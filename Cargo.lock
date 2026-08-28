@@ -39,6 +39,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "amundsen-tools"
+version = "0.1.0"
+dependencies = [
+ "amundsen-config",
+ "amundsen-core",
+ "amundsen-permissions",
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -34,7 +34,11 @@ pub struct DispatchContext {
 }
 
 impl DispatchContext {
-    pub(crate) fn new(
+    /// Public so a `ToolDispatcher` implementor (amundsen-tools) can build a
+    /// real `DispatchContext` in its own test harness — held-out clones of
+    /// `approvals`/`prompts` let a test resolve the round trip itself,
+    /// exactly as `Agent`'s command loop does in production.
+    pub fn new(
         turn_id:   TurnId,
         step_id:   StepId,
         events:    mpsc::Sender<Event>,

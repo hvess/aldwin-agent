@@ -254,15 +254,17 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             });
         }
 
-        // Commit observed tool calls to log.
-        for call in &tool_calls {
-            self.log.append(LogRecord::ToolUse { turn_id, step_id, call: call.clone() });
-        }
-
         match stream_terminal {
             StepTerminal::Cancelled  => return StepResult::Cancelled,
             StepTerminal::Error(msg) => return StepResult::Error(msg),
             StepTerminal::Ok         => {}
+        }
+
+        // Commit observed tool calls to log only once the step is known to have
+        // completed — logging these before a cancellation/error check would leave
+        // a ToolUse record with no matching ToolResult or StepBoundary (a torn log).
+        for call in &tool_calls {
+            self.log.append(LogRecord::ToolUse { turn_id, step_id, call: call.clone() });
         }
 
         let outcome = step_outcome.expect("StepTerminal::Ok implies StepEnded was received");
@@ -383,4 +385,246 @@ enum StepResult {
     ToolsDispatched { outcome: StepOutcome, results: Vec<ToolResult> },
     Cancelled,
     Error(String),
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+//
+// Covers the loop's real failure modes per amundsen-core.md's Pitfalls: torn logs
+// on cancellation, tool round trips, and step/turn boundary bookkeeping. Not
+// exhaustive by design — these are the invariants a refactor is most likely to
+// break silently.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use crate::client::LlmError;
+    use futures::stream;
+    use std::collections::VecDeque;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    /// Replays one canned event script per `stream()` call, one script per step.
+    struct ScriptedClient {
+        scripts: Mutex<VecDeque<Vec<LlmEvent>>>,
+    }
+
+    impl ScriptedClient {
+        fn new(scripts: Vec<Vec<LlmEvent>>) -> Self {
+            Self { scripts: Mutex::new(scripts.into()) }
+        }
+    }
+
+    impl LlmClient for ScriptedClient {
+        fn stream<'a>(
+            &'a self,
+            _request: LlmRequest<'a>,
+        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            let events = self.scripts.lock().unwrap().pop_front()
+                .expect("ScriptedClient: no more scripted steps");
+            Box::pin(stream::iter(events.into_iter().map(Ok)))
+        }
+    }
+
+    /// Yields one delta then never terminates — for exercising mid-step cancellation.
+    struct StallingClient;
+
+    impl LlmClient for StallingClient {
+        fn stream<'a>(
+            &'a self,
+            _request: LlmRequest<'a>,
+        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            let first = stream::iter(vec![Ok(LlmEvent::TextDelta { text: "partial".into() })]);
+            Box::pin(first.chain(stream::pending()))
+        }
+    }
+
+    /// Yields a tool-use request then never terminates — for exercising cancellation
+    /// that lands after a tool call is requested but before the step ends.
+    struct StallingAfterToolUseClient;
+
+    impl LlmClient for StallingAfterToolUseClient {
+        fn stream<'a>(
+            &'a self,
+            _request: LlmRequest<'a>,
+        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            let call = ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) };
+            let first = stream::iter(vec![Ok(LlmEvent::ToolUseRequested { call })]);
+            Box::pin(first.chain(stream::pending()))
+        }
+    }
+
+    struct EchoDispatcher;
+
+    #[async_trait]
+    impl ToolDispatcher for EchoDispatcher {
+        async fn dispatch(&self, call: ToolCall) -> ToolResult {
+            ToolResult { call_id: call.id, content: format!("ok:{}", call.name), is_error: false }
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+    }
+
+    fn outcome(stop_reason: StopReason) -> StepOutcome {
+        StepOutcome {
+            stop_reason,
+            usage: UsageStats { input_tokens: 0, output_tokens: 0 },
+            cache: CacheStats { cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        }
+    }
+
+    #[tokio::test]
+    async fn simple_turn_completes_and_logs_cleanly() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::TextDelta { text: "hi".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+        ]]);
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::EndTurn));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let snap = log.snapshot();
+        assert!(matches!(snap[0], LogRecord::TurnStarted { .. }));
+        assert!(matches!(snap[1], LogRecord::UserMessage { .. }));
+        assert!(matches!(snap[2], LogRecord::AssistantMessage { .. }));
+        assert!(matches!(snap[3], LogRecord::StepBoundary { .. }));
+        assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
+    }
+
+    #[tokio::test]
+    async fn tool_round_trip_dispatches_and_continues() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![
+                LlmEvent::TextDelta { text: "done".into() },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+        ]);
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        let mut completed = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolCompleted { result, .. } => {
+                    assert_eq!(result.content, "ok:read");
+                    completed = true;
+                }
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(completed);
+
+        let snap = log.snapshot();
+        assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
+        assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolResult { .. })));
+        assert!(matches!(snap.last().unwrap(), LogRecord::TurnEnded { .. }));
+    }
+
+    #[tokio::test]
+    async fn cancellation_leaves_well_formed_log_not_a_torn_one() {
+        let agent = Agent::new(StallingClient, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        // Wait for the partial delta so cancel lands mid-step, not before the step starts.
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TextDelta { .. } => break,
+                _ => {}
+            }
+        }
+        cmd_tx.send(Command::Cancel).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::Cancelled));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let snap = log.snapshot();
+        assert!(snap.iter().any(|r| matches!(
+            r,
+            LogRecord::AssistantMessage { text, .. } if text.as_str() == "partial"
+        )));
+        assert!(matches!(
+            snap.last().unwrap(),
+            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_after_tool_use_requested_leaves_no_orphaned_tool_use() {
+        let agent = Agent::new(StallingAfterToolUseClient, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        // Wait for the tool call to be requested so cancel lands after it, before StepEnded.
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolUseRequested { .. } => break,
+                _ => {}
+            }
+        }
+        cmd_tx.send(Command::Cancel).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::Cancelled));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        // The requested tool call was never dispatched, so it must not appear in the
+        // log — a logged ToolUse with no ToolResult/StepBoundary would be a torn log.
+        let snap = log.snapshot();
+        assert!(!snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
+        assert!(matches!(
+            snap.last().unwrap(),
+            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+        ));
+    }
 }

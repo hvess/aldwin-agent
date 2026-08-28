@@ -51,6 +51,11 @@ pub struct ProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     pub api_key_env: String,
+    /// Extended-thinking token budget. `None` means "let the provider crate
+    /// pick its own default" — this field only exists so the developer can
+    /// override it; amundsen-config has no opinion on what a good budget is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_thinking_budget: Option<u32>,
 }
 
 impl ProviderConfig {

@@ -592,6 +592,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_yaml_without_extended_thinking_budget_still_parses() {
+        // Backward compatibility: files written before this field existed
+        // must keep loading, with the field defaulting to None.
+        let (_project, global, _config) = fresh();
+        let dir = global.path().join(".amundsen");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("provider.yaml"), "version: 1\nprovider: anthropic\nmodel: m\napi_key_env: X\n").unwrap();
+
+        let config = Config::open_at(_project.path(), &dir).unwrap();
+        assert_eq!(config.global_provider().unwrap().extended_thinking_budget, None);
+    }
+
+    #[test]
+    fn extended_thinking_budget_round_trips_through_set_provider() {
+        let (_project, _global, config) = fresh();
+        let provider = ProviderConfig {
+            version: PROVIDER_VERSION,
+            provider: crate::domain::ProviderKind::Anthropic,
+            model: "m".into(),
+            base_url: None,
+            api_key_env: "X".into(),
+            extended_thinking_budget: Some(16_000),
+        };
+        config.set_provider(Scope::Global, provider).unwrap();
+        assert_eq!(config.global_provider().unwrap().extended_thinking_budget, Some(16_000));
+    }
+
+    #[test]
     fn raw_api_key_field_is_rejected_by_the_schema() {
         let (_project, global, _config) = fresh();
         let dir = global.path().join(".amundsen");
@@ -615,6 +643,7 @@ mod tests {
             model: "m".into(),
             base_url: None,
             api_key_env: "".into(),
+            extended_thinking_budget: None,
         };
         let err = config.set_provider(Scope::Global, bad).unwrap_err();
         assert!(matches!(err, ConfigError::MissingApiKeyEnv { .. }));

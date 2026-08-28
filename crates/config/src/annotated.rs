@@ -15,12 +15,15 @@ deny: []
 
 pub const PROVIDER: &str = "\
 # Amundsen provider settings.
-#   provider:     anthropic | openai-compatible
-#   model:        the model id to use for every request
-#   base_url:     only used when provider is openai-compatible
-#   api_key_env:  the NAME of an environment variable holding your API key —
-#                 Amundsen never reads or stores the key itself here, only
-#                 this variable's name. Export it before starting Amundsen.
+#   provider:                  anthropic | openai-compatible
+#   model:                     the model id to use for every request
+#   base_url:                  only used when provider is openai-compatible
+#   api_key_env:               the NAME of an environment variable holding your
+#                              API key — Amundsen never reads or stores the key
+#                              itself here, only this variable's name. Export it
+#                              before starting Amundsen.
+#   extended_thinking_budget:  token budget for extended thinking. Omit to use
+#                              amundsen-llm's built-in default.
 version: 1
 provider: anthropic
 model: claude-sonnet-5

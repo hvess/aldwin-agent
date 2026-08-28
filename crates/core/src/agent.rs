@@ -1,12 +1,13 @@
 use futures::{future, StreamExt};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
     client::{LlmClient, LlmRequest},
-    dispatcher::ToolDispatcher,
+    dispatcher::{DispatchContext, ToolDispatcher},
     event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason},
     log::ConversationLog,
     prompt,
@@ -19,6 +20,12 @@ pub struct Agent<C, D> {
     log:        ConversationLog,
     model:      String,
     system:     String,
+    // Pending Edit approval gates and permission prompts, keyed by call_id /
+    // PromptId. Shared rather than owned locally by `run` so `DispatchContext`
+    // — handed to a dispatch future that runs concurrently with the command
+    // loop — can register into the same map the loop resolves against.
+    approvals:  Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    prompts:    Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
 }
 
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
@@ -34,10 +41,30 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             log: ConversationLog::new(),
             model: model.into(),
             system: prompt::compose(additional_context),
+            approvals: Arc::new(Mutex::new(HashMap::new())),
+            prompts:   Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub fn log(&self) -> &ConversationLog { &self.log }
+
+    /// Resolve a pending Edit approval gate. Returns false if `call_id` has no
+    /// pending gate (already resolved, or never registered).
+    fn resolve_approval(&self, call_id: &str, approved: bool) -> bool {
+        match self.approvals.lock().expect("approvals lock poisoned").remove(call_id) {
+            Some(tx) => { let _ = tx.send(approved); true }
+            None => false,
+        }
+    }
+
+    /// Resolve a pending permission prompt. Returns false if `id` has no
+    /// pending prompt (already resolved, or never registered).
+    fn resolve_prompt(&self, id: u64, payload: serde_json::Value) -> bool {
+        match self.prompts.lock().expect("prompts lock poisoned").remove(&id) {
+            Some(tx) => { let _ = tx.send(payload); true }
+            None => false,
+        }
+    }
 
     /// Drive the agent. Returns when the command channel closes.
     pub async fn run(
@@ -45,11 +72,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         mut commands: mpsc::Receiver<Command>,
         events:       mpsc::Sender<Event>,
     ) {
-        // Pending Edit approval gates: call_id → oneshot tx (resolved by ApproveTool/DenyTool).
-        let mut approvals: HashMap<String, oneshot::Sender<bool>> = HashMap::new();
-        // Pending permission prompts: PromptId → oneshot tx.
-        let mut prompts: HashMap<u64, oneshot::Sender<serde_json::Value>> = HashMap::new();
-
         while let Some(cmd) = commands.recv().await {
             match cmd {
                 Command::Submit { text } => {
@@ -59,10 +81,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
                     let cancel = CancellationToken::new();
                     let reason = self
-                        .run_turn(
-                            turn_id, text, &events, &mut commands,
-                            &mut approvals, &mut prompts, cancel,
-                        )
+                        .run_turn(turn_id, text, &events, &mut commands, cancel)
                         .await;
 
                     self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
@@ -70,16 +89,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 }
 
                 Command::ApproveTool { call_id } => {
-                    if let Some(tx) = approvals.remove(&call_id) { let _ = tx.send(true); }
-                    else { warn!("ApproveTool for unknown call_id {call_id}"); }
+                    if !self.resolve_approval(&call_id, true) {
+                        warn!("ApproveTool for unknown call_id {call_id}");
+                    }
                 }
                 Command::DenyTool { call_id } => {
-                    if let Some(tx) = approvals.remove(&call_id) { let _ = tx.send(false); }
-                    else { warn!("DenyTool for unknown call_id {call_id}"); }
+                    if !self.resolve_approval(&call_id, false) {
+                        warn!("DenyTool for unknown call_id {call_id}");
+                    }
                 }
                 Command::PromptResponse { id, payload } => {
-                    if let Some(tx) = prompts.remove(&id.0) { let _ = tx.send(payload); }
-                    else { warn!("PromptResponse for unknown prompt {}", id.0); }
+                    if !self.resolve_prompt(id.0, payload) {
+                        warn!("PromptResponse for unknown prompt {}", id.0);
+                    }
                 }
                 Command::Cancel => {} // no-op outside an active turn
             }
@@ -92,8 +114,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         user_text: String,
         events:    &mpsc::Sender<Event>,
         commands:  &mut mpsc::Receiver<Command>,
-        approvals: &mut HashMap<String, oneshot::Sender<bool>>,
-        prompts:   &mut HashMap<u64, oneshot::Sender<serde_json::Value>>,
         cancel:    CancellationToken,
     ) -> TurnEndReason {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
@@ -106,10 +126,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             debug!("turn {turn_id:?} step {step_id:?}");
 
             let result = self
-                .run_step(
-                    turn_id, step_id, &mut messages, events,
-                    commands, approvals, prompts, cancel.clone(),
-                )
+                .run_step(turn_id, step_id, &mut messages, events, commands, cancel.clone())
                 .await;
 
             match result {
@@ -130,6 +147,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     }
                     // Continue to next step.
                 }
+                StepResult::ToolsAborted { outcome, results, reason } => {
+                    // Dispatch was cut short (cancelled, or the command channel
+                    // closed) after ToolUse records were already logged for this
+                    // step. Close the step out the same shape a completed round
+                    // trip would have — StepBoundary, then a ToolResult for every
+                    // call — so no ToolUse is ever left without a matching
+                    // ToolResult; a later replay of the log stays a valid request.
+                    self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
+                    for result in results {
+                        self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
+                    }
+                    return reason;
+                }
                 StepResult::Cancelled  => return TurnEndReason::Cancelled,
                 StepResult::Error(msg) => return TurnEndReason::Error(msg),
             }
@@ -143,8 +173,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         messages:  &mut Vec<Message>,
         events:    &mpsc::Sender<Event>,
         commands:  &mut mpsc::Receiver<Command>,
-        approvals: &mut HashMap<String, oneshot::Sender<bool>>,
-        prompts:   &mut HashMap<u64, oneshot::Sender<serde_json::Value>>,
         cancel:    CancellationToken,
     ) -> StepResult {
         let cache_breakpoints = self.cache_breakpoints(messages);
@@ -184,15 +212,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                 cancel.cancel();
                                 break StepTerminal::Cancelled;
                             }
-                            Some(Command::ApproveTool { call_id }) => {
-                                if let Some(tx) = approvals.remove(&call_id) { let _ = tx.send(true); }
-                            }
-                            Some(Command::DenyTool { call_id }) => {
-                                if let Some(tx) = approvals.remove(&call_id) { let _ = tx.send(false); }
-                            }
-                            Some(Command::PromptResponse { id, payload }) => {
-                                if let Some(tx) = prompts.remove(&id.0) { let _ = tx.send(payload); }
-                            }
+                            Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
+                            Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
+                            Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
                             Some(Command::Submit { .. }) => {
                                 warn!("Submit received mid-turn; discarding");
                             }
@@ -272,45 +294,119 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         match outcome.stop_reason {
             StopReason::EndTurn  => StepResult::EndTurn(outcome),
             StopReason::ToolUse  => {
-                match self.dispatch_tools(turn_id, step_id, tool_calls, events, cancel).await {
-                    Ok(results) => StepResult::ToolsDispatched { outcome, results },
-                    Err(msg)    => StepResult::Error(msg),
+                match self.dispatch_tools(turn_id, step_id, tool_calls, events, commands, cancel).await {
+                    DispatchOutcome::Completed(results) => StepResult::ToolsDispatched { outcome, results },
+                    DispatchOutcome::Aborted { results, reason } => {
+                        StepResult::ToolsAborted { outcome, results, reason }
+                    }
                 }
             }
         }
     }
 
-    /// Dispatch all tool calls for a step concurrently.
-    /// Approval-gated tools (Edit) block inside their own future.
+    /// Dispatch all tool calls for a step concurrently, staying responsive to
+    /// commands (Cancel above all) for the whole duration — a slow or stuck
+    /// tool must not make cancellation meaningless. Approval-gated tools (Edit)
+    /// block inside their own future via `DispatchContext`; the agent loop
+    /// just awaits.
     async fn dispatch_tools(
         &self,
-        turn_id: TurnId,
-        step_id: StepId,
-        calls:   Vec<ToolCall>,
-        events:  &mpsc::Sender<Event>,
-        cancel:  CancellationToken,
-    ) -> Result<Vec<ToolResult>, String> {
+        turn_id:  TurnId,
+        step_id:  StepId,
+        calls:    Vec<ToolCall>,
+        events:   &mpsc::Sender<Event>,
+        commands: &mut mpsc::Receiver<Command>,
+        cancel:   CancellationToken,
+    ) -> DispatchOutcome {
         for call in &calls {
             let _ = events.send(Event::ToolDispatched {
                 turn_id, step_id, call_id: call.id.clone(),
             }).await;
         }
 
+        let ctx = DispatchContext::new(
+            turn_id, step_id, events.clone(), self.approvals.clone(), self.prompts.clone(),
+        );
+
         // Drive all dispatch futures on the current task (cooperative).
         // Dispatcher impls use spawn_blocking internally for CPU-heavy work.
-        let futs: Vec<_> = calls.iter().map(|call| self.dispatcher.dispatch(call.clone())).collect();
+        let futs: Vec<_> = calls.iter()
+            .map(|call| self.dispatcher.dispatch(call.clone(), &ctx))
+            .collect();
+        let joined = future::join_all(futs);
+        tokio::pin!(joined);
 
-        tokio::select! {
-            _ = cancel.cancelled() => Err("cancelled during tool dispatch".into()),
-            results = future::join_all(futs) => {
-                for result in &results {
-                    let _ = events.send(Event::ToolCompleted {
-                        turn_id, step_id, result: result.clone(),
-                    }).await;
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = cancel.cancelled() => {
+                    return self.abort_dispatch(turn_id, step_id, &calls, events, TurnEndReason::Cancelled).await;
                 }
-                Ok(results)
+
+                cmd = commands.recv() => {
+                    match cmd {
+                        Some(Command::Cancel) => {
+                            cancel.cancel();
+                            return self.abort_dispatch(turn_id, step_id, &calls, events, TurnEndReason::Cancelled).await;
+                        }
+                        Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
+                        Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
+                        Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
+                        Some(Command::Submit { .. }) => warn!("Submit received mid-turn; discarding"),
+                        None => {
+                            let reason = TurnEndReason::Error("command channel closed".into());
+                            return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;
+                        }
+                    }
+                }
+
+                results = &mut joined => {
+                    for result in &results {
+                        let _ = events.send(Event::ToolCompleted {
+                            turn_id, step_id, result: result.clone(),
+                        }).await;
+                    }
+                    return DispatchOutcome::Completed(results);
+                }
             }
         }
+    }
+
+    /// Close out a step whose tool dispatch was cut short (cancelled, or the
+    /// command channel closed) without leaving the already-logged ToolUse
+    /// records orphaned: every in-flight call gets a synthetic error
+    /// ToolResult, so the step still reads as a well-formed round trip and
+    /// never a torn one.
+    async fn abort_dispatch(
+        &self,
+        turn_id: TurnId,
+        step_id: StepId,
+        calls:   &[ToolCall],
+        events:  &mpsc::Sender<Event>,
+        reason:  TurnEndReason,
+    ) -> DispatchOutcome {
+        // A call whose dispatch future was mid-`request_approval` leaves a
+        // dangling entry here otherwise — nothing will ever resolve it once the
+        // future backing its receiver has been dropped.
+        {
+            let mut approvals = self.approvals.lock().expect("approvals lock poisoned");
+            for call in calls {
+                approvals.remove(&call.id);
+            }
+        }
+
+        let message = match &reason {
+            TurnEndReason::Cancelled => "cancelled",
+            _ => "tool dispatch aborted",
+        };
+        let results: Vec<ToolResult> = calls.iter()
+            .map(|call| ToolResult { call_id: call.id.clone(), content: message.into(), is_error: true })
+            .collect();
+        for result in &results {
+            let _ = events.send(Event::ToolCompleted { turn_id, step_id, result: result.clone() }).await;
+        }
+        DispatchOutcome::Aborted { results, reason }
     }
 
     /// Reconstruct the wire message list from the append-only log.
@@ -383,8 +479,14 @@ enum StepTerminal { Ok, Cancelled, Error(String) }
 enum StepResult {
     EndTurn(StepOutcome),
     ToolsDispatched { outcome: StepOutcome, results: Vec<ToolResult> },
+    ToolsAborted { outcome: StepOutcome, results: Vec<ToolResult>, reason: TurnEndReason },
     Cancelled,
     Error(String),
+}
+
+enum DispatchOutcome {
+    Completed(Vec<ToolResult>),
+    Aborted { results: Vec<ToolResult>, reason: TurnEndReason },
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -458,8 +560,50 @@ mod tests {
 
     #[async_trait]
     impl ToolDispatcher for EchoDispatcher {
-        async fn dispatch(&self, call: ToolCall) -> ToolResult {
+        async fn dispatch(&self, call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
             ToolResult { call_id: call.id, content: format!("ok:{}", call.name), is_error: false }
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+    }
+
+    /// Never resolves — for exercising cancellation that lands while tools are
+    /// actually dispatching (as opposed to mid-stream, before dispatch starts).
+    struct StallingDispatcher;
+
+    #[async_trait]
+    impl ToolDispatcher for StallingDispatcher {
+        async fn dispatch(&self, _call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
+            future::pending().await
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+    }
+
+    /// Blocks on `DispatchContext::request_approval` — for exercising the
+    /// Edit-style approval round trip end to end.
+    struct ApprovalGatedDispatcher;
+
+    #[async_trait]
+    impl ToolDispatcher for ApprovalGatedDispatcher {
+        async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
+            let approved = ctx.request_approval(call.id.clone(), "diff".into()).await;
+            ToolResult {
+                call_id:  call.id,
+                content:  if approved { "approved".into() } else { "denied".into() },
+                is_error: !approved,
+            }
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+    }
+
+    /// Blocks on `DispatchContext::request_prompt` — for exercising the
+    /// permission-prompt round trip end to end.
+    struct PromptGatedDispatcher;
+
+    #[async_trait]
+    impl ToolDispatcher for PromptGatedDispatcher {
+        async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
+            let payload = ctx.request_prompt(serde_json::json!({"ask": "confirm"})).await;
+            ToolResult { call_id: call.id, content: payload.to_string(), is_error: false }
         }
         fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
     }
@@ -626,5 +770,158 @@ mod tests {
             snap.last().unwrap(),
             LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn cancel_during_tool_dispatch_ends_turn_cancelled_with_well_formed_log() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::ToolUseRequested {
+                call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+            },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+        ]]);
+        let agent = Agent::new(client, StallingDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        // Wait until the tool is actually dispatched (not merely requested) so
+        // cancel lands while dispatch_tools is awaiting it, not before.
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolDispatched { .. } => break,
+                _ => {}
+            }
+        }
+        cmd_tx.send(Command::Cancel).await.unwrap();
+
+        let mut saw_tool_completed = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolCompleted { result, .. } => {
+                    assert!(result.is_error);
+                    saw_tool_completed = true;
+                }
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::Cancelled));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_tool_completed);
+
+        // Every ToolUse must be followed by a matching ToolResult before
+        // TurnEnded — an unresolved one would make a later replay of this log
+        // an invalid request to the LLM (a dangling tool_use block).
+        let snap = log.snapshot();
+        let tool_use_count = snap.iter().filter(|r| matches!(r, LogRecord::ToolUse { .. })).count();
+        let tool_result_count = snap.iter().filter(|r| matches!(r, LogRecord::ToolResult { .. })).count();
+        assert_eq!(tool_use_count, 1);
+        assert_eq!(tool_result_count, 1);
+        assert!(matches!(
+            snap.last().unwrap(),
+            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn approval_gate_round_trips_through_approve_tool_command() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "edit".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![
+                LlmEvent::TextDelta { text: "done".into() },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+        ]);
+        let agent = Agent::new(client, ApprovalGatedDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolApprovalRequested { call_id, .. } => {
+                    cmd_tx.send(Command::ApproveTool { call_id }).await.unwrap();
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut saw_approved = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolCompleted { result, .. } => {
+                    assert_eq!(result.content, "approved");
+                    saw_approved = true;
+                }
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::EndTurn));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_approved);
+    }
+
+    #[tokio::test]
+    async fn prompt_gate_round_trips_through_prompt_response_command() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "risky".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+        ]);
+        let agent = Agent::new(client, PromptGatedDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::PromptRequested { id, .. } => {
+                    cmd_tx.send(Command::PromptResponse { id, payload: serde_json::json!("yes") })
+                        .await.unwrap();
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut saw_result = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolCompleted { result, .. } => {
+                    assert_eq!(result.content, "\"yes\"");
+                    saw_result = true;
+                }
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::EndTurn));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_result);
     }
 }

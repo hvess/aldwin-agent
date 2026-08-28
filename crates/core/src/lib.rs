@@ -8,7 +8,7 @@ pub mod types;
 
 pub use agent::Agent;
 pub use client::{LlmClient, LlmError, LlmRequest};
-pub use dispatcher::ToolDispatcher;
+pub use dispatcher::{DispatchContext, ToolDispatcher};
 pub use event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason};
 pub use log::ConversationLog;
 pub use types::*;

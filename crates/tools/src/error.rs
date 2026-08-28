@@ -34,4 +34,7 @@ pub enum ToolError {
 
     #[error("malformed prompt response from developer")]
     MalformedPromptResponse,
+
+    #[error("language server error: {0}")]
+    Lsp(#[from] crate::lsp::LspError),
 }

@@ -1,0 +1,21 @@
+[package]
+name    = "amundsen-llm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+amundsen-core   = { path = "../core" }
+amundsen-config = { path = "../config" }
+tokio             = { workspace = true }
+futures           = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+reqwest           = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
+eventsource-stream = "0.2"
+async-stream      = "0.3"
+rand              = "0.8"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

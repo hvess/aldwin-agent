@@ -29,6 +29,12 @@ event channel closes the same way it already does on `None` — no new
 ("Additional slash commands beyond /reload-config — V0 set is minimal"),
 not a gap against the original spec.
 
+Also added `/help`, listing all three commands (`/help`, `/exit`,
+`/reload-config`) from a single `HELP_TEXT` constant kept in sync by hand
+with the `match` in `intercept` — three commands doesn't earn a
+data-driven dispatch table yet. The unknown-command Notice now points at
+`/help` too.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `amundsen` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

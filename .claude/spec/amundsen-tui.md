@@ -37,6 +37,14 @@ above (tool-activity collapse mechanism, Shift+Enter cross-terminal
 verification) are still open — this session's terminal wasn't used to
 re-verify Shift+Enter specifically.
 
+**Progress (2026-08-29, follow-up):** A `/`-prefixed `UserMessage` (a
+slash command) now renders dim rather than sharing plain user messages'
+normal style, per developer request once `/help`/`/exit` landed in
+amundsen-cli — otherwise a command looks identical to a chat message in
+the log, undermining the point of having named commands at all. See
+`is_command` in `ui.rs`; duplicates cli's own `/`-prefix check since tui
+can't depend on cli (wrong direction) to reuse it.
+
 ## Design
 
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
@@ -44,7 +52,7 @@ re-verify Shift+Enter specifically.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
 - **Input Area:** Multi-line textarea. Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Input is blocked while an approval card is pending.
 - **Status Bar:** Single line, always visible. Shows: model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), names of tools currently running within the active step (e.g. "tools: Read shell").
-- **Palette:** Minimal monochrome. Background: terminal default. Text hierarchy: bright (assistant output), normal (user input), dim (tool metadata, status bar text). One accent color applied only to the approval card border and focused-input highlight. Specific accent color deferred pending mascot palette decision.
+- **Palette:** Minimal monochrome. Background: terminal default. Text hierarchy: bright (assistant output), normal (user input), dim (tool metadata, status bar text, and — added 2026-08-29 — a slash command as user input, since it's directed at the harness rather than the model). One accent color applied only to the approval card border and focused-input highlight. Specific accent color deferred pending mascot palette decision.
 
 ## Decisions
 

@@ -22,6 +22,11 @@ enum Intercepted {
     Quit,
 }
 
+/// Single source of truth for `/help`'s listing — keep in sync with the
+/// `match` in `intercept` below by hand; three entries doesn't earn a
+/// data-driven dispatch table yet.
+const HELP_TEXT: &str = "commands: /help (this list), /exit (end the session), /reload-config (reload config files from disk)";
+
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
 /// the core, per amundsen-cli.md: "the core's only input is Submit, Cancel,
 /// ApproveTool — it has no slash-command semantics." Runs synchronously in
@@ -32,13 +37,17 @@ async fn intercept(command: Command, config: &Config, events: &mpsc::Sender<Even
     let Some(rest) = text.trim_start().strip_prefix('/') else { return Intercepted::Forward(command) };
 
     match rest.trim() {
+        "help" => {
+            let _ = events.send(Event::Notice { message: HELP_TEXT.into() }).await;
+            Intercepted::Handled
+        }
         "reload-config" => {
             handle_reload_config(config, events).await;
             Intercepted::Handled
         }
         "exit" => Intercepted::Quit,
         other => {
-            let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other}") }).await;
+            let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other} (try /help)") }).await;
             Intercepted::Handled
         }
     }
@@ -122,6 +131,22 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/nope")),
+            other => panic!("expected a Notice, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn help_lists_every_known_command() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, &tx).await;
+        assert!(matches!(result, Intercepted::Handled));
+        match rx.recv().await {
+            Some(Event::Notice { message }) => {
+                for command in ["/help", "/exit", "/reload-config"] {
+                    assert!(message.contains(command), "help text missing {command}: {message}");
+                }
+            }
             other => panic!("expected a Notice, got {other:?}"),
         }
     }

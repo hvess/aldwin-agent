@@ -52,8 +52,14 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
     match entry {
         // Palette per amundsen-tui.md: bright = assistant, normal = user —
         // these must not share a style, or the two speakers become
-        // indistinguishable in the log.
-        LogEntry::UserMessage { text } => text.lines().map(|l| Line::from(Span::raw(format!("> {l}")))).collect(),
+        // indistinguishable in the log. A slash command is user input that
+        // never reaches the model (see amundsen-cli's interceptor) — dim
+        // marks it as directed at the harness itself, not conversation,
+        // the same way tool metadata and notices are dim.
+        LogEntry::UserMessage { text } => {
+            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default() };
+            text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), style))).collect()
+        }
         LogEntry::AssistantText { text } => {
             text.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)))).collect()
         }
@@ -97,6 +103,14 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
         LogEntry::Error { message } => vec![Line::from(Span::styled(format!("error: {message}"), Style::default().fg(Color::Red)))],
         LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("— {message} —"), Style::default().fg(DIM)))],
     }
+}
+
+/// Mirrors amundsen-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
+/// in `slash.rs`) — this crate can't depend on that one to reuse it
+/// directly (cli depends on tui, not the other way around), so the rule is
+/// duplicated; keep the two in sync if it ever changes.
+fn is_command(text: &str) -> bool {
+    text.trim_start().starts_with('/')
 }
 
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>) -> Vec<Line<'static>> {
@@ -235,6 +249,26 @@ mod tests {
             (user_cell.fg, user_cell.modifier),
             (assistant_cell.fg, assistant_cell.modifier),
             "user and assistant text must use different styles"
+        );
+    }
+
+    #[test]
+    fn a_slash_command_renders_differently_from_a_plain_user_message() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.log.push(LogEntry::UserMessage { text: "/exit".into() });
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let plain_cell = &buffer[(2, 0)]; // "> hi"
+        let command_cell = &buffer[(2, 1)]; // "> /exit"
+        assert_ne!(
+            (plain_cell.fg, plain_cell.modifier),
+            (command_cell.fg, command_cell.modifier),
+            "a slash command must not use the same style as a plain user message"
         );
     }
 

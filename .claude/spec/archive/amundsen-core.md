@@ -20,7 +20,7 @@ step involving a tool call therefore sent a request on step 2+ missing
 the assistant's `tool_calls`, which a provider that validates role
 sequencing (tool must follow the assistant message that requested it)
 rejected outright — "Unexpected role 'tool' after role 'user'" against
-an OpenAI-compatible endpoint. Fixed in `<commit-to-fill-in>` with a
+an OpenAI-compatible endpoint. Fixed in `afe7033` with a
 regression test (`multi_step_turn_carries_tool_use_into_the_next_steps_live_request`)
 that inspects the second step's actual request rather than only the log.
 This crate stays archived — the fix didn't reopen a design question, but

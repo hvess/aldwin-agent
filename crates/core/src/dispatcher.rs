@@ -34,11 +34,7 @@ pub struct DispatchContext {
 }
 
 impl DispatchContext {
-    /// Public so a `ToolDispatcher` implementor (amundsen-tools) can build a
-    /// real `DispatchContext` in its own test harness — held-out clones of
-    /// `approvals`/`prompts` let a test resolve the round trip itself,
-    /// exactly as `Agent`'s command loop does in production.
-    pub fn new(
+    pub(crate) fn new(
         turn_id:   TurnId,
         step_id:   StepId,
         events:    mpsc::Sender<Event>,
@@ -46,6 +42,28 @@ impl DispatchContext {
         prompts:   Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     ) -> Self {
         Self { turn_id, step_id, events, approvals, prompts }
+    }
+
+    /// Only compiled with the `test-util` feature — lets a `ToolDispatcher`
+    /// implementor (amundsen-tools) build a real `DispatchContext` in its
+    /// own test harness, with held-out clones of `approvals`/`prompts` so a
+    /// test can resolve the round trip itself exactly as `Agent`'s command
+    /// loop does in production. Kept as a separate, feature-gated function
+    /// rather than just making `new` `pub`, so ordinary (non-test) builds of
+    /// downstream crates keep the compile-time guarantee that only `Agent`'s
+    /// own run loop can construct a context wired to its live approvals/
+    /// prompts maps — a context built any other way has no `Command` handler
+    /// draining those maps, so `request_approval`/`request_prompt` would
+    /// hang forever awaiting a decision that can never arrive.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn for_testing(
+        turn_id:   TurnId,
+        step_id:   StepId,
+        events:    mpsc::Sender<Event>,
+        approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+        prompts:   Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
+    ) -> Self {
+        Self::new(turn_id, step_id, events, approvals, prompts)
     }
 
     /// Emit `ToolApprovalRequested` for `call_id` and await the developer's

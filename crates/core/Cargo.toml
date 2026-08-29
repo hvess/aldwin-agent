@@ -3,6 +3,11 @@ name    = "amundsen-core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Exposes DispatchContext::for_testing to downstream crates — see its doc
+# comment in src/dispatcher.rs. Mirrors tokio's own test-util convention.
+test-util = []
+
 [dependencies]
 tokio.workspace       = true
 tokio-util.workspace  = true

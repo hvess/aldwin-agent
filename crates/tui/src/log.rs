@@ -61,6 +61,40 @@ impl From<TurnEndReason> for TurnEndReasonKind {
     }
 }
 
+/// The number of terminal rows `ui::render_entry` will produce for this
+/// entry — kept here (not in `ui.rs`) so `ScrollState`'s bookkeeping
+/// (`App::total_lines`, `app.rs`) can stay accurate without `app.rs`
+/// depending on ratatui at all.
+///
+/// Exact for every variant, with one narrow, transient exception:
+/// `AssistantText` holding a still-open (unterminated) code fence — the
+/// closing fence hasn't streamed in yet — renders one extra border line
+/// (`ui::render_assistant_text` always emits the closing "└─" even without
+/// a matching "```" in the source) that isn't in `text.lines().count()`
+/// yet. Off by at most 1, only mid-stream, and self-corrects the moment
+/// the fence closes — not worth threading fence-parsing state in here to
+/// avoid.
+///
+/// For every other case this is provably exact, not approximate: a
+/// fenced code block's `┌─ lang` / `└─` border lines exactly replace the
+/// opening/closing "```" lines they're rendered instead of (same count),
+/// so `AssistantText`'s total is `text.lines().count()` whether or not it
+/// contains code fences.
+pub fn line_count(entry: &LogEntry) -> usize {
+    match entry {
+        LogEntry::UserMessage { text } | LogEntry::AssistantText { text } => text.lines().count(),
+        LogEntry::ToolActivity { calls, .. } => calls.len(),
+        LogEntry::RetryAttempt { .. } => 1,
+        // render_card: one header line + one line per body ("" for
+        // PermissionPrompt, so exactly 2) + one footer line.
+        LogEntry::ApprovalCard { diff, .. } => diff.lines().count() + 2,
+        LogEntry::PermissionPrompt { .. } => 2,
+        LogEntry::TurnEnded { .. } => 1,
+        LogEntry::Error { .. } => 1,
+        LogEntry::Notice { .. } => 1,
+    }
+}
+
 /// Truncates a tool result to a one-line summary for a closed
 /// `ToolActivityEntry` — the full content already went into the model's
 /// context; the log just needs enough to glance at.
@@ -99,5 +133,34 @@ mod tests {
         assert_eq!(TurnEndReasonKind::from(TurnEndReason::EndTurn), TurnEndReasonKind::EndTurn);
         assert_eq!(TurnEndReasonKind::from(TurnEndReason::Cancelled), TurnEndReasonKind::Cancelled);
         assert_eq!(TurnEndReasonKind::from(TurnEndReason::Error("x".into())), TurnEndReasonKind::Error("x".into()));
+    }
+
+    #[test]
+    fn line_count_counts_text_lines_for_messages() {
+        assert_eq!(line_count(&LogEntry::UserMessage { text: "a\nb\nc".into() }), 3);
+        assert_eq!(line_count(&LogEntry::AssistantText { text: "one line".into() }), 1);
+    }
+
+    #[test]
+    fn line_count_counts_one_line_per_tool_call() {
+        let calls = vec![
+            ToolActivityEntry { call_id: "1".into(), name: "read".into(), status: ToolActivityStatus::Running },
+            ToolActivityEntry { call_id: "2".into(), name: "shell".into(), status: ToolActivityStatus::Running },
+        ];
+        assert_eq!(line_count(&LogEntry::ToolActivity { step_id: StepId(1), calls }), 2);
+    }
+
+    #[test]
+    fn line_count_includes_the_cards_border_lines() {
+        assert_eq!(line_count(&LogEntry::ApprovalCard { call_id: "c".into(), diff: "-a\n+b".into(), resolution: None }), 4);
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "ls".into() };
+        assert_eq!(line_count(&LogEntry::PermissionPrompt { id: PromptId(1), payload, resolution: None }), 2);
+    }
+
+    #[test]
+    fn line_count_is_one_for_single_line_entries() {
+        assert_eq!(line_count(&LogEntry::TurnEnded { reason: TurnEndReasonKind::EndTurn }), 1);
+        assert_eq!(line_count(&LogEntry::Error { message: "boom".into() }), 1);
+        assert_eq!(line_count(&LogEntry::Notice { message: "note".into() }), 1);
     }
 }

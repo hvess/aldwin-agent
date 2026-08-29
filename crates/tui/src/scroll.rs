@@ -1,7 +1,16 @@
-/// Log scroll position, in whole entries (not wrapped terminal lines — an
-/// entry-granularity approximation, not line-accurate; getting line-accurate
-/// scrolling right needs wrap-width-dependent height per entry, computed at
-/// render time, which is more machinery than a V0 conversation log needs).
+/// Log scroll position, in rendered terminal rows — `total_len` in every
+/// method below must be `App::total_lines()` (see its doc comment), not
+/// `App::log`'s entry count. `viewport_height` is real rendered rows too
+/// (only known at render time); comparing that against an *entry* count
+/// in `max_offset` is what made scrolling a near-total no-op before
+/// `total_lines` existed — a handful of entries routinely render to far
+/// more rows than the viewport, so `max_offset` stayed 0 long after there
+/// was real content below the fold. This is exact per entry except one
+/// narrow, self-correcting streaming edge case (see `log::line_count`'s
+/// doc comment) — not wrap-width-accurate, since that needs render-time
+/// knowledge this type doesn't have, but that residual gap is at most a
+/// handful of rows on an unusually long unwrapped line, not "doesn't
+/// scroll at all".
 ///
 /// Auto-follows new content while `following` is true; scrolling up
 /// disengages it, and jumping to the bottom (End / `G`) re-engages it — see

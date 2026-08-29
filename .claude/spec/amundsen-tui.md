@@ -64,7 +64,27 @@ and `base16-ocean.dark` as the highlighting theme (no way to detect the
 terminal's actual background — same open question as the deferred accent
 color above; revisit together).
 
-## Design
+**Progress (2026-08-29, scrolling fix):** The developer reported the TUI
+"has no scrolling capability" at all. Root cause: `ui::draw` called
+`app.scroll.set_viewport_height(log_inner_height, app.log.len())` —
+`log_inner_height` is real rendered rows, `app.log.len()` is *entry*
+count, and `ScrollState::max_offset` computed `total_len.saturating_sub
+(viewport_height)` from those two mismatched units. A handful of entries
+routinely renders to far more rows than the viewport, so `max_offset`
+stayed 0 long after there was real content below the fold — auto-follow
+never advanced past the top, and manual scroll keys had nothing to move
+into, since `draw_log`'s `.skip(app.scroll.offset)` was already being
+applied to the correct (flattened-line) vector; only the offset itself
+was wrong. Fixed by adding `App::total_lines()` (`app.rs`) — an exact
+(not approximate) rendered-row count via a new pure `log::line_count`,
+proven line-count-equal to `ui::render_entry`'s output for every
+`LogEntry` variant except one narrow, self-correcting streaming edge
+case — and using it everywhere `self.log.len()`/`app.log.len()` was
+previously passed to a `ScrollState` method. `scroll.rs`'s doc comment
+updated accordingly (it previously and incorrectly described the unit as
+"whole entries"). Confirmed by reverting the `ui::draw` change alone and
+watching the new regression test fail exactly as the user described,
+then pass again once restored.
 
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.

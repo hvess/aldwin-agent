@@ -25,7 +25,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(input_height)]).areas(area);
 
     let log_inner_height = log_area.height as usize;
-    app.scroll.set_viewport_height(log_inner_height, app.log.len());
+    app.scroll.set_viewport_height(log_inner_height, app.total_lines());
 
     draw_log(frame, log_area, app);
     draw_status(frame, status_area, app);
@@ -270,6 +270,33 @@ mod tests {
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("")
+    }
+
+    /// Regression test for the bug the user actually hit: scroll math
+    /// compared `viewport_height` (rendered rows) against `app.log.len()`
+    /// (entry count) instead of `app.total_lines()` (rendered rows), so
+    /// `max_offset` stayed 0 for any conversation with fewer entries than
+    /// the viewport had rows — which is most of them, since a handful of
+    /// multi-line entries routinely outgrows a terminal's row count. The
+    /// old `ScrollState`-only unit tests couldn't catch this: they fed
+    /// `total_len` in whatever unit the test author chose, never
+    /// exercising the actual `App`/`ui::draw` wiring that picks that unit.
+    /// This one does, with a small viewport that can't possibly show all
+    /// ten 5-line entries at once.
+    #[test]
+    fn auto_follow_shows_the_tail_of_a_long_conversation_in_a_small_viewport() {
+        let mut app = app();
+        for i in 0..10 {
+            app.log.push(LogEntry::AssistantText { text: format!("entry-{i}\nline2\nline3\nline4\nline5") });
+        }
+
+        // Log area gets roughly height-2 rows (status bar + input box eat
+        // the rest) — nowhere near the ~59 rows ten 5-line entries plus
+        // nine separators need.
+        let out = rendered(&mut app, 80, 12);
+
+        assert!(out.contains("entry-9"), "the latest entry must be visible under auto-follow");
+        assert!(!out.contains("entry-0"), "the earliest entry must have scrolled out of view");
     }
 
     #[test]

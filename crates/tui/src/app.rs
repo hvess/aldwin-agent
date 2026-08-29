@@ -109,7 +109,21 @@ impl App {
 
     fn push(&mut self, entry: LogEntry) {
         self.log.push(entry);
-        self.scroll.on_content_grew(self.log.len());
+        self.scroll.on_content_grew(self.total_lines());
+    }
+
+    /// Total rendered terminal rows across the whole log — what
+    /// `ScrollState` actually needs to compare against `viewport_height`
+    /// (also rows), not `self.log.len()` (entry count). Mixing those units
+    /// is what made scrolling effectively a no-op before this existed: a
+    /// handful of entries routinely render to far more rows than the
+    /// viewport, so an entry-count-based `max_offset` stayed 0 long after
+    /// there was real content to scroll to. See `log::line_count`'s doc
+    /// comment for why this is exact (not approximate) per entry.
+    pub fn total_lines(&self) -> usize {
+        let separators = self.log.len().saturating_sub(1); // one blank line between each pair of entries, per ui::draw_log
+        let thinking = usize::from(self.thinking); // ui::draw_log appends one more line while thinking
+        self.log.iter().map(crate::log::line_count).sum::<usize>() + separators + thinking
     }
 
     fn active_step_calls(&mut self, step_id: StepId) -> Option<&mut Vec<ToolActivityEntry>> {
@@ -211,18 +225,18 @@ impl App {
             (KeyCode::Home, _) => self.cursor = 0,
             (KeyCode::End, _) => {
                 self.cursor = self.input.chars().count();
-                self.scroll.jump_to_bottom(self.log.len());
+                self.scroll.jump_to_bottom(self.total_lines());
             }
             (KeyCode::PageUp, _) => self.scroll.page_up(),
-            (KeyCode::PageDown, _) => self.scroll.page_down(self.log.len()),
+            (KeyCode::PageDown, _) => self.scroll.page_down(self.total_lines()),
             (KeyCode::Up, _) => self.scroll.line_up(),
-            (KeyCode::Down, _) => self.scroll.line_down(self.log.len()),
+            (KeyCode::Down, _) => self.scroll.line_down(self.total_lines()),
             // Vim-style j/k/G scroll only when the input is empty — typing
             // those characters into a non-empty draft must never scroll out
             // from under the developer instead of inserting the letter.
             (KeyCode::Char('k'), _) if self.input.is_empty() => self.scroll.line_up(),
-            (KeyCode::Char('j'), _) if self.input.is_empty() => self.scroll.line_down(self.log.len()),
-            (KeyCode::Char('G'), _) if self.input.is_empty() => self.scroll.jump_to_bottom(self.log.len()),
+            (KeyCode::Char('j'), _) if self.input.is_empty() => self.scroll.line_down(self.total_lines()),
+            (KeyCode::Char('G'), _) if self.input.is_empty() => self.scroll.jump_to_bottom(self.total_lines()),
             (KeyCode::Char(c), _) => self.insert_char(c),
             _ => {}
         }

@@ -271,6 +271,40 @@ call; two sites used a different local variable name than the sed
 pass's exact-match pattern (`assistant_app`, `user_app`) and needed a
 manual follow-up fix.
 
+**Progress (2026-08-29, symmetry, padding, gradient, tagline, stacked
+stats):** Five more requests against the settled banner layout above. (1)
+"The hammer itself is still not rendering symmetrically" — the trace
+looked asymmetric (uneven top end-caps, a rightward lean) even though the
+source photo read as symmetric on direct inspection; root cause was in
+the resize/blur pipeline, not the source, so this pipeline now forces
+bilateral symmetry at the source image itself (`-flop` plus
+`-evaluate-sequence mean` averaging the image with its own horizontal
+mirror) before the same resize/blur/threshold/Braille steps — guarantees
+symmetry regardless of downstream filter quirks, rather than trying to
+debug the asymmetry's exact origin. (2) "The hammer needs padding all the
+way around it" — `ui::intro_lines` now emits one blank `Line` before and
+after the art block, and `ui::bordered`'s `LEFT_MARGIN` grew from 2 to 3.
+(3) "Different colors/gradient ... to make it more fancy" — new
+`ui::mjolnir_row_color(row, total)`, a top-to-bottom RGB lerp (near-white
+cyan at the top fading to deep blue at the base) applied per-row to the
+hammer art's style; every other element (wordmark, tagline, stats) stays
+on the existing flat palette. (4) The tagline changed from "a tool for
+thought" to "every strike is yours to call. nothing moves without you." —
+three rounds of developer feedback (first: "about the fact that this
+harness is a tool that gives you the authority/decisiveness to have
+control over the LLM, generate something for me to review"; second: "it
+needs to be longer and better"; third: the developer supplied the final
+text directly) before landing on wording that names the developer's
+authority over the LLM explicitly rather than the harness's own
+qualities. (5) "The stats/statuses should not be inline but stacked
+vertically" — the combined `model · version · commit` line split into
+three separate labeled rows (`model`, `version`, `commit`), changing
+`info`'s type from `Vec<(String, Style)>` to `Vec<Vec<Span<'static>>>` so
+each row can carry its own label/value span pair.
+`log::INTRO_LINE_COUNT` grew from 18 to 20 (the two new padding rows);
+the hammer art itself (`MJOLNIR_ART`) kept its existing 16×27 shape — only
+the source symmetry changed, not the row/column dimensions.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

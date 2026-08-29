@@ -118,23 +118,37 @@ const WORDMARK_ART: [&str; 6] = [
 ];
 
 const MJOLNIR_ART: [&str; 16] = [
-    "⠀⠀⠀⠀⠀⠀⣠⡶⠒⣺⣿⣿⣉⣏⣉⣿⣿⣗⠒⣦⡄⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⣿⠇⡾⢋⡭⣍⠻⣿⠟⡩⢭⡙⣷⢸⣿⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⣿⡀⢷⡘⠒⣨⡿⢡⢾⡀⠚⢁⡟⢠⣼⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠘⠳⣄⠉⠛⢉⣴⢿⣦⡙⠛⠋⡠⠞⠁⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⡆⢀⣤⣙⡿⢋⣤⡀⢸⠁⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⢠⡴⠒⣺⣿⣿⣉⣉⣉⣿⣿⣗⠒⢦⡄⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⣿⠇⣾⢋⡭⢍⠻⣿⠟⡩⢭⡙⣷⠸⣿⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⣿⡄⢿⡘⠒⢨⡷⣀⢾⡅⠒⢃⡿⢠⣿⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠈⠳⣄⠙⠛⢉⣴⠿⣦⡉⠛⠋⣠⠞⠁⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⡇⢀⣤⡙⠿⢋⣤⡀⢸⠁⠀⠀⠀⠀⠀⠀⠀⠀",
     "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠘⣿⠋⣤⠙⣿⠃⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⢸⣿⡶⠉⢴⣿⡇⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⢰⠃⣼⢿⣐⠿⢀⡿⣧⠸⡄⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⢀⡞⢰⣇⠚⣡⣶⣍⠃⣸⡄⢳⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⣀⣀⣀⣀⣀⣠⡾⠤⠾⠿⠛⠛⠛⠛⠛⠿⠷⠤⢷⣤⣄⣀⣀⣤⣄⠀",
-    "⢸⠁⣴⣤⣤⠆⠀⠲⣶⣶⠟⢛⣉⣙⠛⢿⣿⡶⢂⣠⣶⣶⢶⣶⣶⠀⡇",
-    "⣸⢀⣿⣿⣇⠸⠟⣷⢸⠃⣼⠋⣭⡍⢳⡈⣿⡇⣾⡿⠛⣛⣛⠛⢿⡄⣧",
-    "⡟⠘⢛⣉⣙⠓⢚⣡⣾⡀⣿⡘⠿⠿⠿⢠⣿⣷⣈⠓⠛⣋⣽⣿⣦⠀⢸",
-    "⠛⠤⠤⠤⢭⣉⡙⠻⠿⣷⣌⠛⠶⠶⠾⠟⣋⣴⡿⠟⢛⣉⣩⠭⠤⠤⠞",
-    "⠀⠀⠀⠀⠀⠀⠈⠙⠒⠤⣉⠛⢷⣶⡶⠟⣉⡤⠖⠋⠉⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠢⣄⡴⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⢸⣿⡶⠉⢶⣿⡇⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⢰⠇⣼⢿⣀⠿⣀⡿⣧⠸⡆⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⢀⡞⢠⣇⠚⣡⣶⣌⠓⣸⡄⢳⡀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⣠⣀⣀⣀⣀⣤⡾⠤⠾⠿⠛⠛⠛⠛⠛⠿⠷⠤⢷⣤⣀⣀⣀⣀⣄⠀",
+    "⢸⠁⣴⣶⣶⣶⣦⣤⣴⣶⣿⣿⢛⣉⡛⣿⣿⣶⣦⣤⣴⣶⣶⣶⣦⠈⡇",
+    "⣼⢀⣿⣿⣇⠙⠛⢿⡿⢉⣿⢃⣭⣉⣭⡘⣿⡉⢿⡿⠛⠋⣸⣿⣿⡀⣧",
+    "⡏⠀⣻⣿⣏⡙⠛⣃⣤⡼⣿⡈⠿⠿⠿⢁⣿⢧⣤⣘⠛⢋⣹⣿⣟⠀⢹",
+    "⠳⠤⠤⠤⢭⣉⡛⠻⠿⣷⣌⠻⠶⠶⠶⠟⣡⣾⠿⠟⢛⣉⡭⠤⠤⠤⠞",
+    "⠀⠀⠀⠀⠀⠀⠈⠙⠲⠤⣉⠛⢶⣶⡶⠛⣉⠤⠖⠋⠁⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⢦⣤⡴⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
+
+/// Per-row color for `MJOLNIR_ART`: bright electric cyan-white at the top
+/// fading to a deep blue at the base, evoking current arcing down through
+/// the hammer — per explicit developer request for something "fancier"
+/// than a flat single color on the mascot art specifically. Interpolates
+/// linearly in RGB space; not a general loosening of the one-accent-color
+/// rule elsewhere (see the Palette Progress note in mjolnir-tui.md), just
+/// a further scoped expansion of it for this one mark, same as ACCENT
+/// itself already was.
+fn mjolnir_row_color(row: usize, total: usize) -> Color {
+    let t = row as f32 / (total.saturating_sub(1)).max(1) as f32;
+    let lerp = |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * t).round() as u8 };
+    Color::Rgb(lerp(210, 40), lerp(255, 90), lerp(255, 210))
+}
 
 /// Every `MJOLNIR_ART` row is exactly this many chars (not trimmed of
 /// trailing blank Braille cells), so the info column in `intro_lines`
@@ -151,36 +165,43 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     );
     let frame = Style::default().fg(ACCENT);
     let wordmark_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let art_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
-    let meta = Style::default().fg(DIM);
+    let tagline_style = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
+    let stat_label = Style::default().fg(DIM);
+    let stat_value = Style::default().fg(BRIGHT);
 
     // Beside the art, not above or below it — per the standing developer
     // rule (art left-aligned, text alongside it on the right). The
-    // wordmark block sits at the top of this column, tagline/version
-    // below it, the whole column vertically centered against the art's
-    // height.
-    let mut info: Vec<(String, Style)> = WORDMARK_ART.iter().map(|row| (row.to_string(), wordmark_style)).collect();
-    info.push((String::new(), meta));
-    info.push(("a tool for thought.".to_string(), tagline));
-    info.push((String::new(), meta));
-    info.push((format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta));
+    // wordmark block sits at the top of this column, tagline/stats below
+    // it, the whole column vertically centered against the art's height.
+    // Stats render as separate labeled lines (model/version/commit) —
+    // per explicit developer request, not packed onto one line.
+    let mut info: Vec<Vec<Span<'static>>> = WORDMARK_ART.iter().map(|row| vec![Span::styled(*row, wordmark_style)]).collect();
+    info.push(vec![]);
+    info.push(vec![Span::styled("every strike is yours to call. nothing moves without you.", tagline_style)]);
+    info.push(vec![]);
+    info.push(vec![Span::styled("model    ", stat_label), Span::styled(model_name.to_string(), stat_value)]);
+    info.push(vec![Span::styled("version  ", stat_label), Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), stat_value)]);
+    info.push(vec![Span::styled("commit   ", stat_label), Span::styled(env!("MJOLNIR_GIT_HASH"), stat_value)]);
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
-    let content: Vec<Line<'static>> = MJOLNIR_ART
-        .iter()
-        .enumerate()
-        .map(|(i, art_row)| {
-            let mut spans = vec![Span::styled(*art_row, art_style)];
-            if let Some(row_i) = i.checked_sub(info_offset) {
-                if let Some((text, style)) = info.get(row_i) {
-                    spans.push(Span::raw("   "));
-                    spans.push(Span::styled(text.clone(), *style));
-                }
+    // A blank line above and below the art gives it breathing room inside
+    // the border, on top of the existing left margin and the border's own
+    // fill-to-width on the right — per explicit developer request for
+    // padding "all the way around" the hammer, not just on one side.
+    let mut content: Vec<Line<'static>> = Vec::with_capacity(MJOLNIR_ART.len() + 2);
+    content.push(Line::default());
+    content.extend(MJOLNIR_ART.iter().enumerate().map(|(i, art_row)| {
+        let art_style = Style::default().fg(mjolnir_row_color(i, MJOLNIR_ART.len())).add_modifier(Modifier::BOLD);
+        let mut spans = vec![Span::styled(*art_row, art_style)];
+        if let Some(row_i) = i.checked_sub(info_offset) {
+            if let Some(line_spans) = info.get(row_i) {
+                spans.push(Span::raw("   "));
+                spans.extend(line_spans.iter().cloned());
             }
-            Line::from(spans)
-        })
-        .collect();
+        }
+        Line::from(spans)
+    }));
+    content.push(Line::default());
     bordered(width, content, frame)
 }
 
@@ -195,7 +216,7 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
 /// (box-drawing and Braille dot patterns are Unicode East Asian Width
 /// "Narrow"/"Neutral") but would need adjustment for wide (CJK/emoji) text.
 fn bordered(width: u16, content: Vec<Line<'static>>, border_style: Style) -> Vec<Line<'static>> {
-    const LEFT_MARGIN: usize = 2;
+    const LEFT_MARGIN: usize = 3;
     let inner_width = (width as usize).saturating_sub(2);
     let mut out = Vec::with_capacity(content.len() + 2);
     out.push(Line::from(Span::styled(format!("┌{}┐", "─".repeat(inner_width)), border_style)));
@@ -795,6 +816,17 @@ mod tests {
     }
 
     #[test]
+    fn mjolnir_row_color_sweeps_from_light_at_the_top_to_dark_at_the_base() {
+        let top = mjolnir_row_color(0, MJOLNIR_ART.len());
+        let bottom = mjolnir_row_color(MJOLNIR_ART.len() - 1, MJOLNIR_ART.len());
+        assert_ne!(top, bottom, "the hammer should read as a gradient, not a flat single color");
+        let Color::Rgb(tr, tg, tb) = top else { panic!("expected an Rgb color") };
+        let Color::Rgb(br, bg, bb) = bottom else { panic!("expected an Rgb color") };
+        let brightness = |r: u8, g: u8, b: u8| r as u32 + g as u32 + b as u32;
+        assert!(brightness(tr, tg, tb) > brightness(br, bg, bb), "the top of the hammer should be brighter than the base");
+    }
+
+    #[test]
     fn the_wordmark_and_tagline_render_beside_the_hammer_art() {
         let mut app = app();
         // Tall enough that the whole banner fits without auto-follow scroll
@@ -805,20 +837,21 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         // The right-hand column (WORDMARK_ART, then blank/tagline/blank/
-        // version) is vertically centered against MJOLNIR_ART's 16 rows:
-        // offset = (16 - (6 wordmark + 4 info)) / 2 = 3. Screen row 0 is
-        // the top border, so the wordmark's first row is 1 + 3 = 4.
-        let info_len = WORDMARK_ART.len() + 4;
+        // model/version/commit) is vertically centered against
+        // MJOLNIR_ART's 16 rows: offset = (16 - (6 wordmark + 6 info)) / 2
+        // = 2. Screen row 0 is the top border, row 1 is the padding blank
+        // line above the art, so the wordmark's first row is 2 + 2 = 4.
+        let info_len = WORDMARK_ART.len() + 6;
         let offset = (MJOLNIR_ART.len() - info_len) / 2;
-        let wordmark_row = (1 + offset) as u16;
+        let wordmark_row = (2 + offset) as u16;
         let wordmark_row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
         assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row beside the hammer art, got: {wordmark_row_text:?}");
         assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "that same row should still carry hammer art content to its left, not just the wordmark alone");
 
         // Tagline is right after the wordmark block plus one blank line.
-        let tagline_row = (1 + offset + WORDMARK_ART.len() + 1) as u16;
+        let tagline_row = (2 + offset + WORDMARK_ART.len() + 1) as u16;
         let tagline_row_text: String = (0..100).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
-        assert!(tagline_row_text.contains("a tool for thought."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
+        assert!(tagline_row_text.contains("every strike is yours to call."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
     }
 
     #[test]

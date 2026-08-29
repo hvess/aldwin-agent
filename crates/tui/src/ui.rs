@@ -632,6 +632,22 @@ fn is_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
+/// Splits one input line into (leading whitespace, dim-styled `/word`
+/// token, rest-of-line) when it's a slash command per `is_command`'s rule;
+/// otherwise returns the line unstyled. Only the token — not any following
+/// arguments — is dimmed, so `/clear` and a plain draft stay visually
+/// distinguishable the moment the `/` is typed, without waiting for Enter.
+fn highlight_command_token(line: &str) -> Line<'static> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('/') {
+        return Line::from(line.to_string());
+    }
+    let leading_ws = &line[..line.len() - trimmed.len()];
+    let token_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let (token, rest) = trimmed.split_at(token_len);
+    Line::from(vec![Span::raw(leading_ws.to_string()), Span::styled(token.to_string(), Style::default().fg(DIM)), Span::raw(rest.to_string())])
+}
+
 /// One line of a unified diff (`mjolnir_tools::diff::unified`'s output),
 /// tagged by its leading marker (` `/`+`/`-`). The `--- path`/`+++ path`
 /// header pair is pulled out separately by `parse_diff_body` since it's
@@ -799,7 +815,15 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         Style::default().fg(ACCENT)
     });
-    let paragraph = Paragraph::new(app.input.as_str()).block(block).wrap(Wrap { trim: false });
+    // Live counterpart to `is_command`'s dim styling of an already-submitted
+    // slash command in the log (see `render_entry`) — without this, a
+    // command only reads as "directed at the harness, not the model" after
+    // Enter, not while the developer is still typing it. Only the first
+    // line's leading `/word` token is checked/styled (slash commands are
+    // one token, never multi-line), matching `is_command`'s own
+    // trim-then-`/`-prefix rule so the two stay in sync.
+    let lines: Vec<Line> = app.input.split('\n').enumerate().map(|(i, l)| if i == 0 { highlight_command_token(l) } else { Line::from(l.to_string()) }).collect();
+    let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 
     // No visible cursor at all was a standing complaint — per explicit
@@ -1062,6 +1086,48 @@ mod tests {
         app.input = "draft text".into();
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("draft text"));
+    }
+
+    #[test]
+    fn highlight_command_token_dims_only_the_leading_slash_word() {
+        let line = highlight_command_token("/clear now");
+        let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
+        assert_eq!(styled, vec![("", None), ("/clear", Some(DIM)), (" now", None)]);
+    }
+
+    #[test]
+    fn highlight_command_token_leaves_plain_text_unstyled() {
+        let line = highlight_command_token("hello world");
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].style.fg, None);
+    }
+
+    /// Live counterpart to `a_slash_command_renders_differently_from_a_plain_user_message`
+    /// above: a slash command must read as dim the moment it's typed, not
+    /// only after Enter moves it into the log — otherwise the developer gets
+    /// no signal it's headed for the harness rather than the model until
+    /// it's too late to reconsider.
+    #[test]
+    fn command_token_is_dimmed_live_in_the_input_box() {
+        let mut app = app();
+        app.input = "/clear now".into();
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // Single-line draft -> 3-row input box (see `input_area_height`) at
+        // the very bottom of a 20-row frame; content sits on the middle row
+        // (y=18), one cell in from the left border (x=1).
+        let slash_cell = &buffer[(1, 18)]; // '/'
+        let arg_cell = &buffer[(8, 18)]; // 'n' of "now"
+        assert_eq!(slash_cell.symbol(), "/");
+        assert_eq!(arg_cell.symbol(), "n");
+        assert_ne!(
+            (slash_cell.fg, slash_cell.modifier),
+            (arg_cell.fg, arg_cell.modifier),
+            "the command token must render differently from the rest of the typed line"
+        );
     }
 
     /// Regression test: no visible cursor at all was a standing complaint —

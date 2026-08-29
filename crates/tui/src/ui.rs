@@ -632,20 +632,44 @@ fn is_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
-/// Splits one input line into (leading whitespace, dim-styled `/word`
-/// token, rest-of-line) when it's a slash command per `is_command`'s rule;
-/// otherwise returns the line unstyled. Only the token — not any following
-/// arguments — is dimmed, so `/clear` and a plain draft stay visually
-/// distinguishable the moment the `/` is typed, without waiting for Enter.
-fn highlight_command_token(line: &str) -> Line<'static> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('/') {
-        return Line::from(line.to_string());
+/// Every word `cli::slash::intercept` actually dispatches on (see its
+/// `match rest.trim()` arms in `slash.rs`, `/`-prefixed here to match
+/// whole-word input tokens directly) — duplicated for the same reason as
+/// `is_command` above: tui can't depend on cli. Purely a hint for
+/// `highlight_command_tokens` below; keep in sync by hand if slash.rs's
+/// arms change.
+const KNOWN_COMMAND_WORDS: [&str; 4] = ["/help", "/clear", "/exit", "/reload-config"];
+
+/// Dims every word in `line` that exactly matches a known command, no
+/// matter where it falls — per explicit developer direction, this is a
+/// cosmetic hint only and deliberately does *not* mirror `is_command`'s
+/// "whole message must start with `/`" rule: a real slash command only
+/// fires when it's the very first thing in the message (`is_command`,
+/// enforced for real in `cli::slash::intercept`), so `/exit` typed
+/// mid-sentence never actually gets intercepted — it's still worth
+/// flagging live so the developer notices they typed a recognized command
+/// word, wherever it landed.
+fn highlight_command_tokens(line: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut rest = line;
+    while !rest.is_empty() {
+        let ws_len: usize = rest.chars().take_while(|c| c.is_whitespace()).map(|c| c.len_utf8()).sum();
+        if ws_len > 0 {
+            let (ws, tail) = rest.split_at(ws_len);
+            spans.push(Span::raw(ws.to_string()));
+            rest = tail;
+            continue;
+        }
+        let word_len: usize = rest.chars().take_while(|c| !c.is_whitespace()).map(|c| c.len_utf8()).sum();
+        let (word, tail) = rest.split_at(word_len);
+        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(DIM) } else { Style::default() };
+        spans.push(Span::styled(word.to_string(), style));
+        rest = tail;
     }
-    let leading_ws = &line[..line.len() - trimmed.len()];
-    let token_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
-    let (token, rest) = trimmed.split_at(token_len);
-    Line::from(vec![Span::raw(leading_ws.to_string()), Span::styled(token.to_string(), Style::default().fg(DIM)), Span::raw(rest.to_string())])
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    Line::from(spans)
 }
 
 /// One line of a unified diff (`mjolnir_tools::diff::unified`'s output),
@@ -818,11 +842,12 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // Live counterpart to `is_command`'s dim styling of an already-submitted
     // slash command in the log (see `render_entry`) — without this, a
     // command only reads as "directed at the harness, not the model" after
-    // Enter, not while the developer is still typing it. Only the first
-    // line's leading `/word` token is checked/styled (slash commands are
-    // one token, never multi-line), matching `is_command`'s own
-    // trim-then-`/`-prefix rule so the two stay in sync.
-    let lines: Vec<Line> = app.input.split('\n').enumerate().map(|(i, l)| if i == 0 { highlight_command_token(l) } else { Line::from(l.to_string()) }).collect();
+    // Enter, not while the developer is still typing it. Unlike
+    // `is_command`, this checks every word on every line — see
+    // `highlight_command_tokens`'s doc comment for why a mid-message
+    // `/exit` still gets flagged even though it would never actually be
+    // intercepted as a command.
+    let lines: Vec<Line> = app.input.split('\n').map(highlight_command_tokens).collect();
     let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 
@@ -1089,17 +1114,37 @@ mod tests {
     }
 
     #[test]
-    fn highlight_command_token_dims_only_the_leading_slash_word() {
-        let line = highlight_command_token("/clear now");
+    fn highlight_command_tokens_dims_a_leading_command_word() {
+        let line = highlight_command_tokens("/clear now");
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
-        assert_eq!(styled, vec![("", None), ("/clear", Some(DIM)), (" now", None)]);
+        assert_eq!(styled, vec![("/clear", Some(DIM)), (" ", None), ("now", None)]);
+    }
+
+    /// The bug report this responds to: dimming only checked the input's
+    /// very first character, so a recognized command word typed anywhere
+    /// past position 0 never got flagged even though it's the same word.
+    #[test]
+    fn highlight_command_tokens_dims_a_command_word_mid_message() {
+        let line = highlight_command_tokens("please run /exit for me");
+        let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
+        assert_eq!(
+            styled,
+            vec![("please", None), (" ", None), ("run", None), (" ", None), ("/exit", Some(DIM)), (" ", None), ("for", None), (" ", None), ("me", None)]
+        );
     }
 
     #[test]
-    fn highlight_command_token_leaves_plain_text_unstyled() {
-        let line = highlight_command_token("hello world");
-        assert_eq!(line.spans.len(), 1);
-        assert_eq!(line.spans[0].style.fg, None);
+    fn highlight_command_tokens_leaves_plain_text_unstyled() {
+        let line = highlight_command_tokens("hello world");
+        assert!(line.spans.iter().all(|s| s.style.fg.is_none()));
+    }
+
+    #[test]
+    fn highlight_command_tokens_requires_an_exact_word_match() {
+        // "/exiting" isn't the recognized "/exit" word, and "cleared" isn't
+        // "/clear" — a substring match would false-positive on either.
+        let line = highlight_command_tokens("/exiting cleared");
+        assert!(line.spans.iter().all(|s| s.style.fg.is_none()));
     }
 
     /// Live counterpart to `a_slash_command_renders_differently_from_a_plain_user_message`
@@ -1128,6 +1173,29 @@ mod tests {
             (arg_cell.fg, arg_cell.modifier),
             "the command token must render differently from the rest of the typed line"
         );
+    }
+
+    /// Regression test for the reported bug: highlighting only ever
+    /// checked whether the input's very first character was `/`, so a
+    /// command word typed anywhere past position 0 in the same message
+    /// went unstyled even though it's the identical word.
+    #[test]
+    fn command_word_is_dimmed_live_even_mid_message() {
+        let mut app = app();
+        app.input = "hi /exit there".into();
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let leading_cell = &buffer[(1, 18)]; // 'h' of "hi"
+        let slash_cell = &buffer[(4, 18)]; // '/' of "/exit"
+        let trailing_cell = &buffer[(10, 18)]; // 't' of "there"
+        assert_eq!(leading_cell.symbol(), "h");
+        assert_eq!(slash_cell.symbol(), "/");
+        assert_eq!(trailing_cell.symbol(), "t");
+        assert_ne!((leading_cell.fg, leading_cell.modifier), (slash_cell.fg, slash_cell.modifier), "a mid-message command word must still be dimmed");
+        assert_ne!((trailing_cell.fg, trailing_cell.modifier), (slash_cell.fg, slash_cell.modifier), "text after a mid-message command word must not also be dimmed");
     }
 
     /// Regression test: no visible cursor at all was a standing complaint —

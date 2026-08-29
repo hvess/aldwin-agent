@@ -71,7 +71,7 @@ impl Tool for EditTool {
 
     async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let args = edit_args(&input)?;
-        let path = self.project_root.join(&args.path);
+        let path = crate::paths::resolve_in_project(&self.project_root, &args.path)?;
 
         let current = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
 
@@ -119,6 +119,15 @@ mod tests {
 
         let on_disk = std::fs::read_to_string(dir.path().join("f.rs")).unwrap();
         assert_eq!(on_disk, "fn a() { println!(\"hi\"); }\nfn b() {}\n");
+    }
+
+    #[tokio::test]
+    async fn absolute_path_cannot_escape_the_project_root() {
+        let dir = tempdir().unwrap();
+        let tool = EditTool::new(dir.path().to_path_buf());
+
+        let err = tool.call("c1", json!({"path": "/etc/passwd", "before": "root", "after": "x"}), &ALWAYS_APPROVE).await.unwrap_err();
+        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
     }
 
     #[tokio::test]

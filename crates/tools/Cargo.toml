@@ -16,4 +16,5 @@ libc                 = "0.2"
 rmcp                 = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile     = "3"
+amundsen-core = { path = "../core", features = ["test-util"] }

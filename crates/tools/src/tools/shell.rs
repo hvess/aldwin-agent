@@ -20,6 +20,19 @@ const OUTPUT_CAP_BYTES: usize = 50 * 1024;
 /// output capped at 50KB per stream with a truncation marker. Runs the
 /// child in its own process group so cancellation/timeout can SIGKILL the
 /// whole tree, not just the immediate child.
+///
+/// Known limitation, inherent to glob-based grant patterns rather than
+/// specific to this tool: `permission_target` matches the *literal* command
+/// string, so a grant like `shell:cargo test*` matches `cargo test &&
+/// anything-at-all` too — `*` has no concept of "stop at a shell
+/// metacharacter." A real fix needs actual shell-command parsing (an AST,
+/// not a glob) to scope a grant to just the invoked binary and its argv;
+/// that's out of scope for the glob grammar amundsen-permissions.md
+/// defines. This is the same accepted risk class as prefix-matched shell
+/// permission systems generally (a broad grant is an intentional trust
+/// decision, not an isolation boundary) — worth a developer's awareness
+/// when choosing how broad a shell grant to hand out, not a bug fixable
+/// within this tool alone.
 pub struct ShellTool {
     descriptor:   ToolDescriptor,
     project_root: PathBuf,

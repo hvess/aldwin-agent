@@ -9,6 +9,18 @@ use std::sync::Arc;
 use crate::error::ToolError;
 use crate::registry::Registry;
 
+/// One server's or one tool's registration failure — see
+/// `register_mcp_tools`. `tool: None` means the failure was at the
+/// server-enumeration level (the whole server never got any tools
+/// registered); `Some` means one specific tool within an otherwise-healthy
+/// server failed (a namespaced double-collision).
+#[derive(Debug)]
+pub struct McpRegistrationFailure {
+    pub server: String,
+    pub tool:   Option<String>,
+    pub error:  ToolError,
+}
+
 /// Enumerates every configured server's tools and registers them.
 /// Per amundsen-tools.md: MCP-supplied names that collide with a built-in
 /// (or another already-registered MCP tool) are namespaced `<server>:<name>`;
@@ -17,22 +29,41 @@ use crate::registry::Registry;
 /// doc comment on why that's "lazy" in the sense the spec means, not
 /// deferred all the way to a tool's first call.
 ///
-/// A namespaced collision (two servers advertising the identical name) is a
-/// genuine configuration conflict and returns `Err` — it isn't silently
-/// dropped, and it isn't allowed to shadow whatever registered first.
-pub async fn register_mcp_tools(bridge: Arc<McpBridge>, registry: &mut Registry) -> Result<(), ToolError> {
+/// Best-effort across servers: one server failing to enumerate (spawn
+/// failure, protocol error) does not stop any other server's tools from
+/// registering — everything that went wrong comes back in the returned
+/// list rather than aborting the whole call, so a caller can log it (or
+/// not) without one broken server taking down every other one, per
+/// bootstrap.rs's "a broken MCP server must not prevent the session from
+/// starting at all." A namespaced double-collision (two servers advertising
+/// the identical name) is likewise recorded and skipped, not fatal to the
+/// rest of the batch.
+pub async fn register_mcp_tools(bridge: Arc<McpBridge>, registry: &mut Registry) -> Vec<McpRegistrationFailure> {
+    let mut failures = Vec::new();
+
     for server in bridge.server_names() {
-        for remote in bridge.list_tools(&server).await? {
+        let tools = match bridge.list_tools(&server).await {
+            Ok(tools) => tools,
+            Err(error) => {
+                failures.push(McpRegistrationFailure { server, tool: None, error: error.into() });
+                continue;
+            }
+        };
+
+        for remote in tools {
             let bare_name = remote.name.to_string();
             let candidate = Arc::new(McpTool::new(bridge.clone(), server.clone(), bare_name.clone(), &remote));
             if registry.register(candidate).is_err() {
                 let namespaced = format!("{server}:{bare_name}");
                 let candidate = Arc::new(McpTool::new(bridge.clone(), server.clone(), namespaced, &remote));
-                registry.register(candidate)?;
+                if let Err(error) = registry.register(candidate) {
+                    failures.push(McpRegistrationFailure { server: server.clone(), tool: Some(bare_name), error });
+                }
             }
         }
     }
-    Ok(())
+
+    failures
 }
 
 #[cfg(test)]
@@ -50,7 +81,7 @@ mod tests {
     async fn registers_under_the_bare_name_when_there_is_no_collision() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
         let mut registry = Registry::new();
-        register_mcp_tools(bridge, &mut registry).await.unwrap();
+        assert!(register_mcp_tools(bridge, &mut registry).await.is_empty());
         assert!(registry.get("echo").is_some());
     }
 
@@ -82,9 +113,22 @@ mod tests {
             })))
             .unwrap();
 
-        register_mcp_tools(bridge, &mut registry).await.unwrap();
+        assert!(register_mcp_tools(bridge, &mut registry).await.is_empty());
         assert!(registry.get("fake:echo").is_some(), "should fall back to the namespaced name");
         // The pre-registered "echo" is untouched — built-ins win unprefixed.
         assert_eq!(registry.get("echo").unwrap().descriptor().source, ToolSource::Builtin);
+    }
+
+    #[tokio::test]
+    async fn one_broken_server_does_not_stop_another_healthy_ones_tools_from_registering() {
+        let broken = McpServer { name: "broken".into(), transport: McpTransport::Stdio { command: "does-not-exist-xyz".into(), args: vec![] }, env: Default::default() };
+        let bridge = Arc::new(McpBridge::new(vec![broken, fake_server("fake")]));
+        let mut registry = Registry::new();
+
+        let failures = register_mcp_tools(bridge, &mut registry).await;
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].server, "broken");
+        assert!(failures[0].tool.is_none());
+        assert!(registry.get("echo").is_some(), "the healthy server's tool must still register");
     }
 }

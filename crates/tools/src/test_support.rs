@@ -36,6 +36,6 @@ pub fn dispatch_context() -> (DispatchContext, mpsc::Receiver<Event>, Approvals,
     let (tx, rx) = mpsc::channel(16);
     let approvals = Arc::new(Mutex::new(HashMap::new()));
     let prompts = Arc::new(Mutex::new(HashMap::new()));
-    let ctx = DispatchContext::new(TurnId(1), StepId(1), tx, approvals.clone(), prompts.clone());
+    let ctx = DispatchContext::for_testing(TurnId(1), StepId(1), tx, approvals.clone(), prompts.clone());
     (ctx, rx, approvals, prompts)
 }

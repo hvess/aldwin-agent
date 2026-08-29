@@ -55,7 +55,7 @@ impl Tool for ReadTool {
 
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let path_str = path_arg(&input)?;
-        let path = self.project_root.join(&path_str);
+        let path = crate::paths::resolve_in_project(&self.project_root, &path_str)?;
         tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path, source })
     }
 }
@@ -73,6 +73,24 @@ mod tests {
 
         let out = tool.call("c1", json!({"path": "hello.txt"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap();
         assert_eq!(out, "hi there");
+    }
+
+    #[tokio::test]
+    async fn absolute_path_cannot_escape_the_project_root() {
+        let dir = tempdir().unwrap();
+        let tool = ReadTool::new(dir.path().to_path_buf());
+
+        let err = tool.call("c1", json!({"path": "/etc/passwd"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
+        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
+    }
+
+    #[tokio::test]
+    async fn dot_dot_cannot_escape_the_project_root() {
+        let dir = tempdir().unwrap();
+        let tool = ReadTool::new(dir.path().to_path_buf());
+
+        let err = tool.call("c1", json!({"path": "../../../../etc/passwd"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
+        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
     }
 
     #[tokio::test]

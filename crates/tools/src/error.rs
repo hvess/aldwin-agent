@@ -20,6 +20,9 @@ pub enum ToolError {
     #[error("{path}: {source}")]
     Io { path: PathBuf, #[source] source: std::io::Error },
 
+    #[error("path {path:?} resolves outside the project root")]
+    PathEscapesProject { path: String },
+
     #[error("{path}: expected exactly one occurrence of the given text, found {count}")]
     AmbiguousMatch { path: PathBuf, count: usize },
 

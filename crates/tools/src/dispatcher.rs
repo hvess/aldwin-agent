@@ -29,11 +29,12 @@ impl Dispatcher {
     async fn check(&self, descriptor: &ToolDescriptor, call: &ToolCall, ctx: &DispatchContext) -> Result<bool, ToolError> {
         let tool = self.registry.get(&call.name).expect("caller already resolved this name");
         let target = tool.permission_target(&call.input)?;
+        let kind = permission_kind(&descriptor.name);
 
-        match self.permissions.check_tool(&descriptor.name, &target, false) {
+        match self.permissions.check_tool(&kind, &target, false) {
             CheckOutcome::Allow => Ok(true),
             CheckOutcome::Deny => Ok(false),
-            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&descriptor.name, &target, payload, ctx).await,
+            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, &target, payload, ctx).await,
         }
     }
 
@@ -90,6 +91,26 @@ impl amundsen_core::ToolDispatcher for Dispatcher {
 
 fn error_result(call_id: &str, err: ToolError) -> ToolResult {
     ToolResult { call_id: call_id.to_string(), content: err.to_string(), is_error: true }
+}
+
+/// Permission grants persist as an opaque `kind:pattern` string
+/// (amundsen-permissions' `GrantKey::parse` splits on the *first* `:`, so
+/// patterns can contain their own colons — e.g. `read:./f.rs:1`). A tool's
+/// registered name is ordinarily a safe `kind`, but an MCP tool namespaced
+/// under a collision (`<server>:<name>`, per amundsen-tools.md) already
+/// contains a colon itself: persisted as `server:name:pattern`, that would
+/// parse back as kind `server`, pattern `name:pattern` — never matching the
+/// original kind again, so an "always allow" answer would silently stop
+/// taking effect on the very next call. Escaping `:` to `/` here (only ever
+/// needed for namespaced MCP kinds — plain tool names never contain it)
+/// keeps the grant grammar's own splitting rule correct without
+/// amundsen-permissions needing to know anything about MCP namespacing.
+fn permission_kind(tool_name: &str) -> std::borrow::Cow<'_, str> {
+    if tool_name.contains(':') {
+        std::borrow::Cow::Owned(tool_name.replace(':', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(tool_name)
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +225,40 @@ mod tests {
 
         // Project-tier response actually persisted.
         assert_eq!(permissions.check_tool("echo", "hi", false), CheckOutcome::Allow);
+    }
+
+    #[tokio::test]
+    async fn namespaced_mcp_style_tool_names_round_trip_an_always_grant() {
+        let mut registry = Registry::new();
+        registry.register(echo_tool("fake:echo", false)).unwrap();
+        let permissions = engine();
+        let dispatcher = Dispatcher::new(registry, permissions.clone());
+
+        // First call: deny-by-absence prompts; answer "always allow".
+        let (ctx, mut events, _approvals, prompts) = dispatch_context();
+        let call = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "fake:echo".into(), input: json!({"text": "hi"}) }, &ctx);
+        let resolve = async {
+            match events.recv().await.unwrap() {
+                Event::PromptRequested { id, .. } => {
+                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Always };
+                    let tx = prompts.lock().unwrap().remove(&id.0).unwrap();
+                    tx.send(serde_json::to_value(response).unwrap()).unwrap();
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+        let (result, ()) = tokio::join!(call, resolve);
+        assert!(!result.is_error);
+
+        // Second call, brand new DispatchContext (as if a new session):
+        // must be allowed without prompting again — this is exactly what
+        // broke before kind-escaping (the persisted grant's kind couldn't
+        // be reconstructed from the "server:name:pattern" string, since
+        // GrantKey::parse only splits on the first colon).
+        let (ctx2, _events2, _approvals2, _prompts2) = dispatch_context();
+        let result2 = dispatcher.dispatch(ToolCall { id: "c2".into(), name: "fake:echo".into(), input: json!({"text": "hi"}) }, &ctx2).await;
+        assert!(!result2.is_error, "expected the always-allow grant to still apply: {}", result2.content);
+        assert_eq!(result2.content, "hi");
     }
 
     #[tokio::test]

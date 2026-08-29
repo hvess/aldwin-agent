@@ -14,6 +14,7 @@ mod error;
 mod gate;
 mod lsp;
 mod mcp;
+mod paths;
 mod registry;
 mod tools;
 

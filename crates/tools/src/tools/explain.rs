@@ -125,7 +125,7 @@ impl Tool for ExplainTool {
         let path_str = required_str(&input, "path")?;
         let line = required_u64(&input, "line")?;
         let character = required_u64(&input, "character")?;
-        let path = self.project_root.join(path_str);
+        let path = crate::paths::resolve_in_project(&self.project_root, path_str)?;
         let server = lsp::language_for_path(&path).ok_or_else(|| invalid(format!("no language server configured for {}", path.display())))?;
         let client = self.client_for_language(server.language_id, server.command, server.args).await?;
 

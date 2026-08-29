@@ -21,6 +21,22 @@ not empirical cross-terminal testing. A live run (planned separately)
 should confirm or correct that reasoning — pay attention to both of these
 during it.
 
+**Progress (2026-08-29, live run):** First real-terminal session surfaced
+two bugs, both fixed in `a2a28ba`: (1) `handle_key` routed straight to
+`handle_approval_key`/`handle_prompt_key` while a card or prompt was
+pending, and neither recognized Ctrl+C — a developer who didn't already
+know the exact letter keybinding had no responsive key at all, which read
+as the harness hanging/crashing. Ctrl+C now always resolves the pending
+gate as a deny/decline. (2) `UserMessage` and `AssistantText` both
+rendered `Style::default().fg(BRIGHT)`, so the two speakers were
+visually identical in the log despite the Design section's stated
+bright/normal split — assistant text is now bold-bright, user text is
+terminal-default. Cards and the status bar now also spell out the Ctrl+C
+keybinding inline, since it wasn't discoverable before. The two gaps
+above (tool-activity collapse mechanism, Shift+Enter cross-terminal
+verification) are still open — this session's terminal wasn't used to
+re-verify Shift+Enter specifically.
+
 ## Design
 
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.

@@ -18,6 +18,7 @@
 //! terminals.
 
 mod app;
+mod highlight;
 mod log;
 mod run;
 mod scroll;

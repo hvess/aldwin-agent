@@ -6,11 +6,17 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, PermState};
+use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
 const BRIGHT: Color = Color::White;
+// Distinct from ACCENT (reserved for cards/focused-input per
+// amundsen-tui.md) and from BRIGHT (assistant) — a developer's own words
+// get their own color, not just the pre-existing "> " prefix, per explicit
+// feedback that user/assistant needed clearer separation than that gave.
+const USER: Color = Color::LightGreen;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -36,7 +42,13 @@ fn input_area_height(input: &str) -> u16 {
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
-    for entry in &app.log {
+    for (i, entry) in app.log.iter().enumerate() {
+        // Blank line between entries — not just at the user/assistant
+        // boundary, since every entry kind benefits from more breathing
+        // room, per explicit feedback that the log felt visually cramped.
+        if i > 0 {
+            lines.push(Line::default());
+        }
         lines.extend(render_entry(entry));
     }
     if app.thinking {
@@ -50,19 +62,17 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
     match entry {
-        // Palette per amundsen-tui.md: bright = assistant, normal = user —
+        // Palette per amundsen-tui.md: bright = assistant, USER = user —
         // these must not share a style, or the two speakers become
         // indistinguishable in the log. A slash command is user input that
         // never reaches the model (see amundsen-cli's interceptor) — dim
         // marks it as directed at the harness itself, not conversation,
         // the same way tool metadata and notices are dim.
         LogEntry::UserMessage { text } => {
-            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default() };
+            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default().fg(USER) };
             text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), style))).collect()
         }
-        LogEntry::AssistantText { text } => {
-            text.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)))).collect()
-        }
+        LogEntry::AssistantText { text } => render_assistant_text(text),
         LogEntry::ToolActivity { calls, .. } => calls
             .iter()
             .map(|c| {
@@ -103,6 +113,78 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
         LogEntry::Error { message } => vec![Line::from(Span::styled(format!("error: {message}"), Style::default().fg(Color::Red)))],
         LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("— {message} —"), Style::default().fg(DIM)))],
     }
+}
+
+/// One piece of assistant text — either prose or a fenced code block.
+enum Segment {
+    Prose(String),
+    Code { lang: String, body: String },
+}
+
+/// Splits on ` ``` ` fences (optionally followed by a language tag on the
+/// opening fence). An unterminated fence — the closing ` ``` ` hasn't
+/// streamed in yet — still renders as code up to the end of the buffer
+/// rather than falling back to prose, since re-rendering happens on every
+/// delta and the fence will close on a later redraw.
+fn split_code_fences(text: &str) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut prose = String::new();
+    let mut lines = text.lines().peekable();
+
+    while let Some(line) = lines.next() {
+        match line.trim_start().strip_prefix("```") {
+            Some(lang) => {
+                if !prose.is_empty() {
+                    segments.push(Segment::Prose(std::mem::take(&mut prose)));
+                }
+                let mut body = String::new();
+                for line in lines.by_ref() {
+                    if line.trim() == "```" {
+                        break;
+                    }
+                    body.push_str(line);
+                    body.push('\n');
+                }
+                segments.push(Segment::Code { lang: lang.trim().to_string(), body });
+            }
+            None => {
+                prose.push_str(line);
+                prose.push('\n');
+            }
+        }
+    }
+    if !prose.is_empty() {
+        segments.push(Segment::Prose(prose));
+    }
+    segments
+}
+
+fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for segment in split_code_fences(text) {
+        match segment {
+            Segment::Prose(s) => {
+                lines.extend(s.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)))));
+            }
+            Segment::Code { lang, body } => {
+                let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
+                lines.push(Line::from(Span::styled(format!("┌─ {label}"), Style::default().fg(DIM))));
+                for code_line in highlight::highlight_lines(&lang, &body) {
+                    let mut spans = vec![Span::styled("│ ", Style::default().fg(DIM))];
+                    spans.extend(code_line);
+                    lines.push(Line::from(spans));
+                }
+                lines.push(Line::from(Span::styled("└─", Style::default().fg(DIM))));
+            }
+        }
+    }
+    // A single marker on the very first rendered line — prose or a code
+    // fence's header, whichever comes first — scans as "here's where the
+    // assistant's turn starts" without repeating on every line.
+    if let Some(first) = lines.first_mut() {
+        first.spans.insert(0, Span::styled("● ", Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)));
+    }
+    lines
 }
 
 /// Mirrors amundsen-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
@@ -239,12 +321,11 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Both lines render "hi" at column 2 (after the "> " / no prefix);
-        // find each by its line content and compare the cell style at the
-        // first character — they must not be identical, or the two
-        // speakers are indistinguishable in the log.
+        // Row 1 is the blank separator line draw_log now inserts between
+        // every entry — the assistant message lands on row 2, at column 2
+        // (after its "● " marker, same width as user's "> ").
         let user_cell = &buffer[(2, 0)]; // "> hi"
-        let assistant_cell = &buffer[(0, 1)]; // "hi"
+        let assistant_cell = &buffer[(2, 2)]; // "● hi"
         assert_ne!(
             (user_cell.fg, user_cell.modifier),
             (assistant_cell.fg, assistant_cell.modifier),
@@ -264,7 +345,7 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         let plain_cell = &buffer[(2, 0)]; // "> hi"
-        let command_cell = &buffer[(2, 1)]; // "> /exit"
+        let command_cell = &buffer[(2, 2)]; // "> /exit" — row 1 is the blank separator line
         assert_ne!(
             (plain_cell.fg, plain_cell.modifier),
             (command_cell.fg, command_cell.modifier),
@@ -278,5 +359,60 @@ mod tests {
         app.input = "draft text".into();
         let out = rendered(&mut app, 80, 20);
         assert!(out.contains("draft text"));
+    }
+
+    /// The row-index assumptions the two style-comparison tests above make
+    /// (row 1 is blank, the second entry lands on row 2) only hold because
+    /// `draw_log` inserts exactly one blank line between entries — pin that
+    /// down directly so a change to the spacing logic fails loudly here
+    /// instead of silently making those tests compare the wrong cells.
+    #[test]
+    fn a_blank_line_separates_consecutive_log_entries() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "first".into() });
+        app.log.push(LogEntry::UserMessage { text: "second".into() });
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let row1: String = (0..80).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(row1.trim(), "", "row 1 must be the blank separator between the two entries");
+    }
+
+    #[test]
+    fn assistant_text_gets_a_marker_that_user_text_does_not() {
+        let mut assistant_app = app();
+        assistant_app.log.push(LogEntry::AssistantText { text: "hi".into() });
+        assert!(rendered(&mut assistant_app, 80, 20).contains('●'), "assistant text should start with a marker");
+
+        let mut user_app = app();
+        user_app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        assert!(!rendered(&mut user_app, 80, 20).contains('●'), "user text should not get the assistant marker");
+    }
+
+    #[test]
+    fn fenced_code_block_is_stripped_of_its_fences_and_syntax_highlighted() {
+        let mut app = app();
+        app.log.push(LogEntry::AssistantText { text: "here:\n```rust\nfn main() {}\n```\ndone".into() });
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let out: String = buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("");
+
+        assert!(!out.contains("```"), "the literal fence markers must not reach the screen");
+        assert!(out.contains("rust"), "the language tag should appear in the block's header");
+        assert!(out.contains("fn main"), "the code itself must still be shown");
+
+        // At least two distinct foreground colors within the code line —
+        // proof it went through the highlighter, not just plain dim text.
+        // No blank-line separator here: draw_log only inserts one between
+        // entries, and this is all one AssistantText entry.
+        let code_row = 2; // "● here:" / "┌─ rust" / "│ fn main() {}"
+        let colors: std::collections::HashSet<Color> = (0..80).map(|x| buffer[(x, code_row)].fg).collect();
+        assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
     }
 }

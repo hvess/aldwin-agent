@@ -45,6 +45,25 @@ the log, undermining the point of having named commands at all. See
 `is_command` in `ui.rs`; duplicates cli's own `/`-prefix check since tui
 can't depend on cli (wrong direction) to reuse it.
 
+**Progress (2026-08-29, second follow-up):** Two more requests from the
+same live session: (1) user/assistant separation via color alone (plus
+the earlier bright/normal split) still read as too subtle — assistant
+text now gets a `●` marker on its first line, user text moved off
+terminal-default onto a dedicated green (`USER` in `ui.rs`), and
+`draw_log` inserts a blank line between every log entry, not just at the
+user/assistant boundary. (2) fenced code blocks in assistant text were
+rendering as raw text, backticks included — `highlight.rs` now parses
+` ``` ` fences (`ui::split_code_fences`) and syntax-highlights the body
+via `syntect` (bundled syntax/theme dumps, `default-fancy` feature — pure
+Rust regex backend, no C toolchain dependency), inside a dim
+`┌─ lang` / `│ ` / `└─` border; an unrecognized language tag falls back
+to `syntect`'s plain-text syntax rather than refusing to render. Explicit
+user choice: full syntax highlighting over a lighter bordered-only
+treatment, accepting the added dependency, ~4MB larger release binary,
+and `base16-ocean.dark` as the highlighting theme (no way to detect the
+terminal's actual background — same open question as the deferred accent
+color above; revisit together).
+
 ## Design
 
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
@@ -52,7 +71,7 @@ can't depend on cli (wrong direction) to reuse it.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
 - **Input Area:** Multi-line textarea. Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Input is blocked while an approval card is pending.
 - **Status Bar:** Single line, always visible. Shows: model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), names of tools currently running within the active step (e.g. "tools: Read shell").
-- **Palette:** Minimal monochrome. Background: terminal default. Text hierarchy: bright (assistant output), normal (user input), dim (tool metadata, status bar text, and — added 2026-08-29 — a slash command as user input, since it's directed at the harness rather than the model). One accent color applied only to the approval card border and focused-input highlight. Specific accent color deferred pending mascot palette decision.
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress note below for why. Background: terminal default throughout. Text hierarchy: bright-bold with a leading `●` marker (assistant output), a dedicated green (user input), dim (tool metadata, status bar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied only to the approval card border and focused-input highlight. Specific accent color still deferred pending mascot palette decision. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `┌─`/`│`/`└─` border, independent of this hierarchy.
 
 ## Decisions
 

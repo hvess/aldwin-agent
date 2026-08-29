@@ -132,6 +132,16 @@ offers allow/deny at four tiers: once, this session, this project, always.
 Edit is the one exception: it's never allowlistable at any tier, and always
 shows a diff for per-call approval.
 
+### Log rendering
+
+Each speaker gets its own color: user input is green, assistant text is
+bold white with a leading `●`, a slash command is dim (it never reaches the
+model), and tool/status text stays dim. Fenced code blocks (` ```lang `) in
+assistant output render as a bordered block with real syntax highlighting
+instead of raw backticks — an unrecognized or missing language tag falls
+back to unhighlighted (but still bordered) text rather than refusing to
+render.
+
 ### Keybindings
 
 - **Input:** `Enter` submits, `Shift+Enter` inserts a newline (`Ctrl+J` as a

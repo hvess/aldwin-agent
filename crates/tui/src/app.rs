@@ -121,9 +121,12 @@ impl App {
     /// there was real content to scroll to. See `log::line_count`'s doc
     /// comment for why this is exact (not approximate) per entry.
     pub fn total_lines(&self) -> usize {
+        // The welcome banner plus the separator ui::draw_log puts between
+        // it and the first real entry (skipped when the log is empty).
+        let intro = crate::log::INTRO_LINE_COUNT + usize::from(!self.log.is_empty());
         let separators = self.log.len().saturating_sub(1); // one blank line between each pair of entries, per ui::draw_log
         let thinking = usize::from(self.thinking); // ui::draw_log appends one more line while thinking
-        self.log.iter().map(crate::log::line_count).sum::<usize>() + separators + thinking
+        intro + self.log.iter().map(crate::log::line_count).sum::<usize>() + separators + thinking
     }
 
     fn active_step_calls(&mut self, step_id: StepId) -> Option<&mut Vec<ToolActivityEntry>> {

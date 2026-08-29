@@ -27,7 +27,7 @@ A tool for thought.
   - Matte industrial finish in the contemporary-robot lineage (Wall-E, Anki Vector); not steampunk.
   - Slight wear and character marks — considered use, not factory-fresh.
   - Do not replicate the silhouette of any existing owl mascot (Bubo, Hedwig, Owl from The Owl House).
-- **Status:** Form factor decided (little owl, matte industrial, perched, eye-lenses as expressive feature). Silhouette refinements and colour palette still open.
+- **Status:** Form factor decided (little owl, matte industrial, perched, eye-lenses as expressive feature). Silhouette refinements and colour palette still open. First concrete rendering: an ASCII owl in the TUI's welcome banner (`amundsen-tui.md`'s 2026-08-29 "muted user color + welcome banner" Progress entry, `ui::intro_lines`) — a starting silhouette to react to, not a resolution of the open colour-palette question (it borrows the TUI's existing accent color rather than choosing a mascot palette).
 
 ## Workspace
 

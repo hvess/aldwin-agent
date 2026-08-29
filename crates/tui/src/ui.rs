@@ -12,11 +12,16 @@ use crate::log::{LogEntry, ToolActivityStatus};
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
 const BRIGHT: Color = Color::White;
-// Distinct from ACCENT (reserved for cards/focused-input per
-// amundsen-tui.md) and from BRIGHT (assistant) — a developer's own words
-// get their own color, not just the pre-existing "> " prefix, per explicit
-// feedback that user/assistant needed clearer separation than that gave.
-const USER: Color = Color::LightGreen;
+// A dedicated LightGreen was tried first for user/assistant separation
+// (see the git history) but read as too loud against real terminal color
+// schemes, per explicit developer feedback — swapped for a muted gray text
+// color plus a subtle background tint, which separates user input from
+// both assistant text (BRIGHT, no bg) and dim metadata without fighting
+// the terminal's own palette. Fixed RGB rather than a named ANSI color so
+// the "subtle" tint doesn't get reinterpreted by whatever the terminal
+// theme maps that ANSI slot to.
+const USER_FG: Color = Color::Rgb(190, 190, 195);
+const USER_BG: Color = Color::Rgb(40, 40, 46);
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -41,7 +46,13 @@ fn input_area_height(input: &str) -> u16 {
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line> = intro_lines(&app.status.model_name);
+    // Separates the banner from the first real entry, same as the
+    // inter-entry separator below — skipped when the log is still empty so
+    // a fresh session doesn't end in a trailing blank line.
+    if !app.log.is_empty() {
+        lines.push(Line::default());
+    }
     for (i, entry) in app.log.iter().enumerate() {
         // Blank line between entries — not just at the user/assistant
         // boundary, since every entry kind benefits from more breathing
@@ -60,16 +71,60 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+/// The welcome banner shown above the conversation log on every draw: the
+/// little owl from amundsen.md's Mascot section (boxy/geometric silhouette,
+/// camera-iris eyes as the one expressive feature, perched — not
+/// ambulatory — with talons gripping a rail rather than acting), plus the
+/// harness version, git commit (`build.rs` — `CARGO_PKG_VERSION` alone is
+/// the workspace's shared `0.1.0` and doesn't move between commits, so it
+/// can't tell a developer which build they're actually running), and
+/// active model. Always exactly `log::INTRO_LINE_COUNT` lines — that
+/// constant is a plain `usize` (not derived from this function) so
+/// `App::total_lines` can stay ratatui-free per `log::line_count`'s doc
+/// comment; keep the two in sync by hand if this art changes shape. Colors
+/// stay within the existing modifier-only discipline used for markdown,
+/// plus ACCENT for the mascot itself — the one deliberate expansion of
+/// accent beyond "card border and focused input only" (see the Palette
+/// Progress note in amundsen-tui.md).
+fn intro_lines(model_name: &str) -> Vec<Line<'static>> {
+    let frame = Style::default().fg(ACCENT);
+    let eyes = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let wordmark = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
+    let meta = Style::default().fg(DIM);
+
+    vec![
+        Line::from(Span::styled("   ┏━━━━━━━━━┓", frame)),
+        Line::from(vec![
+            Span::styled("   ┃  ", frame),
+            Span::styled("◉", eyes),
+            Span::styled("   ", frame),
+            Span::styled("◉", eyes),
+            Span::styled("  ┃", frame),
+        ]),
+        Line::from(Span::styled("   ┃    ▽    ┃", frame)),
+        Line::from(Span::styled("   ┗━┳━━━━━┳━┛", frame)),
+        Line::from(Span::styled("    ┌┴┐   ┌┴┐", frame)),
+        Line::from(Span::styled("═════╧═════╧═════", meta)),
+        Line::default(),
+        Line::from(Span::styled("   A M U N D S E N", wordmark)),
+        Line::from(Span::styled("   a tool for thought.", tagline)),
+        Line::default(),
+        Line::from(Span::styled(format!("   v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta)),
+    ]
+}
+
 fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
     match entry {
-        // Palette per amundsen-tui.md: bright = assistant, USER = user —
-        // these must not share a style, or the two speakers become
-        // indistinguishable in the log. A slash command is user input that
-        // never reaches the model (see amundsen-cli's interceptor) — dim
-        // marks it as directed at the harness itself, not conversation,
-        // the same way tool metadata and notices are dim.
+        // Palette per amundsen-tui.md: bright = assistant, muted gray +
+        // subtle background = user — these must not share a style, or the
+        // two speakers become indistinguishable in the log. A slash command
+        // is user input that never reaches the model (see amundsen-cli's
+        // interceptor) — dim marks it as directed at the harness itself,
+        // not conversation, the same way tool metadata and notices are dim
+        // (and it skips the background tint, since it isn't a chat message).
         LogEntry::UserMessage { text } => {
-            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default().fg(USER) };
+            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default().fg(USER_FG).bg(USER_BG) };
             text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), style))).collect()
         }
         LogEntry::AssistantText { text } => render_assistant_text(text),
@@ -164,7 +219,7 @@ fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
     for segment in split_code_fences(text) {
         match segment {
             Segment::Prose(s) => {
-                lines.extend(s.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)))));
+                lines.extend(s.lines().map(render_markdown_line));
             }
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
@@ -185,6 +240,162 @@ fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
         first.spans.insert(0, Span::styled("● ", Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)));
     }
     lines
+}
+
+/// Renders one prose line (never a fenced-code line — those are already
+/// pulled out by `split_code_fences`) of LLM-authored markdown. Hand-rolled
+/// rather than pulling in a CommonMark crate: `log::line_count`'s scroll-math
+/// invariant depends on exactly one rendered `Line` per source line, and a
+/// real block-level parser normalizes blank lines and reflows paragraphs,
+/// breaking that guarantee. Per-line block-prefix detection (heading, list,
+/// blockquote, rule) plus a recursive-descent inline pass covers what LLMs
+/// actually emit without touching line count. Styling is modifiers only
+/// (bold/italic/underline/reversed/crossed-out) — amundsen-tui.md reserves
+/// the one accent color for the approval card and focused input.
+fn render_markdown_line(line: &str) -> Line<'static> {
+    let base = Style::default().fg(BRIGHT);
+    let trimmed_start = line.trim_start();
+    let indent = &line[..line.len() - trimmed_start.len()];
+
+    if is_hr(trimmed_start) {
+        return Line::from(Span::styled("─".repeat(20), Style::default().fg(DIM)));
+    }
+    if let Some((level, rest)) = parse_heading(trimmed_start) {
+        let style = if level <= 2 { base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { base.add_modifier(Modifier::BOLD) };
+        return Line::from(parse_inline(rest, style));
+    }
+    if let Some(rest) = trimmed_start.strip_prefix('>') {
+        let rest = rest.strip_prefix(' ').unwrap_or(rest);
+        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(DIM))];
+        spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC)));
+        return Line::from(spans);
+    }
+    if let Some(rest) = parse_bullet(trimmed_start) {
+        let mut spans = vec![Span::styled(format!("{indent}• "), base)];
+        spans.extend(parse_inline(rest, base));
+        return Line::from(spans);
+    }
+    if let Some((marker, rest)) = parse_ordered(trimmed_start) {
+        let mut spans = vec![Span::styled(format!("{indent}{marker} "), base)];
+        spans.extend(parse_inline(rest, base));
+        return Line::from(spans);
+    }
+    Line::from(parse_inline(line, base))
+}
+
+/// Recursive-descent inline pass: `**bold**`, `*italic*`/`_italic_`,
+/// `` `code` ``, `~~strike~~`, `[text](url)`. Delimiters nest via recursion
+/// (e.g. `**bold *and italic***`) rather than a flat token stream, which
+/// keeps this a single small function instead of a tokenizer + AST.
+fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
+    fn flush(buf: &mut String, style: Style, spans: &mut Vec<Span<'static>>) {
+        if !buf.is_empty() {
+            spans.push(Span::styled(std::mem::take(buf), style));
+        }
+    }
+
+    let mut spans = Vec::new();
+    let mut buf = String::new();
+    let mut rest = text;
+
+    while !rest.is_empty() {
+        if let Some(stripped) = rest.strip_prefix('`') {
+            if let Some(end) = stripped.find('`') {
+                flush(&mut buf, base, &mut spans);
+                spans.push(Span::styled(stripped[..end].to_string(), base.add_modifier(Modifier::REVERSED)));
+                rest = &stripped[end + 1..];
+                continue;
+            }
+        } else if let Some(stripped) = rest.strip_prefix("**") {
+            if let Some(end) = stripped.find("**") {
+                flush(&mut buf, base, &mut spans);
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::BOLD)));
+                rest = &stripped[end + 2..];
+                continue;
+            }
+        } else if let Some(stripped) = rest.strip_prefix("~~") {
+            if let Some(end) = stripped.find("~~") {
+                flush(&mut buf, base, &mut spans);
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::CROSSED_OUT)));
+                rest = &stripped[end + 2..];
+                continue;
+            }
+        } else if rest.starts_with('*') || rest.starts_with('_') {
+            let delim = &rest[..1];
+            let stripped = &rest[1..];
+            if let Some(end) = stripped.find(delim) {
+                flush(&mut buf, base, &mut spans);
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::ITALIC)));
+                rest = &stripped[end + 1..];
+                continue;
+            }
+        } else if rest.starts_with('[') {
+            if let Some((label, url, remainder)) = parse_link(rest) {
+                flush(&mut buf, base, &mut spans);
+                spans.push(Span::styled(label.to_string(), base.add_modifier(Modifier::UNDERLINED)));
+                if !url.is_empty() && url != label {
+                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(DIM)));
+                }
+                rest = remainder;
+                continue;
+            }
+        }
+
+        let ch_len = rest.chars().next().map(char::len_utf8).unwrap_or(1);
+        buf.push_str(&rest[..ch_len]);
+        rest = &rest[ch_len..];
+    }
+    flush(&mut buf, base, &mut spans);
+    spans
+}
+
+fn parse_link(text: &str) -> Option<(&str, &str, &str)> {
+    let after_bracket = &text[1..];
+    let close = after_bracket.find(']')?;
+    let label = &after_bracket[..close];
+    let after_label = &after_bracket[close + 1..];
+    let after_paren = after_label.strip_prefix('(')?;
+    let close_paren = after_paren.find(')')?;
+    let url = &after_paren[..close_paren];
+    let remainder = &after_paren[close_paren + 1..];
+    Some((label, url, remainder))
+}
+
+fn parse_heading(line: &str) -> Option<(u8, &str)> {
+    let hashes = line.chars().take_while(|&c| c == '#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    line[hashes..].strip_prefix(' ').map(|rest| (hashes as u8, rest))
+}
+
+fn parse_bullet(line: &str) -> Option<&str> {
+    let marker = line.chars().next()?;
+    if !matches!(marker, '-' | '*' | '+') {
+        return None;
+    }
+    line[marker.len_utf8()..].strip_prefix(' ')
+}
+
+fn parse_ordered(line: &str) -> Option<(String, &str)> {
+    let digits_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+    if digits_end == 0 {
+        return None;
+    }
+    let (digits, rest) = line.split_at(digits_end);
+    let sep = rest.chars().next()?;
+    if sep != '.' && sep != ')' {
+        return None;
+    }
+    let rest = rest[sep.len_utf8()..].strip_prefix(' ')?;
+    Some((format!("{digits}{sep}"), rest))
+}
+
+/// A line of 3+ `-`, `*`, or `_` (ignoring interior spaces, so `- - -`
+/// counts) and nothing else — CommonMark's thematic break.
+fn is_hr(line: &str) -> bool {
+    let stripped: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    stripped.len() >= 3 && (stripped.chars().all(|c| c == '-') || stripped.chars().all(|c| c == '*') || stripped.chars().all(|c| c == '_'))
 }
 
 /// Mirrors amundsen-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
@@ -348,11 +559,13 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Row 1 is the blank separator line draw_log now inserts between
-        // every entry — the assistant message lands on row 2, at column 2
-        // (after its "● " marker, same width as user's "> ").
-        let user_cell = &buffer[(2, 0)]; // "> hi"
-        let assistant_cell = &buffer[(2, 2)]; // "● hi"
+        // The welcome banner (log::INTRO_LINE_COUNT rows) plus its own
+        // separator come first, then the same "row 1 is the blank
+        // separator between entries, row 2 is the second entry" shape as
+        // before, just offset past the banner.
+        let base = intro_offset();
+        let user_cell = &buffer[(2, base)]; // "> hi"
+        let assistant_cell = &buffer[(2, base + 2)]; // "● hi"
         assert_ne!(
             (user_cell.fg, user_cell.modifier),
             (assistant_cell.fg, assistant_cell.modifier),
@@ -371,8 +584,9 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let plain_cell = &buffer[(2, 0)]; // "> hi"
-        let command_cell = &buffer[(2, 2)]; // "> /exit" — row 1 is the blank separator line
+        let base = intro_offset();
+        let plain_cell = &buffer[(2, base)]; // "> hi"
+        let command_cell = &buffer[(2, base + 2)]; // "> /exit" — the next row is the blank separator line
         assert_ne!(
             (plain_cell.fg, plain_cell.modifier),
             (command_cell.fg, command_cell.modifier),
@@ -388,11 +602,20 @@ mod tests {
         assert!(out.contains("draft text"));
     }
 
+    /// Rows the welcome banner always occupies before the first real log
+    /// entry: `log::INTRO_LINE_COUNT` art/text rows plus the one separator
+    /// `draw_log` inserts between the banner and the log (present here
+    /// since every caller pushes at least one entry before measuring).
+    fn intro_offset() -> u16 {
+        (crate::log::INTRO_LINE_COUNT + 1) as u16
+    }
+
     /// The row-index assumptions the two style-comparison tests above make
-    /// (row 1 is blank, the second entry lands on row 2) only hold because
-    /// `draw_log` inserts exactly one blank line between entries — pin that
-    /// down directly so a change to the spacing logic fails loudly here
-    /// instead of silently making those tests compare the wrong cells.
+    /// (the row right after the banner is blank, the second entry lands two
+    /// rows after that) only hold because `draw_log` inserts exactly one
+    /// blank line between entries — pin that down directly so a change to
+    /// the spacing logic fails loudly here instead of silently making those
+    /// tests compare the wrong cells.
     #[test]
     fn a_blank_line_separates_consecutive_log_entries() {
         let mut app = app();
@@ -404,8 +627,9 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let row1: String = (0..80).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
-        assert_eq!(row1.trim(), "", "row 1 must be the blank separator between the two entries");
+        let row = intro_offset() + 1;
+        let row_text: String = (0..80).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        assert_eq!(row_text.trim(), "", "the row after the first entry must be the blank separator between the two entries");
     }
 
     #[test]
@@ -436,10 +660,98 @@ mod tests {
 
         // At least two distinct foreground colors within the code line —
         // proof it went through the highlighter, not just plain dim text.
-        // No blank-line separator here: draw_log only inserts one between
-        // entries, and this is all one AssistantText entry.
-        let code_row = 2; // "● here:" / "┌─ rust" / "│ fn main() {}"
-        let colors: std::collections::HashSet<Color> = (0..80).map(|x| buffer[(x, code_row)].fg).collect();
+        // No blank-line separator here beyond the banner's own: draw_log
+        // only inserts one between entries, and this is all one
+        // AssistantText entry. Restricted to the line's own width so
+        // unstyled padding cells past the printed text can't manufacture a
+        // spurious second color.
+        let code_row = intro_offset() + 2; // "● here:" / "┌─ rust" / "│ fn main() {}"
+        let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
+    }
+
+    #[test]
+    fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
+        assert_eq!(intro_lines("claude-sonnet-5").len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
+        let out = rendered(&mut app(), 80, 20);
+        assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
+        assert!(out.contains("A M U N D S E N"), "the wordmark should appear in the welcome banner");
+        assert!(out.contains(env!("AMUNDSEN_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
+    }
+
+    #[test]
+    fn a_fresh_session_shows_the_banner_before_any_log_entries() {
+        let mut app = app();
+        assert!(app.log.is_empty());
+        let out = rendered(&mut app, 80, 20);
+        assert!(out.contains("A M U N D S E N"));
+    }
+
+    #[test]
+    fn plain_user_messages_get_a_muted_background_but_slash_commands_do_not() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.log.push(LogEntry::UserMessage { text: "/exit".into() });
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let base = intro_offset();
+        let plain_cell = &buffer[(2, base)]; // "> hi"
+        let command_cell = &buffer[(2, base + 2)]; // "> /exit"
+        assert_eq!(plain_cell.bg, USER_BG, "a plain user message should carry the subtle background tint");
+        assert_ne!(command_cell.bg, USER_BG, "a slash command must not carry the chat-message background tint");
+    }
+
+    #[test]
+    fn bold_markdown_strips_asterisks_and_sets_the_bold_modifier() {
+        let spans = parse_inline("say **hello** now", Style::default().fg(BRIGHT));
+        let bold = spans.iter().find(|s| s.content.as_ref() == "hello").expect("bold span present");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+        assert!(spans.iter().all(|s| !s.content.contains('*')), "literal asterisks must not reach the screen");
+    }
+
+    #[test]
+    fn italic_markdown_sets_the_italic_modifier() {
+        let spans = parse_inline("that is *neat* stuff", Style::default().fg(BRIGHT));
+        let italic = spans.iter().find(|s| s.content.as_ref() == "neat").expect("italic span present");
+        assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn inline_code_strips_backticks_and_uses_reversed_video() {
+        let spans = parse_inline("run `cargo test` first", Style::default().fg(BRIGHT));
+        let code = spans.iter().find(|s| s.content.as_ref() == "cargo test").expect("code span present");
+        assert!(code.style.add_modifier.contains(Modifier::REVERSED));
+        assert!(spans.iter().all(|s| !s.content.contains('`')), "literal backticks must not reach the screen");
+    }
+
+    #[test]
+    fn a_heading_line_drops_the_hashes_and_renders_bold() {
+        let line = render_markdown_line("## Section Title");
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "Section Title");
+        assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn a_bullet_line_replaces_the_dash_with_a_bullet_marker() {
+        let line = render_markdown_line("- first item");
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "• first item");
+    }
+
+    #[test]
+    fn markdown_in_the_full_log_renders_without_literal_markup_characters() {
+        let mut app = app();
+        app.log.push(LogEntry::AssistantText { text: "**bold** and `code` and *italic*".into() });
+        let out = rendered(&mut app, 80, 20);
+        assert!(!out.contains('*'), "literal asterisks must not reach the screen: {out:?}");
+        assert!(!out.contains('`'), "literal backticks must not reach the screen: {out:?}");
+        assert!(out.contains("bold"));
+        assert!(out.contains("code"));
+        assert!(out.contains("italic"));
     }
 }

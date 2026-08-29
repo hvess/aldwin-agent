@@ -86,12 +86,76 @@ updated accordingly (it previously and incorrectly described the unit as
 watching the new regression test fail exactly as the user described,
 then pass again once restored.
 
+**Progress (2026-08-29, markdown support):** Assistant prose was rendering
+raw markdown source (`**bold**`, `` `code` ``, `# heading`, `- item`,
+literal asterisks and backticks included) — reported directly by the
+developer ("LLM output is in markdown, but amundsen doesn't support it").
+`ui::render_markdown_line` now parses each prose line (fenced code was
+already handled separately, see the 2026-08-29 second-follow-up entry
+below) for bold/italic/inline-code/strikethrough/links, and per-line block
+prefixes for headings, bullet/ordered lists, blockquotes, and thematic
+breaks. Hand-rolled rather than a CommonMark crate: a real block parser
+normalizes blank lines and reflows paragraphs across source lines, which
+would break `log::line_count`'s exact one-`Line`-per-source-line invariant
+that `ScrollState`'s bookkeeping depends on (see the scrolling-fix entry
+below); per-line prefix detection plus a small recursive inline pass
+covers what LLMs actually emit without touching line count. All markdown
+styling uses modifiers only (bold/italic/underline/reversed/crossed-out) —
+no new colors — since the Palette section below reserves the one accent
+color for the approval card and focused input. Plain assistant prose
+dropped its blanket bold modifier as part of this (now BRIGHT only, bold
+earned via `**...**` or a heading) so real emphasis has contrast against
+the surrounding text.
+
+**Progress (2026-08-29, muted user color + welcome banner):** Two more
+developer requests. (1) The dedicated LightGreen for user input (from the
+2026-08-29 "second follow-up" entry above) read as too loud against the
+developer's actual terminal color scheme — `USER_FG`/`USER_BG` in `ui.rs`
+replace it with a muted gray text color plus a subtle background tint
+(fixed RGB, not a named ANSI color, so it isn't reinterpreted by whatever
+the terminal theme maps that slot to), applied only to plain chat
+messages — a `/`-prefixed slash command keeps its plain dim style with no
+background, preserving the harness-directed-vs-conversation distinction.
+(2) A welcome banner now renders above the conversation log on every draw
+(`ui::intro_lines`, always exactly `log::INTRO_LINE_COUNT` rows): an ASCII
+rendering of the little owl from amundsen.md's Mascot section (boxy
+outline, `◉` camera-iris eyes as the one expressive feature, perched on a
+rail rather than ambulatory, talons gripping rather than acting), the
+`AMUNDSEN` wordmark and tagline, and a version/model line
+(`v{CARGO_PKG_VERSION} · {model_name}`). It isn't a `LogEntry` — it isn't a
+core event, so it doesn't belong in the append-only event log semantics
+that `log.rs`'s doc comments describe — instead `ui::draw_log` prepends it
+directly and `App::total_lines` accounts for its fixed row count (plus the
+one separator before the first real entry) the same way it already
+accounts for the transient thinking indicator. The owl uses ACCENT
+(cyan) for its outline/eyes and the wordmark — a deliberate, scoped
+expansion of accent beyond "card border and focused input only" (see the
+Palette bullet below), not a resolution of the still-open mascot color
+palette question in amundsen.md's Mascot section.
+
+**Progress (2026-08-29, git commit in the banner):** The banner's version
+line originally showed only `CARGO_PKG_VERSION` — reported back by the
+developer as unhelpful, since the whole workspace shares one version
+(`0.1.0`) via `version.workspace = true` that doesn't move commit to
+commit; on an actively-developed harness that's not enough to tell a
+developer which build they're actually running. `crates/tui/build.rs`
+now shells out to `git rev-parse --short=8 HEAD` (falling back to
+`"unknown"` if git isn't available, e.g. a source tarball with no `.git`)
+and `git status --porcelain` for a `-dirty` suffix, exposing the result as
+`AMUNDSEN_GIT_HASH` via `cargo:rustc-env`; `ui::intro_lines` reads it with
+`env!(...)` alongside `CARGO_PKG_VERSION`. Also explains the "why is my
+build binary not showing the new intro at all" report immediately prior
+to this entry — the real cause there was a stale prebuilt binary, not a
+code defect, but it's the reason the version line needed to earn its keep
+enough to answer "which commit is this binary actually built from" going
+forward.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
-- **Conversation Log:** Append-only rendered view of core events. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
+- **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
 - **Input Area:** Multi-line textarea. Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Input is blocked while an approval card is pending.
 - **Status Bar:** Single line, always visible. Shows: model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), names of tools currently running within the active step (e.g. "tools: Read shell").
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress note below for why. Background: terminal default throughout. Text hierarchy: bright-bold with a leading `●` marker (assistant output), a dedicated green (user input), dim (tool metadata, status bar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied only to the approval card border and focused-input highlight. Specific accent color still deferred pending mascot palette decision. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `┌─`/`│`/`└─` border, independent of this hierarchy.
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why. Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, status bar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage). Specific accent color still deferred pending mascot palette decision. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `┌─`/`│`/`└─` border, independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only, never a new color.
 
 ## Decisions
 

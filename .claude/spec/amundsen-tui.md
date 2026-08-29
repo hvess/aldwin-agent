@@ -150,6 +150,28 @@ code defect, but it's the reason the version line needed to earn its keep
 enough to answer "which commit is this binary actually built from" going
 forward.
 
+**Progress (2026-08-29, mascot pivot to Mjolnir):** The owl mascot from the
+welcome-banner entry above was replaced at the developer's explicit
+direction toward something more "aggressive/directive" — several
+procedurally-generated candidates were tried in between (a cobra shaded
+with `░▒▓█`, a hand-coded "tribal" infinity mark, two hand-coded Mjolnir
+attempts using a diagonal crosshatch-weave texture) and rejected, most
+pointedly for not being "a true representation" of the reference images
+supplied. The version that landed, `ui::MJOLNIR_ART`, is not
+hand-drawn or procedurally generated at all: it's a literal trace of a
+real reference photo (thresholded to pure black/white, trimmed, resized
+preserving aspect ratio, then read back pixel-for-pixel with one source
+pixel mapped to one Braille dot — 2×4 real sub-character dots per cell,
+not the `░▒▓█` shading-level approximation every earlier attempt used).
+This settles amundsen.md's Mascot section in a new direction; that
+section's "little owl" rationale is superseded, not merely
+supplemented — update it to describe Mjolnir if/when that file gets its
+own pass. `INTRO_LINE_COUNT` grew to 28 (21 art rows + blank + wordmark +
+tagline + blank + version, plus the 2 border rows) to fit the traced
+art's true proportions — noticeably taller than the owl or any of the
+procedural Mjolnir attempts, since a faithful trace doesn't compress to
+fit a target row count the way hand-authored art can.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

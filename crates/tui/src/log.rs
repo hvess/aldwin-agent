@@ -61,14 +61,18 @@ impl From<TurnEndReason> for TurnEndReasonKind {
     }
 }
 
-/// Rows the welcome banner (`ui::intro_lines`) always renders. Fixed art,
-/// not derived from any state but the model name (itself always one line),
-/// so this is a hand-kept constant rather than a function — same contract
-/// as `line_count` below: exact, not approximate, since `App::total_lines`
-/// needs precise scroll math without this crate's `app` module depending
-/// on ratatui at all. Update alongside `ui::intro_lines` if its shape ever
+/// Rows the welcome banner (`ui::intro_lines`) always renders: `MJOLNIR_ART`'s
+/// 21 traced Braille rows, blank, wordmark, tagline, blank, version — 26
+/// content rows — plus the top/bottom border `ui::bordered` always adds
+/// regardless of render width. Fixed shape, not derived from any state but
+/// the model name (itself always one line) and the render width (which
+/// changes the border's length, not its row count), so this is a hand-kept
+/// constant rather than a function — same contract as `line_count` below:
+/// exact, not approximate, since `App::total_lines` needs precise scroll
+/// math without this crate's `app` module depending on ratatui at all.
+/// Update alongside `ui::intro_lines`/`ui::MJOLNIR_ART` if its shape ever
 /// changes.
-pub const INTRO_LINE_COUNT: usize = 11;
+pub const INTRO_LINE_COUNT: usize = 28;
 
 /// The number of terminal rows `ui::render_entry` will produce for this
 /// entry — kept here (not in `ui.rs`) so `ScrollState`'s bookkeeping

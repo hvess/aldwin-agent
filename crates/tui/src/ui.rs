@@ -46,7 +46,7 @@ fn input_area_height(input: &str) -> u16 {
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = intro_lines(&app.status.model_name);
+    let mut lines: Vec<Line> = intro_lines(&app.status.model_name, area.width);
     // Separates the banner from the first real entry, same as the
     // inter-entry separator below — skipped when the log is still empty so
     // a fresh session doesn't end in a trailing blank line.
@@ -60,7 +60,7 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
         if i > 0 {
             lines.push(Line::default());
         }
-        lines.extend(render_entry(entry));
+        lines.extend(render_entry(entry, area.width));
     }
     if app.thinking {
         lines.push(Line::from(Span::styled("thinking…", Style::default().fg(DIM))));
@@ -71,50 +71,102 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// The welcome banner shown above the conversation log on every draw: the
-/// little owl from amundsen.md's Mascot section (boxy/geometric silhouette,
-/// camera-iris eyes as the one expressive feature, perched — not
-/// ambulatory — with talons gripping a rail rather than acting), plus the
-/// harness version, git commit (`build.rs` — `CARGO_PKG_VERSION` alone is
-/// the workspace's shared `0.1.0` and doesn't move between commits, so it
-/// can't tell a developer which build they're actually running), and
-/// active model. Always exactly `log::INTRO_LINE_COUNT` lines — that
-/// constant is a plain `usize` (not derived from this function) so
-/// `App::total_lines` can stay ratatui-free per `log::line_count`'s doc
-/// comment; keep the two in sync by hand if this art changes shape. Colors
-/// stay within the existing modifier-only discipline used for markdown,
-/// plus ACCENT for the mascot itself — the one deliberate expansion of
-/// accent beyond "card border and focused input only" (see the Palette
-/// Progress note in amundsen-tui.md).
-fn intro_lines(model_name: &str) -> Vec<Line<'static>> {
+/// The welcome banner shown above the conversation log on every draw: a
+/// Mjolnir (Thor's hammer) mark — a mascot pivot away from amundsen.md's
+/// originally-decided little owl, per explicit developer direction toward
+/// something more "aggressive/directive" (see amundsen.md's Mascot section
+/// for the superseded rationale, and this function's own history for the
+/// several prior designs it replaced: an owl, a cobra, a hand-coded
+/// "tribal" infinity mark, and two hand-coded Mjolnir attempts using a
+/// procedural crosshatch-weave texture). `MJOLNIR_ART` is not hand-drawn or
+/// procedurally generated — per explicit developer feedback that repeated
+/// procedural attempts "weren't a true representation" of the reference
+/// images supplied, it's a literal trace: a real reference photo
+/// (thresholded to pure black/white, trimmed, resized preserving aspect,
+/// and read back pixel-for-pixel — see this crate's git history for the
+/// generating script, not kept in the repo since it's a one-time art
+/// pipeline, not runtime code) mapped one source pixel per Braille dot
+/// (2×4 dots per cell — real sub-character resolution, unlike the `░▒▓█`
+/// shading levels the earlier attempts used). Plus the harness version,
+/// git commit (`build.rs` — `CARGO_PKG_VERSION` alone is the workspace's
+/// shared `0.1.0` and doesn't move between commits, so it can't tell a
+/// developer which build they're actually running), and active model,
+/// framed in a full-width bordered card (`bordered`). Always exactly
+/// `log::INTRO_LINE_COUNT` lines — that constant is a plain `usize` (not
+/// derived from this function) so `App::total_lines` can stay ratatui-free
+/// per `log::line_count`'s doc comment; keep the two in sync by hand if
+/// `MJOLNIR_ART` or the border changes shape. Styled uniformly ACCENT+BOLD
+/// — a traced silhouette has no shading gradient to speak of (unlike the
+/// procedural cobra it replaced), so per-glyph styling would be pointless;
+/// ACCENT is still the one deliberate expansion of accent beyond "card
+/// border and focused input only" (see the Palette Progress note in
+/// amundsen-tui.md).
+const MJOLNIR_ART: [&str; 21] = [
+    "⠀⠀⠀⠀⠀⠀⠀⠀⢠⣤⠶⠶⠒⣛⣛⡛⠛⣛⠛⢛⣛⣓⠲⠶⢶⣤⡀",
+    "⠀⠀⠀⠀⠀⠀⠀⢀⡏⡜⢠⣾⠟⠛⠛⠿⣿⣿⣿⠟⠛⠛⠻⣦⡀⢇⢻",
+    "⠀⠀⠀⠀⠀⠀⠀⢸⡇⡇⣾⡃⢰⢋⠙⢦⣈⠟⢁⡴⠋⢙⡆⢸⡇⢸⢸⡆",
+    "⠀⠀⠀⠀⠀⠀⠀⠸⣇⡇⠘⣧⣈⠛⣁⡾⠋⣠⠻⣧⡈⠋⣁⡾⠃⢸⣸⠁",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠙⠳⢦⡀⠙⠛⠋⣠⣾⠿⣦⣈⠙⠛⠋⢁⡴⠟⠉",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⡀⠀⣀⠙⢿⣶⡿⠋⡀⠀⢠⡟",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⣿⣷⡴⠋⢠⣾⣿⠀⢸⡇",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢀⣿⡏⠠⣷⠄⢹⣿⠀⢸⡇",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢸⣿⣿⠞⢁⠴⣿⣿⡇⢸⡇",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠀⣈⣿⡁⠰⣿⠆⢸⣿⣀⠘⣇",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡏⢠⡏⢠⡿⠊⣁⠰⢿⡄⢹⡀⢻⡀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡞⠀⠸⣧⣄⣤⣾⣿⣷⣤⣠⣾⠇⠈⢷⡀",
+    "⠀⣠⢤⣤⣤⣤⣤⣤⠴⠾⠤⠶⠟⠛⠛⠛⢉⣉⣉⠙⠛⠛⠻⠶⠼⠷⠤⠤⢤⣤⡤⠤⠤⣄",
+    "⠀⡇⢠⣤⣤⣤⡤⠤⠀⠶⣶⣶⣶⡾⠟⠛⠉⠛⠻⢿⣿⣷⣶⠖⢀⣠⣤⣤⡤⣤⣤⣤⡄⢸⡆",
+    "⢸⡇⢸⣿⣿⡿⠀⣴⡶⣦⠈⣿⠏⣠⡶⠛⠛⠛⢶⡄⠹⣿⡏⢠⣿⣿⡿⠿⠧⠼⣿⣿⡇⠸⡇",
+    "⢸⠁⣼⣿⣿⣿⣄⣉⣀⡾⠀⡏⠀⣿⠁⣼⣿⣧⣨⡿⠀⣿⣇⠘⣟⣁⣤⣶⠶⢦⣤⡈⠻⠀⣷",
+    "⣿⠀⠉⣠⣤⣤⣈⣉⣉⣤⣾⣷⠀⢿⣄⠙⠻⠿⠟⢁⣼⣿⠟⢦⣈⣉⣉⣁⣴⣿⣿⣿⣆⠀⣿",
+    "⠙⢦⣤⡤⢤⣤⣈⣉⠙⠛⠿⣿⣷⣄⠙⠻⠶⣶⣾⠿⠛⢁⣴⣿⠿⠟⠛⢉⣉⣠⣤⣤⣤⡤⠟",
+    "⠀⠀⠀⠀⠀⠀⠀⠉⠙⠓⠦⣄⣉⠙⠻⣶⣦⣤⣤⣴⠾⠛⢉⣠⠴⠖⠛⠉⠁",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠦⣄⠙⠻⠋⣠⡴⠚⠉",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠶⠞⠁",
+];
+
+fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     let frame = Style::default().fg(ACCENT);
-    let eyes = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let art_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let wordmark = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
     let meta = Style::default().fg(DIM);
 
-    vec![
-        Line::from(Span::styled("   ┏━━━━━━━━━┓", frame)),
-        Line::from(vec![
-            Span::styled("   ┃  ", frame),
-            Span::styled("◉", eyes),
-            Span::styled("   ", frame),
-            Span::styled("◉", eyes),
-            Span::styled("  ┃", frame),
-        ]),
-        Line::from(Span::styled("   ┃    ▽    ┃", frame)),
-        Line::from(Span::styled("   ┗━┳━━━━━┳━┛", frame)),
-        Line::from(Span::styled("    ┌┴┐   ┌┴┐", frame)),
-        Line::from(Span::styled("═════╧═════╧═════", meta)),
-        Line::default(),
-        Line::from(Span::styled("   A M U N D S E N", wordmark)),
-        Line::from(Span::styled("   a tool for thought.", tagline)),
-        Line::default(),
-        Line::from(Span::styled(format!("   v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta)),
-    ]
+    let mut content: Vec<Line<'static>> = MJOLNIR_ART.iter().map(|row| Line::from(Span::styled(*row, art_style))).collect();
+    content.push(Line::default());
+    content.push(Line::from(Span::styled("A M U N D S E N", wordmark)));
+    content.push(Line::from(Span::styled("a tool for thought.", tagline)));
+    content.push(Line::default());
+    content.push(Line::from(Span::styled(format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta)));
+    bordered(width, content, frame)
 }
 
-fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
+/// Wraps `content` in a border that spans the full render width (`width`,
+/// the log area's actual `Rect::width` — art alone can't know this, so it's
+/// threaded in from `draw_log` at render time), centering each line inside
+/// it. `content_width` sums `Span::content` char counts, which only holds
+/// up for single-width glyphs — true of every char used here (box-drawing
+/// and the mascot's own glyphs are Unicode East Asian Width "Narrow"/
+/// "Neutral") but would need adjustment for wide (CJK/emoji) text.
+fn bordered(width: u16, content: Vec<Line<'static>>, border_style: Style) -> Vec<Line<'static>> {
+    let inner_width = (width as usize).saturating_sub(2);
+    let mut out = Vec::with_capacity(content.len() + 2);
+    out.push(Line::from(Span::styled(format!("┌{}┐", "─".repeat(inner_width)), border_style)));
+    for line in content {
+        let content_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        let avail = inner_width.saturating_sub(2); // one space of margin inside each border char
+        let left_pad = avail.saturating_sub(content_width) / 2;
+        let right_pad = avail.saturating_sub(content_width) - left_pad;
+        let mut spans = vec![Span::styled(format!("│ {}", " ".repeat(left_pad)), border_style)];
+        spans.extend(line.spans);
+        spans.push(Span::styled(format!("{} │", " ".repeat(right_pad)), border_style));
+        out.push(Line::from(spans));
+    }
+    out.push(Line::from(Span::styled(format!("└{}┘", "─".repeat(inner_width)), border_style)));
+    out
+}
+
+fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
     match entry {
         // Palette per amundsen-tui.md: bright = assistant, muted gray +
         // subtle background = user — these must not share a style, or the
@@ -125,7 +177,19 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
         // (and it skips the background tint, since it isn't a chat message).
         LogEntry::UserMessage { text } => {
             let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default().fg(USER_FG).bg(USER_BG) };
-            text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), style))).collect()
+            // Padded to the full render width so the background tint reads
+            // as a chat bubble even for a short message, not just a tinted
+            // "> " prefix — per explicit developer feedback. Only exact for
+            // a source line that fits on one screen row: a line long enough
+            // to wrap under Paragraph's own Wrap{trim:false} gets this
+            // padding appended past the wrap point, not per wrapped row.
+            text.lines()
+                .map(|l| {
+                    let content = format!("> {l}");
+                    let pad = (width as usize).saturating_sub(content.chars().count());
+                    Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
+                })
+                .collect()
         }
         LogEntry::AssistantText { text } => render_assistant_text(text),
         LogEntry::ToolActivity { calls, .. } => calls
@@ -554,7 +618,11 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.log.push(LogEntry::AssistantText { text: "hi".into() });
 
-        let backend = TestBackend::new(80, 20);
+        // Tall enough that the banner plus both entries fit without
+        // triggering auto-follow scroll — otherwise the offset below
+        // (which assumes the viewport shows everything from row 0) would
+        // be reading the wrong rows entirely.
+        let backend = TestBackend::new(80, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -579,7 +647,8 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
-        let backend = TestBackend::new(80, 20);
+        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
+        let backend = TestBackend::new(80, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -622,7 +691,8 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "first".into() });
         app.log.push(LogEntry::UserMessage { text: "second".into() });
 
-        let backend = TestBackend::new(80, 20);
+        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
+        let backend = TestBackend::new(80, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -648,7 +718,8 @@ mod tests {
         let mut app = app();
         app.log.push(LogEntry::AssistantText { text: "here:\n```rust\nfn main() {}\n```\ndone".into() });
 
-        let backend = TestBackend::new(80, 20);
+        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
+        let backend = TestBackend::new(80, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -672,11 +743,15 @@ mod tests {
 
     #[test]
     fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
-        assert_eq!(intro_lines("claude-sonnet-5").len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
-        let out = rendered(&mut app(), 80, 20);
+        assert_eq!(intro_lines("claude-sonnet-5", 80).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
+        // Tall enough that the whole banner fits without auto-follow scroll
+        // pushing its top rows out of view — see the sizing comment on
+        // user_and_assistant_messages_are_visually_distinct.
+        let out = rendered(&mut app(), 80, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
         assert!(out.contains("A M U N D S E N"), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("AMUNDSEN_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
+        assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
     }
 
     #[test]
@@ -693,7 +768,8 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
-        let backend = TestBackend::new(80, 20);
+        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
+        let backend = TestBackend::new(80, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -703,6 +779,38 @@ mod tests {
         let command_cell = &buffer[(2, base + 2)]; // "> /exit"
         assert_eq!(plain_cell.bg, USER_BG, "a plain user message should carry the subtle background tint");
         assert_ne!(command_cell.bg, USER_BG, "a slash command must not carry the chat-message background tint");
+    }
+
+    #[test]
+    fn a_short_user_message_gets_the_background_tint_all_the_way_to_the_right_edge() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let row = intro_offset();
+        let far_right_cell = &buffer[(79, row)]; // well past "> hi"
+        assert_eq!(far_right_cell.bg, USER_BG, "the background tint should fill the full row width, not just trail the text");
+    }
+
+    #[test]
+    fn the_welcome_banner_is_framed_by_a_border_spanning_the_full_render_width() {
+        let mut app = app();
+        // Tall enough that the whole banner fits without auto-follow scroll
+        // pushing its top rows out of view — see the sizing comment on
+        // user_and_assistant_messages_are_visually_distinct.
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert_eq!(buffer[(0, 0)].symbol(), "┌", "top-left corner of the banner's border");
+        assert_eq!(buffer[(79, 0)].symbol(), "┐", "top-right corner should reach the full render width");
+        let bottom = crate::log::INTRO_LINE_COUNT as u16 - 1;
+        assert_eq!(buffer[(0, bottom)].symbol(), "└", "bottom-left corner of the banner's border");
+        assert_eq!(buffer[(79, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
     }
 
     #[test]

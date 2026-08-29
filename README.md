@@ -23,12 +23,26 @@ Not yet run against a real terminal or the live Anthropic API in this
 project's own development environment — see those specs' notes before
 relying on it for anything you can't afford to babysit closely.
 
+## Install
+
+The easiest path is a prebuilt binary from this repo's
+[Releases](../../releases) page — no Rust toolchain needed. Grab the archive
+for your platform (Linux/macOS/Windows, x86_64 or Apple Silicon), extract it,
+and put `amundsen` on your `PATH`. Since this repo is private, you'll need
+GitHub access to it to download release assets.
+
+Building from source is the alternative — see [Prerequisites](#prerequisites)
+and [Build](#build) below. It's also how new releases get made: pushing a
+`vX.Y.Z` tag triggers `.github/workflows/release.yml`, which cross-builds all
+platform binaries and attaches them to a GitHub Release automatically.
+
 ## Prerequisites
 
-- **A Rust toolchain.** Amundsen is distributed as source only — there's no
-  published crate, no release binaries, no CI pipeline producing one. You
-  need `rustc`/`cargo` to build it; once built, the resulting binary needs
-  nothing Rust-specific to run.
+Only needed if you're building from source rather than using a release
+binary above.
+
+- **A Rust toolchain.** Once built, the resulting binary needs nothing
+  Rust-specific to run.
 
   Use [rustup](https://rustup.rs/), not your OS package manager's `cargo` —
   this repo's lockfile needs a reasonably recent cargo (1.75 is too old to
@@ -41,7 +55,7 @@ relying on it for anything you can't afford to babysit closely.
 
 - **An API key for your provider.** Anthropic, or any OpenAI-compatible
   endpoint (Mistral, a self-hosted proxy, etc.) — see [Run](#run) below for
-  how to point `provider.yaml` at each.
+  the `provider.yaml` config for each.
 
 - **[rust-analyzer](https://rust-analyzer.github.io/)** on `PATH`, optional —
   only needed for the `explain` tool's code-intelligence operations
@@ -99,8 +113,8 @@ base_url: https://api.mistral.ai/v1/chat/completions
 api_key_env: MISTRAL_API_KEY
 ```
 
-`base_url` is only read for `provider: openai-compatible` — it has no effect
-under `provider: anthropic`, which always talks to Anthropic's own endpoint.
+`base_url` only takes effect under `provider: openai-compatible`; Anthropic
+always uses its own fixed endpoint regardless of what's set there.
 
 If your project has a `CLAUDE.md` or `AGENTS.md`, you'll be asked — once,
 synchronously, before the TUI launches — whether to include it in the
@@ -147,7 +161,7 @@ depend on it. Read the relevant file in `.claude/spec/` (or
 | `amundsen-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
 | `amundsen-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
 | `amundsen-tools`         | `ToolDispatcher` impl — Read, Edit, shell, Explain (LSP), MCP bridge (rmcp) |
-| `amundsen-llm`           | `LlmClient` impls — Anthropic (reqwest + SSE, retry, prompt caching) and an OpenAI-compatible adapter (Mistral, self-hosted proxies) |
+| `amundsen-llm`           | `LlmClient` impls for Anthropic and OpenAI-compatible (Mistral, self-hosted proxies) providers — reqwest + SSE, retry, prompt caching |
 | `amundsen-tui`           | ratatui frontend                                                   |
 | `amundsen-cli` (`crates/cli`) | Binary crate (`amundsen`) — startup sequence, wiring, slash commands |
 

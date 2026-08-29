@@ -1,7 +1,7 @@
-//! Wire shapes for the prompt round trip described in amundsen-permissions.md.
-//! `amundsen-core`'s `Event::PromptRequested` / `Command::PromptResponse`
+//! Wire shapes for the prompt round trip described in mjolnir-permissions.md.
+//! `mjolnir-core`'s `Event::PromptRequested` / `Command::PromptResponse`
 //! carry an opaque `serde_json::Value` — these types are what that value
-//! actually is. Callers (amundsen-tools, amundsen-tui) serialise
+//! actually is. Callers (mjolnir-tools, mjolnir-tui) serialise
 //! [`PromptPayload`] into the event and deserialise [`PromptResponse`] back
 //! out of the command.
 

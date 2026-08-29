@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use amundsen_core::{DispatchContext, Event, StepId, TurnId};
+use mjolnir_core::{DispatchContext, Event, StepId, TurnId};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 

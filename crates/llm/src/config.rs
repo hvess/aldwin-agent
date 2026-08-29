@@ -1,13 +1,13 @@
-use amundsen_config::ProviderKind;
+use mjolnir_config::ProviderKind;
 
 /// Used when neither project nor global provider.yaml sets
 /// `extended_thinking_budget` — extended thinking is enabled by default per
-/// amundsen-llm.md, so a default has to live somewhere even when the
+/// mjolnir-llm.md, so a default has to live somewhere even when the
 /// developer hasn't picked one.
 pub const DEFAULT_THINKING_BUDGET: u32 = 10_000;
 
-/// amundsen-llm's own resolved view of provider config — distinct from
-/// `amundsen_config::ProviderConfig` (the raw on-disk domain shape). Built by
+/// mjolnir-llm's own resolved view of provider config — distinct from
+/// `mjolnir_config::ProviderConfig` (the raw on-disk domain shape). Built by
 /// [`resolve`]; never round-trips back to YAML.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderConfig {
@@ -21,10 +21,10 @@ pub struct ProviderConfig {
 
 /// Flat project-over-global overlay: a project-scope provider.yaml, when
 /// present, wins wholesale for the required fields (`provider`/`model`/
-/// `api_key_env` — amundsen-config's schema makes a project file all-or-
+/// `api_key_env` — mjolnir-config's schema makes a project file all-or-
 /// nothing for those, since they're not `Option`), but the two optional
 /// fields overlay individually, falling back to global's value.
-pub fn resolve(project: Option<&amundsen_config::ProviderConfig>, global: &amundsen_config::ProviderConfig) -> ProviderConfig {
+pub fn resolve(project: Option<&mjolnir_config::ProviderConfig>, global: &mjolnir_config::ProviderConfig) -> ProviderConfig {
     let required_source = project.unwrap_or(global);
     ProviderConfig {
         kind:        required_source.provider,
@@ -41,7 +41,7 @@ pub fn resolve(project: Option<&amundsen_config::ProviderConfig>, global: &amund
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_config::ProviderConfig as RawProviderConfig;
+    use mjolnir_config::ProviderConfig as RawProviderConfig;
 
     fn raw(model: &str, base_url: Option<&str>, budget: Option<u32>) -> RawProviderConfig {
         RawProviderConfig {

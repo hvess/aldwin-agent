@@ -1,4 +1,4 @@
-# amundsen-cli
+# mjolnir-cli
 
 Binary crate — startup sequence, session bootstrap, impl wiring, slash-command dispatch.
 
@@ -8,8 +8,8 @@ Binary crate — startup sequence, session bootstrap, impl wiring, slash-command
 **Last Updated:** 2026-06-10
 
 **Completed:** 2026-08-29 — `20a8d39`, plus an audit fix (`f023d4a`) that
-wired up context-file approval (was implemented in amundsen-permissions
-and amundsen-tui but never actually invoked from here — the session
+wired up context-file approval (was implemented in mjolnir-permissions
+and mjolnir-tui but never actually invoked from here — the session
 initializer now does exactly what this spec's Design section says: tests
 each candidate file before composing additional-context). No known gaps
 against this spec. Manually verified against the real binary: --help/
@@ -19,7 +19,7 @@ against the real Anthropic API (no API key in this environment).
 
 **Post-archive addition (2026-08-29):** A live run's developer had no
 discoverable way to end a session short of `Ctrl+C` (itself undiscoverable
-until fixed in amundsen-tui the same day) and asked for a slash command.
+until fixed in mjolnir-tui the same day) and asked for a slash command.
 Added `/exit` to the dispatch table — `Intercepted::Quit`
 makes `run_interceptor` return instead of looping again, which drops its
 `forward` and `events` sender clones; the core's command channel then
@@ -37,16 +37,16 @@ data-driven dispatch table yet. The unknown-command Notice now points at
 
 ## Design
 
-- **Invocation:** Zero-arg binary. `amundsen` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.
+- **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.
 - **Startup Sequence:**
   1. init_global_if_empty — first launch writes annotated global config; PartiallyPresent → refuse to start.
   2. Load all config layers — refuse to start on any parse failure, schema error, unknown major, or missing env var (error to stderr, non-zero exit; TUI has not yet launched).
   3. Build additional-context string from cwd path and approved context file contents.
-  4. Instantiate concrete impls: AnthropicClient (amundsen-llm), PermissionsEngine (amundsen-permissions), ToolDispatcher (amundsen-tools).
-  5. Create the agent loop (amundsen-core) with LlmClient, ToolDispatcher, and additional-context.
-  6. Launch TUI (amundsen-tui) with the core's event receiver and command sender.
+  4. Instantiate concrete impls: AnthropicClient (mjolnir-llm), PermissionsEngine (mjolnir-permissions), ToolDispatcher (mjolnir-tools).
+  5. Create the agent loop (mjolnir-core) with LlmClient, ToolDispatcher, and additional-context.
+  6. Launch TUI (mjolnir-tui) with the core's event receiver and command sender.
   7. Block on TUI exit; drop channels; wait for core to drain cleanly.
-- **Additional Context:** Opaque string handed to amundsen-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim.
+- **Additional Context:** Opaque string handed to mjolnir-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim.
 - **Slash Commands:** Input that begins with `/` is intercepted at the CLI layer before the Submit command reaches the core. The CLI maintains a dispatch table of known slash commands. Unknown slash commands are rejected with an error message in the TUI; they do not reach the core. Known V0 commands: /reload-config.
 - **Reload Config:** `/reload-config` calls config.reload_all(). On success, re-initializes the PermissionsEngine from the new snapshot and notifies the TUI. On failure, previous snapshot is retained and the failing file path is surfaced to the TUI verbatim.
 
@@ -98,9 +98,9 @@ data-driven dispatch table yet. The unknown-command Notice now points at
 
 ## References
 
-- .claude/spec/amundsen.md — parent spec; binary crate role and dependency list.
-- .claude/spec/amundsen-core.md — agent loop, additional-context contract, event/command channels.
-- .claude/spec/amundsen-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
-- .claude/spec/amundsen-permissions.md — PermissionsEngine init from config snapshot.
-- .claude/spec/amundsen-tools.md — ToolDispatcher instantiation.
-- .claude/spec/amundsen-tui.md — TUI launch, channel wiring, /reload-config surface.
+- .claude/spec/mjolnir.md — parent spec; binary crate role and dependency list.
+- .claude/spec/mjolnir-core.md — agent loop, additional-context contract, event/command channels.
+- .claude/spec/mjolnir-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
+- .claude/spec/mjolnir-permissions.md — PermissionsEngine init from config snapshot.
+- .claude/spec/mjolnir-tools.md — ToolDispatcher instantiation.
+- .claude/spec/mjolnir-tui.md — TUI launch, channel wiring, /reload-config surface.

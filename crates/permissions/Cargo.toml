@@ -1,10 +1,10 @@
 [package]
-name    = "amundsen-permissions"
+name    = "mjolnir-permissions"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-amundsen-config = { path = "../config" }
+mjolnir-config = { path = "../config" }
 serde            = { workspace = true }
 serde_json       = { workspace = true }
 thiserror        = { workspace = true }

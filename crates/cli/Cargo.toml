@@ -1,19 +1,19 @@
 [package]
-name    = "amundsen-cli"
+name    = "mjolnir-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "amundsen"
+name = "mjolnir"
 path = "src/main.rs"
 
 [dependencies]
-amundsen-core        = { path = "../core" }
-amundsen-config      = { path = "../config" }
-amundsen-permissions = { path = "../permissions" }
-amundsen-tools       = { path = "../tools" }
-amundsen-llm         = { path = "../llm" }
-amundsen-tui         = { path = "../tui" }
+mjolnir-core        = { path = "../core" }
+mjolnir-config      = { path = "../config" }
+mjolnir-permissions = { path = "../permissions" }
+mjolnir-tools       = { path = "../tools" }
+mjolnir-llm         = { path = "../llm" }
+mjolnir-tui         = { path = "../tui" }
 tokio                = { workspace = true }
 futures              = { workspace = true }
 thiserror            = { workspace = true }

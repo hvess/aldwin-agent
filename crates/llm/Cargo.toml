@@ -1,11 +1,11 @@
 [package]
-name    = "amundsen-llm"
+name    = "mjolnir-llm"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-amundsen-core   = { path = "../core" }
-amundsen-config = { path = "../config" }
+mjolnir-core   = { path = "../core" }
+mjolnir-config = { path = "../config" }
 tokio             = { workspace = true }
 futures           = { workspace = true }
 serde             = { workspace = true }

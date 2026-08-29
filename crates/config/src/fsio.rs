@@ -47,7 +47,7 @@ pub fn read_versioned<T: DeserializeOwned>(
 /// fsync'd, then renamed over the target. A crash mid-write leaves either the
 /// old file or the new one, never a partial write. Creates the parent
 /// directory if it doesn't exist yet — the first write into a scope is what
-/// materialises `<project>/.amundsen/` or `~/.amundsen/`.
+/// materialises `<project>/.mjolnir/` or `~/.mjolnir/`.
 pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     let dir = path.parent().expect("config domain paths always have a parent directory");
     fs::create_dir_all(dir).map_err(|e| ConfigError::Io { path: dir.to_path_buf(), source: e })?;

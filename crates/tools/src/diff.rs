@@ -1,4 +1,4 @@
-//! Minimal unified-style diff for Edit's approval card. Per amundsen-tools.md:
+//! Minimal unified-style diff for Edit's approval card. Per mjolnir-tools.md:
 //! "The diff is rendered from the (before, after) the tool already assembled
 //! — TUI owns formatting" — so this only needs to produce the +/- line
 //! content; syntax highlighting and layout are the TUI's job. `before`/

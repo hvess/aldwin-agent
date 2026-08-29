@@ -505,7 +505,7 @@ enum DispatchOutcome {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Covers the loop's real failure modes per amundsen-core.md's Pitfalls: torn logs
+// Covers the loop's real failure modes per mjolnir-core.md's Pitfalls: torn logs
 // on cancellation, tool round trips, and step/turn boundary bookkeeping. Not
 // exhaustive by design — these are the invariants a refactor is most likely to
 // break silently.

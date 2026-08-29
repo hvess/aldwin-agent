@@ -10,7 +10,7 @@ use crate::registry::{Tool, ToolDescriptor, ToolSource};
 
 /// Propose a single edit (path, before, after). Always per-call approval —
 /// the gate lives inside this future, not the dispatcher (see
-/// amundsen-tools.md's Decisions). `edit_class: true` means the generic
+/// mjolnir-tools.md's Decisions). `edit_class: true` means the generic
 /// dispatcher permission check is never even consulted for this tool.
 pub struct EditTool {
     descriptor:   ToolDescriptor,
@@ -96,7 +96,7 @@ impl Tool for EditTool {
 mod tests {
     use super::*;
     use crate::test_support::{dispatch_context, ALWAYS_APPROVE, ALWAYS_DENY};
-    use amundsen_core::Event;
+    use mjolnir_core::Event;
     use tempfile::tempdir;
 
     fn write(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {

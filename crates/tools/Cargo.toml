@@ -1,12 +1,12 @@
 [package]
-name    = "amundsen-tools"
+name    = "mjolnir-tools"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-amundsen-core        = { path = "../core" }
-amundsen-permissions = { path = "../permissions" }
-amundsen-config      = { path = "../config" }
+mjolnir-core        = { path = "../core" }
+mjolnir-permissions = { path = "../permissions" }
+mjolnir-config      = { path = "../config" }
 tokio                = { workspace = true }
 async-trait          = { workspace = true }
 serde                = { workspace = true }
@@ -17,4 +17,4 @@ rmcp                 = { version = "3.1.4", default-features = false, features =
 
 [dev-dependencies]
 tempfile     = "3"
-amundsen-core = { path = "../core", features = ["test-util"] }
+mjolnir-core = { path = "../core", features = ["test-util"] }

@@ -128,7 +128,7 @@ impl LspClient {
 
     /// Graceful LSP shutdown: `shutdown` request, then `exit` notification.
     /// `kill_on_drop` on the child process is the fallback if this is never
-    /// called (or the server doesn't respond) — see amundsen-tools.md's "LSP
+    /// called (or the server doesn't respond) — see mjolnir-tools.md's "LSP
     /// servers ... shut down at process exit."
     pub async fn shutdown(&self) {
         let _ = self.request("shutdown", Value::Null).await;

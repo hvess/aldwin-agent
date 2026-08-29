@@ -24,112 +24,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "amundsen-cli"
-version = "0.1.0"
-dependencies = [
- "amundsen-config",
- "amundsen-core",
- "amundsen-llm",
- "amundsen-permissions",
- "amundsen-tools",
- "amundsen-tui",
- "clap",
- "futures",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "amundsen-config"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "serde",
- "serde_yaml_ng",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "amundsen-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "amundsen-llm"
-version = "0.1.0"
-dependencies = [
- "amundsen-config",
- "amundsen-core",
- "async-stream",
- "eventsource-stream",
- "futures",
- "rand 0.8.8",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "amundsen-permissions"
-version = "0.1.0"
-dependencies = [
- "amundsen-config",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "amundsen-tools"
-version = "0.1.0"
-dependencies = [
- "amundsen-config",
- "amundsen-core",
- "amundsen-permissions",
- "async-trait",
- "libc",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "amundsen-tui"
-version = "0.1.0"
-dependencies = [
- "amundsen-config",
- "amundsen-core",
- "amundsen-permissions",
- "crossterm",
- "futures",
- "ratatui",
- "serde_json",
- "syntect",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1459,6 +1353,112 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mjolnir-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures",
+ "mjolnir-config",
+ "mjolnir-core",
+ "mjolnir-llm",
+ "mjolnir-permissions",
+ "mjolnir-tools",
+ "mjolnir-tui",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mjolnir-config"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mjolnir-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "mjolnir-llm"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "eventsource-stream",
+ "futures",
+ "mjolnir-config",
+ "mjolnir-core",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mjolnir-permissions"
+version = "0.1.0"
+dependencies = [
+ "mjolnir-config",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mjolnir-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "mjolnir-config",
+ "mjolnir-core",
+ "mjolnir-permissions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "mjolnir-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "futures",
+ "mjolnir-config",
+ "mjolnir-core",
+ "mjolnir-permissions",
+ "ratatui",
+ "serde_json",
+ "syntect",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

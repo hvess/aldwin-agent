@@ -23,7 +23,7 @@ enum Op {
 
 /// LSP-backed code intelligence. Output is structured location and
 /// signature data only (JSON text) — no prose summaries, per
-/// amundsen-tools.md. Servers spawn lazily per-language on first use and
+/// mjolnir-tools.md. Servers spawn lazily per-language on first use and
 /// persist in `clients` for the tool's (i.e. the session's) lifetime.
 pub struct ExplainTool {
     descriptor:   ToolDescriptor,
@@ -59,7 +59,7 @@ impl ExplainTool {
     }
 
     /// Best-effort graceful shutdown of every spawned server — call this
-    /// from the process's own shutdown sequence (amundsen-cli). Each
+    /// from the process's own shutdown sequence (mjolnir-cli). Each
     /// client's process is also `kill_on_drop`, so this isn't the only
     /// thing standing between a spawned server and process exit.
     pub async fn shutdown_all(&self) {
@@ -349,7 +349,7 @@ mod tests {
     /// definition` correctly. Ignored by default — indexing (even for a
     /// trivial crate) can take several seconds, too slow/flaky for a
     /// default test run. Run explicitly with:
-    ///   cargo test -p amundsen-tools --lib tools::explain -- --ignored
+    ///   cargo test -p mjolnir-tools --lib tools::explain -- --ignored
     #[tokio::test]
     #[ignore]
     async fn real_rust_analyzer_resolves_a_definition() {

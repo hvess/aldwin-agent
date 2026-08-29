@@ -47,7 +47,7 @@ impl Tool for ReadTool {
 
     /// Matched against `read:`-kind grant patterns (e.g. `read:./**`) using
     /// the raw path as given by the model, not the resolved absolute path —
-    /// that's what the pattern grammar examples in amundsen-permissions.md
+    /// that's what the pattern grammar examples in mjolnir-permissions.md
     /// assume.
     fn permission_target(&self, input: &Value) -> Result<String, ToolError> {
         path_arg(input)

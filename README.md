@@ -1,4 +1,4 @@
-# Amundsen
+# Mjolnir
 
 *A tool for thought.*
 
@@ -8,15 +8,15 @@ explains, and proposes; it edits only on explicit signal ("apply this", "go
 ahead"). Permissions are default-deny everywhere, and Edit is never
 allowlistable: friction on Edit is structural, not a setting.
 
-See `.claude/spec/amundsen.md` for the full design rationale.
+See `.claude/spec/mjolnir.md` for the full design rationale.
 
 ## Status
 
 V0, under active development. All seven crates in `.claude/spec/` are
-implemented; four (`amundsen-core`, `amundsen-config`, `amundsen-llm`,
-`amundsen-cli`) are feature-complete against their specs and archived under
-`.claude/spec/archive/`. Three (`amundsen-permissions`, `amundsen-tools`,
-`amundsen-tui`) are active with one or two disclosed, non-blocking gaps —
+implemented; four (`mjolnir-core`, `mjolnir-config`, `mjolnir-llm`,
+`mjolnir-cli`) are feature-complete against their specs and archived under
+`.claude/spec/archive/`. Three (`mjolnir-permissions`, `mjolnir-tools`,
+`mjolnir-tui`) are active with one or two disclosed, non-blocking gaps —
 see the `Progress` note at the top of each spec file for specifics.
 
 Not yet run against a real terminal or the live Anthropic API in this
@@ -29,7 +29,7 @@ The easiest path is a prebuilt binary from this repo's
 [Releases](../../releases) page — no Rust toolchain needed. Grab the archive
 for your platform (Linux or macOS, x86_64 or Apple Silicon; Windows isn't
 supported yet — the shell tool relies on Unix process APIs), extract it,
-and put `amundsen` on your `PATH`. Since this repo is private, you'll need
+and put `mjolnir` on your `PATH`. Since this repo is private, you'll need
 GitHub access to it to download release assets.
 
 Building from source is the alternative — see [Prerequisites](#prerequisites)
@@ -73,7 +73,7 @@ From the repo root:
 cargo build --release
 ```
 
-The binary is `target/release/amundsen`. To put `amundsen` on your `PATH`
+The binary is `target/release/mjolnir`. To put `mjolnir` on your `PATH`
 instead:
 
 ```sh
@@ -84,7 +84,7 @@ cargo install --path crates/cli
 
 ```sh
 export ANTHROPIC_API_KEY=sk-...
-amundsen
+mjolnir
 ```
 
 Zero-arg binary — no flags or subcommands beyond `--help`/`--version`.
@@ -92,15 +92,15 @@ Everything else is driven by config files, not CLI arguments.
 
 ### First launch
 
-The first run writes an annotated, fully-commented config to `~/.amundsen/`
+The first run writes an annotated, fully-commented config to `~/.mjolnir/`
 (`permissions.yaml`, `provider.yaml`, `mcp.yaml`, `tui.yaml`) and exits — read
-it, then run `amundsen` again. If `~/.amundsen/` already exists but is
-missing one of those four files, Amundsen refuses to start rather than
+it, then run `mjolnir` again. If `~/.mjolnir/` already exists but is
+missing one of those four files, Mjolnir refuses to start rather than
 silently filling the gap; restore the missing file or remove the directory
 to reinitialize.
 
 By default `provider.yaml` points `api_key_env` at `ANTHROPIC_API_KEY` — that
-environment variable must be set before Amundsen will start. Amundsen never
+environment variable must be set before Mjolnir will start. Mjolnir never
 reads or stores the key itself in config, only the variable's name.
 
 To use an OpenAI-compatible provider instead (Mistral, a self-hosted proxy,
@@ -120,7 +120,7 @@ always uses its own fixed endpoint regardless of what's set there.
 If your project has a `CLAUDE.md` or `AGENTS.md`, you'll be asked — once,
 synchronously, before the TUI launches — whether to include it in the
 model's context, and at what scope (`[p]roject` persists the approval to
-`.amundsen/context_files.yaml`, `[s]ession` approves for this run only,
+`.mjolnir/context_files.yaml`, `[s]ession` approves for this run only,
 `[n]o` declines). Nothing not explicitly approved is ever read into context.
 
 ### Permissions
@@ -170,13 +170,13 @@ depend on it. Read the relevant file in `.claude/spec/` (or
 
 | Crate                  | Role                                                              |
 |-------------------------|--------------------------------------------------------------------|
-| `amundsen-core`          | Agent loop, append-only log, event/command types, `LlmClient`/`ToolDispatcher` trait defs |
-| `amundsen-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
-| `amundsen-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
-| `amundsen-tools`         | `ToolDispatcher` impl — Read, Edit, shell, Explain (LSP), MCP bridge (rmcp) |
-| `amundsen-llm`           | `LlmClient` impls for Anthropic and OpenAI-compatible (Mistral, self-hosted proxies) providers — reqwest + SSE, retry, prompt caching |
-| `amundsen-tui`           | ratatui frontend                                                   |
-| `amundsen-cli` (`crates/cli`) | Binary crate (`amundsen`) — startup sequence, wiring, slash commands |
+| `mjolnir-core`          | Agent loop, append-only log, event/command types, `LlmClient`/`ToolDispatcher` trait defs |
+| `mjolnir-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
+| `mjolnir-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
+| `mjolnir-tools`         | `ToolDispatcher` impl — Read, Edit, shell, Explain (LSP), MCP bridge (rmcp) |
+| `mjolnir-llm`           | `LlmClient` impls for Anthropic and OpenAI-compatible (Mistral, self-hosted proxies) providers — reqwest + SSE, retry, prompt caching |
+| `mjolnir-tui`           | ratatui frontend                                                   |
+| `mjolnir-cli` (`crates/cli`) | Binary crate (`mjolnir`) — startup sequence, wiring, slash commands |
 
 ## Development
 
@@ -185,9 +185,9 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-One crate (`amundsen-tools`) has an `#[ignore]`d integration test that
+One crate (`mjolnir-tools`) has an `#[ignore]`d integration test that
 exercises real rust-analyzer indexing (too slow for routine runs):
 
 ```sh
-cargo test -p amundsen-tools --lib tools::explain -- --ignored
+cargo test -p mjolnir-tools --lib tools::explain -- --ignored
 ```

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Structured tool failure. Per amundsen-tools.md: "errors are structured
+/// Structured tool failure. Per mjolnir-tools.md: "errors are structured
 /// and fed back to the model; transport errors do not retry here" — every
 /// variant's `Display` becomes `ToolResult.content` with `is_error: true`,
 /// text the model is meant to read and adapt to.
@@ -33,7 +33,7 @@ pub enum ToolError {
     Timeout { secs: u64 },
 
     #[error("permission engine error: {0}")]
-    Permission(#[from] amundsen_permissions::PermissionError),
+    Permission(#[from] mjolnir_permissions::PermissionError),
 
     #[error("malformed prompt response from developer")]
     MalformedPromptResponse,

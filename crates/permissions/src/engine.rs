@@ -2,14 +2,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use amundsen_config::{Config, GrantList, Scope as ConfigScope};
+use mjolnir_config::{Config, GrantList, Scope as ConfigScope};
 
 use crate::error::PermissionError;
 use crate::grant::{Decision, GrantKey};
 use crate::prompt::{ContextFileTier, PromptPayload, ToolTier};
 
 /// Where a grant or context-file approval came from, for display in
-/// [`EffectiveView`]. Distinct from `amundsen_config::Scope` because session
+/// [`EffectiveView`]. Distinct from `mjolnir_config::Scope` because session
 /// has no config-backed counterpart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantScope {
@@ -63,10 +63,10 @@ struct SessionState {
     context_files: HashSet<PathBuf>,
 }
 
-/// Default-deny permission engine — see amundsen-permissions.md. Owns scope
+/// Default-deny permission engine — see mjolnir-permissions.md. Owns scope
 /// precedence, pattern matching, and the in-memory shape of allow/deny lists.
 /// Session-scope decisions live only in this struct; project/global persist
-/// through `amundsen_config::Config`, which is cheap to clone (internally
+/// through `mjolnir_config::Config`, which is cheap to clone (internally
 /// `Arc`) so `Engine` just holds one.
 pub struct Engine {
     config:  Config,
@@ -161,7 +161,7 @@ impl Engine {
     // ── Context-file checks ──────────────────────────────────────────────
 
     /// Checks a CLAUDE.md / AGENTS.md candidate. Path-keyed only, no content
-    /// hash — see amundsen-permissions.md's Decisions. There is no deny
+    /// hash — see mjolnir-permissions.md's Decisions. There is no deny
     /// list: decline simply persists nothing, so absence re-prompts.
     pub fn check_context_file(&self, path: &Path) -> CheckOutcome {
         if self.config.project_context_files().approved.iter().any(|p| p == path) {
@@ -285,7 +285,7 @@ fn collect_grants(scope: GrantScope, list: &[String], decision: Decision) -> Vec
 
 // ── Tests ────────────────────────────────────────────────────────────────
 //
-// Covers this crate's real failure modes per amundsen-permissions.md's
+// Covers this crate's real failure modes per mjolnir-permissions.md's
 // Pitfalls: default-deny as the floor, session overriding both directions,
 // deny-wins within a scope, the edit_class flag (not tool name) driving
 // enforcement, session persistence never leaking to project storage, and
@@ -294,13 +294,13 @@ fn collect_grants(scope: GrantScope, list: &[String], decision: Decision) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_config::Config;
+    use mjolnir_config::Config;
     use tempfile::tempdir;
 
     fn fresh_engine() -> (tempfile::TempDir, tempfile::TempDir, Engine) {
         let project = tempdir().unwrap();
         let global = tempdir().unwrap();
-        let config = Config::open_at(project.path(), global.path().join(".amundsen")).unwrap();
+        let config = Config::open_at(project.path(), global.path().join(".mjolnir")).unwrap();
         (project, global, Engine::new(config))
     }
 
@@ -396,7 +396,7 @@ mod tests {
     fn session_grant_does_not_leak_into_project_storage() {
         let (project, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Allow, ToolTier::Session).unwrap();
-        let path = project.path().join(".amundsen").join("permissions.yaml");
+        let path = project.path().join(".mjolnir").join("permissions.yaml");
         assert!(!path.exists(), "session-tier grant must not touch disk");
     }
 
@@ -416,7 +416,7 @@ mod tests {
         let path = PathBuf::from("./CLAUDE.md");
         engine.record_context_file_decision(&path, true, Some(ContextFileTier::Project)).unwrap();
 
-        let reopened = Config::open_at(project.path(), global.path().join(".amundsen")).unwrap();
+        let reopened = Config::open_at(project.path(), global.path().join(".mjolnir")).unwrap();
         let other = Engine::new(reopened);
         assert_eq!(other.check_context_file(&path), CheckOutcome::Allow);
     }

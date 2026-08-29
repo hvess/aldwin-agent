@@ -1,5 +1,5 @@
-use amundsen_config::Config;
-use amundsen_core::{Command, Event};
+use mjolnir_config::Config;
+use mjolnir_core::{Command, Event};
 use tokio::sync::mpsc;
 
 /// What `intercept` decided to do with one incoming command.
@@ -10,7 +10,7 @@ enum Intercepted {
     /// reaches the core.
     Handled,
     /// `/exit` — `run_interceptor` stops entirely rather than
-    /// looping again, per amundsen-cli.md's Decisions: "CLI owns the
+    /// looping again, per mjolnir-cli.md's Decisions: "CLI owns the
     /// dispatch table so slash commands can trigger ... process
     /// operations that the core has no visibility into." Ending the
     /// interceptor task drops both its `forward` (core command) and
@@ -28,7 +28,7 @@ enum Intercepted {
 const HELP_TEXT: &str = "commands: /help (this list), /exit (end the session), /reload-config (reload config files from disk)";
 
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
-/// the core, per amundsen-cli.md: "the core's only input is Submit, Cancel,
+/// the core, per mjolnir-cli.md: "the core's only input is Submit, Cancel,
 /// ApproveTool — it has no slash-command semantics." Runs synchronously in
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
@@ -95,7 +95,7 @@ pub async fn run_interceptor(mut incoming: mpsc::Receiver<Command>, forward: mps
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_core::PromptId;
+    use mjolnir_core::PromptId;
 
     fn config() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         let project = tempfile::tempdir().unwrap();
@@ -189,8 +189,8 @@ mod tests {
         let config = Config::open_at(project.path(), global.path()).unwrap();
         // Establish the project dir, then hand-corrupt permissions.yaml so
         // reload_all() fails on that one layer.
-        config.add_grant(amundsen_config::Scope::Project, amundsen_config::GrantList::Allow, "read:**").unwrap();
-        let bad_path = project.path().join(".amundsen").join("permissions.yaml");
+        config.add_grant(mjolnir_config::Scope::Project, mjolnir_config::GrantList::Allow, "read:**").unwrap();
+        let bad_path = project.path().join(".mjolnir").join("permissions.yaml");
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
 
         let (tx, mut rx) = mpsc::channel(8);

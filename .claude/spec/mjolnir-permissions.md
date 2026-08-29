@@ -1,9 +1,9 @@
-# amundsen-permissions
+# mjolnir-permissions
 
 Default-deny permission engine — three persistent scopes, tiered prompts, friction by design.
 
 **Status:** active — one known gap, see Progress below
-**Scope:** amundsen-permissions crate only. Policy engine, allowlist shape, prompt round-trip. Excludes TUI rendering, YAML I/O (config), and tool implementations.
+**Scope:** mjolnir-permissions crate only. Policy engine, allowlist shape, prompt round-trip. Excludes TUI rendering, YAML I/O (config), and tool implementations.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
 
@@ -12,7 +12,7 @@ tested — `6c60023`. Not yet built: the "MCP tool calls use the standard
 tool prompt, extended once with an edit-shape follow-up" Decision (line
 57) and the matching Design bullet on MCP edit-shape detection. Building
 it needs a new prompt payload/response shape here plus a new persisted
-field in amundsen-config (grant strings are deliberately opaque
+field in mjolnir-config (grant strings are deliberately opaque
 `kind:pattern`, not a good fit for the path-arg/content-arg mapping) — a
 real, separable follow-up, not a prerequisite for the rest of this spec.
 Every MCP tool currently goes through the plain four-tier prompt with
@@ -35,11 +35,11 @@ Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request run
 - **Default Deny:** Every guarded action starts denied. No "obviously safe" carve-out — Read, Explain, shell, and every MCP tool are gated identically. Edit is the only structural exception and has its own binary prompt (see edit_exception). In a new project the first session triggers a permission prompt for every tool the agent attempts to use, since nothing is pre-allowed. That initial burst of prompts is intentional — it is how the developer builds the allowlist by encounter rather than by upfront configuration.
 - **Precedence:** Session > project > global, higher wins in both directions. A session allow overrides a global deny for the session's duration; a session deny overrides a global allow for the session's duration. Nothing the session decides propagates to disk. Within a scope, deny beats allow.
 - **Grammar:** Grants are (kind, pattern, decision) per scope. Tool invocations key by `kind:pattern` against the assembled argv. Path-based actions key by `kind:path-glob`.
-- **Prompt Round Trip:** On Deny-by-absence: engine emits PromptRequested with action, args, and shape; caller awaits PromptResponse and calls back to record. Session decisions persist to in-memory engine state; project / global decisions persist via amundsen-config.
+- **Prompt Round Trip:** On Deny-by-absence: engine emits PromptRequested with action, args, and shape; caller awaits PromptResponse and calls back to record. Session decisions persist to in-memory engine state; project / global decisions persist via mjolnir-config.
 - **Context Files:** CLAUDE.md / AGENTS.md ingestion gated by the two-tier prompt. Decline means do not inject. Decisions are path-keyed by absolute path with no content hash — see decision below. The session initializer (cli crate) tests each candidate file before composing the additional-context string.
 - **MCP Connection:** Adding an MCP server to config implicitly authorises spawn-and-enumerate; no connect-time prompt. Each tool the server advertises is default-denied and flows through the four-tier prompt on first invocation. The first-invocation prompt also asks whether the tool is edit-shaped — if yes, the developer supplies the path-arg and content-arg names and subsequent calls route through the Edit binary approval gate. Tools whose shape cannot be pre-diffed (arbitrary patch / partial edit / mutation by query) cannot inherit the gate and stay on the standard four-tier prompt.
 - **Edit Exception:** Edit is never allowlistable in any scope. The prompt shape collapses to approve/deny per invocation. Enforcement is keyed to an edit_class flag on tool registration, not the tool name — a tool author cannot escape by renaming.
-- **First Launch:** No interactive wizard. amundsen-config writes a fully-denied annotated YAML and points at the README.
+- **First Launch:** No interactive wizard. mjolnir-config writes a fully-denied annotated YAML and points at the README.
 
 ## Interfaces
 
@@ -65,7 +65,7 @@ Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request run
 
 - **Grammar supports arg-pattern matching, not just per-binary toggles.** — `shell:cargo test*` ≠ `shell:cargo install*`. Coarse per-binary grants would dominate in practice and erode deliberate allowance.
 
-- **MCP tool calls use the standard tool prompt, extended once with an edit-shape follow-up.** — The four-tier prompt is the deliberation moment. A parallel "show me args every call even when allowed" review layer would split mental models without adding structural protection. The one exception is the edit-shape question at first invocation — if marked, subsequent calls route through the Edit binary approval gate so MCP cannot bypass the friction Amundsen's own Edit tool enforces. Marking happens at first call, never at upfront config — see pitfall below.
+- **MCP tool calls use the standard tool prompt, extended once with an edit-shape follow-up.** — The four-tier prompt is the deliberation moment. A parallel "show me args every call even when allowed" review layer would split mental models without adding structural protection. The one exception is the edit-shape question at first invocation — if marked, subsequent calls route through the Edit binary approval gate so MCP cannot bypass the friction Mjolnir's own Edit tool enforces. Marking happens at first call, never at upfront config — see pitfall below.
 
 - **Adding an MCP server to config is implicit consent to spawn-and-enumerate.** — The config edit is the consent. The tool-call layer remains default-denied per tool.
 
@@ -86,17 +86,17 @@ Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request run
 
 ## Out of Scope
 
-- On-disk YAML schema and scope-storage file layout — amundsen-config.
-- TUI rendering of prompts and the permissions panel — amundsen-tui.
-- Tool implementations (Read, Explain, Edit, shell, MCP) — amundsen-tools.
-- MCP transport, subprocess lifecycle, tool discovery — amundsen-tools via rmcp.
-- Edit approval surface (diff format, syntax highlighting) — amundsen-tools.
+- On-disk YAML schema and scope-storage file layout — mjolnir-config.
+- TUI rendering of prompts and the permissions panel — mjolnir-tui.
+- Tool implementations (Read, Explain, Edit, shell, MCP) — mjolnir-tools.
+- MCP transport, subprocess lifecycle, tool discovery — mjolnir-tools via rmcp.
+- Edit approval surface (diff format, syntax highlighting) — mjolnir-tools.
 - Session persistence and prompt history — out of V0 per parent.
 - GC of unreachable context-file paths — flagged, deferred past V0.
 - Audit log of grant changes — out of V0; TUI shows current state only.
 
 ## References
 
-- .claude/spec/amundsen.md — parent; default-deny and friction-as-feature decisions.
-- .claude/spec/amundsen-core.md — core's command/event surface the prompt round-trip plugs into.
-- .claude/spec/amundsen-config.md — on-disk persistence of project/global grants.
+- .claude/spec/mjolnir.md — parent; default-deny and friction-as-feature decisions.
+- .claude/spec/mjolnir-core.md — core's command/event surface the prompt round-trip plugs into.
+- .claude/spec/mjolnir-config.md — on-disk persistence of project/global grants.

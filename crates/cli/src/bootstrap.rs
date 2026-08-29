@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use amundsen_config::{Config, InitOutcome, McpServer, ProviderKind};
-use amundsen_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
-use amundsen_permissions::Engine;
-use amundsen_tools::{register_mcp_tools, Dispatcher, McpBridge};
+use mjolnir_config::{Config, InitOutcome, McpServer, ProviderKind};
+use mjolnir_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
+use mjolnir_permissions::Engine;
+use mjolnir_tools::{register_mcp_tools, Dispatcher, McpBridge};
 use futures::Stream;
 use tokio::sync::mpsc;
 
@@ -20,8 +20,8 @@ use crate::slash;
 /// type to build an `Agent` with — the alternative would be duplicating the
 /// whole channel/task/TUI wiring below in two near-identical branches.
 enum AnyLlmClient {
-    Anthropic(amundsen_llm::AnthropicClient),
-    OpenAi(amundsen_llm::OpenAiCompatibleClient),
+    Anthropic(mjolnir_llm::AnthropicClient),
+    OpenAi(mjolnir_llm::OpenAiCompatibleClient),
 }
 
 impl LlmClient for AnyLlmClient {
@@ -35,7 +35,7 @@ impl LlmClient for AnyLlmClient {
 
 const CHANNEL_CAPACITY: usize = 64;
 
-/// The startup sequence from amundsen-cli.md, in order:
+/// The startup sequence from mjolnir-cli.md, in order:
 /// 1. init_global_if_empty — refuse to start on PartiallyPresent.
 /// 2. Load all config layers (`Config::open` — refuses to start on any
 ///    parse failure, schema error, unknown major, or missing env var).
@@ -46,7 +46,7 @@ const CHANNEL_CAPACITY: usize = 64;
 /// 7. Block on TUI exit; drop channels; wait for the agent to drain.
 ///
 /// Step 4's PermissionsEngine is actually built ahead of step 3 here, not
-/// after: per amundsen-permissions.md, "the session initializer tests each
+/// after: per mjolnir-permissions.md, "the session initializer tests each
 /// candidate [context] file" through the engine's own check_context_file
 /// before composing the additional-context string, which needs the engine
 /// to already exist. The spec's numbered list is the right order to read
@@ -67,14 +67,14 @@ pub async fn run() -> Result<(), StartupError> {
 
     let project_provider = config.project_provider();
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
-    let provider_config = amundsen_llm::resolve(project_provider.as_ref(), &global_provider);
+    let provider_config = mjolnir_llm::resolve(project_provider.as_ref(), &global_provider);
     let model_name = provider_config.model.clone();
     let client = match provider_config.kind {
-        ProviderKind::Anthropic => AnyLlmClient::Anthropic(amundsen_llm::AnthropicClient::new(provider_config)?),
-        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(amundsen_llm::OpenAiCompatibleClient::new(provider_config)?),
+        ProviderKind::Anthropic => AnyLlmClient::Anthropic(mjolnir_llm::AnthropicClient::new(provider_config)?),
+        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(mjolnir_llm::OpenAiCompatibleClient::new(provider_config)?),
     };
 
-    let mut registry = amundsen_tools::builtin_registry(cwd.clone());
+    let mut registry = mjolnir_tools::builtin_registry(cwd.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
     // Best-effort per server/tool (see register_mcp_tools' own doc comment)
     // — one broken server must not prevent the session from starting, or
@@ -98,7 +98,7 @@ pub async fn run() -> Result<(), StartupError> {
     let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), event_tx.clone()));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
-    let tui_result = amundsen_tui::run(event_rx, tui_cmd_tx, model_name, permissions).await;
+    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions).await;
 
     // The TUI dropped its command sender on return, closing tui_cmd_rx;
     // the interceptor then drops agent_cmd_tx, closing the core's command
@@ -110,7 +110,7 @@ pub async fn run() -> Result<(), StartupError> {
 }
 
 /// A project-scope server entry replaces a global one of the same name
-/// entirely (see amundsen-config's annotated mcp.yaml) — this is that same
+/// entirely (see mjolnir-config's annotated mcp.yaml) — this is that same
 /// rule applied across the two already-loaded snapshots.
 fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut by_name: BTreeMap<String, McpServer> = config.global_mcp().servers.into_iter().map(|s| (s.name.clone(), s)).collect();
@@ -123,7 +123,7 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_config::McpTransport;
+    use mjolnir_config::McpTransport;
 
     fn server(name: &str, command: &str) -> McpServer {
         McpServer { name: name.into(), transport: McpTransport::Stdio { command: command.into(), args: vec![] }, env: Default::default() }
@@ -135,9 +135,9 @@ mod tests {
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
 
-        config.add_mcp_server(amundsen_config::Scope::Global, server("fs", "global-fs-server")).unwrap();
-        config.add_mcp_server(amundsen_config::Scope::Project, server("fs", "project-fs-server")).unwrap();
-        config.add_mcp_server(amundsen_config::Scope::Global, server("other", "other-server")).unwrap();
+        config.add_mcp_server(mjolnir_config::Scope::Global, server("fs", "global-fs-server")).unwrap();
+        config.add_mcp_server(mjolnir_config::Scope::Project, server("fs", "project-fs-server")).unwrap();
+        config.add_mcp_server(mjolnir_config::Scope::Global, server("other", "other-server")).unwrap();
 
         let merged = merged_mcp_servers(&config);
         assert_eq!(merged.len(), 2);

@@ -1,7 +1,7 @@
 //! Anthropic wire types and the SSE-to-`LlmEvent` assembler. Nothing here is
-//! `pub` outside the crate — see amundsen-llm.md's Wire Isolation decision.
+//! `pub` outside the crate — see mjolnir-llm.md's Wire Isolation decision.
 
-use amundsen_core::{CacheStats, ContentBlock, LlmRequest, Message, Role, StepOutcome, StopReason, ToolCall, UsageStats};
+use mjolnir_core::{CacheStats, ContentBlock, LlmRequest, Message, Role, StepOutcome, StopReason, ToolCall, UsageStats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -97,7 +97,7 @@ impl WireContentBlock {
     }
 }
 
-/// Builds the request body. Cache placement per amundsen-llm.md: one
+/// Builds the request body. Cache placement per mjolnir-llm.md: one
 /// breakpoint on the last tool definition (covers system + tools), one on
 /// the last content block of the message at `request.cache_breakpoints`'
 /// highest index (covers the last completed turn) — at most two total, the
@@ -284,7 +284,7 @@ struct ToolBuffer {
 }
 
 /// Turns a sequence of `WireEvent`s from one HTTP attempt into
-/// `amundsen_core::LlmEvent`s. Per amundsen-llm.md: thinking content is
+/// `mjolnir_core::LlmEvent`s. Per mjolnir-llm.md: thinking content is
 /// dropped at the parse site (only start/end markers cross the boundary);
 /// tool input is buffered and emitted as one `ToolUseRequested` on
 /// `content_block_stop`; usage is folded from `message_start` +
@@ -308,8 +308,8 @@ impl Assembler {
     /// Zero, one, or (for `content_block_stop` closing a tool block) exactly
     /// one `LlmEvent` for this wire event; `Err` on a malformed payload or an
     /// upstream `error` event.
-    pub fn handle(&mut self, event: WireEvent) -> Result<Vec<amundsen_core::LlmEvent>, WireError> {
-        use amundsen_core::LlmEvent;
+    pub fn handle(&mut self, event: WireEvent) -> Result<Vec<mjolnir_core::LlmEvent>, WireError> {
+        use mjolnir_core::LlmEvent;
 
         Ok(match event {
             WireEvent::MessageStart { message } => {
@@ -404,7 +404,7 @@ impl Assembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
+    use mjolnir_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
     use serde_json::json;
 
     fn ev(json_str: &str) -> WireEvent {
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn build_request_places_cache_control_on_last_tool_and_the_given_message_index() {
         let config = crate::config::ProviderConfig {
-            kind: amundsen_config::ProviderKind::Anthropic,
+            kind: mjolnir_config::ProviderKind::Anthropic,
             model: "claude-sonnet-5".into(),
             api_key_env: "X".into(),
             base_url: None,
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn build_request_max_tokens_exceeds_the_thinking_budget() {
         let config = crate::config::ProviderConfig {
-            kind: amundsen_config::ProviderKind::Anthropic,
+            kind: mjolnir_config::ProviderKind::Anthropic,
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: None,

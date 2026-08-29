@@ -9,7 +9,7 @@ use crate::gate::ApprovalGate;
 use crate::registry::{Tool, ToolDescriptor, ToolSource};
 
 /// One remote MCP tool, proxied through `McpBridge`. `edit_class` is always
-/// `false` at registration — per amundsen-tools.md, MCP tools only ever
+/// `false` at registration — per mjolnir-tools.md, MCP tools only ever
 /// become edit-shaped via a first-invocation follow-up, never upfront. That
 /// follow-up (and the config persistence it needs) isn't implemented in
 /// this pass; every MCP tool goes through the standard four-tier prompt.
@@ -75,7 +75,7 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_config::{McpServer, McpTransport};
+    use mjolnir_config::{McpServer, McpTransport};
     use serde_json::json;
     use std::sync::Arc as StdArc;
 

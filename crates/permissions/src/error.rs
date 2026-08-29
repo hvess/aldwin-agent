@@ -9,5 +9,5 @@ pub enum PermissionError {
     EditNotAllowlistable,
 
     #[error(transparent)]
-    Config(#[from] amundsen_config::ConfigError),
+    Config(#[from] mjolnir_config::ConfigError),
 }

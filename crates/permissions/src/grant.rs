@@ -13,8 +13,8 @@ pub enum Decision {
 /// Parsed form of a config-persisted grant string: `kind:pattern`. `kind` is
 /// a guarded action's name (a tool name such as `shell` or `read`); `pattern`
 /// is matched against a caller-supplied target string via [`glob_match`].
-/// amundsen-config only guarantees these are opaque strings — parsing the
-/// grammar is this crate's job (see amundsen-config's domain.rs doc comment).
+/// mjolnir-config only guarantees these are opaque strings — parsing the
+/// grammar is this crate's job (see mjolnir-config's domain.rs doc comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantKey {
     pub kind:    String,

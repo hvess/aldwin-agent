@@ -27,7 +27,7 @@ const OUTPUT_CAP_BYTES: usize = 50 * 1024;
 /// anything-at-all` too — `*` has no concept of "stop at a shell
 /// metacharacter." A real fix needs actual shell-command parsing (an AST,
 /// not a glob) to scope a grant to just the invoked binary and its argv;
-/// that's out of scope for the glob grammar amundsen-permissions.md
+/// that's out of scope for the glob grammar mjolnir-permissions.md
 /// defines. This is the same accepted risk class as prefix-matched shell
 /// permission systems generally (a broad grant is an intentional trust
 /// decision, not an isolation boundary) — worth a developer's awareness
@@ -133,7 +133,7 @@ impl Tool for ShellTool {
 }
 
 /// Best-effort SIGKILL of the child's process group on drop, unless
-/// disarmed. Per amundsen-tools.md: "Cancellation is advisory from core's
+/// disarmed. Per mjolnir-tools.md: "Cancellation is advisory from core's
 /// perspective — the dispatcher promises to release the slot, not that the
 /// OS-level work stopped" — sending to an already-reaped pid is harmless.
 struct ProcessGroupGuard {
@@ -272,7 +272,7 @@ mod tests {
         // No assertion beyond "returns promptly" here — verifying the OS
         // actually reaped the grandchild would need /proc polling, which is
         // more machinery than this test needs; the guard's kill(-pgid) call
-        // is what amundsen-tools.md asks for.
+        // is what mjolnir-tools.md asks for.
     }
 
     #[test]

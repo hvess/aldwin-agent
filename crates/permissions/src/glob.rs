@@ -1,4 +1,4 @@
-//! Grant-pattern matching. Per amundsen-permissions.md's Pattern vocabulary,
+//! Grant-pattern matching. Per mjolnir-permissions.md's Pattern vocabulary,
 //! both tool-arg globs (`shell:cargo test*`) and path globs (`read:./**`) are
 //! the same grammar: `*` matches any run of characters, including none and
 //! including path separators; everything else matches literally. Exact match

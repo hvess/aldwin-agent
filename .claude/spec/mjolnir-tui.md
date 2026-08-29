@@ -1,4 +1,4 @@
-# amundsen-tui
+# mjolnir-tui
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
@@ -40,7 +40,7 @@ re-verify Shift+Enter specifically.
 **Progress (2026-08-29, follow-up):** A `/`-prefixed `UserMessage` (a
 slash command) now renders dim rather than sharing plain user messages'
 normal style, per developer request once `/help`/`/exit` landed in
-amundsen-cli — otherwise a command looks identical to a chat message in
+mjolnir-cli — otherwise a command looks identical to a chat message in
 the log, undermining the point of having named commands at all. See
 `is_command` in `ui.rs`; duplicates cli's own `/`-prefix check since tui
 can't depend on cli (wrong direction) to reuse it.
@@ -89,7 +89,7 @@ then pass again once restored.
 **Progress (2026-08-29, markdown support):** Assistant prose was rendering
 raw markdown source (`**bold**`, `` `code` ``, `# heading`, `- item`,
 literal asterisks and backticks included) — reported directly by the
-developer ("LLM output is in markdown, but amundsen doesn't support it").
+developer ("LLM output is in markdown, but mjolnir doesn't support it").
 `ui::render_markdown_line` now parses each prose line (fenced code was
 already handled separately, see the 2026-08-29 second-follow-up entry
 below) for bold/italic/inline-code/strikethrough/links, and per-line block
@@ -118,10 +118,10 @@ messages — a `/`-prefixed slash command keeps its plain dim style with no
 background, preserving the harness-directed-vs-conversation distinction.
 (2) A welcome banner now renders above the conversation log on every draw
 (`ui::intro_lines`, always exactly `log::INTRO_LINE_COUNT` rows): an ASCII
-rendering of the little owl from amundsen.md's Mascot section (boxy
+rendering of the little owl from mjolnir.md's Mascot section (boxy
 outline, `◉` camera-iris eyes as the one expressive feature, perched on a
 rail rather than ambulatory, talons gripping rather than acting), the
-`AMUNDSEN` wordmark and tagline, and a version/model line
+`MJOLNIR` wordmark and tagline, and a version/model line
 (`v{CARGO_PKG_VERSION} · {model_name}`). It isn't a `LogEntry` — it isn't a
 core event, so it doesn't belong in the append-only event log semantics
 that `log.rs`'s doc comments describe — instead `ui::draw_log` prepends it
@@ -131,7 +131,7 @@ accounts for the transient thinking indicator. The owl uses ACCENT
 (cyan) for its outline/eyes and the wordmark — a deliberate, scoped
 expansion of accent beyond "card border and focused input only" (see the
 Palette bullet below), not a resolution of the still-open mascot color
-palette question in amundsen.md's Mascot section.
+palette question in mjolnir.md's Mascot section.
 
 **Progress (2026-08-29, git commit in the banner):** The banner's version
 line originally showed only `CARGO_PKG_VERSION` — reported back by the
@@ -142,7 +142,7 @@ developer which build they're actually running. `crates/tui/build.rs`
 now shells out to `git rev-parse --short=8 HEAD` (falling back to
 `"unknown"` if git isn't available, e.g. a source tarball with no `.git`)
 and `git status --porcelain` for a `-dirty` suffix, exposing the result as
-`AMUNDSEN_GIT_HASH` via `cargo:rustc-env`; `ui::intro_lines` reads it with
+`MJOLNIR_GIT_HASH` via `cargo:rustc-env`; `ui::intro_lines` reads it with
 `env!(...)` alongside `CARGO_PKG_VERSION`. Also explains the "why is my
 build binary not showing the new intro at all" report immediately prior
 to this entry — the real cause there was a stale prebuilt binary, not a
@@ -163,7 +163,7 @@ real reference photo (thresholded to pure black/white, trimmed, resized
 preserving aspect ratio, then read back pixel-for-pixel with one source
 pixel mapped to one Braille dot — 2×4 real sub-character dots per cell,
 not the `░▒▓█` shading-level approximation every earlier attempt used).
-This settles amundsen.md's Mascot section in a new direction; that
+This settles mjolnir.md's Mascot section in a new direction; that
 section's "little owl" rationale is superseded, not merely
 supplemented — update it to describe Mjolnir if/when that file gets its
 own pass. `INTRO_LINE_COUNT` grew to 28 (21 art rows + blank + wordmark +
@@ -184,7 +184,7 @@ broken dots. (2) "A little too large" — re-traced at a smaller target
 height-constrained resize (`-resize x64`) rather than width-constrained,
 which also happens to read more cleanly at the smaller size since there's
 less linework crammed into the same dot budget. (3) "It should be left
-aligned with the name of AMUNDSEN alongside it on the right" — the banner
+aligned with the name of MJOLNIR alongside it on the right" — the banner
 was centering one stacked column (art, then wordmark/tagline/version below
 it); `ui::intro_lines` now builds the info block as a second column placed
 beside the art on the same rows (vertically centered against the art's
@@ -197,7 +197,7 @@ rows of its own, since it now shares the art's rows instead of following
 them).
 
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
-- **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
+- **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
 - **Input Area:** Multi-line textarea. Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Input is blocked while an approval card is pending.
 - **Status Bar:** Single line, always visible. Shows: model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), names of tools currently running within the active step (e.g. "tools: Read shell").
@@ -213,13 +213,13 @@ them).
 
 - **Minimal monochrome palette with one accent color in V0.** — Avoids colour decisions blocked on the open mascot palette. One accent is sufficient to make the approval card unmistakable. Rich theming deferred until the mascot palette is settled.
 
-- **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in amundsen-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
+- **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in mjolnir-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 
 - **Input blocked while an approval card is pending.** — Structural friction — the developer cannot queue submissions while an edit awaits approval. Consistent with "Edit is never allowlistable in any configuration" from the parent spec.
 
 ## Steps
 
-1. Create crates/tui — Cargo.toml with ratatui, crossterm, tokio; depends on amundsen-core.
+1. Create crates/tui — Cargo.toml with ratatui, crossterm, tokio; depends on mjolnir-core.
 
 2. Define App struct: core event receiver, command sender, log snapshot, approval-pending flag, input buffer.
    - Why: Approval-pending flag drives input-blocking; keeping it on App avoids threading it through every handler.
@@ -264,8 +264,8 @@ them).
 
 ## References
 
-- .claude/spec/amundsen.md — parent spec; layout decisions, UX posture, Edit friction rules.
-- .claude/spec/amundsen-core.md — event/command types, turn/step model, thinking-content contract.
-- .claude/spec/amundsen-tools.md — ToolApprovalRequested semantics, ApproveTool command.
+- .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.
+- .claude/spec/mjolnir-core.md — event/command types, turn/step model, thinking-content contract.
+- .claude/spec/mjolnir-tools.md — ToolApprovalRequested semantics, ApproveTool command.
 - https://ratatui.rs/ — ratatui.
 - https://docs.rs/crossterm/ — crossterm terminal backend.

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use amundsen_core::{Command, Event, StepId};
-use amundsen_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
+use mjolnir_core::{Command, Event, StepId};
+use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::log::{summarise, LogEntry, ToolActivityEntry, ToolActivityStatus};
@@ -15,7 +15,7 @@ pub struct PendingApproval {
 }
 
 pub struct PendingPrompt {
-    pub id:      amundsen_core::PromptId,
+    pub id:      mjolnir_core::PromptId,
     pub payload: PromptPayload,
 }
 
@@ -48,7 +48,7 @@ impl StatusInfo {
 }
 
 /// `CheckOutcome::PromptRequired` (deny-by-absence) counts as Denied here —
-/// matches amundsen-tui.md's two-state "allowed or denied" status bar
+/// matches mjolnir-tui.md's two-state "allowed or denied" status bar
 /// vocabulary; this is a glanceable summary against an empty target (the
 /// broadest possible grant), not a precise per-pattern oracle.
 fn perm_state(engine: &Engine, kind: &str, edit_class: bool) -> PermState {
@@ -318,7 +318,7 @@ impl App {
     /// Tool four-tier: o/s/p/a = allow once/session/project/always;
     /// shift O/S/P/A = deny at the same tiers. Context-file two-tier: s/p =
     /// approve session/project, n = decline. Labels are rendered in the
-    /// card itself (see `ui.rs`) — see amundsen-tui.md's Pitfall on
+    /// card itself (see `ui.rs`) — see mjolnir-tui.md's Pitfall on
     /// requiring an unambiguous labeled key.
     fn handle_prompt_key(&mut self, key: KeyEvent) {
         let Some(pending) = &self.pending_prompt else { return };
@@ -383,8 +383,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amundsen_config::Config;
-    use amundsen_core::{ToolCall, ToolResult, TurnEndReason, TurnId};
+    use mjolnir_config::Config;
+    use mjolnir_core::{ToolCall, ToolResult, TurnEndReason, TurnId};
     use ratatui::crossterm::event::KeyEventState;
 
     fn engine() -> Arc<Engine> {
@@ -526,7 +526,7 @@ mod tests {
     fn ctrl_c_declines_a_pending_tool_prompt_instead_of_being_swallowed() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompt.is_none(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
         match app.outbox.last() {
@@ -542,7 +542,7 @@ mod tests {
     fn ctrl_c_declines_a_pending_context_file_prompt() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompt.is_none());
         match app.outbox.last() {
@@ -558,7 +558,7 @@ mod tests {
     fn permission_prompt_resolves_on_labeled_key_and_records_resolution() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
         assert!(app.pending_prompt.is_some());
 
         app.handle_key(press(KeyCode::Char('p'))); // allow, project tier
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn retry_attempt_renders_as_a_visible_log_entry() {
         let mut app = app();
-        let info = amundsen_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded".into(), attempt: 1 };
+        let info = mjolnir_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded".into(), attempt: 1 };
         app.apply_event(Event::RetryAttempt { turn_id: TurnId(1), step_id: StepId(1), info: info.clone() });
         assert!(matches!(app.log.last(), Some(LogEntry::RetryAttempt { info: i }) if *i == info));
     }
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn malformed_prompt_payload_is_a_log_error_not_a_panic() {
         let mut app = app();
-        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload: serde_json::json!({"shape": "unknown_shape"}) });
+        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload: serde_json::json!({"shape": "unknown_shape"}) });
         assert!(matches!(app.log.last(), Some(LogEntry::Error { .. })));
         assert!(app.pending_prompt.is_none());
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal stdio MCP server for amundsen-tools' McpBridge integration test.
+"""Minimal stdio MCP server for mjolnir-tools' McpBridge integration test.
 
 Speaks just enough of the protocol (newline-delimited JSON-RPC 2.0) to
 exercise the real subprocess + rmcp client wiring: initialize, tools/list,

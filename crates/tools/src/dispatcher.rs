@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use amundsen_core::{DispatchContext, ToolCall, ToolDefinition, ToolResult};
-use amundsen_permissions::{CheckOutcome, Decision, Engine, PromptPayload, PromptResponse};
+use mjolnir_core::{DispatchContext, ToolCall, ToolDefinition, ToolResult};
+use mjolnir_permissions::{CheckOutcome, Decision, Engine, PromptPayload, PromptResponse};
 use async_trait::async_trait;
 
 use crate::error::ToolError;
 use crate::registry::{Registry, ToolDescriptor};
 
 /// Implements core's `ToolDispatcher`. Owns the dispatch flow described in
-/// amundsen-tools.md: resolve name -> tool, run the generic permission check
+/// mjolnir-tools.md: resolve name -> tool, run the generic permission check
 /// for `edit_class: false` tools (emitting `PromptRequested` / awaiting
 /// `PromptResponse` on Deny-by-absence), then run the tool's future.
 /// `edit_class: true` tools skip the permission check entirely — their
@@ -63,7 +63,7 @@ impl Dispatcher {
 }
 
 #[async_trait]
-impl amundsen_core::ToolDispatcher for Dispatcher {
+impl mjolnir_core::ToolDispatcher for Dispatcher {
     async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
         let Some(tool) = self.registry.get(&call.name) else {
             return error_result(&call.id, ToolError::UnknownTool { name: call.name });
@@ -94,17 +94,17 @@ fn error_result(call_id: &str, err: ToolError) -> ToolResult {
 }
 
 /// Permission grants persist as an opaque `kind:pattern` string
-/// (amundsen-permissions' `GrantKey::parse` splits on the *first* `:`, so
+/// (mjolnir-permissions' `GrantKey::parse` splits on the *first* `:`, so
 /// patterns can contain their own colons — e.g. `read:./f.rs:1`). A tool's
 /// registered name is ordinarily a safe `kind`, but an MCP tool namespaced
-/// under a collision (`<server>:<name>`, per amundsen-tools.md) already
+/// under a collision (`<server>:<name>`, per mjolnir-tools.md) already
 /// contains a colon itself: persisted as `server:name:pattern`, that would
 /// parse back as kind `server`, pattern `name:pattern` — never matching the
 /// original kind again, so an "always allow" answer would silently stop
 /// taking effect on the very next call. Escaping `:` to `/` here (only ever
 /// needed for namespaced MCP kinds — plain tool names never contain it)
 /// keeps the grant grammar's own splitting rule correct without
-/// amundsen-permissions needing to know anything about MCP namespacing.
+/// mjolnir-permissions needing to know anything about MCP namespacing.
 fn permission_kind(tool_name: &str) -> std::borrow::Cow<'_, str> {
     if tool_name.contains(':') {
         std::borrow::Cow::Owned(tool_name.replace(':', "/"))
@@ -118,9 +118,9 @@ mod tests {
     use super::*;
     use crate::registry::ToolSource;
     use crate::test_support::dispatch_context;
-    use amundsen_config::Config;
-    use amundsen_core::{Event, ToolDispatcher as _};
-    use amundsen_permissions::ToolTier;
+    use mjolnir_config::Config;
+    use mjolnir_core::{Event, ToolDispatcher as _};
+    use mjolnir_permissions::ToolTier;
     use async_trait::async_trait;
     use serde_json::{json, Value};
 

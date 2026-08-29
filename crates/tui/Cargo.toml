@@ -1,11 +1,11 @@
 [package]
-name    = "amundsen-tui"
+name    = "mjolnir-tui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-amundsen-core        = { path = "../core" }
-amundsen-permissions = { path = "../permissions" }
+mjolnir-core        = { path = "../core" }
+mjolnir-permissions = { path = "../permissions" }
 tokio                = { workspace = true }
 futures              = { workspace = true }
 serde_json           = { workspace = true }
@@ -15,4 +15,4 @@ syntect              = { version = "5", default-features = false, features = ["d
 
 [dev-dependencies]
 tempfile        = "3"
-amundsen-config = { path = "../config" }
+mjolnir-config = { path = "../config" }

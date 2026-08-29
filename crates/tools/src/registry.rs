@@ -16,9 +16,9 @@ pub enum ToolSource {
 }
 
 /// A registered (name, input schema, edit_class, dispatch fn) tuple — see
-/// amundsen-tools.md's Vocabulary. Built-ins register at crate init with a
+/// mjolnir-tools.md's Vocabulary. Built-ins register at crate init with a
 /// static descriptor; MCP tools register lazily (not yet implemented in this
-/// pass — see amundsen-tools.md's MCP Bridge / MCP Lifecycle sections).
+/// pass — see mjolnir-tools.md's MCP Bridge / MCP Lifecycle sections).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {
     pub name:         String,
@@ -82,12 +82,12 @@ impl Registry {
 
     /// What core's `ToolDispatcher::definitions` needs — just the surface
     /// the model sees, stripped of dispatch-only metadata like `edit_class`.
-    pub fn definitions(&self) -> Vec<amundsen_core::ToolDefinition> {
+    pub fn definitions(&self) -> Vec<mjolnir_core::ToolDefinition> {
         self.tools
             .values()
             .map(|t| {
                 let d = t.descriptor();
-                amundsen_core::ToolDefinition {
+                mjolnir_core::ToolDefinition {
                     name:         d.name.clone(),
                     description:  d.description.clone(),
                     input_schema: d.input_schema.clone(),

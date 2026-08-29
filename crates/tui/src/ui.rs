@@ -1,4 +1,4 @@
-use amundsen_permissions::PromptPayload;
+use mjolnir_permissions::PromptPayload;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -72,9 +72,9 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The welcome banner shown above the conversation log on every draw: a
-/// Mjolnir (Thor's hammer) mark — a mascot pivot away from amundsen.md's
+/// Mjolnir (Thor's hammer) mark — a mascot pivot away from mjolnir.md's
 /// originally-decided little owl, per explicit developer direction toward
-/// something more "aggressive/directive" (see amundsen.md's Mascot section
+/// something more "aggressive/directive" (see mjolnir.md's Mascot section
 /// for the superseded rationale, and this function's own history for the
 /// several prior designs it replaced: an owl, a cobra, a hand-coded
 /// "tribal" infinity mark, and two hand-coded Mjolnir attempts using a
@@ -103,7 +103,7 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// procedural cobra it replaced), so per-glyph styling would be pointless;
 /// ACCENT is still the one deliberate expansion of accent beyond "card
 /// border and focused input only" (see the Palette Progress note in
-/// amundsen-tui.md).
+/// mjolnir-tui.md).
 const MJOLNIR_ART: [&str; 16] = [
     "⠀⠀⠀⠀⠀⠀⣠⡶⠒⣺⣿⣿⣉⣏⣉⣿⣿⣗⠒⣦⡄⠀⠀⠀⠀⠀⠀",
     "⠀⠀⠀⠀⠀⠀⣿⠇⡾⢋⡭⣍⠻⣿⠟⡩⢭⡙⣷⢸⣿⠀⠀⠀⠀⠀⠀",
@@ -146,7 +146,7 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
         ("A M U N D S E N".to_string(), wordmark),
         ("a tool for thought.".to_string(), tagline),
         (String::new(), meta),
-        (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta),
+        (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta),
     ];
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
@@ -197,10 +197,10 @@ fn bordered(width: u16, content: Vec<Line<'static>>, border_style: Style) -> Vec
 
 fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
     match entry {
-        // Palette per amundsen-tui.md: bright = assistant, muted gray +
+        // Palette per mjolnir-tui.md: bright = assistant, muted gray +
         // subtle background = user — these must not share a style, or the
         // two speakers become indistinguishable in the log. A slash command
-        // is user input that never reaches the model (see amundsen-cli's
+        // is user input that never reaches the model (see mjolnir-cli's
         // interceptor) — dim marks it as directed at the harness itself,
         // not conversation, the same way tool metadata and notices are dim
         // (and it skips the background tint, since it isn't a chat message).
@@ -343,7 +343,7 @@ fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
 /// breaking that guarantee. Per-line block-prefix detection (heading, list,
 /// blockquote, rule) plus a recursive-descent inline pass covers what LLMs
 /// actually emit without touching line count. Styling is modifiers only
-/// (bold/italic/underline/reversed/crossed-out) — amundsen-tui.md reserves
+/// (bold/italic/underline/reversed/crossed-out) — mjolnir-tui.md reserves
 /// the one accent color for the approval card and focused input.
 fn render_markdown_line(line: &str) -> Line<'static> {
     let base = Style::default().fg(BRIGHT);
@@ -491,7 +491,7 @@ fn is_hr(line: &str) -> bool {
     stripped.len() >= 3 && (stripped.chars().all(|c| c == '-') || stripped.chars().all(|c| c == '*') || stripped.chars().all(|c| c == '_'))
 }
 
-/// Mirrors amundsen-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
+/// Mirrors mjolnir-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
 /// in `slash.rs`) — this crate can't depend on that one to reuse it
 /// directly (cli depends on tui, not the other way around), so the rule is
 /// duplicated; keep the two in sync if it ever changes.
@@ -556,8 +556,8 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::app::App;
-    use amundsen_config::Config;
-    use amundsen_permissions::Engine;
+    use mjolnir_config::Config;
+    use mjolnir_permissions::Engine;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::sync::Arc;
@@ -805,7 +805,7 @@ mod tests {
         let out = rendered(&mut app(), 80, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
         assert!(out.contains("A M U N D S E N"), "the wordmark should appear in the welcome banner");
-        assert!(out.contains(env!("AMUNDSEN_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
+        assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
         assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
     }
 

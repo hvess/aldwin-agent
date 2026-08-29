@@ -1,5 +1,5 @@
 //! `ToolDispatcher` impl, built-in tool set, and the Edit approval gate. See
-//! `.claude/spec/amundsen-tools.md`.
+//! `.claude/spec/mjolnir-tools.md`.
 //!
 //! Covers the registry, dispatch flow, permissions wiring, all four V0
 //! built-ins (Read, Edit, shell, Explain), the LSP client Explain uses, and

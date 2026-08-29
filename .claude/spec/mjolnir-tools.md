@@ -1,9 +1,9 @@
-# amundsen-tools
+# mjolnir-tools
 
 ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 
 **Status:** active — one known gap, see Progress below
-**Scope:** amundsen-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
+**Scope:** mjolnir-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
 
@@ -13,13 +13,13 @@ Explain) and the MCP bridge are implemented and tested — `053792a`,
 V0-scoped to Rust only (rust-analyzer), matching the crate's own
 LSP-scope-creep Pitfall rather than a gap. Not yet built: the MCP
 first-invocation edit-shape follow-up ("MCP Edit-Shape Detection" — see
-amundsen-permissions.md's matching gap, which this depends on). Every MCP
+mjolnir-permissions.md's matching gap, which this depends on). Every MCP
 tool currently registers with `edit_class: false` and never graduates to
 Edit's binary approval gate. Keep this spec active until that's built.
 
 ## Why
 
-Owns every concrete tool Amundsen can dispatch — the V0 built-ins (Read, Diff, Explain, Edit, shell) and the MCP bridge that maps remote tools onto the same dispatch surface. Implements core's ToolDispatcher trait. Hosts the Edit approval gate as structural friction the developer cannot configure away. Other crates supply policy and protocol; this crate supplies behaviour.
+Owns every concrete tool Mjolnir can dispatch — the V0 built-ins (Read, Diff, Explain, Edit, shell) and the MCP bridge that maps remote tools onto the same dispatch surface. Implements core's ToolDispatcher trait. Hosts the Edit approval gate as structural friction the developer cannot configure away. Other crates supply policy and protocol; this crate supplies behaviour.
 
 ## Vocabulary
 
@@ -63,19 +63,19 @@ Owns every concrete tool Amundsen can dispatch — the V0 built-ins (Read, Diff,
 
 - **Edit approval gate lives inside the tool's future, not in the dispatcher.** — Keeps the dispatcher uniform — every tool is a future of a Result. Edit's friction is structural to the tool, not a side path. Matches core's "approval-gated tools handle their gate inside the future" decision.
 
-- **edit_class is registration-time and immutable; never derived from tool name.** — Inherited from amundsen-permissions. Naming-based enforcement is escapable by renaming; flag on the descriptor is not.
+- **edit_class is registration-time and immutable; never derived from tool name.** — Inherited from mjolnir-permissions. Naming-based enforcement is escapable by renaming; flag on the descriptor is not.
 
-- **MCP tools become edit-shaped via a first-invocation follow-up, never via upfront config.** — Edit friction must extend to MCP tools that modify files, but the MCP protocol does not tell Amundsen which tools those are. Marking at first invocation puts the question at the moment the developer is already paying attention to the call — matches the parent decision against first-run wizards ("understanding develops by encounter"). Tools whose shape cannot be pre-diffed (arbitrary patch / partial edit / mutation by query) cannot inherit the Edit gate and fall back to the standard prompt; that limitation is structural to the diff-rendering contract, not a setting.
+- **MCP tools become edit-shaped via a first-invocation follow-up, never via upfront config.** — Edit friction must extend to MCP tools that modify files, but the MCP protocol does not tell Mjolnir which tools those are. Marking at first invocation puts the question at the moment the developer is already paying attention to the call — matches the parent decision against first-run wizards ("understanding develops by encounter"). Tools whose shape cannot be pre-diffed (arbitrary patch / partial edit / mutation by query) cannot inherit the Edit gate and fall back to the standard prompt; that limitation is structural to the diff-rendering contract, not a setting.
 
 - **MCP name collisions namespace under `<server>:<name>`; built-ins win unprefixed.** — Built-ins are the stable surface; remote tools must not silently shadow them. Prefixing is explicit and survives server churn.
 
-- **Tool errors are structured and fed back to the model; transport errors do not retry here.** — Tool-level failure is signal for the model. Transient retry policy belongs to amundsen-llm for upstream calls, not to the tool layer.
+- **Tool errors are structured and fed back to the model; transport errors do not retry here.** — Tool-level failure is signal for the model. Transient retry policy belongs to mjolnir-llm for upstream calls, not to the tool layer.
 
 - **Each tool owns its cancellation; the dispatcher only promises to release the slot.** — Shell needs SIGKILL on the process group; pure-Rust tools want await-point abort; MCP wants the response future dropped. A single cancellation primitive at the dispatcher would have to lie about at least one of these.
 
 ## Pitfalls
 
-- LSP integration may outgrow this crate — server lifecycle, JSON-RPC client, capability negotiation, and per-language config (rust-analyzer, sourcekit-lsp, kotlin-lsp) are real scope. Split into amundsen-lsp if it eats more than ~25% of this crate's surface.
+- LSP integration may outgrow this crate — server lifecycle, JSON-RPC client, capability negotiation, and per-language config (rust-analyzer, sourcekit-lsp, kotlin-lsp) are real scope. Split into mjolnir-lsp if it eats more than ~25% of this crate's surface.
 - Edit-shape marking for MCP tools drifting back into upfront config (e.g. a UI flow that asks at server registration rather than at first call) — defeats the encounter-driven design and re-creates the wizard the parent spec rejected.
 - MCP edit-shape arg mapping going stale if a server changes its tool schema between sessions — detect schema-hash mismatch on the marked tool and re-prompt, do not silently reuse the old mapping.
 - Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass.
@@ -85,11 +85,11 @@ Owns every concrete tool Amundsen can dispatch — the V0 built-ins (Read, Diff,
 
 ## Out of Scope
 
-- Permission policy, scope precedence, allowlist storage — amundsen-permissions.
-- Agent loop, append-only log, turn/step semantics — amundsen-core.
-- TUI rendering of diffs, tool listings, approval dialogs — amundsen-tui.
-- Config file format and persistence of MCP server entries — amundsen-config.
-- Anthropic wire format, SSE, retry — amundsen-llm.
+- Permission policy, scope precedence, allowlist storage — mjolnir-permissions.
+- Agent loop, append-only log, turn/step semantics — mjolnir-core.
+- TUI rendering of diffs, tool listings, approval dialogs — mjolnir-tui.
+- Config file format and persistence of MCP server entries — mjolnir-config.
+- Anthropic wire format, SSE, retry — mjolnir-llm.
 - Session persistence of approval history — out of V0 per parent.
 - Sandboxing of shell execution (seccomp, landlock, containers) — out of V0 per parent.
 - Streaming tool outputs (partial deltas during execution) — V0 returns terminal results only.
@@ -97,8 +97,8 @@ Owns every concrete tool Amundsen can dispatch — the V0 built-ins (Read, Diff,
 
 ## References
 
-- .claude/spec/amundsen.md — parent; built-in surface, MCP-as-extension, Edit-as-structural-friction.
-- .claude/spec/amundsen-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
-- .claude/spec/amundsen-permissions.md — check() interface, edit_class enforcement, MCP gating.
+- .claude/spec/mjolnir.md — parent; built-in surface, MCP-as-extension, Edit-as-structural-friction.
+- .claude/spec/mjolnir-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
+- .claude/spec/mjolnir-permissions.md — check() interface, edit_class enforcement, MCP gating.
 - https://github.com/modelcontextprotocol/rust-sdk — rmcp.
 - https://modelcontextprotocol.io/specification — MCP protocol surface.

@@ -1,9 +1,9 @@
-# amundsen-llm
+# mjolnir-llm
 
 V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, no wire-type leakage.
 
 **Status:** archived — implemented, tested, audited
-**Scope:** amundsen-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
+**Scope:** mjolnir-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
 **Last Updated:** 2026-05-16
 
@@ -23,7 +23,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 ## Vocabulary
 
 - **Wire Event:** SSE from Anthropic's Messages API. Parsed internally; never crosses the trait boundary.
-- **Breakpoint Marker:** Abstract pointer from amundsen-core ("cache up to here"). Translated to a cache_control `{ type: ephemeral }` placement on a specific content block at request-build time.
+- **Breakpoint Marker:** Abstract pointer from mjolnir-core ("cache up to here"). Translated to a cache_control `{ type: ephemeral }` placement on a specific content block at request-build time.
 
 ## Design
 
@@ -35,13 +35,13 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 - **Retry:** Retryable: 408, 429, 500, 502, 503, 504, 529, plus connect/read/write transport failures. Full-jitter exponential backoff (1s base, 30s cap), max 4 attempts. Every attempt emits RetryAttempt { provider: "anthropic", status, retry_in, message } with the verbatim upstream message. Mid-stream errors after the first event are not retried — the step ends with a structured error and partial output stays in the log.
 - **Idle Timeout:** 60s SSE silence drops the stream and engages the retry path. Not user-tunable in V0.
 - **Extended Thinking:** Enabled by default. `thinking: { type: "enabled", budget_tokens: N }` where N is resolved from provider.yaml.
-- **Provider Config Resolution:** Composes its own view from amundsen-config's raw project_provider() and global_provider() snapshots — flat project-over-global overlay. Reads std::env::var(api_key_env) at construction; refuses to start on a missing var, surfacing the var name verbatim from the YAML.
+- **Provider Config Resolution:** Composes its own view from mjolnir-config's raw project_provider() and global_provider() snapshots — flat project-over-global overlay. Reads std::env::var(api_key_env) at construction; refuses to start on a missing var, surfacing the var name verbatim from the YAML.
 - **API Version:** anthropic-version header pinned in code as a const. Provider config cannot override it.
 - **Cancellation:** Dropping the returned event stream is sufficient — reqwest drops the connection, no detached tasks, no buffer survives the drop.
 
 ## Interfaces
 
-- **Anthropic Client:** AnthropicClient implements amundsen_core::LlmClient. Constructed from a resolved ProviderConfig.
+- **Anthropic Client:** AnthropicClient implements mjolnir_core::LlmClient. Constructed from a resolved ProviderConfig.
 - **Provider Config:** ProviderConfig { kind, model, api_key_env, base_url (V0.5), extended_thinking_budget }. Built via `resolve(project, global) -> Result<ProviderConfig, ConfigError>`.
 - **Errors:** LlmError (transport, HTTP status, SSE parse, schema mismatch, retry exhausted, idle timeout, cancelled). Mapped to core's StepEnded.error variant at the trait boundary.
 
@@ -65,7 +65,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 - **Extended thinking enabled by default; budget configured in provider.yaml.** — Thinking is what differentiates Claude on the kinds of questions this project is built around. Budget is the developer's concern, so it surfaces in YAML.
 
-- **anthropic-version pinned in code, not config.** — The API version is Amundsen's contract with Anthropic, not the developer's.
+- **anthropic-version pinned in code, not config.** — The API version is Mjolnir's contract with Anthropic, not the developer's.
 
 - **Provider config resolution lives in this crate — flat project-over-global field overlay.** — Only one provider is active at a time; field overlay is the right shape, not a name-keyed union.
 
@@ -84,11 +84,11 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 ## Out of Scope
 
-- LlmClient trait definition — amundsen-core.
-- Agent loop, conversation log, turn/step bookkeeping — amundsen-core.
-- Tool execution and approval gate — amundsen-tools.
-- Permission engine — amundsen-permissions.
-- provider.yaml on-disk format — amundsen-config.
+- LlmClient trait definition — mjolnir-core.
+- Agent loop, conversation log, turn/step bookkeeping — mjolnir-core.
+- Tool execution and approval gate — mjolnir-tools.
+- Permission engine — mjolnir-permissions.
+- provider.yaml on-disk format — mjolnir-config.
 - OpenAI-compatible adapter implementation — V0.5.
 - Gemini, Bedrock, Vertex adapters — parent spec exclusion.
 - LLM call audit log, persisted usage history — V0 surfaces usage on StepEnded but does not persist.
@@ -97,9 +97,9 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 ## References
 
-- .claude/spec/amundsen.md — parent.
-- .claude/spec/amundsen-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
-- .claude/spec/amundsen-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
+- .claude/spec/mjolnir.md — parent.
+- .claude/spec/mjolnir-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
+- .claude/spec/mjolnir-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
 - https://docs.anthropic.com/en/api/messages — Messages API.
 - https://docs.anthropic.com/en/api/messages-streaming — SSE event shapes.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — cache_control placement.

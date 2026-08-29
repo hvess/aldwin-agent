@@ -1,9 +1,9 @@
-# amundsen-core
+# mjolnir-core
 
 Agent loop, append-only conversation state, and the typed boundary between LLM and tools.
 
 **Status:** archived — implemented, tested, audited
-**Scope:** amundsen-core crate only — narrow cut. Excludes tool implementations, permissions, TUI, and provider wire format.
+**Scope:** mjolnir-core crate only — narrow cut. Excludes tool implementations, permissions, TUI, and provider wire format.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-16
 
@@ -28,7 +28,7 @@ note it here since "no known gaps" above was wrong until this landed.
 
 ## Why
 
-The narrow heart of Amundsen — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.
+The narrow heart of Mjolnir — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.
 
 ## Vocabulary
 
@@ -45,11 +45,11 @@ The narrow heart of Amundsen — the agent loop, the canonical conversation log,
 - **Event Flow:** Per step the LlmClient yields: text deltas, thinking start/end markers (content dropped at source), one tool-use-requested per tool call carrying the fully assembled input, and a terminal step-ended carrying stop reason or structured error plus usage and cache stats. The core re-emits these annotated with step/turn IDs and appends to the log.
 - **Tool Round Trip:** A step ending with tool_use carries one or more tool calls. The core dispatches concurrently, awaits all results, and starts the next step with results appended. Tool errors feed back to the model but emit upward as visibly distinct events. Approval-gated tools (Edit) wait inside the dispatcher's future; the core just awaits.
 - **Cancellation:** Cancel is a hard stop. LLM stream dropped, in-flight tools aborted best-effort (SIGKILL for shell, await-point abort for pure-Rust), turn ends in `cancelled`. Partial output remains in the log as a well-formed entry; the cancelled turn must close cleanly, not leave a torn record.
-- **System Prompt:** The core embeds the base Amundsen system prompt (discussion-first, friction on Edit, voice). At session start it receives an opaque additional-context string from the session initializer (working directory, project files if permitted). The core composes `<base>\n\n<session_context>` and sends that as the system prompt to every LLM call. The initializer can only append.
+- **System Prompt:** The core embeds the base Mjolnir system prompt (discussion-first, friction on Edit, voice). At session start it receives an opaque additional-context string from the session initializer (working directory, project files if permitted). The core composes `<base>\n\n<session_context>` and sends that as the system prompt to every LLM call. The initializer can only append.
 
 ## Interfaces
 
-- **LlmClient Trait:** Single streaming method taking (model, system prompt, tools, messages, cache breakpoints) and returning a stream of normalised events. V0 Anthropic impl lives in amundsen-llm.
+- **LlmClient Trait:** Single streaming method taking (model, system prompt, tools, messages, cache breakpoints) and returning a stream of normalised events. V0 Anthropic impl lives in mjolnir-llm.
 - **ToolDispatcher Trait:** Dispatch a tool call by name with assembled input; returns a future resolving to a success or structured error. Approval-gated tools handle their gate inside the future; the core just awaits.
 - **Events:**
   - TurnStarted
@@ -58,19 +58,19 @@ The narrow heart of Amundsen — the agent loop, the canonical conversation log,
   - ThinkingEnd
   - ToolUseRequested — assembled tool call; end-only, no streamed JSON
   - ToolDispatched — dispatcher has begun executing the tool
-  - ToolApprovalRequested — Edit approval gate; carries diff payload; semantics in amundsen-tools
+  - ToolApprovalRequested — Edit approval gate; carries diff payload; semantics in mjolnir-tools
   - ToolCompleted — tool returned with success or structured error
   - StepEnded — stop reason or structured error, usage, cache stats
   - RetryAttempt — provider-attributed transient retry, surfaced visibly
   - TurnEnded — end_turn, cancelled, or terminal error
-  - PromptRequested — permission engine needs a developer decision; semantics in amundsen-permissions
-  - PermissionsChanged — a grant was added, removed, or modified; semantics in amundsen-permissions
+  - PromptRequested — permission engine needs a developer decision; semantics in mjolnir-permissions
+  - PermissionsChanged — a grant was added, removed, or modified; semantics in mjolnir-permissions
 - **Commands:**
   - Submit — user input opens a new turn
   - Cancel — hard-stop the current turn
-  - ApproveTool — approve a pending Edit; semantics in amundsen-tools
-  - DenyTool — deny a pending Edit; semantics in amundsen-tools
-  - PromptResponse — developer's answer to a PromptRequested; semantics in amundsen-permissions
+  - ApproveTool — approve a pending Edit; semantics in mjolnir-tools
+  - DenyTool — deny a pending Edit; semantics in mjolnir-tools
+  - PromptResponse — developer's answer to a PromptRequested; semantics in mjolnir-permissions
 
 ## Decisions
 
@@ -80,7 +80,7 @@ The narrow heart of Amundsen — the agent loop, the canonical conversation log,
 
 - **LlmClient yields normalised, provider-agnostic events; thinking content dropped at source.** — Prevents V0.5's adapter from being a refactor. Thinking content is noise the developer cannot act on; only markers cross the boundary. Tool input is end-only because per-character JSON is not useful UX.
 
-- **Parallel tool calls within a step run concurrently.** — The model productively requests multiple tools per response (e.g. read two files at once); serial execution pays unnecessary latency. The TUI groups concurrent calls by kind so the developer can still follow. Edit's per-edit gate lives in amundsen-tools; the core just awaits.
+- **Parallel tool calls within a step run concurrently.** — The model productively requests multiple tools per response (e.g. read two files at once); serial execution pays unnecessary latency. The TUI groups concurrent calls by kind so the developer can still follow. Edit's per-edit gate lives in mjolnir-tools; the core just awaits.
 
 - **Cancellation is a hard stop; partial output preserved as a well-formed log entry.** — Control must return immediately. Graceful wind-down was rejected because a stuck tool would make cancel meaningless. The cancelled turn closes with TurnEnded(cancelled); the log is never torn.
 
@@ -88,7 +88,7 @@ The narrow heart of Amundsen — the agent loop, the canonical conversation log,
 
 - **Tool errors feed back to the model but surface visibly; LLM API errors retry transiently with every attempt visible.** — The model adapts to its own tool mistakes; the developer should not babysit recoverable failures. For upstream LLM failures (529, network drop) every retry emits RetryAttempt carrying provider, status, and verbatim message. Silent retries are rejected — failures must be attributable to their actual source.
 
-- **Core owns the base system prompt; session initializer supplies an opaque additional-context string only.** — The base prompt is Amundsen's operating contract — structurally inseparable from the loop. The initializer cannot reorder or replace it; it can only append. Keeps composition out of the core while keeping the contract in.
+- **Core owns the base system prompt; session initializer supplies an opaque additional-context string only.** — The base prompt is Mjolnir's operating contract — structurally inseparable from the loop. The initializer cannot reorder or replace it; it can only append. Keeps composition out of the core while keeping the contract in.
 
 ## Pitfalls
 
@@ -102,20 +102,20 @@ The narrow heart of Amundsen — the agent loop, the canonical conversation log,
 
 ## Out of Scope
 
-- Tool implementations (Read, Diff, Explain, Edit, shell, MCP) — amundsen-tools.
-- Permission engine, scope resolution, allowlist storage — amundsen-permissions.
-- TUI rendering, web-client rendering, theming — amundsen-tui and the future web client.
-- Anthropic HTTP, SSE parsing, request signing, retry backoff arithmetic — amundsen-llm.
-- OpenAI-compatible adapter — amundsen-llm V0.5.
-- MCP transport, server lifecycle, tool discovery — amundsen-tools via rmcp.
-- Config file format, scope resolution, YAML schema — amundsen-config.
+- Tool implementations (Read, Diff, Explain, Edit, shell, MCP) — mjolnir-tools.
+- Permission engine, scope resolution, allowlist storage — mjolnir-permissions.
+- TUI rendering, web-client rendering, theming — mjolnir-tui and the future web client.
+- Anthropic HTTP, SSE parsing, request signing, retry backoff arithmetic — mjolnir-llm.
+- OpenAI-compatible adapter — mjolnir-llm V0.5.
+- MCP transport, server lifecycle, tool discovery — mjolnir-tools via rmcp.
+- Config file format, scope resolution, YAML schema — mjolnir-config.
 - Session persistence, history surface, developer-authored memory — out of V0 per parent.
 - The textual content of the base system prompt — ownership is in scope; the prose is its own deliverable.
-- Concrete semantics of the approval round-trip for Edit and other gated tools — amundsen-tools.
+- Concrete semantics of the approval round-trip for Edit and other gated tools — mjolnir-tools.
 
 ## References
 
-- .claude/spec/amundsen.md — parent; narrow-vs-broad cut and inherited decisions.
+- .claude/spec/mjolnir.md — parent; narrow-vs-broad cut and inherited decisions.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API, streaming and tool-use blocks.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — breakpoint placement guidance.
 - https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking — thinking block semantics.

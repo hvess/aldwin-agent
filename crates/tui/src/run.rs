@@ -1,8 +1,8 @@
 use std::io;
 use std::sync::Arc;
 
-use amundsen_core::{Command, Event};
-use amundsen_permissions::Engine;
+use mjolnir_core::{Command, Event};
+use mjolnir_permissions::Engine;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event as CtEvent, EventStream};
@@ -16,7 +16,7 @@ use crate::ui;
 
 /// Runs the TUI to completion: sets up the terminal, drives the event loop
 /// multiplexing crossterm input and core events on one `tokio::select!` (per
-/// amundsen-tui.md's Pitfall on not blocking the draw loop on either channel
+/// mjolnir-tui.md's Pitfall on not blocking the draw loop on either channel
 /// alone), and always restores the terminal on the way out, success or not.
 pub async fn run(events: mpsc::Receiver<Event>, commands: mpsc::Sender<Command>, model_name: String, permissions: Arc<Engine>) -> io::Result<()> {
     enable_raw_mode()?;

@@ -19,7 +19,7 @@ fn syntax_set() -> &'static SyntaxSet {
 
 /// `base16-ocean.dark` is one of syntect's bundled themes — picked as a
 /// reasonable default in the absence of any way to detect the terminal's
-/// actual background, same open question as amundsen-tui.md's deferred
+/// actual background, same open question as mjolnir-tui.md's deferred
 /// accent color. Revisit together if/when that's settled.
 fn theme() -> &'static Theme {
     static THEME: OnceLock<Theme> = OnceLock::new();

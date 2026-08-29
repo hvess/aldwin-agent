@@ -1,5 +1,5 @@
 [package]
-name    = "amundsen-config"
+name    = "mjolnir-config"
 version.workspace = true
 edition.workspace = true
 

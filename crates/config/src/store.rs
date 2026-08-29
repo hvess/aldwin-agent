@@ -26,11 +26,11 @@ pub enum GrantList {
 /// Result of [`Config::init_global_if_empty`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitOutcome {
-    /// `~/.amundsen/` did not exist; created it and wrote all four annotated files.
+    /// `~/.mjolnir/` did not exist; created it and wrote all four annotated files.
     Created,
-    /// `~/.amundsen/` exists and all four domain files are present.
+    /// `~/.mjolnir/` exists and all four domain files are present.
     AlreadyPresent,
-    /// `~/.amundsen/` exists but is missing one or more domain files. The
+    /// `~/.mjolnir/` exists but is missing one or more domain files. The
     /// caller must refuse to start rather than auto-fill the gap.
     PartiallyPresent { missing: Vec<&'static str> },
 }
@@ -57,7 +57,7 @@ struct Inner {
     project_context_files: RwLock<ContextFilesConfig>,
 }
 
-/// Typed access to Amundsen's on-disk config. Cheap to clone — internally an
+/// Typed access to Mjolnir's on-disk config. Cheap to clone — internally an
 /// `Arc`, so every clone shares the same in-memory snapshots. Reads never
 /// touch disk; they answer from the snapshot loaded at [`Config::open`] or
 /// refreshed by [`Config::reload_all`].
@@ -88,13 +88,34 @@ fn load_provider(path: &Path) -> Result<Option<ProviderConfig>, ConfigError> {
     Ok(Some(cfg))
 }
 
+/// One-time best-effort migration for the Amundsen→Mjolnir rebrand:
+/// existing installs have their config at the old `~/.amundsen/`. If the
+/// new `~/.mjolnir/` doesn't exist yet but the old one does, move it over
+/// so a rebuild-and-reinstall doesn't silently orphan a developer's
+/// existing permissions grants and provider config behind a renamed
+/// directory `Config::open` no longer looks at. Best-effort: a failed
+/// rename (e.g. a cross-device home directory) just leaves `global_dir`
+/// nonexistent, which `init_global_if_empty` already treats as a normal
+/// fresh install — migration must never block startup.
+fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
+    if new_dir.exists() {
+        return;
+    }
+    let legacy_dir = home.join(".amundsen");
+    if legacy_dir.exists() {
+        let _ = std::fs::rename(&legacy_dir, new_dir);
+    }
+}
+
 impl Config {
     /// Read every existing layer once, resolving global scope to
-    /// `~/.amundsen/`. See [`Config::open_at`] for the same thing with an
+    /// `~/.mjolnir/`. See [`Config::open_at`] for the same thing with an
     /// explicit global root (used by tests, so they never touch the real
     /// home directory).
     pub fn open(project_root: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let global_dir = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?.join(".amundsen");
+        let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
+        let global_dir = home.join(".mjolnir");
+        migrate_legacy_global_dir(&home, &global_dir);
         Self::open_at(project_root, global_dir)
     }
 
@@ -107,7 +128,7 @@ impl Config {
         global_dir:   impl Into<PathBuf>,
     ) -> Result<Self, ConfigError> {
         let global_dir = global_dir.into();
-        let project_dir = project_root.as_ref().join(".amundsen");
+        let project_dir = project_root.as_ref().join(".mjolnir");
 
         let project_permissions =
             fsio::read_versioned(&project_dir.join("permissions.yaml"), PERMISSIONS_VERSION)?
@@ -404,7 +425,7 @@ impl Config {
 
     // ── First launch ─────────────────────────────────────────────────────
 
-    /// Create `~/.amundsen/` and write the four annotated global files if the
+    /// Create `~/.mjolnir/` and write the four annotated global files if the
     /// directory does not exist. Idempotent — a directory that already
     /// exists is inspected for completeness rather than touched.
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
@@ -450,7 +471,7 @@ impl Config {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Covers this crate's real failure modes per amundsen-config.md's Pitfalls:
+// Covers this crate's real failure modes per mjolnir-config.md's Pitfalls:
 // deny-wins staying structural, version-bump rejection, partial-init refusing
 // to start, reload retaining the previous snapshot on a bad file while still
 // naming it, and project scope not materialising until first write.
@@ -469,9 +490,50 @@ mod tests {
         // Use a not-yet-existing subdirectory so "does the dir exist" checks
         // (init_global_if_empty, project-scope materialisation) start from
         // true absence rather than an empty-but-present tempdir.
-        let global_root = global.path().join(".amundsen");
+        let global_root = global.path().join(".mjolnir");
         let config = Config::open_at(project.path(), &global_root).unwrap();
         (project, global, config)
+    }
+
+    #[test]
+    fn legacy_global_dir_is_migrated_when_the_new_one_does_not_exist() {
+        let home = tempdir().unwrap();
+        let legacy_dir = home.path().join(".amundsen");
+        std::fs::create_dir(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("provider.yaml"), "version: 1\n").unwrap();
+
+        let new_dir = home.path().join(".mjolnir");
+        migrate_legacy_global_dir(home.path(), &new_dir);
+
+        assert!(!legacy_dir.exists(), "the old .amundsen/ should be moved, not copied");
+        assert!(new_dir.join("provider.yaml").exists(), "the migrated file must survive the move");
+    }
+
+    #[test]
+    fn migration_is_a_no_op_when_the_new_global_dir_already_exists() {
+        let home = tempdir().unwrap();
+        let legacy_dir = home.path().join(".amundsen");
+        std::fs::create_dir(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("provider.yaml"), "legacy").unwrap();
+
+        let new_dir = home.path().join(".mjolnir");
+        std::fs::create_dir(&new_dir).unwrap();
+        std::fs::write(new_dir.join("provider.yaml"), "current").unwrap();
+
+        migrate_legacy_global_dir(home.path(), &new_dir);
+
+        assert!(legacy_dir.exists(), "an already-migrated (or independently created) new dir must not trigger another move");
+        assert_eq!(std::fs::read_to_string(new_dir.join("provider.yaml")).unwrap(), "current", "the existing new-dir content must not be clobbered");
+    }
+
+    #[test]
+    fn migration_is_a_no_op_when_no_legacy_dir_exists() {
+        let home = tempdir().unwrap();
+        let new_dir = home.path().join(".mjolnir");
+
+        migrate_legacy_global_dir(home.path(), &new_dir);
+
+        assert!(!new_dir.exists(), "nothing to migrate — a fresh install must not have .mjolnir/ conjured from nothing");
     }
 
     #[test]
@@ -491,18 +553,18 @@ mod tests {
     #[test]
     fn project_scope_directory_is_not_created_until_first_write() {
         let (project, _global, config) = fresh();
-        let amundsen_dir = project.path().join(".amundsen");
-        assert!(!amundsen_dir.exists());
+        let mjolnir_dir = project.path().join(".mjolnir");
+        assert!(!mjolnir_dir.exists());
 
         config.add_grant(Scope::Project, GrantList::Allow, "read:**").unwrap();
-        assert!(amundsen_dir.is_dir());
-        assert!(amundsen_dir.join("permissions.yaml").is_file());
+        assert!(mjolnir_dir.is_dir());
+        assert!(mjolnir_dir.join("permissions.yaml").is_file());
     }
 
     #[test]
     fn init_global_if_empty_is_created_then_already_present() {
         let (_project, global, config) = fresh();
-        let global_dir = global.path().join(".amundsen");
+        let global_dir = global.path().join(".mjolnir");
         assert!(!global_dir.exists());
 
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
@@ -521,7 +583,7 @@ mod tests {
     #[test]
     fn init_global_if_empty_partial_directory_refuses_to_start() {
         let (_project, global, config) = fresh();
-        let global_dir = global.path().join(".amundsen");
+        let global_dir = global.path().join(".mjolnir");
 
         config.init_global_if_empty().unwrap();
         std::fs::remove_file(global_dir.join("mcp.yaml")).unwrap();
@@ -568,18 +630,18 @@ mod tests {
     #[test]
     fn unknown_major_version_is_rejected() {
         let (project, _global, _config) = fresh();
-        let dir = project.path().join(".amundsen");
+        let dir = project.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("permissions.yaml"), "version: 99\nallow: []\ndeny: []\n").unwrap();
 
-        let err = Config::open_at(project.path(), _global.path().join(".amundsen")).unwrap_err();
+        let err = Config::open_at(project.path(), _global.path().join(".mjolnir")).unwrap_err();
         assert!(matches!(err, ConfigError::UnknownVersion { found: 99, expected: 1, .. }));
     }
 
     #[test]
     fn empty_api_key_env_refuses_to_start() {
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".amundsen");
+        let dir = global.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("provider.yaml"),
@@ -596,7 +658,7 @@ mod tests {
         // Backward compatibility: files written before this field existed
         // must keep loading, with the field defaulting to None.
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".amundsen");
+        let dir = global.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("provider.yaml"), "version: 1\nprovider: anthropic\nmodel: m\napi_key_env: X\n").unwrap();
 
@@ -622,7 +684,7 @@ mod tests {
     #[test]
     fn raw_api_key_field_is_rejected_by_the_schema() {
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".amundsen");
+        let dir = global.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("provider.yaml"),
@@ -647,7 +709,7 @@ mod tests {
         };
         let err = config.set_provider(Scope::Global, bad).unwrap_err();
         assert!(matches!(err, ConfigError::MissingApiKeyEnv { .. }));
-        assert!(!_global.path().join(".amundsen").join("provider.yaml").exists());
+        assert!(!_global.path().join(".mjolnir").join("provider.yaml").exists());
         assert!(config.global_provider().is_err());
     }
 
@@ -697,7 +759,7 @@ mod tests {
         config.add_grant(Scope::Global, GrantList::Allow, "shell:*").unwrap();
 
         // Hand-edit project permissions.yaml into garbage, but leave global alone.
-        let dir = project.path().join(".amundsen");
+        let dir = project.path().join(".mjolnir");
         std::fs::write(dir.join("permissions.yaml"), "not: [valid, yaml: at all").unwrap();
 
         let result = config.reload_all();
@@ -714,7 +776,7 @@ mod tests {
     #[test]
     fn reload_all_picks_up_hand_edits_that_are_still_valid() {
         let (project, _global, config) = fresh();
-        let dir = project.path().join(".amundsen");
+        let dir = project.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("permissions.yaml"), "version: 1\nallow: [\"edited:in\"]\ndeny: []\n")
             .unwrap();

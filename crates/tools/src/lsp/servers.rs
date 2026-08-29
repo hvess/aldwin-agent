@@ -1,6 +1,6 @@
 //! Per-language server config. V0 supports exactly one language (Rust, via
 //! rust-analyzer) — this stays a flat match rather than a pluggable registry
-//! on purpose; see amundsen-tools.md's Pitfalls on LSP scope creep. Adding a
+//! on purpose; see mjolnir-tools.md's Pitfalls on LSP scope creep. Adding a
 //! second language is one more match arm, not a new abstraction.
 
 use std::path::Path;

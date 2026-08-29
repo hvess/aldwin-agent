@@ -8,7 +8,7 @@ use crate::{
     types::{PromptId, StepId, ToolCall, ToolResult, TurnId},
 };
 
-/// Implementors live in amundsen-tools. Approval-gated tools (Edit) block
+/// Implementors live in mjolnir-tools. Approval-gated tools (Edit) block
 /// inside their own dispatch future, using `DispatchContext` to ask the
 /// developer for a decision; the agent loop just awaits.
 #[async_trait]
@@ -22,7 +22,7 @@ pub trait ToolDispatcher: Send + Sync {
 /// Given to a dispatch future so it can request a developer decision without
 /// reaching into the agent's internals. Concrete policy — when to gate a
 /// tool, how to render a diff, permission-engine rules — lives in
-/// amundsen-tools and amundsen-permissions; this only provides the round
+/// mjolnir-tools and mjolnir-permissions; this only provides the round
 /// trip through the agent's existing event/command boundary.
 #[derive(Clone)]
 pub struct DispatchContext {
@@ -45,7 +45,7 @@ impl DispatchContext {
     }
 
     /// Only compiled with the `test-util` feature — lets a `ToolDispatcher`
-    /// implementor (amundsen-tools) build a real `DispatchContext` in its
+    /// implementor (mjolnir-tools) build a real `DispatchContext` in its
     /// own test harness, with held-out clones of `approvals`/`prompts` so a
     /// test can resolve the round trip itself exactly as `Agent`'s command
     /// loop does in production. Kept as a separate, feature-gated function

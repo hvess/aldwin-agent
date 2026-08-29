@@ -1,5 +1,5 @@
 //! V0 Anthropic client implementing core's `LlmClient` trait. See
-//! `.claude/spec/amundsen-llm.md`. All Anthropic wire types stay in the
+//! `.claude/spec/mjolnir-llm.md`. All Anthropic wire types stay in the
 //! private `wire` module — only `AnthropicClient`, `ProviderConfig`, and
 //! core's own `LlmError` are part of this crate's public surface.
 

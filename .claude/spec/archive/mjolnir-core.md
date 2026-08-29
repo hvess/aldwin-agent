@@ -26,6 +26,21 @@ that inspects the second step's actual request rather than only the log.
 This crate stays archived — the fix didn't reopen a design question, but
 note it here since "no known gaps" above was wrong until this landed.
 
+**Post-archive addition (2026-08-29, `/clear`):** mjolnir-tui's live-feedback
+batch (see its own spec's same-day Progress entry) added a way to clear
+conversation context mid-session. New `Command::ClearHistory` — handled
+identically to `Submit`'s existing mid-turn-rejection shape (a no-op with
+a `warn!`, since "forget everything" has no sound meaning while a turn is
+still in flight using that same history); between turns, wipes
+`ConversationLog` via a new `ConversationLog::clear()` and acknowledges
+with a new `Event::HistoryCleared` (empty payload, same shape as
+`PermissionsChanged` — tells the layer above to refresh/reset its own
+state rather than carrying it). mjolnir-cli's `/clear` slash command
+forwards `Command::ClearHistory` to the core rather than handling it
+locally like `/help`, since core is what owns `ConversationLog`. Still no
+open design question — this is an additive command/event pair on the
+existing shapes, not a change to the turn/step/log model above.
+
 ## Why
 
 The narrow heart of Mjolnir — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.
@@ -65,12 +80,14 @@ The narrow heart of Mjolnir — the agent loop, the canonical conversation log, 
   - TurnEnded — end_turn, cancelled, or terminal error
   - PromptRequested — permission engine needs a developer decision; semantics in mjolnir-permissions
   - PermissionsChanged — a grant was added, removed, or modified; semantics in mjolnir-permissions
+  - HistoryCleared — `/clear` wiped `ConversationLog`; see the 2026-08-29 post-archive addition above
 - **Commands:**
   - Submit — user input opens a new turn
   - Cancel — hard-stop the current turn
   - ApproveTool — approve a pending Edit; semantics in mjolnir-tools
   - DenyTool — deny a pending Edit; semantics in mjolnir-tools
   - PromptResponse — developer's answer to a PromptRequested; semantics in mjolnir-permissions
+  - ClearHistory — `/clear`; wipes `ConversationLog`, a no-op mid-turn; see the 2026-08-29 post-archive addition above
 
 ## Decisions
 

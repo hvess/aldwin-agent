@@ -25,7 +25,8 @@ enum Intercepted {
 /// Single source of truth for `/help`'s listing — keep in sync with the
 /// `match` in `intercept` below by hand; three entries doesn't earn a
 /// data-driven dispatch table yet.
-const HELP_TEXT: &str = "commands: /help (this list), /exit (end the session), /reload-config (reload config files from disk)";
+const HELP_TEXT: &str =
+    "commands: /help (this list), /clear (clear conversation context), /exit (end the session), /reload-config (reload config files from disk)";
 
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
 /// the core, per mjolnir-cli.md: "the core's only input is Submit, Cancel,
@@ -45,6 +46,12 @@ async fn intercept(command: Command, config: &Config, events: &mpsc::Sender<Even
             handle_reload_config(config, events).await;
             Intercepted::Handled
         }
+        // Unlike /help and /reload-config, this one core needs to act on
+        // (wipe ConversationLog) — so it's translated and forwarded rather
+        // than handled locally; core acknowledges with Event::HistoryCleared
+        // once done, which is what actually tells the TUI to wipe its own
+        // rendered log (see mjolnir_tui::App::apply_event).
+        "clear" => Intercepted::Forward(Command::ClearHistory),
         "exit" => Intercepted::Quit,
         other => {
             let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other} (try /help)") }).await;
@@ -143,7 +150,7 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => {
-                for command in ["/help", "/exit", "/reload-config"] {
+                for command in ["/help", "/clear", "/exit", "/reload-config"] {
                     assert!(message.contains(command), "help text missing {command}: {message}");
                 }
             }
@@ -157,6 +164,17 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &tx).await;
         assert!(matches!(result, Intercepted::Quit));
+    }
+
+    #[tokio::test]
+    async fn clear_is_translated_and_forwarded_to_core_not_handled_locally() {
+        let (_project, _global, cfg) = config();
+        let (tx, _rx) = mpsc::channel(8);
+        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &tx).await;
+        assert!(
+            matches!(result, Intercepted::Forward(Command::ClearHistory)),
+            "core owns ConversationLog, so /clear must reach it as ClearHistory rather than being swallowed like /help"
+        );
     }
 
     #[tokio::test]

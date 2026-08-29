@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, PermState};
+use crate::app::{cursor_line_col, App, PermState};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
@@ -22,6 +22,39 @@ const BRIGHT: Color = Color::White;
 // theme maps that ANSI slot to.
 const USER_FG: Color = Color::Rgb(190, 190, 195);
 const USER_BG: Color = Color::Rgb(40, 40, 46);
+
+/// Inline `` `code` `` in assistant prose used `Modifier::REVERSED` (fg/bg
+/// swapped) to stand out, which reads as a jarring bright-white block
+/// against most terminal themes — per explicit developer feedback, swapped
+/// for a plain distinguishing color, same fixed-RGB-not-named-ANSI
+/// reasoning as `USER_FG`/`USER_BG` above. A one-off, scoped exception to
+/// mjolnir-tui.md's "modifiers only, never a new color" rule for inline
+/// markdown — that rule was written when the alternative on the table was
+/// REVERSED, not a plain fg color; superseded by this developer's later,
+/// more specific ask.
+const CODE_FG: Color = Color::Rgb(224, 175, 104);
+
+/// Approval-card diff coloring: a full-width background tint (same
+/// technique as `USER_BG`) behind added/removed lines so a diff reads at a
+/// glance instead of every line rendering in the same plain `BRIGHT`, which
+/// is what the card did before — per explicit developer feedback that
+/// diffs "are not very clear."
+const DIFF_ADD_BG: Color = Color::Rgb(28, 46, 30);
+const DIFF_ADD_FG: Color = Color::Rgb(150, 210, 160);
+const DIFF_DEL_BG: Color = Color::Rgb(48, 28, 28);
+const DIFF_DEL_FG: Color = Color::Rgb(220, 150, 150);
+
+/// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
+/// the hammer in, so the "ascii trick" loading indicator reads as part of
+/// the same visual language rather than a mismatched borrowed spinner.
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// `tick` is `App::tick` — a free-running frame counter, not wall-clock
+/// time, so this stays deterministic and testable without a real clock.
+fn spinner_line(tick: u64, label: &str) -> Line<'static> {
+    let frame = SPINNER_FRAMES[tick as usize % SPINNER_FRAMES.len()];
+    Line::from(Span::styled(format!("{frame} {label}…"), Style::default().fg(DIM)))
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -70,8 +103,17 @@ fn build_log_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         }
         lines.extend(render_entry(entry, width));
     }
+    // An animated spinner rather than static text — per explicit developer
+    // feedback that waiting for the next turn gave no loading/progress
+    // feedback at all. `thinking` (an extended-thinking block) takes
+    // priority over the broader `turn_active` (true for the whole turn,
+    // including the stretch between tool calls and before the first token
+    // streams back, which `thinking` alone doesn't cover) since only one of
+    // the two labels is shown at a time.
     if app.thinking {
-        lines.push(Line::from(Span::styled("thinking…", Style::default().fg(DIM))));
+        lines.push(spinner_line(app.tick, "thinking"));
+    } else if app.turn_active {
+        lines.push(spinner_line(app.tick, "working"));
     }
     lines
 }
@@ -315,17 +357,18 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
                 Style::default().fg(DIM),
             ))]
         }
-        LogEntry::ApprovalCard { diff, resolution, .. } => render_card(
-            "Approve this edit?",
-            diff,
-            "[y] approve   [n] deny   [Ctrl+C] deny",
-            resolution.map(|approved| if approved { "approved".to_string() } else { "denied".to_string() }),
-        ),
+        LogEntry::ApprovalCard { diff, resolution, .. } => render_approval_card(diff, *resolution, width),
         LogEntry::PermissionPrompt { payload, resolution, .. } => render_prompt_card(payload, resolution.as_deref()),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
+            // "— turn ended —" read as flat/mechanical for the ordinary
+            // case — per explicit developer feedback — so it's replaced
+            // with "answered", which names what actually happened instead
+            // of describing internal turn-lifecycle plumbing. Cancelled/
+            // error keep their own distinct wording since those already
+            // read as intended and name a different outcome.
             let text = match reason {
-                TurnEndReasonKind::EndTurn => "— turn ended —".to_string(),
+                TurnEndReasonKind::EndTurn => "— answered —".to_string(),
                 TurnEndReasonKind::Cancelled => "— turn cancelled —".to_string(),
                 TurnEndReasonKind::Error(message) => format!("— turn ended in error: {message} —"),
             };
@@ -468,7 +511,7 @@ fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                spans.push(Span::styled(stripped[..end].to_string(), base.add_modifier(Modifier::REVERSED)));
+                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(CODE_FG)));
                 rest = &stripped[end + 1..];
                 continue;
             }
@@ -572,6 +615,124 @@ fn is_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
+/// One line of a unified diff (`mjolnir_tools::diff::unified`'s output),
+/// tagged by its leading marker (` `/`+`/`-`). The `--- path`/`+++ path`
+/// header pair is pulled out separately by `parse_diff_body` since it's
+/// shown once as a label, not per line.
+enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+}
+
+/// How many lines of unmodified context to keep immediately before/after a
+/// change — per explicit developer feedback that in an approval card,
+/// unchanged lines are only relevant this close to what actually changed; a
+/// longer run of context collapses to a single elision marker instead of
+/// listing every line, and pure context isn't colored at all (see
+/// `render_diff_line`) — only the changed lines are, so they're the only
+/// thing competing for attention.
+const DIFF_CONTEXT_RADIUS: usize = 2;
+
+/// Splits a unified diff into its path (from the `--- path` header line;
+/// `+++ path` names the same path, so it's dropped) and its body lines,
+/// each tagged with the kind its leading marker encodes.
+fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) {
+    let mut path = None;
+    let mut body = Vec::new();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("--- ") {
+            path.get_or_insert_with(|| rest.to_string());
+        } else if line.starts_with("+++ ") {
+            // Same path as the "---" line — nothing new to show.
+        } else if let Some(rest) = line.strip_prefix('+') {
+            body.push((DiffLineKind::Added, rest.to_string()));
+        } else if let Some(rest) = line.strip_prefix('-') {
+            body.push((DiffLineKind::Removed, rest.to_string()));
+        } else {
+            body.push((DiffLineKind::Context, line.strip_prefix(' ').unwrap_or(line).to_string()));
+        }
+    }
+    (path, body)
+}
+
+/// The Edit approval card: bordered title/keys (same shape as
+/// `render_card`) around a diff-aware body — added/removed lines get a
+/// full-width background tint (see `DIFF_ADD_BG`/`DIFF_DEL_BG`), and
+/// unchanged context beyond `DIFF_CONTEXT_RADIUS` lines from the nearest
+/// change collapses to a single "N unchanged lines" marker — per explicit
+/// developer feedback that the card previously rendered every diff line in
+/// the same plain style, which made it hard to tell what actually changed
+/// at a glance.
+fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
+    let (path, body) = parse_diff_body(diff);
+    let mut lines = vec![Line::from(Span::styled("┌─ Approve this edit?", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
+    if let Some(path) = path {
+        lines.push(Line::from(Span::styled(format!("│ {path}"), Style::default().fg(DIM))));
+    }
+
+    let n = body.len();
+    let mut keep = vec![false; n];
+    for (i, (kind, _)) in body.iter().enumerate() {
+        if !matches!(kind, DiffLineKind::Context) {
+            let start = i.saturating_sub(DIFF_CONTEXT_RADIUS);
+            let end = (i + DIFF_CONTEXT_RADIUS).min(n.saturating_sub(1));
+            for k in &mut keep[start..=end] {
+                *k = true;
+            }
+        }
+    }
+
+    let mut i = 0;
+    while i < n {
+        if keep[i] {
+            let (kind, text) = &body[i];
+            lines.push(render_diff_line(kind, text, width));
+            i += 1;
+        } else {
+            let elided_start = i;
+            while i < n && !keep[i] {
+                i += 1;
+            }
+            let count = i - elided_start;
+            lines.push(Line::from(Span::styled(
+                format!("│ ⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+
+    match resolution {
+        Some(approved) => lines.push(Line::from(Span::styled(
+            format!("└─ resolved: {}", if approved { "approved" } else { "denied" }),
+            Style::default().fg(ACCENT),
+        ))),
+        None => lines.push(Line::from(Span::styled("└─ [y] approve   [n] deny   [Ctrl+C] deny", Style::default().fg(ACCENT)))),
+    }
+    lines
+}
+
+/// Renders one kept diff line. Added/removed lines get a full-width
+/// background tint — same "pad to render width" technique `LogEntry::
+/// UserMessage` uses for its chat-bubble background — so a change reads as
+/// a colored row at a glance, not just a leading +/- character in an
+/// otherwise uniformly-styled card; context lines stay plain (no
+/// background at all), since only the changed lines should compete for
+/// attention.
+fn render_diff_line(kind: &DiffLineKind, text: &str, width: u16) -> Line<'static> {
+    let (marker, style) = match kind {
+        DiffLineKind::Added => ("+", Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG)),
+        DiffLineKind::Removed => ("-", Style::default().fg(DIFF_DEL_FG).bg(DIFF_DEL_BG)),
+        DiffLineKind::Context => (" ", Style::default().fg(BRIGHT)),
+    };
+    let content = format!("│{marker}{text}");
+    if matches!(kind, DiffLineKind::Context) {
+        return Line::from(Span::styled(content, style));
+    }
+    let pad = (width as usize).saturating_sub(content.chars().count());
+    Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
+}
+
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>) -> Vec<Line<'static>> {
     let (title, keys) = match payload {
         PromptPayload::Tool { kind, target } => {
@@ -623,6 +784,26 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     });
     let paragraph = Paragraph::new(app.input.as_str()).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+
+    // No visible cursor at all was a standing complaint — per explicit
+    // developer feedback that it was hard to tell where the cursor sat in
+    // the input box. Ratatui doesn't draw one on its own; `set_cursor_position`
+    // asks the real terminal cursor to sit there instead. Skipped while a
+    // card is pending (input is blocked then, and the border already dims
+    // to say so — see the `border_style` above). `cursor_line_col` counts
+    // by source line, not wrapped screen row (see its doc comment), so a
+    // single logical line long enough to wrap past the box's width places
+    // the terminal cursor past the visible text — clamped to the inner
+    // area's last column/row below so it never lands outside the box
+    // rather than fixing the underlying wrap mismatch.
+    if app.pending_approval.is_none() && app.pending_prompt.is_none() {
+        let (line, col) = cursor_line_col(&app.input, app.cursor);
+        let inner_right = area.x + area.width.saturating_sub(2);
+        let inner_bottom = area.y + area.height.saturating_sub(2);
+        let x = (area.x + 1 + col as u16).min(inner_right);
+        let y = (area.y + 1 + line as u16).min(inner_bottom);
+        frame.set_cursor_position((x, y));
+    }
 }
 
 #[cfg(test)]
@@ -733,6 +914,32 @@ mod tests {
     }
 
     #[test]
+    fn working_spinner_shows_during_an_active_turn_with_no_thinking_block() {
+        let mut app = app();
+        app.turn_active = true;
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("working…"), "an active turn with no other feedback should still show loading progress: {out:?}");
+
+        app.turn_active = false;
+        assert!(!rendered(&mut app, 100, 20).contains("working…"), "no active turn means no spinner");
+    }
+
+    #[test]
+    fn thinking_takes_priority_over_the_working_spinner() {
+        let mut app = app();
+        app.turn_active = true;
+        app.thinking = true;
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("thinking…"));
+        assert!(!out.contains("working…"), "only one spinner label should show at a time");
+    }
+
+    #[test]
+    fn the_spinner_animates_across_ticks() {
+        assert_ne!(spinner_line(0, "working").spans[0].content, spinner_line(1, "working").spans[0].content, "advancing the tick should change the spinner glyph");
+    }
+
+    #[test]
     fn approval_card_shows_labeled_keys_and_the_diff() {
         let mut app = app();
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
@@ -741,6 +948,44 @@ mod tests {
         assert!(out.contains("deny"));
         assert!(out.contains("old"));
         assert!(out.contains("new"));
+    }
+
+    #[test]
+    fn approval_card_colors_added_and_removed_lines_distinctly() {
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let find_row = |needle: &str| -> u16 {
+            for y in 0..buffer.area.height {
+                let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+                if row.contains(needle) {
+                    return y;
+                }
+            }
+            panic!("row containing {needle:?} not found");
+        };
+        let removed_row = find_row("old");
+        let added_row = find_row("new");
+        assert_eq!(buffer[(0, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
+        assert_eq!(buffer[(0, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
+        assert_ne!(buffer[(0, removed_row)].bg, buffer[(0, added_row)].bg, "added and removed lines must be visually distinct");
+    }
+
+    #[test]
+    fn approval_card_collapses_unchanged_context_beyond_the_radius() {
+        let diff = "--- f.rs\n+++ f.rs\n far\n context\n a\n b\n-old\n+new\n c\n d\n near\n";
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: diff.into(), resolution: None });
+        let out = rendered(&mut app, 100, 30);
+        assert!(out.contains("unchanged line"), "a long run of unmodified context should collapse to an elision marker: {out:?}");
+        assert!(!out.contains("far"), "context far from any change should be elided");
+        assert!(out.contains("old") && out.contains("new"), "the change itself must still be shown");
+        assert!(out.contains("a") && out.contains("b"), "the 2 lines of context immediately before a change must be kept");
+        assert!(out.contains("c") && out.contains("d"), "the 2 lines of context immediately after a change must be kept");
     }
 
     #[test]
@@ -800,6 +1045,37 @@ mod tests {
         app.input = "draft text".into();
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("draft text"));
+    }
+
+    /// Regression test: no visible cursor at all was a standing complaint —
+    /// the input box rendered the draft text but never told the real
+    /// terminal where the cursor sat within it.
+    #[test]
+    fn the_terminal_cursor_is_placed_inside_the_input_box_at_the_draft_cursor() {
+        let mut app = app();
+        app.input = "hi".into();
+        app.cursor = 2; // end of "hi"
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+
+        assert!(terminal.backend().cursor_visible(), "the terminal cursor must be shown while the input is focused");
+        let pos = terminal.backend().cursor_position();
+        // Input box is the last Length(3) row of the layout: border at
+        // height-3, content row at height-2.
+        assert_eq!(pos.y, 20 - 2, "cursor should sit on the input box's one content row");
+        assert_eq!(pos.x, 1 + 2, "cursor should sit right after \"hi\" (1 for the left border, 2 for the two typed chars)");
+    }
+
+    #[test]
+    fn the_terminal_cursor_is_hidden_while_an_approval_card_is_pending() {
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "diff".into(), resolution: None });
+        app.pending_approval = Some(crate::app::PendingApproval { call_id: "c1".into() });
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(!terminal.backend().cursor_visible(), "input is blocked while a card is pending — no cursor should show");
     }
 
     /// Rows the welcome banner always occupies before the first real log
@@ -1008,10 +1284,11 @@ mod tests {
     }
 
     #[test]
-    fn inline_code_strips_backticks_and_uses_reversed_video() {
+    fn inline_code_strips_backticks_and_uses_a_distinct_color() {
         let spans = parse_inline("run `cargo test` first", Style::default().fg(BRIGHT));
         let code = spans.iter().find(|s| s.content.as_ref() == "cargo test").expect("code span present");
-        assert!(code.style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(code.style.fg, Some(CODE_FG), "inline code should read as a distinct color, not a reversed-video block");
+        assert!(!code.style.add_modifier.contains(Modifier::REVERSED), "inline code must not use reversed video");
         assert!(spans.iter().all(|s| !s.content.contains('`')), "literal backticks must not reach the screen");
     }
 

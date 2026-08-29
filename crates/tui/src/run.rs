@@ -43,6 +43,12 @@ async fn run_loop(
 ) -> io::Result<()> {
     let mut app = App::new(model_name, permissions);
     let mut input = EventStream::new();
+    // Drives the "working"/"thinking" spinner's animation frame — a plain
+    // redraw timer, not tied to any core event, since there'd otherwise be
+    // no way to animate anything between events (per explicit developer
+    // feedback that waiting for the next turn gave no loading/progress
+    // feedback at all).
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(120));
 
     terminal.draw(|f| ui::draw(f, &mut app))?;
 
@@ -66,6 +72,8 @@ async fn run_loop(
                     Some(Err(_)) | None => break,
                 }
             }
+
+            _ = ticker.tick() => app.tick(),
         }
 
         for command in app.outbox.drain(..) {

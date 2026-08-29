@@ -59,6 +59,13 @@ pub enum Event {
     /// vehicle for reaching the TUI's log) has one. Not turn/step-scoped
     /// and never appended to the conversation log — this is UI-facing only.
     Notice { message: String },
+
+    /// `Command::ClearHistory` landed and `ConversationLog` was wiped — the
+    /// TUI reacts by wiping its own rendered log in step (see
+    /// `mjolnir_tui::App::apply_event`), the same way `PermissionsChanged`
+    /// tells it to refresh the status bar rather than carrying the new
+    /// state itself.
+    HistoryCleared,
 }
 
 // ── Commands (accepted downward) ─────────────────────────────────────────────
@@ -70,6 +77,11 @@ pub enum Command {
     ApproveTool    { call_id: String },
     DenyTool       { call_id: String },
     PromptResponse { id: PromptId, payload: serde_json::Value },
+    /// `/clear` — wipes `ConversationLog` so the next turn starts from a
+    /// blank slate. A no-op (with a warning) if received mid-turn, same as
+    /// `Submit` mid-turn: there's no sound meaning for "forget everything"
+    /// while a turn is still in flight using that same history.
+    ClearHistory,
 }
 
 // ── Log record ───────────────────────────────────────────────────────────────

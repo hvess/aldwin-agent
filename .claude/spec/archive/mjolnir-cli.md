@@ -35,6 +35,19 @@ with the `match` in `intercept` — three commands doesn't earn a
 data-driven dispatch table yet. The unknown-command Notice now points at
 `/help` too.
 
+**Post-archive addition (2026-08-29, `/clear`):** Part of mjolnir-tui's
+same-day live-feedback batch (see its own spec). Unlike every other known
+command, `/clear` is translated and forwarded (`Intercepted::Forward(Command::ClearHistory)`)
+rather than handled locally — core owns `ConversationLog`, so only core
+can actually wipe it; `intercept` returns `Forward` instead of sending a
+`Notice` and returning `Handled` the way `/help`/`/reload-config` do. This
+doesn't reopen the Decisions section's "core has no slash-command
+semantics" — `ClearHistory` is a generic core operation core would accept
+from any caller, the same way `Submit`/`Cancel` are; the CLI layer still
+owns 100% of the `/`-prefix parsing and dispatch table, it's just that this
+one entry's action lives in core rather than in this crate. `HELP_TEXT`
+updated to include it.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

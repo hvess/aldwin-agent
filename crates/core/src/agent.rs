@@ -104,6 +104,11 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     }
                 }
                 Command::Cancel => {} // no-op outside an active turn
+
+                Command::ClearHistory => {
+                    self.log.clear();
+                    let _ = events.send(Event::HistoryCleared).await;
+                }
             }
         }
     }
@@ -217,6 +222,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                             Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
                             Some(Command::Submit { .. }) => {
                                 warn!("Submit received mid-turn; discarding");
+                            }
+                            Some(Command::ClearHistory) => {
+                                warn!("ClearHistory received mid-turn; discarding");
                             }
                             None => break StepTerminal::Error("command channel closed".into()),
                         }
@@ -368,6 +376,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
                         Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
                         Some(Command::Submit { .. }) => warn!("Submit received mid-turn; discarding"),
+                        Some(Command::ClearHistory) => warn!("ClearHistory received mid-turn; discarding"),
                         None => {
                             let reason = TurnEndReason::Error("command channel closed".into());
                             return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;
@@ -673,6 +682,32 @@ mod tests {
         assert!(matches!(snap[2], LogRecord::AssistantMessage { .. }));
         assert!(matches!(snap[3], LogRecord::StepBoundary { .. }));
         assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
+    }
+
+    #[tokio::test]
+    async fn clear_history_wipes_the_log_and_notifies_the_tui() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::TextDelta { text: "hi".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+        ]]);
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        loop {
+            if matches!(ev_rx.recv().await.expect("agent dropped the event channel"), Event::TurnEnded { .. }) {
+                break;
+            }
+        }
+        assert!(!log.is_empty(), "the turn should have left records behind");
+
+        cmd_tx.send(Command::ClearHistory).await.unwrap();
+        assert!(matches!(ev_rx.recv().await, Some(Event::HistoryCleared)), "ClearHistory must be acknowledged so the TUI can wipe its own rendered log");
+        assert!(log.is_empty(), "ClearHistory must wipe ConversationLog so the next turn starts from nothing");
     }
 
     #[tokio::test]

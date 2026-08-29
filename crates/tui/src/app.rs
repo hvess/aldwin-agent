@@ -10,6 +10,25 @@ use crate::scroll::ScrollState;
 
 const SUMMARY_MAX_LEN: usize = 80;
 
+/// (line, col) of `cursor` (a char index into `input`, same unit
+/// `App::cursor` is kept in) — both counted in chars, 0-indexed. Shared by
+/// `App::move_cursor_vertical` (cursor navigation) and `ui::draw_input`
+/// (placing the real terminal cursor), so the two can't disagree about
+/// where the cursor visually sits.
+pub(crate) fn cursor_line_col(input: &str, cursor: usize) -> (usize, usize) {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    for c in input.chars().take(cursor) {
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 pub struct PendingApproval {
     pub call_id: String,
 }
@@ -85,6 +104,17 @@ pub struct App {
     pub pending_prompt:    Option<PendingPrompt>,
     pub status:            StatusInfo,
     pub should_quit:       bool,
+    /// True from `TurnStarted` until the matching `TurnEnded` — drives the
+    /// "working" activity indicator in `ui::build_log_lines` for the stretch
+    /// of a turn (between tool calls, before the first token streams back)
+    /// that `thinking` alone doesn't cover, since `thinking` is only set
+    /// between `ThinkingStart`/`ThinkingEnd` (extended-thinking blocks).
+    pub turn_active:       bool,
+    /// Free-running animation-frame counter, advanced by `tick` (called by
+    /// `run.rs` on a fixed timer) — not wall-clock time itself, so the
+    /// spinner's frame selection stays deterministic and testable without a
+    /// real clock.
+    pub tick:              u64,
 
     /// Populated on `ToolUseRequested` (the one event that carries the
     /// tool's name), consumed on `ToolDispatched` (which only carries
@@ -113,9 +143,18 @@ impl App {
             pending_prompt: None,
             status,
             should_quit: false,
+            turn_active: false,
+            tick: 0,
             pending_tool_names: HashMap::new(),
             outbox: Vec::new(),
         }
+    }
+
+    /// Advances the animation-frame counter — called by `run.rs` on a fixed
+    /// timer so the "working"/"thinking" spinner animates independently of
+    /// core events or keystrokes.
+    pub fn tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
     }
 
     fn push(&mut self, entry: LogEntry) {
@@ -158,6 +197,7 @@ impl App {
             Event::TurnStarted { turn_id } => {
                 self.status.turn = Some(turn_id.0);
                 self.status.step = None;
+                self.turn_active = true;
             }
             Event::TextDelta { text, .. } => {
                 if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
@@ -198,6 +238,7 @@ impl App {
             Event::RetryAttempt { info, .. } => self.push(LogEntry::RetryAttempt { info }),
             Event::TurnEnded { reason, .. } => {
                 self.status.running_tools.clear();
+                self.turn_active = false;
                 self.push(LogEntry::TurnEnded { reason: reason.into() });
             }
             Event::PromptRequested { id, payload } => {
@@ -212,6 +253,21 @@ impl App {
             }
             Event::PermissionsChanged { .. } => self.status.refresh_permissions(&self.permissions),
             Event::Notice { message } => self.push(LogEntry::Notice { message }),
+            // `/clear` — core's ConversationLog is authoritative for what
+            // the LLM sees, so the TUI's own rendered log must actually be
+            // wiped in step with it, not just told about it via a Notice
+            // (which only appends). Resetting `scroll` to its default drops
+            // any stale offset/`following` state from before the clear; the
+            // welcome banner reappears on the next draw since it's rendered
+            // whenever `log` is empty (see `ui::build_log_lines`).
+            Event::HistoryCleared => {
+                self.log.clear();
+                self.scroll = ScrollState::default();
+                self.status.turn = None;
+                self.status.step = None;
+                self.thinking = false;
+                self.turn_active = false;
+            }
         }
     }
 
@@ -249,17 +305,48 @@ impl App {
             }
             (KeyCode::PageUp, _) => self.scroll.page_up(),
             (KeyCode::PageDown, _) => self.scroll.page_down(self.total_lines()),
-            (KeyCode::Up, _) => self.scroll.line_up(),
-            (KeyCode::Down, _) => self.scroll.line_down(self.total_lines()),
-            // Vim-style j/k/G scroll only when the input is empty — typing
-            // those characters into a non-empty draft must never scroll out
-            // from under the developer instead of inserting the letter.
-            (KeyCode::Char('k'), _) if self.input.is_empty() => self.scroll.line_up(),
-            (KeyCode::Char('j'), _) if self.input.is_empty() => self.scroll.line_down(self.total_lines()),
-            (KeyCode::Char('G'), _) if self.input.is_empty() => self.scroll.jump_to_bottom(self.total_lines()),
+            // Within a multi-line draft, Up/Down move the cursor between its
+            // lines first; only once there's no further line to move to
+            // (a single-line draft, or already at the draft's first/last
+            // line) do they fall through to scrolling the log. Previously
+            // this — and a separate set of vim-style j/k/G bindings — used
+            // "only when the input is empty" as the guard, which silently
+            // swallowed the first keystroke of any message starting with
+            // j, k, or a capital G instead of inserting it (the vim
+            // bindings are gone outright: PageUp/PageDown/Home/End already
+            // cover keyboard scrolling without that ambiguity).
+            (KeyCode::Up, _) => {
+                if !self.move_cursor_vertical(-1) {
+                    self.scroll.line_up();
+                }
+            }
+            (KeyCode::Down, _) => {
+                if !self.move_cursor_vertical(1) {
+                    self.scroll.line_down(self.total_lines());
+                }
+            }
             (KeyCode::Char(c), _) => self.insert_char(c),
             _ => {}
         }
+    }
+
+    /// Moves the cursor to the line `delta` rows away (by source line, not
+    /// wrapped screen row — the input box is short enough that this rarely
+    /// matters, and ratatui's own wrap point isn't available to this pure
+    /// logic layer without threading render width all the way through key
+    /// handling), preserving column where possible. Returns `false` (leaving
+    /// the cursor untouched) when there's no such line — a single-line
+    /// draft, or already at its first/last line — so callers can fall
+    /// through to scrolling the log instead.
+    fn move_cursor_vertical(&mut self, delta: isize) -> bool {
+        let lines: Vec<&str> = self.input.split('\n').collect();
+        let (line, col) = cursor_line_col(&self.input, self.cursor);
+        let Some(target) = line.checked_add_signed(delta).filter(|&t| t < lines.len()) else { return false };
+        let target_len = lines[target].chars().count();
+        let new_col = col.min(target_len);
+        let idx: usize = lines[..target].iter().map(|l| l.chars().count() + 1).sum::<usize>() + new_col;
+        self.cursor = idx;
+        true
     }
 
     fn insert_char(&mut self, c: char) {
@@ -466,6 +553,49 @@ mod tests {
         assert!(app.outbox.is_empty());
     }
 
+    /// Regression test: a former vim-style binding treated 'G'/'j'/'k' as
+    /// scroll commands whenever the input was empty, which silently ate the
+    /// very first keystroke of any message starting with one of those
+    /// letters instead of inserting it — this is what the developer
+    /// actually hit typing a capital G as the first character of a draft.
+    #[test]
+    fn typing_g_j_or_k_as_the_first_character_inserts_it_instead_of_scrolling() {
+        for first in ["G", "j", "k"] {
+            let mut app = app();
+            type_str(&mut app, first);
+            assert_eq!(app.input, first, "first keystroke {first:?} must be inserted, not swallowed as a scroll command");
+        }
+    }
+
+    #[test]
+    fn up_and_down_navigate_a_multiline_draft_before_falling_through_to_scroll() {
+        let mut app = app();
+        type_str(&mut app, "line one\nline two\nline three");
+        // Cursor starts at the end (line 2, col 10 within "line three").
+        // "line two" is only 8 chars, so the column clamps on the way up.
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (1, 8), "Up should clamp to the shorter middle line's length");
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (0, 8), "Up again should land on the same column, which the first line can also fit");
+        // No line above the first — Up here must not move the cursor
+        // further (it falls through to scrolling the log instead).
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (0, 8));
+    }
+
+    #[test]
+    fn up_arrow_scrolls_the_log_when_the_draft_is_single_line() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        app.scroll.set_viewport_height(5, app.total_lines());
+        let before = app.scroll.offset;
+        app.handle_key(press(KeyCode::Up));
+        assert!(app.scroll.offset < before, "Up must scroll the log when there's no draft line to navigate to");
+    }
+
     #[test]
     fn backspace_removes_the_character_before_the_cursor() {
         let mut app = app();
@@ -662,6 +792,30 @@ mod tests {
         let mut app = app();
         app.apply_event(Event::Notice { message: "unknown slash command: /foo".into() });
         assert!(matches!(app.log.last(), Some(LogEntry::Notice { message }) if message == "unknown slash command: /foo"));
+    }
+
+    #[test]
+    fn history_cleared_wipes_the_rendered_log_and_turn_state() {
+        let mut app = app();
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        app.push(LogEntry::AssistantText { text: "hi".into() });
+        assert!(!app.log.is_empty());
+        assert!(app.turn_active);
+
+        app.apply_event(Event::HistoryCleared);
+        assert!(app.log.is_empty(), "the visible log must be wiped in step with core's conversation history");
+        assert!(!app.turn_active);
+        assert_eq!(app.status.turn, None);
+    }
+
+    #[test]
+    fn turn_active_tracks_turn_started_and_ended() {
+        let mut app = app();
+        assert!(!app.turn_active);
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        assert!(app.turn_active);
+        app.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn });
+        assert!(!app.turn_active);
     }
 
     #[test]

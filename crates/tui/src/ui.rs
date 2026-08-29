@@ -71,39 +71,52 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-/// The welcome banner shown above the conversation log on every draw: a
-/// Mjolnir (Thor's hammer) mark — a mascot pivot away from mjolnir.md's
+/// The welcome banner shown above the conversation log on every draw: the
+/// "MJOLNIR" wordmark, then a Mjolnir (Thor's hammer) mark beside the
+/// tagline/version line — a mascot pivot away from mjolnir.md's
 /// originally-decided little owl, per explicit developer direction toward
 /// something more "aggressive/directive" (see mjolnir.md's Mascot section
 /// for the superseded rationale, and this function's own history for the
-/// several prior designs it replaced: an owl, a cobra, a hand-coded
-/// "tribal" infinity mark, and two hand-coded Mjolnir attempts using a
-/// procedural crosshatch-weave texture). `MJOLNIR_ART` is not hand-drawn or
-/// procedurally generated — per explicit developer feedback that repeated
+/// several prior hammer designs: two procedural crosshatch-weave textures,
+/// then this literal photo trace rendered as Braille dots). `MJOLNIR_ART`
+/// is a literal trace of a real reference photo (thresholded, trimmed,
+/// resized preserving aspect, Gaussian-blurred before thresholding so fine
+/// knotwork linework survives as continuous strokes instead of fragmenting
+/// into speckle, read back one source pixel per Braille dot — 2×4 real
+/// sub-character dots per cell) rather than a hand-drawn or
+/// procedurally-generated shape — per explicit developer feedback that
 /// procedural attempts "weren't a true representation" of the reference
-/// images supplied, it's a literal trace: a real reference photo
-/// (trimmed, resized preserving aspect ratio, Gaussian-blurred, then
-/// thresholded to pure black/white — the blur-before-threshold step
-/// matters: a hard threshold straight off the resize fragmented the fine
-/// knotwork linework into disconnected speckle, per direct developer
-/// feedback that the first traced version "looks malformed" — and read
-/// back pixel-for-pixel; see this crate's git history for the generating
-/// script, not kept in the repo since it's a one-time art pipeline, not
-/// runtime code) mapped one source pixel per Braille dot (2×4 dots per
-/// cell — real sub-character resolution, unlike the `░▒▓█` shading levels
-/// the earlier attempts used). Rendered left-aligned with the wordmark,
-/// tagline, and version/model line beside it (not below it, and not
-/// centered) — per explicit developer direction, `bordered` left-aligns
-/// with a fixed margin rather than centering. Always exactly
-/// `log::INTRO_LINE_COUNT` lines — that constant is a plain `usize` (not
-/// derived from this function) so `App::total_lines` can stay ratatui-free
-/// per `log::line_count`'s doc comment; keep the two in sync by hand if
-/// `MJOLNIR_ART` or the border changes shape. Styled uniformly ACCENT+BOLD
-/// — a traced silhouette has no shading gradient to speak of (unlike the
-/// procedural cobra it replaced), so per-glyph styling would be pointless;
-/// ACCENT is still the one deliberate expansion of accent beyond "card
-/// border and focused input only" (see the Palette Progress note in
-/// mjolnir-tui.md).
+/// images supplied. `WORDMARK_ART` is FIGlet's "Whimsy" font (`-k` kerning
+/// layout — plain smushing ran the letters together), found by rendering
+/// "MJOLNIR" through the ~370-font xero/figlet-fonts collection and
+/// grepping for a fragment the developer pasted as their preferred
+/// reference, after two earlier wordmark attempts (hand-drawn angular
+/// block letters, then FIGlet's "Colossal") — the developer wanted a real
+/// existing font, not another from-scratch design, and Whimsy specifically
+/// once they saw it. See this crate's git history for the generating
+/// scripts; neither is kept in the repo since they're one-time art
+/// pipelines, not runtime code. Always exactly `log::INTRO_LINE_COUNT`
+/// lines — that constant is a plain `usize` (not derived from this
+/// function) so `App::total_lines` can stay ratatui-free per
+/// `log::line_count`'s doc comment; keep the two in sync by hand if either
+/// array or the border changes shape. Styled uniformly ACCENT+BOLD — a
+/// traced silhouette has no shading gradient to speak of, so per-glyph
+/// styling would be pointless; ACCENT is still the one deliberate
+/// expansion of accent beyond "card border and focused input only" (see
+/// the Palette Progress note in mjolnir-tui.md).
+const WORDMARK_ART: [&str; 10] = [
+    "               d8,          d8b             d8,        ",
+    "              `8P           88P            `8P         ",
+    "                           d88                         ",
+    "  88bd8b,d88b d88   d8888b 888    88bd88b   88b 88bd88b",
+    "  88P'`?8P'?8b?88  d8P' ?88?88    88P' ?8b  88P 88P'  `",
+    " d88  d88  88P 88b 88b  d88 88b  d88   88P d88 d88     ",
+    "d88' d88'  88b `88b`?8888P'  88bd88'   88bd88'd88'     ",
+    "                )88                                    ",
+    "               ,88P                                    ",
+    "            `?888P                                     ",
+];
+
 const MJOLNIR_ART: [&str; 16] = [
     "⠀⠀⠀⠀⠀⠀⣠⡶⠒⣺⣿⣿⣉⣏⣉⣿⣿⣗⠒⣦⡄⠀⠀⠀⠀⠀⠀",
     "⠀⠀⠀⠀⠀⠀⣿⠇⡾⢋⡭⣍⠻⣿⠟⡩⢭⡙⣷⢸⣿⠀⠀⠀⠀⠀⠀",
@@ -123,10 +136,12 @@ const MJOLNIR_ART: [&str; 16] = [
     "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠢⣄⡴⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
 
-/// One Braille glyph is one column — every `MJOLNIR_ART` row is exactly
-/// this many chars (not trimmed of trailing blank Braille cells), so the
-/// info column in `intro_lines` starts at the same screen column on every
-/// row regardless of how much art content that particular row has.
+/// Every `MJOLNIR_ART` row is exactly this many chars (not trimmed of
+/// trailing blank Braille cells), so the info column in `intro_lines`
+/// starts at the same screen column on every row regardless of how much
+/// art content that particular row has. `WORDMARK_ART` doesn't need this
+/// — nothing sits beside it — so its rows aren't held to a matching
+/// invariant.
 const MJOLNIR_ART_WIDTH: usize = 27;
 
 fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
@@ -135,35 +150,32 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
         "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
     );
     let frame = Style::default().fg(ACCENT);
+    let wordmark_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let art_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let wordmark = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
     let meta = Style::default().fg(DIM);
 
     // Beside the art, not below it — per explicit developer direction.
     // Vertically centered against the art block's height.
-    let info: [(String, Style); 4] = [
-        ("M J O L N I R".to_string(), wordmark),
+    let info: [(String, Style); 3] = [
         ("a tool for thought.".to_string(), tagline),
         (String::new(), meta),
         (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta),
     ];
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
-    let content: Vec<Line<'static>> = MJOLNIR_ART
-        .iter()
-        .enumerate()
-        .map(|(i, art_row)| {
-            let mut spans = vec![Span::styled(*art_row, art_style)];
-            if let Some(row_i) = i.checked_sub(info_offset) {
-                if let Some((text, style)) = info.get(row_i) {
-                    spans.push(Span::raw("   "));
-                    spans.push(Span::styled(text.clone(), *style));
-                }
+    let mut content: Vec<Line<'static>> = WORDMARK_ART.iter().map(|row| Line::from(Span::styled(*row, wordmark_style))).collect();
+    content.push(Line::default());
+    content.extend(MJOLNIR_ART.iter().enumerate().map(|(i, art_row)| {
+        let mut spans = vec![Span::styled(*art_row, art_style)];
+        if let Some(row_i) = i.checked_sub(info_offset) {
+            if let Some((text, style)) = info.get(row_i) {
+                spans.push(Span::raw("   "));
+                spans.push(Span::styled(text.clone(), *style));
             }
-            Line::from(spans)
-        })
-        .collect();
+        }
+        Line::from(spans)
+    }));
     bordered(width, content, frame)
 }
 
@@ -778,22 +790,27 @@ mod tests {
     }
 
     #[test]
-    fn the_wordmark_renders_beside_the_art_not_below_it() {
+    fn the_wordmark_renders_above_the_hammer_art_with_info_beside_the_hammer() {
         let mut app = app();
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view.
-        let backend = TestBackend::new(100, 30);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Vertically centered against MJOLNIR_ART's 16 rows (4-line info
-        // block, offset (16-4)/2 = 6) — the intro's top border is screen
-        // row 0, so the wordmark row is 1 (border) + 6.
-        let wordmark_row = (1 + (MJOLNIR_ART.len() - 4) / 2) as u16;
-        let row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
-        assert!(row_text.contains("M J O L N I R"), "expected the wordmark on the art's vertically-centered row, got: {row_text:?}");
-        assert!(row_text.contains('⣿') || row_text.contains('⠀'), "that same row should still carry Braille art content to its left, not just the wordmark alone");
+        // WORDMARK_ART starts right after the top border (screen row 0).
+        let wordmark_row = 1u16;
+        let wordmark_row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
+        assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row right after the top border, got: {wordmark_row_text:?}");
+
+        // The tagline sits beside the hammer art (vertically centered
+        // against MJOLNIR_ART's 16 rows, 3-line info block, offset
+        // (16-3)/2 = 6), well below the wordmark block + its separator.
+        let hammer_start = 1 + WORDMARK_ART.len() as u16 + 1;
+        let tagline_row = hammer_start + ((MJOLNIR_ART.len() - 3) / 2) as u16;
+        let tagline_row_text: String = (0..100).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
+        assert!(tagline_row_text.contains("a tool for thought."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
     }
 
     #[test]
@@ -804,7 +821,7 @@ mod tests {
         // user_and_assistant_messages_are_visually_distinct.
         let out = rendered(&mut app(), 80, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
-        assert!(out.contains("M J O L N I R"), "the wordmark should appear in the welcome banner");
+        assert!(out.contains(WORDMARK_ART[3].trim()), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
         assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
     }
@@ -813,8 +830,10 @@ mod tests {
     fn a_fresh_session_shows_the_banner_before_any_log_entries() {
         let mut app = app();
         assert!(app.log.is_empty());
-        let out = rendered(&mut app, 80, 20);
-        assert!(out.contains("M J O L N I R"));
+        // Tall enough that the whole banner fits without auto-follow scroll
+        // pushing the wordmark (near the top) out of view.
+        let out = rendered(&mut app, 80, 40);
+        assert!(out.contains(WORDMARK_ART[3].trim()));
     }
 
     #[test]

@@ -196,6 +196,41 @@ dropped to 18 (16 art rows + 2 border — the info block no longer adds
 rows of its own, since it now shares the art's rows instead of following
 them).
 
+**Progress (2026-08-29, big wordmark, and a hammer-technique detour
+reverted):** The plain "M J O L N I R" text line wasn't enough presence
+next to the hammer art — the developer asked for the wordmark itself
+rendered as block-letter art. Landed on FIGlet's "Whimsy" font (`-k`
+kerning), found by rendering "MJOLNIR" through the ~370-font
+xero/figlet-fonts collection and grepping for a fragment the developer
+pasted as their preferred reference, after two earlier wordmark attempts
+(hand-drawn angular block letters via a small stroke-rasterizer, then
+FIGlet's "Colossal") — the developer wanted a real existing font, not
+another from-scratch design. `ui::WORDMARK_ART` (10 rows) now renders
+above the hammer, with a blank separator, then `ui::MJOLNIR_ART` below it
+with the tagline/version info still beside the hammer (unchanged from the
+entry above). `INTRO_LINE_COUNT` grew to 29 (10 wordmark + 1 blank + 16
+hammer + 2 border).
+
+Also worth recording since it nearly shipped: mid-turn, in the same
+request that asked for the wordmark, the developer separately reported
+the hammer "malformed again" after an earlier scaling fix. Read that as
+license to re-derive the hammer from scratch using `░▒▓█` block-shading
+instead of Braille (reasoning: Braille glyph coverage is more
+font-dependent, and the developer's own best-received *reference* images
+used block shading) — box-averaged a fresh trace at 27×46 and wired it
+in alongside the wordmark work. The developer caught this immediately
+("did you change the hammer itself? I only wanted a text addition") and
+clarified the malformation was a scaling issue from an earlier commit,
+not a font-rendering problem, and that the Braille hammer itself was
+fine. Reverted `MJOLNIR_ART` back to the 16×27 Braille array verbatim
+(pulled from the prior commit rather than retyped) before it was ever
+pushed. Lesson for next time: a "let's give it a try" on a bundled
+proposal (wordmark + hammer swap presented together) approves the
+bundle as understood, not license to expand scope further within it —
+confirm the swap specifically when a request only asked for an addition
+elsewhere. The actual "malformed" cause (a genuine scaling bug from an
+earlier commit, per the developer) is still open — not yet diagnosed.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

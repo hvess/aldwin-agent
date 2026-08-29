@@ -305,6 +305,43 @@ each row can carry its own label/value span pair.
 the hammer art itself (`MJOLNIR_ART`) kept its existing 16×27 shape — only
 the source symmetry changed, not the row/column dimensions.
 
+**Progress (2026-08-29, wrapped-row scroll math):** The developer reported
+text getting obscured in real sessions — root cause was the exact gap the
+"wordmark lands on ANSI Shadow" Progress entry above disclosed in passing
+but didn't fix: `App::total_lines`/`log::line_count` counted one screen row
+per *logical* source line, while `draw_log` rendered through
+`Paragraph::wrap(Wrap { trim: false })`, which can spread any single
+logical line across multiple screen rows once it's wider than the render
+width (a long tool-result summary, a long retry message, a long assistant
+line). `ScrollState`'s offset math — built on the logical count — drifted
+out of sync with what was actually on screen the moment anything wrapped,
+clipping content at the bottom of the log area, usually right above the
+status bar. That earlier entry's fix (widening test `TestBackend`s to
+~100 columns) only masked the symptom in tests; the underlying mismatch
+was still live for any real terminal width or content length that
+actually wraps.
+
+Fixed by dropping the hand-kept logical count entirely in favor of
+ratatui's own wrap-aware `Paragraph::line_count(width)` (behind the new
+`unstable-rendered-line-info` cargo feature — same `WordWrapper` ratatui's
+render path uses internally, so the count is exact by construction, not
+re-derived by hand). `ui::build_log_lines` now builds the log's `Vec<Line>`
+once, shared by `draw_log` (renders it) and the new `ui::log_row_count`
+(counts its wrapped rows — `App::total_lines` delegates to this). `draw_log`
+also switched from `.skip(offset)` on the unwrapped line list to
+`Paragraph::scroll((offset, 0))`, since `offset` is now in wrapped-row
+units and skipping pre-wrap `Line`s would drift out of sync with that unit
+the same way the old count did. `App` gained a `render_width: u16` field
+(set by `ui::draw` each frame) so scroll navigation between draws
+(`handle_key`, `push`) has a width to count against. `log::line_count` (now
+unused) and its tests were deleted; `log::INTRO_LINE_COUNT` survives as a
+`#[cfg(test)]`-only constant — it's still an accurate fixed banner-row
+count, just no longer part of live scroll math, only test row-offset
+math. Regression test:
+`ui::tests::auto_follow_accounts_for_wrapped_rows_not_just_logical_lines`
+— verified it fails against the pre-fix code (a long wrapping line's tail
+gets clipped) before confirming it passes against the fix.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

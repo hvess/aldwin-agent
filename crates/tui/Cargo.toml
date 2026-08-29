@@ -9,7 +9,7 @@ mjolnir-permissions = { path = "../permissions" }
 tokio                = { workspace = true }
 futures              = { workspace = true }
 serde_json           = { workspace = true }
-ratatui              = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }
+ratatui              = { version = "0.30", default-features = false, features = ["crossterm", "underline-color", "unstable-rendered-line-info"] }
 crossterm            = { version = "0.29", features = ["event-stream"] }
 syntect              = { version = "5", default-features = false, features = ["default-fancy"] }
 

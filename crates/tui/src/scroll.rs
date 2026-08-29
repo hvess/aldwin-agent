@@ -1,16 +1,15 @@
-/// Log scroll position, in rendered terminal rows — `total_len` in every
-/// method below must be `App::total_lines()` (see its doc comment), not
-/// `App::log`'s entry count. `viewport_height` is real rendered rows too
-/// (only known at render time); comparing that against an *entry* count
-/// in `max_offset` is what made scrolling a near-total no-op before
+/// Log scroll position, in rendered *wrapped* terminal rows — `total_len`
+/// in every method below must be `App::total_lines()` (see its doc
+/// comment), not `App::log`'s entry count and not a logical (pre-wrap)
+/// line count either. `viewport_height` is real rendered rows too (only
+/// known at render time); comparing that against an *entry* count in
+/// `max_offset` is what made scrolling a near-total no-op before
 /// `total_lines` existed — a handful of entries routinely render to far
 /// more rows than the viewport, so `max_offset` stayed 0 long after there
-/// was real content below the fold. This is exact per entry except one
-/// narrow, self-correcting streaming edge case (see `log::line_count`'s
-/// doc comment) — not wrap-width-accurate, since that needs render-time
-/// knowledge this type doesn't have, but that residual gap is at most a
-/// handful of rows on an unusually long unwrapped line, not "doesn't
-/// scroll at all".
+/// was real content below the fold. `offset` itself must land on
+/// `ui::draw_log` via `Paragraph::scroll`, not a `.skip()` on the
+/// unwrapped line list — see that function's doc comment for why the two
+/// aren't interchangeable once anything wraps.
 ///
 /// Auto-follows new content while `following` is true; scrolling up
 /// disengages it, and jumping to the bottom (End / `G`) re-engages it — see

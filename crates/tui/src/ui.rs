@@ -29,6 +29,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [log_area, status_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(input_height)]).areas(area);
 
+    // Scroll math needs the real render width before `total_lines` (called
+    // by `set_viewport_height` below) can count wrapped rows correctly —
+    // see `App::render_width`'s doc comment.
+    app.render_width = log_area.width;
     let log_inner_height = log_area.height as usize;
     app.scroll.set_viewport_height(log_inner_height, app.total_lines());
 
@@ -45,8 +49,12 @@ fn input_area_height(input: &str) -> u16 {
     (lines + 2).max(3)
 }
 
-fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = intro_lines(&app.status.model_name, area.width);
+/// Builds every line the log area can show — banner, entries, separators,
+/// the transient "thinking…" indicator — at `width`. Shared by `draw_log`
+/// (renders it) and `log_row_count` (counts its wrapped rows for scroll
+/// math), so the two can never disagree about what the log contains.
+fn build_log_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = intro_lines(&app.status.model_name, width);
     // Separates the banner from the first real entry, same as the
     // inter-entry separator below — skipped when the log is still empty so
     // a fresh session doesn't end in a trailing blank line.
@@ -60,15 +68,41 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
         if i > 0 {
             lines.push(Line::default());
         }
-        lines.extend(render_entry(entry, area.width));
+        lines.extend(render_entry(entry, width));
     }
     if app.thinking {
         lines.push(Line::from(Span::styled("thinking…", Style::default().fg(DIM))));
     }
+    lines
+}
 
-    let visible: Vec<Line> = lines.into_iter().skip(app.scroll.offset).collect();
-    let paragraph = Paragraph::new(Text::from(visible)).wrap(Wrap { trim: false });
+fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
+    let lines = build_log_lines(app, area.width);
+    // `scroll.offset` is in *wrapped screen rows* (see `log_row_count`), so
+    // it must go through `Paragraph::scroll`, which advances the same
+    // wrapping line-composer `Paragraph::line_count` uses internally —
+    // not a `.skip()` on `lines` beforehand, which would count in logical
+    // (pre-wrap) rows instead and drift out of sync the moment anything
+    // wraps.
+    let offset = app.scroll.offset.min(u16::MAX as usize) as u16;
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).scroll((offset, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// The number of terminal rows the log area needs to fully render at
+/// `width` — what `ScrollState` (see `scroll.rs`) actually compares against
+/// viewport height, wrapping included. Delegates to ratatui's own
+/// `Paragraph::line_count`, which runs the exact same word-wrapper
+/// `draw_log`'s render path uses, rather than re-deriving wrap behaviour by
+/// hand — the previous approach (`log::line_count`, counting logical source
+/// lines) silently under- or over-counted the moment any single line — a
+/// long tool-result summary, a long retry message, a long assistant line —
+/// was wide enough to wrap, corrupting `ScrollState`'s offset math and
+/// clipping content at the bottom of the log area. See mjolnir-tui.md's
+/// 2026-08-29 scrolling-fix Progress note for the incident this replaces.
+pub(crate) fn log_row_count(app: &App, width: u16) -> usize {
+    let lines = build_log_lines(app, width);
+    Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).line_count(width)
 }
 
 /// The welcome banner shown above the conversation log on every draw: the
@@ -101,9 +135,10 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// scripts; neither is kept in the repo since they're one-time art
 /// pipelines, not runtime code. Always exactly `log::INTRO_LINE_COUNT`
 /// lines — that constant is a plain `usize` (not derived from this
-/// function) so `App::total_lines` can stay ratatui-free per
-/// `log::line_count`'s doc comment; keep the two in sync by hand if either
-/// array or the border changes shape. Styled uniformly ACCENT+BOLD — a
+/// function) so `ui.rs`'s own tests can compute banner-relative row
+/// offsets without duplicating this shape (see `INTRO_LINE_COUNT`'s doc
+/// comment); keep the two in sync by hand if either array or the border
+/// changes shape. Styled uniformly ACCENT+BOLD — a
 /// traced silhouette has no shading gradient to speak of, so per-glyph
 /// styling would be pointless; ACCENT is still the one deliberate
 /// expansion of accent beyond "card border and focused input only" (see
@@ -375,12 +410,12 @@ fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
 
 /// Renders one prose line (never a fenced-code line — those are already
 /// pulled out by `split_code_fences`) of LLM-authored markdown. Hand-rolled
-/// rather than pulling in a CommonMark crate: `log::line_count`'s scroll-math
-/// invariant depends on exactly one rendered `Line` per source line, and a
-/// real block-level parser normalizes blank lines and reflows paragraphs,
-/// breaking that guarantee. Per-line block-prefix detection (heading, list,
-/// blockquote, rule) plus a recursive-descent inline pass covers what LLMs
-/// actually emit without touching line count. Styling is modifiers only
+/// rather than pulling in a CommonMark crate — a real block-level parser
+/// normalizes blank lines and reflows paragraphs, which would fight the
+/// line-for-line streaming render this does on every delta. Per-line
+/// block-prefix detection (heading, list, blockquote, rule) plus a
+/// recursive-descent inline pass covers what LLMs actually emit. Styling is
+/// modifiers only
 /// (bold/italic/underline/reversed/crossed-out) — mjolnir-tui.md reserves
 /// the one accent color for the approval card and focused input.
 fn render_markdown_line(line: &str) -> Line<'static> {
@@ -639,6 +674,35 @@ mod tests {
 
         assert!(out.contains("entry-9"), "the latest entry must be visible under auto-follow");
         assert!(!out.contains("entry-0"), "the earliest entry must have scrolled out of view");
+    }
+
+    /// Regression test for the bug the developer actually hit in a real
+    /// session: `total_lines`/`ScrollState` used to count one screen row
+    /// per *logical* source line (`log::line_count`), not per *wrapped*
+    /// screen row. A single line long enough to wrap at the render width —
+    /// a long tool-result summary, a long assistant line — then counted as
+    /// fewer rows than it actually occupied on screen, so a following
+    /// viewport's offset undershot where it needed to sit and the wrapped
+    /// tail got clipped below the log area instead of shown, right above
+    /// the status bar. `log_row_count` (via ratatui's own
+    /// `Paragraph::line_count`) fixes this by counting exactly what
+    /// `draw_log` renders, wrapping included.
+    #[test]
+    fn auto_follow_accounts_for_wrapped_rows_not_just_logical_lines() {
+        let mut app = app();
+        for i in 0..5 {
+            app.log.push(LogEntry::AssistantText { text: format!("short-{i}") });
+        }
+        // One long single logical line — `log::line_count` used to count
+        // this as exactly 1 row; at width 100 it actually wraps into
+        // several.
+        let tail = "END-OF-LONG-LINE";
+        app.log.push(LogEntry::AssistantText { text: format!("{}{tail}", "word ".repeat(40)) });
+
+        let out = rendered(&mut app, 100, 12);
+
+        assert!(out.contains(tail), "the wrapped tail of the last entry must be visible under auto-follow, not clipped below the log area");
+        assert!(!out.contains("short-0"), "earlier entries must have scrolled out of view to make room for the wrapped entry");
     }
 
     #[test]

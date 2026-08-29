@@ -69,6 +69,16 @@ pub struct App {
     pub log:              Vec<LogEntry>,
     pub thinking:          bool,
     pub scroll:            ScrollState,
+    /// The log area's real render width, last set by `ui::draw` right
+    /// before it calls `total_lines()`. `total_lines()` needs a width to
+    /// count wrapped screen rows (see its doc comment); scroll navigation
+    /// (`handle_key`, `push`) happens between draws with no render access
+    /// of its own, so it reads this cached value rather than the true
+    /// current-frame width — off by at most one stale frame, on a
+    /// terminal resize, until the next draw corrects it. Defaults to a
+    /// plausible starting width so `total_lines()` is never called before
+    /// any draw has run.
+    pub render_width:     u16,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
     pub pending_approval:  Option<PendingApproval>,
@@ -96,6 +106,7 @@ impl App {
             log: Vec::new(),
             thinking: false,
             scroll: ScrollState::default(),
+            render_width: 80,
             input: String::new(),
             cursor: 0,
             pending_approval: None,
@@ -112,21 +123,27 @@ impl App {
         self.scroll.on_content_grew(self.total_lines());
     }
 
-    /// Total rendered terminal rows across the whole log — what
-    /// `ScrollState` actually needs to compare against `viewport_height`
-    /// (also rows), not `self.log.len()` (entry count). Mixing those units
-    /// is what made scrolling effectively a no-op before this existed: a
-    /// handful of entries routinely render to far more rows than the
-    /// viewport, so an entry-count-based `max_offset` stayed 0 long after
-    /// there was real content to scroll to. See `log::line_count`'s doc
-    /// comment for why this is exact (not approximate) per entry.
+    /// Total rendered terminal rows across the whole log, wrapping
+    /// included — what `ScrollState` actually needs to compare against
+    /// `viewport_height` (also rows), not `self.log.len()` (entry count)
+    /// and not a logical (pre-wrap) line count either. Mixing entry count
+    /// in for `viewport_height` is what made scrolling effectively a
+    /// no-op before `total_lines` existed at all: a handful of entries
+    /// routinely render to far more rows than the viewport, so an
+    /// entry-count-based `max_offset` stayed 0 long after there was real
+    /// content to scroll to. Using a *logical* line count (one row per
+    /// source line) fixed that but stayed wrong on its own terms: any
+    /// single line wide enough to wrap at the current `render_width` — a
+    /// long tool-result summary, a long retry message, a long assistant
+    /// line — rendered as more screen rows than it counted as, so
+    /// `ScrollState`'s offset drifted out of sync with what was actually
+    /// on screen and clipped content at the bottom of the log area (see
+    /// mjolnir-tui.md's 2026-08-29 scrolling-fix Progress note). Delegates
+    /// to `ui::log_row_count`, which counts the exact same wrapped rows
+    /// `ui::draw_log` renders, using ratatui's own wrapper rather than a
+    /// hand-kept approximation.
     pub fn total_lines(&self) -> usize {
-        // The welcome banner plus the separator ui::draw_log puts between
-        // it and the first real entry (skipped when the log is empty).
-        let intro = crate::log::INTRO_LINE_COUNT + usize::from(!self.log.is_empty());
-        let separators = self.log.len().saturating_sub(1); // one blank line between each pair of entries, per ui::draw_log
-        let thinking = usize::from(self.thinking); // ui::draw_log appends one more line while thinking
-        intro + self.log.iter().map(crate::log::line_count).sum::<usize>() + separators + thinking
+        crate::ui::log_row_count(self, self.render_width)
     }
 
     fn active_step_calls(&mut self, step_id: StepId) -> Option<&mut Vec<ToolActivityEntry>> {

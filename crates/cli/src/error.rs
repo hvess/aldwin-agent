@@ -25,4 +25,7 @@ pub enum StartupError {
 
     #[error("terminal I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("could not read the current working directory: {0}")]
+    Cwd(#[source] std::io::Error),
 }

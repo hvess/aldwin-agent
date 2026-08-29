@@ -8,6 +8,7 @@ use amundsen_tools::{register_mcp_tools, Dispatcher, McpBridge};
 use tokio::sync::mpsc;
 
 use crate::context;
+use crate::context_approval;
 use crate::error::StartupError;
 use crate::slash;
 
@@ -22,8 +23,15 @@ const CHANNEL_CAPACITY: usize = 64;
 /// 5. Create the agent loop.
 /// 6. Launch the TUI.
 /// 7. Block on TUI exit; drop channels; wait for the agent to drain.
+///
+/// Step 4's PermissionsEngine is actually built ahead of step 3 here, not
+/// after: per amundsen-permissions.md, "the session initializer tests each
+/// candidate [context] file" through the engine's own check_context_file
+/// before composing the additional-context string, which needs the engine
+/// to already exist. The spec's numbered list is the right order to read
+/// it in, not a claim that 3 has zero dependency on 4.
 pub async fn run() -> Result<(), StartupError> {
-    let cwd = std::env::current_dir().expect("current working directory must be readable");
+    let cwd = std::env::current_dir().map_err(StartupError::Cwd)?;
 
     let config = Config::open(&cwd)?;
     match config.init_global_if_empty()? {
@@ -31,7 +39,10 @@ pub async fn run() -> Result<(), StartupError> {
         InitOutcome::PartiallyPresent { missing } => return Err(StartupError::PartiallyPresentGlobalConfig { missing }),
     }
 
-    let additional_context = context::build(&cwd, &config);
+    let permissions = Arc::new(Engine::new(config.clone()));
+
+    let approved_context_files = context_approval::resolve(&cwd, &permissions);
+    let additional_context = context::build(&cwd, &approved_context_files);
 
     let project_provider = config.project_provider();
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
@@ -39,14 +50,16 @@ pub async fn run() -> Result<(), StartupError> {
     let model_name = provider_config.model.clone();
     let client = amundsen_llm::AnthropicClient::new(provider_config)?;
 
-    let permissions = Arc::new(Engine::new(config.clone()));
-
     let mut registry = amundsen_tools::builtin_registry(cwd.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
-    // A broken MCP server must not prevent the session from starting at
-    // all — built-ins and every other server's tools should still work.
-    if let Err(e) = register_mcp_tools(mcp_bridge, &mut registry).await {
-        tracing::warn!("MCP tool registration failed, continuing without it: {e}");
+    // Best-effort per server/tool (see register_mcp_tools' own doc comment)
+    // — one broken server must not prevent the session from starting, or
+    // stop any other server's tools from registering.
+    for failure in register_mcp_tools(mcp_bridge, &mut registry).await {
+        match failure.tool {
+            Some(tool) => tracing::warn!("MCP server {:?}: tool {tool:?} not registered: {}", failure.server, failure.error),
+            None => tracing::warn!("MCP server {:?}: no tools registered: {}", failure.server, failure.error),
+        }
     }
     let dispatcher = Dispatcher::new(registry, permissions.clone());
 

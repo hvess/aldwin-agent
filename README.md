@@ -39,7 +39,9 @@ relying on it for anything you can't afford to babysit closely.
   source "$HOME/.cargo/env"
   ```
 
-- **An Anthropic API key.** V0 supports Anthropic only.
+- **An API key for your provider.** Anthropic, or any OpenAI-compatible
+  endpoint (Mistral, a self-hosted proxy, etc.) — see [Run](#run) below for
+  how to point `provider.yaml` at each.
 
 - **[rust-analyzer](https://rust-analyzer.github.io/)** on `PATH`, optional —
   only needed for the `explain` tool's code-intelligence operations
@@ -86,6 +88,20 @@ By default `provider.yaml` points `api_key_env` at `ANTHROPIC_API_KEY` — that
 environment variable must be set before Amundsen will start. Amundsen never
 reads or stores the key itself in config, only the variable's name.
 
+To use an OpenAI-compatible provider instead (Mistral, a self-hosted proxy,
+etc.), edit `provider.yaml`:
+
+```yaml
+version: 1
+provider: openai-compatible
+model: mistral-small-latest
+base_url: https://api.mistral.ai/v1/chat/completions
+api_key_env: MISTRAL_API_KEY
+```
+
+`base_url` is only read for `provider: openai-compatible` — it has no effect
+under `provider: anthropic`, which always talks to Anthropic's own endpoint.
+
 If your project has a `CLAUDE.md` or `AGENTS.md`, you'll be asked — once,
 synchronously, before the TUI launches — whether to include it in the
 model's context, and at what scope (`[p]roject` persists the approval to
@@ -131,7 +147,7 @@ depend on it. Read the relevant file in `.claude/spec/` (or
 | `amundsen-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
 | `amundsen-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
 | `amundsen-tools`         | `ToolDispatcher` impl — Read, Edit, shell, Explain (LSP), MCP bridge (rmcp) |
-| `amundsen-llm`           | Anthropic `LlmClient` — reqwest + SSE, retry, prompt caching       |
+| `amundsen-llm`           | `LlmClient` impls — Anthropic (reqwest + SSE, retry, prompt caching) and an OpenAI-compatible adapter (Mistral, self-hosted proxies) |
 | `amundsen-tui`           | ratatui frontend                                                   |
 | `amundsen-cli` (`crates/cli`) | Binary crate (`amundsen`) — startup sequence, wiring, slash commands |
 

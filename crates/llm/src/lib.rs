@@ -4,12 +4,15 @@
 //! core's own `LlmError` are part of this crate's public surface.
 
 mod client;
+mod client_openai;
 mod config;
 mod retry;
 mod wire;
+mod wire_openai;
 
 #[cfg(test)]
 mod test_server;
 
 pub use client::{AnthropicClient, LlmClientInitError};
+pub use client_openai::OpenAiCompatibleClient;
 pub use config::{resolve, ProviderConfig};

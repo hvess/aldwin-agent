@@ -28,6 +28,7 @@ dependencies = [
  "amundsen-tools",
  "amundsen-tui",
  "clap",
+ "futures",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",

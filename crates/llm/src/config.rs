@@ -14,7 +14,7 @@ pub struct ProviderConfig {
     pub kind:                     ProviderKind,
     pub model:                    String,
     pub api_key_env:              String,
-    /// V0.5 — only used by the (not yet implemented) OpenAI-compatible adapter.
+    /// V0.5 — only used by the OpenAI-compatible adapter (`OpenAiCompatibleClient`).
     pub base_url:                 Option<String>,
     pub extended_thinking_budget: u32,
 }

@@ -1,5 +1,33 @@
 use std::time::Duration;
 
+use amundsen_core::LlmError;
+
+/// What one read off the SSE stream produced this iteration — shared by both
+/// clients' attempt loops since neither variant is wire-type-specific
+/// (`LlmEvent` is core's normalised type, `String` is a plain error message).
+pub enum AttemptOutcome {
+    Events(Vec<amundsen_core::LlmEvent>),
+    Failed(String),
+}
+
+/// Chooses the terminal error variant for a failure we're not retrying.
+/// `attempt == 1` means nothing was ever retried — surface the specific
+/// cause (`Provider`/`Network`). `attempt > 1` means retries were exhausted
+/// — surface `Terminal`, core's "gave up after N tries" bucket, since by
+/// that point the specific final-attempt cause is less useful than the
+/// retry count. Shared by both `AnthropicClient` and `OpenAiCompatibleClient`
+/// — the rule is provider-agnostic.
+pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> LlmError {
+    if attempt == 1 {
+        match status {
+            Some(status) => LlmError::Provider { status, message },
+            None => LlmError::Network(message),
+        }
+    } else {
+        LlmError::Terminal { attempts: attempt, message }
+    }
+}
+
 /// Max total attempts (the first try plus up to three retries).
 pub const MAX_ATTEMPTS: u32 = 4;
 const BASE: Duration = Duration::from_secs(1);

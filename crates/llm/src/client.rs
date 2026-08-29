@@ -8,7 +8,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use thiserror::Error;
 
 use crate::config::ProviderConfig;
-use crate::retry::{self, backoff, is_retryable_status, should_retry};
+use crate::retry::{self, backoff, is_retryable_status, should_retry, terminal_error, AttemptOutcome};
 use crate::wire::{self, Assembler, WireEvent};
 
 const PROVIDER_NAME: &str = "anthropic";
@@ -21,6 +21,8 @@ pub enum LlmClientInitError {
     InvalidApiKeyValue { var: String },
     #[error("failed to construct the HTTP client: {0}")]
     HttpClient(#[source] reqwest::Error),
+    #[error("provider.yaml's base_url is required for the openai-compatible provider")]
+    MissingBaseUrl,
 }
 
 /// V0 Anthropic client implementing core's `LlmClient`. No Anthropic wire
@@ -59,6 +61,12 @@ impl AnthropicClient {
         // expensive to construct, so built once here.
         let http = reqwest::Client::builder().build().map_err(LlmClientInitError::HttpClient)?;
 
+        // `base_url` is deliberately NOT consulted here: per provider.yaml's
+        // own annotated comment ("base_url: only used when provider is
+        // openai-compatible", see amundsen-config's annotated.rs), the field
+        // is scoped to the OpenAI-compatible adapter. Honoring it here would
+        // silently redirect Anthropic requests for anyone who has a leftover
+        // base_url set while `provider: anthropic`.
         Ok(Self { http, config, headers, endpoint: wire::ANTHROPIC_API_URL.to_string(), idle_timeout: retry::IDLE_TIMEOUT })
     }
 
@@ -74,28 +82,6 @@ impl AnthropicClient {
         headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
         let http = reqwest::Client::builder().build().unwrap();
         Self { http, config, headers, endpoint, idle_timeout }
-    }
-}
-
-enum AttemptOutcome {
-    Events(Vec<LlmEvent>),
-    Failed(String),
-}
-
-/// Chooses the terminal error variant for a failure we're not retrying.
-/// `attempt == 1` means nothing was ever retried — surface the specific
-/// cause (`Provider`/`Network`). `attempt > 1` means retries were exhausted
-/// — surface `Terminal`, core's "gave up after N tries" bucket, since by
-/// that point the specific final-attempt cause is less useful than the
-/// retry count.
-fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> LlmError {
-    if attempt == 1 {
-        match status {
-            Some(status) => LlmError::Provider { status, message },
-            None => LlmError::Network(message),
-        }
-    } else {
-        LlmError::Terminal { attempts: attempt, message }
     }
 }
 
@@ -218,7 +204,7 @@ mod tests {
     }
 
     fn client_at(server: &test_server::FakeServer, idle_timeout: Duration) -> AnthropicClient {
-        AnthropicClient::with_endpoint(config(), "test-key", server.url(), idle_timeout)
+        AnthropicClient::with_endpoint(config(), "test-key", server.url("/v1/messages"), idle_timeout)
     }
 
     fn empty_messages() -> Vec<Message> {

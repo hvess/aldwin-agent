@@ -31,8 +31,8 @@ pub struct FakeServer {
 }
 
 impl FakeServer {
-    pub fn url(&self) -> String {
-        format!("http://{}/v1/messages", self.addr)
+    pub fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.addr)
     }
 }
 

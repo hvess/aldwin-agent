@@ -1,16 +1,37 @@
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use amundsen_config::{Config, InitOutcome, McpServer};
-use amundsen_core::Agent;
+use amundsen_config::{Config, InitOutcome, McpServer, ProviderKind};
+use amundsen_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
 use amundsen_permissions::Engine;
 use amundsen_tools::{register_mcp_tools, Dispatcher, McpBridge};
+use futures::Stream;
 use tokio::sync::mpsc;
 
 use crate::context;
 use crate::context_approval;
 use crate::error::StartupError;
 use crate::slash;
+
+/// Dispatches to whichever client `provider.yaml`'s `kind` selects.
+/// `Agent<C, D>` is generic over `C: LlmClient` (monomorphized, not a trait
+/// object), so this small enum exists to give `run()` a single concrete
+/// type to build an `Agent` with — the alternative would be duplicating the
+/// whole channel/task/TUI wiring below in two near-identical branches.
+enum AnyLlmClient {
+    Anthropic(amundsen_llm::AnthropicClient),
+    OpenAi(amundsen_llm::OpenAiCompatibleClient),
+}
+
+impl LlmClient for AnyLlmClient {
+    fn stream<'a>(&'a self, request: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+        match self {
+            Self::Anthropic(c) => c.stream(request),
+            Self::OpenAi(c) => c.stream(request),
+        }
+    }
+}
 
 const CHANNEL_CAPACITY: usize = 64;
 
@@ -48,7 +69,10 @@ pub async fn run() -> Result<(), StartupError> {
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
     let provider_config = amundsen_llm::resolve(project_provider.as_ref(), &global_provider);
     let model_name = provider_config.model.clone();
-    let client = amundsen_llm::AnthropicClient::new(provider_config)?;
+    let client = match provider_config.kind {
+        ProviderKind::Anthropic => AnyLlmClient::Anthropic(amundsen_llm::AnthropicClient::new(provider_config)?),
+        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(amundsen_llm::OpenAiCompatibleClient::new(provider_config)?),
+    };
 
     let mut registry = amundsen_tools::builtin_registry(cwd.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));

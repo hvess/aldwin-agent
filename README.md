@@ -27,7 +27,8 @@ relying on it for anything you can't afford to babysit closely.
 
 The easiest path is a prebuilt binary from this repo's
 [Releases](../../releases) page — no Rust toolchain needed. Grab the archive
-for your platform (Linux/macOS/Windows, x86_64 or Apple Silicon), extract it,
+for your platform (Linux or macOS, x86_64 or Apple Silicon; Windows isn't
+supported yet — the shell tool relies on Unix process APIs), extract it,
 and put `amundsen` on your `PATH`. Since this repo is private, you'll need
 GitHub access to it to download release assets.
 

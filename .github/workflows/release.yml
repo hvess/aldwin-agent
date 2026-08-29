@@ -21,8 +21,6 @@ jobs:
             os: macos-13
           - target: aarch64-apple-darwin
             os: macos-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,21 +36,10 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p amundsen-cli
 
-      - name: Package (unix)
-        if: runner.os != 'Windows'
-        shell: bash
+      - name: Package
         run: |
           out="amundsen-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           tar czf "$out" -C target/${{ matrix.target }}/release amundsen
-          mkdir -p dist
-          mv "$out" dist/
-
-      - name: Package (windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          out="amundsen-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          (cd target/${{ matrix.target }}/release && 7z a "$OLDPWD/$out" amundsen.exe)
           mkdir -p dist
           mv "$out" dist/
 

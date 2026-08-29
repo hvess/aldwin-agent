@@ -1,0 +1,24 @@
+[package]
+name    = "amundsen-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "amundsen"
+path = "src/main.rs"
+
+[dependencies]
+amundsen-core        = { path = "../core" }
+amundsen-config      = { path = "../config" }
+amundsen-permissions = { path = "../permissions" }
+amundsen-tools       = { path = "../tools" }
+amundsen-llm         = { path = "../llm" }
+amundsen-tui         = { path = "../tui" }
+tokio                = { workspace = true }
+thiserror            = { workspace = true }
+tracing              = { workspace = true }
+serde_json           = { workspace = true }
+clap                 = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

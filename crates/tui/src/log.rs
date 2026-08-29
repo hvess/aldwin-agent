@@ -21,6 +21,11 @@ pub enum LogEntry {
     PermissionPrompt { id: PromptId, payload: PromptPayload, resolution: Option<String> },
     TurnEnded { reason: TurnEndReasonKind },
     Error { message: String },
+    /// From `Event::Notice` — a message from outside the turn/step
+    /// lifecycle (amundsen-cli rejecting a slash command, a
+    /// `/reload-config` result). Rendered dim, not red like `Error` — it
+    /// isn't necessarily bad news (a successful reload is a Notice too).
+    Notice { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]

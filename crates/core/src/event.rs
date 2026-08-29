@@ -51,6 +51,14 @@ pub enum Event {
     /// Permission engine needs a developer decision. Payload is opaque to core.
     PromptRequested  { id: PromptId, payload: serde_json::Value },
     PermissionsChanged { payload: serde_json::Value },
+
+    /// A message from outside the turn/step lifecycle — the session
+    /// initialiser (amundsen-cli) rejecting an unknown slash command or
+    /// reporting a `/reload-config` result, for example. Core itself never
+    /// emits this; it exists so a layer above core (which owns no other
+    /// vehicle for reaching the TUI's log) has one. Not turn/step-scoped
+    /// and never appended to the conversation log — this is UI-facing only.
+    Notice { message: String },
 }
 
 // ── Commands (accepted downward) ─────────────────────────────────────────────

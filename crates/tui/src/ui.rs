@@ -89,6 +89,7 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
             vec![Line::from(Span::styled(text, Style::default().fg(DIM)))]
         }
         LogEntry::Error { message } => vec![Line::from(Span::styled(format!("error: {message}"), Style::default().fg(Color::Red)))],
+        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("— {message} —"), Style::default().fg(DIM)))],
     }
 }
 

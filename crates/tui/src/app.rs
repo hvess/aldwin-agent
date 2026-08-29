@@ -168,6 +168,7 @@ impl App {
                 }
             }
             Event::PermissionsChanged { .. } => self.status.refresh_permissions(&self.permissions),
+            Event::Notice { message } => self.push(LogEntry::Notice { message }),
         }
     }
 
@@ -547,6 +548,13 @@ mod tests {
         // Still denied (no grant recorded) but proves the refresh path runs
         // without panicking on an opaque payload it doesn't need to parse.
         assert_eq!(app.status.read, PermState::Denied);
+    }
+
+    #[test]
+    fn notice_event_becomes_a_notice_log_entry() {
+        let mut app = app();
+        app.apply_event(Event::Notice { message: "unknown slash command: /foo".into() });
+        assert!(matches!(app.log.last(), Some(LogEntry::Notice { message }) if message == "unknown slash command: /foo"));
     }
 
     #[test]

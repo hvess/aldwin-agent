@@ -280,6 +280,11 @@ impl App {
         let decision = match key.code {
             KeyCode::Char('y') => true,
             KeyCode::Char('n') => false,
+            // Ctrl+C must always be a way out, even mid-approval — denying
+            // is the safe default and matches 'n', rather than leaving the
+            // developer with no responsive key at all if they don't already
+            // know y/n.
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => false,
             _ => return, // any other key is silently dropped — no typing ahead
         };
         let Some(pending) = self.pending_approval.take() else { return };
@@ -300,6 +305,20 @@ impl App {
     /// requiring an unambiguous labeled key.
     fn handle_prompt_key(&mut self, key: KeyEvent) {
         let Some(pending) = &self.pending_prompt else { return };
+        // Ctrl+C always declines, regardless of payload shape — same
+        // rationale as handle_approval_key: a stuck prompt with no
+        // recognized key otherwise has no escape hatch.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            let decline = match &pending.payload {
+                PromptPayload::Tool { .. } => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once }),
+                PromptPayload::ContextFile { .. } => Some(PromptResponse::ContextFile { approve: false, tier: None }),
+                PromptPayload::Edit { .. } => None,
+            };
+            if let Some(response) = decline {
+                self.resolve_prompt(response);
+            }
+            return;
+        }
         let response = match &pending.payload {
             PromptPayload::Tool { .. } => match key.code {
                 KeyCode::Char('o') => Some(PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Once }),
@@ -325,10 +344,13 @@ impl App {
             PromptPayload::Edit { .. } => None,
         };
         let Some(response) = response else { return };
+        self.resolve_prompt(response);
+    }
 
+    fn resolve_prompt(&mut self, response: PromptResponse) {
+        let Some(pending) = self.pending_prompt.take() else { return };
         let id = pending.id;
         let label = format!("{response:?}");
-        self.pending_prompt = None;
         for entry in self.log.iter_mut() {
             if let LogEntry::PermissionPrompt { id: eid, resolution, .. } = entry {
                 if *eid == id {
@@ -472,6 +494,47 @@ mod tests {
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
         app.handle_key(press(KeyCode::Char('n')));
         assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
+    }
+
+    #[test]
+    fn ctrl_c_denies_a_pending_approval_card_instead_of_being_swallowed() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.pending_approval.is_none(), "Ctrl+C must resolve a pending approval card, not get stuck");
+        assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
+    }
+
+    #[test]
+    fn ctrl_c_declines_a_pending_tool_prompt_instead_of_being_swallowed() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload });
+        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.pending_prompt.is_none(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
+        match app.outbox.last() {
+            Some(Command::PromptResponse { payload, .. }) => {
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once });
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_declines_a_pending_context_file_prompt() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { id: amundsen_core::PromptId(1), payload });
+        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.pending_prompt.is_none());
+        match app.outbox.last() {
+            Some(Command::PromptResponse { payload, .. }) => {
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(response, PromptResponse::ContextFile { approve: false, tier: None });
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
     }
 
     #[test]

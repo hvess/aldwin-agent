@@ -50,8 +50,13 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
     match entry {
-        LogEntry::UserMessage { text } => text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(BRIGHT)))).collect(),
-        LogEntry::AssistantText { text } => text.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT)))).collect(),
+        // Palette per amundsen-tui.md: bright = assistant, normal = user —
+        // these must not share a style, or the two speakers become
+        // indistinguishable in the log.
+        LogEntry::UserMessage { text } => text.lines().map(|l| Line::from(Span::raw(format!("> {l}")))).collect(),
+        LogEntry::AssistantText { text } => {
+            text.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)))).collect()
+        }
         LogEntry::ToolActivity { calls, .. } => calls
             .iter()
             .map(|c| {
@@ -76,7 +81,7 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
         LogEntry::ApprovalCard { diff, resolution, .. } => render_card(
             "Approve this edit?",
             diff,
-            "[y] approve   [n] deny",
+            "[y] approve   [n] deny   [Ctrl+C] deny",
             resolution.map(|approved| if approved { "approved".to_string() } else { "denied".to_string() }),
         ),
         LogEntry::PermissionPrompt { payload, resolution, .. } => render_prompt_card(payload, resolution.as_deref()),
@@ -97,9 +102,9 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>) -> Vec<Line<'static>> {
     let (title, keys) = match payload {
         PromptPayload::Tool { kind, target } => {
-            (format!("Allow {kind}: {target}?"), "[o]nce [s]ession [p]roject [a]lways   Shift = deny at the same tier".to_string())
+            (format!("Allow {kind}: {target}?"), "[o]nce [s]ession [p]roject [a]lways   Shift = deny at the same tier   Ctrl+C = deny once".to_string())
         }
-        PromptPayload::ContextFile { path } => (format!("Inject context file {}?", path.display()), "[s]ession [p]roject [n]o".to_string()),
+        PromptPayload::ContextFile { path } => (format!("Inject context file {}?", path.display()), "[s]ession [p]roject [n]o   Ctrl+C = no".to_string()),
         PromptPayload::Edit { kind } => (format!("Edit approval for {kind}"), String::new()),
     };
     render_card(&title, "", &keys, resolution.map(str::to_string))
@@ -128,7 +133,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let tools = if s.running_tools.is_empty() { String::new() } else { format!(" | tools: {}", s.running_tools.join(" ")) };
 
     let text = format!(
-        "{}  {turn_step}  {} {} {}{tools}",
+        "{}  {turn_step}  {} {} {}{tools}  |  Ctrl+C: cancel/quit",
         s.model_name,
         perm("read", s.read),
         perm("shell", s.shell),
@@ -207,6 +212,30 @@ mod tests {
         assert!(out.contains("deny"));
         assert!(out.contains("old"));
         assert!(out.contains("new"));
+    }
+
+    #[test]
+    fn user_and_assistant_messages_are_visually_distinct() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.log.push(LogEntry::AssistantText { text: "hi".into() });
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // Both lines render "hi" at column 2 (after the "> " / no prefix);
+        // find each by its line content and compare the cell style at the
+        // first character — they must not be identical, or the two
+        // speakers are indistinguishable in the log.
+        let user_cell = &buffer[(2, 0)]; // "> hi"
+        let assistant_cell = &buffer[(0, 1)]; // "hi"
+        assert_ne!(
+            (user_cell.fg, user_cell.modifier),
+            (assistant_cell.fg, assistant_cell.modifier),
+            "user and assistant text must use different styles"
+        );
     }
 
     #[test]

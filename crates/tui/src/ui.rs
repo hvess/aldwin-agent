@@ -143,7 +143,7 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     // Beside the art, not below it — per explicit developer direction.
     // Vertically centered against the art block's height.
     let info: [(String, Style); 4] = [
-        ("A M U N D S E N".to_string(), wordmark),
+        ("M J O L N I R".to_string(), wordmark),
         ("a tool for thought.".to_string(), tagline),
         (String::new(), meta),
         (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta),
@@ -792,7 +792,7 @@ mod tests {
         // row 0, so the wordmark row is 1 (border) + 6.
         let wordmark_row = (1 + (MJOLNIR_ART.len() - 4) / 2) as u16;
         let row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
-        assert!(row_text.contains("A M U N D S E N"), "expected the wordmark on the art's vertically-centered row, got: {row_text:?}");
+        assert!(row_text.contains("M J O L N I R"), "expected the wordmark on the art's vertically-centered row, got: {row_text:?}");
         assert!(row_text.contains('⣿') || row_text.contains('⠀'), "that same row should still carry Braille art content to its left, not just the wordmark alone");
     }
 
@@ -804,7 +804,7 @@ mod tests {
         // user_and_assistant_messages_are_visually_distinct.
         let out = rendered(&mut app(), 80, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
-        assert!(out.contains("A M U N D S E N"), "the wordmark should appear in the welcome banner");
+        assert!(out.contains("M J O L N I R"), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
         assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
     }
@@ -814,7 +814,7 @@ mod tests {
         let mut app = app();
         assert!(app.log.is_empty());
         let out = rendered(&mut app, 80, 20);
-        assert!(out.contains("A M U N D S E N"));
+        assert!(out.contains("M J O L N I R"));
     }
 
     #[test]

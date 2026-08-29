@@ -17,6 +17,18 @@ against this spec. Manually verified against the real binary: --help/
 the full startup path through TUI launch — but not yet a full live session
 against the real Anthropic API (no API key in this environment).
 
+**Post-archive addition (2026-08-29):** A live run's developer had no
+discoverable way to end a session short of `Ctrl+C` (itself undiscoverable
+until fixed in amundsen-tui the same day) and asked for a slash command.
+Added `/exit` and `/quit` to the dispatch table — `Intercepted::Quit`
+makes `run_interceptor` return instead of looping again, which drops its
+`forward` and `events` sender clones; the core's command channel then
+closes, the core drains and drops its own `events` sender, and the TUI's
+event channel closes the same way it already does on `None` — no new
+`Event` variant, no core changes. This was explicitly out of scope before
+("Additional slash commands beyond /reload-config — V0 set is minimal"),
+not a gap against the original spec.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `amundsen` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

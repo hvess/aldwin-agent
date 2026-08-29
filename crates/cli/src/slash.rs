@@ -2,26 +2,44 @@ use amundsen_config::Config;
 use amundsen_core::{Command, Event};
 use tokio::sync::mpsc;
 
+/// What `intercept` decided to do with one incoming command.
+enum Intercepted {
+    /// Not a slash command (or not a `Submit` at all) — forward unchanged.
+    Forward(Command),
+    /// A known slash command ran (or an unknown one was rejected); nothing
+    /// reaches the core.
+    Handled,
+    /// `/exit` or `/quit` — `run_interceptor` stops entirely rather than
+    /// looping again, per amundsen-cli.md's Decisions: "CLI owns the
+    /// dispatch table so slash commands can trigger ... process
+    /// operations that the core has no visibility into." Ending the
+    /// interceptor task drops both its `forward` (core command) and
+    /// `events` sender clones; the core's own command channel then closes
+    /// too (dropping its `events` sender in turn), so the TUI's event
+    /// channel closes once both are gone and it exits the same way it
+    /// already does on `None` from `events.recv()` — no new `Event`
+    /// variant needed, and no core changes at all.
+    Quit,
+}
+
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
 /// the core, per amundsen-cli.md: "the core's only input is Submit, Cancel,
-/// ApproveTool — it has no slash-command semantics." Returns `Some(command)`
-/// to forward unchanged, `None` if this call fully handled it (a known
-/// slash command was run, or an unknown one was rejected) — either way,
-/// nothing reaches the core in the `None` case. Runs synchronously in the
-/// interceptor's own recv loop (`run_interceptor`), before any forward
+/// ApproveTool — it has no slash-command semantics." Runs synchronously in
+/// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
-async fn intercept(command: Command, config: &Config, events: &mpsc::Sender<Event>) -> Option<Command> {
-    let Command::Submit { text } = &command else { return Some(command) };
-    let Some(rest) = text.trim_start().strip_prefix('/') else { return Some(command) };
+async fn intercept(command: Command, config: &Config, events: &mpsc::Sender<Event>) -> Intercepted {
+    let Command::Submit { text } = &command else { return Intercepted::Forward(command) };
+    let Some(rest) = text.trim_start().strip_prefix('/') else { return Intercepted::Forward(command) };
 
     match rest.trim() {
         "reload-config" => {
             handle_reload_config(config, events).await;
-            None
+            Intercepted::Handled
         }
+        "exit" | "quit" => Intercepted::Quit,
         other => {
             let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other}") }).await;
-            None
+            Intercepted::Handled
         }
     }
 }
@@ -51,12 +69,18 @@ async fn handle_reload_config(config: &Config, events: &mpsc::Sender<Event>) {
 /// happens when the TUI's own `run()` returns and drops its sender.
 pub async fn run_interceptor(mut incoming: mpsc::Receiver<Command>, forward: mpsc::Sender<Command>, config: Config, events: mpsc::Sender<Event>) {
     while let Some(command) = incoming.recv().await {
-        if let Some(command) = intercept(command, &config, &events).await {
-            if forward.send(command).await.is_err() {
-                break;
+        match intercept(command, &config, &events).await {
+            Intercepted::Forward(command) => {
+                if forward.send(command).await.is_err() {
+                    break;
+                }
             }
+            Intercepted::Handled => {}
+            Intercepted::Quit => break,
         }
     }
+    // `forward` and `events` drop here — see `Intercepted::Quit`'s doc
+    // comment for why that's enough to shut the whole session down.
 }
 
 #[cfg(test)]
@@ -77,7 +101,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "hello".into() };
         let result = intercept(cmd, &cfg, &tx).await;
-        assert!(matches!(result, Some(Command::Submit { text }) if text == "hello"));
+        assert!(matches!(result, Intercepted::Forward(Command::Submit { text }) if text == "hello"));
     }
 
     #[tokio::test]
@@ -86,7 +110,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::PromptResponse { id: PromptId(1), payload: serde_json::Value::Null };
         let result = intercept(cmd, &cfg, &tx).await;
-        assert!(matches!(result, Some(Command::PromptResponse { .. })));
+        assert!(matches!(result, Intercepted::Forward(Command::PromptResponse { .. })));
     }
 
     #[tokio::test]
@@ -95,10 +119,20 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/nope".into() };
         let result = intercept(cmd, &cfg, &tx).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/nope")),
             other => panic!("expected a Notice, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn exit_and_quit_are_recognised_as_the_quit_command() {
+        let (_project, _global, cfg) = config();
+        for text in ["/exit", "/quit"] {
+            let (tx, _rx) = mpsc::channel(8);
+            let result = intercept(Command::Submit { text: text.into() }, &cfg, &tx).await;
+            assert!(matches!(result, Intercepted::Quit), "{text} should be recognised as a quit command");
         }
     }
 
@@ -108,7 +142,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
         let result = intercept(cmd, &cfg, &tx).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Intercepted::Handled));
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
         assert!(matches!(rx.recv().await, Some(Event::PermissionsChanged { .. })));
     }
@@ -153,5 +187,27 @@ mod tests {
         assert!(matches!(forward_rx.recv().await, Some(Command::Submit { text }) if text == "hi"));
         assert!(forward_rx.recv().await.is_none(), "forward sender must be dropped once incoming closes");
         handle.await.unwrap();
+    }
+
+    /// `/exit` must stop `run_interceptor` outright — not just skip
+    /// forwarding this one command — dropping both its `forward` and
+    /// `events` sender clones so the core's command channel closes (and,
+    /// once the core drains, its own `events` sender), which is what
+    /// eventually closes the TUI's event channel and lets it exit.
+    #[tokio::test]
+    async fn slash_exit_stops_the_interceptor_and_drops_its_senders() {
+        let (_project, _global, cfg) = config();
+        let (tui_tx, tui_rx) = mpsc::channel(8);
+        let (forward_tx, mut forward_rx) = mpsc::channel(8);
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, event_tx));
+
+        tui_tx.send(Command::Submit { text: "/exit".into() }).await.unwrap();
+
+        // The interceptor task ends on its own — no need to drop tui_tx.
+        handle.await.unwrap();
+        assert!(forward_rx.recv().await.is_none(), "forward must be dropped so the core's command channel closes");
+        assert!(event_rx.recv().await.is_none(), "events must be dropped, not left open, on quit");
     }
 }

@@ -102,6 +102,17 @@ impl WireContentBlock {
 /// the last content block of the message at `request.cache_breakpoints`'
 /// highest index (covers the last completed turn) — at most two total, the
 /// V0 ceiling, even if core ever supplied more than one breakpoint index.
+///
+/// Known cost, not fixed here: this deep-clones every message's text/JSON
+/// on every call (`WireRequest` owns everything rather than borrowing from
+/// `request`, chosen for simplicity — see the module's earlier design
+/// note), so building the request body is O(conversation length) per turn,
+/// O(n²) in allocation/copy over a long session. A borrowing implementation
+/// is possible (custom `Serialize` over `&Message` plus a side-table for
+/// the one or two blocks that need `cache_control` injected) but is real
+/// added complexity for a cost that's unmeasured against actual session
+/// lengths — worth revisiting if it ever shows up in practice, not
+/// speculatively now.
 pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
     let mut tools: Vec<WireTool> = request
         .tools

@@ -148,7 +148,7 @@ shows a diff for per-call approval.
 - `/reload-config` — reloads all config layers from disk. A file that fails
   to parse keeps its previous in-memory snapshot (surfaced by path); files
   that parse fine still pick up the edit.
-- `/exit`, `/quit` — ends the session, same as `Ctrl+C` with no turn running.
+- `/exit` — ends the session, same as `Ctrl+C` with no turn running.
 
 ## Project layout
 

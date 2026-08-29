@@ -20,7 +20,7 @@ against the real Anthropic API (no API key in this environment).
 **Post-archive addition (2026-08-29):** A live run's developer had no
 discoverable way to end a session short of `Ctrl+C` (itself undiscoverable
 until fixed in amundsen-tui the same day) and asked for a slash command.
-Added `/exit` and `/quit` to the dispatch table — `Intercepted::Quit`
+Added `/exit` to the dispatch table — `Intercepted::Quit`
 makes `run_interceptor` return instead of looping again, which drops its
 `forward` and `events` sender clones; the core's command channel then
 closes, the core drains and drops its own `events` sender, and the TUI's

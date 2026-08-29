@@ -9,7 +9,7 @@ enum Intercepted {
     /// A known slash command ran (or an unknown one was rejected); nothing
     /// reaches the core.
     Handled,
-    /// `/exit` or `/quit` — `run_interceptor` stops entirely rather than
+    /// `/exit` — `run_interceptor` stops entirely rather than
     /// looping again, per amundsen-cli.md's Decisions: "CLI owns the
     /// dispatch table so slash commands can trigger ... process
     /// operations that the core has no visibility into." Ending the
@@ -36,7 +36,7 @@ async fn intercept(command: Command, config: &Config, events: &mpsc::Sender<Even
             handle_reload_config(config, events).await;
             Intercepted::Handled
         }
-        "exit" | "quit" => Intercepted::Quit,
+        "exit" => Intercepted::Quit,
         other => {
             let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other}") }).await;
             Intercepted::Handled
@@ -127,12 +127,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exit_and_quit_are_recognised_as_the_quit_command() {
+    async fn exit_is_recognised_as_the_quit_command() {
         let (_project, _global, cfg) = config();
-        for text in ["/exit", "/quit"] {
-            let (tx, _rx) = mpsc::channel(8);
-            let result = intercept(Command::Submit { text: text.into() }, &cfg, &tx).await;
-            assert!(matches!(result, Intercepted::Quit), "{text} should be recognised as a quit command");
+        let (tx, _rx) = mpsc::channel(8);
+        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &tx).await;
+        assert!(matches!(result, Intercepted::Quit));
+    }
+
+    #[tokio::test]
+    async fn quit_is_not_recognised_only_exit_is() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, &tx).await;
+        assert!(matches!(result, Intercepted::Handled), "/quit must not be a recognised command");
+        match rx.recv().await {
+            Some(Event::Notice { message }) => assert!(message.contains("/quit")),
+            other => panic!("expected a Notice, got {other:?}"),
         }
     }
 

@@ -2,10 +2,14 @@
 
 Agent loop, append-only conversation state, and the typed boundary between LLM and tools.
 
-**Status:** active
+**Status:** archived — implemented, tested, audited
 **Scope:** amundsen-core crate only — narrow cut. Excludes tool implementations, permissions, TUI, and provider wire format.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-16
+
+**Completed:** 2026-08-29. Implemented in full (agent loop, append-only log,
+event/command types, LlmClient/ToolDispatcher trait boundary) —
+`34760d6`, `440c699`. No known gaps against this spec.
 
 ## Why
 

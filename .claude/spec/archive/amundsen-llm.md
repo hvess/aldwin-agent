@@ -2,10 +2,19 @@
 
 V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, no wire-type leakage.
 
-**Status:** active
+**Status:** archived — implemented, tested, audited
 **Scope:** amundsen-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
 **Last Updated:** 2026-05-16
+
+**Completed:** 2026-08-29 — `be6cd75`. Known, accepted (not a spec
+deviation): `build_request` clones the full conversation history per turn,
+O(n²) over a long session — real cost, unmeasured against actual usage,
+documented in `wire.rs`'s own doc comment rather than fixed. Not yet
+exercised against the live Anthropic API in this environment (no API key
+available here) — unit- and integration-tested against a real local HTTP
+server instead; a live run is still worth doing before fully trusting the
+retry/SSE paths against the real API's exact behavior.
 
 ## Why
 

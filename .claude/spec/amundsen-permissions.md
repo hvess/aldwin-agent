@@ -2,10 +2,21 @@
 
 Default-deny permission engine — three persistent scopes, tiered prompts, friction by design.
 
-**Status:** active
+**Status:** active — one known gap, see Progress below
 **Scope:** amundsen-permissions crate only. Policy engine, allowlist shape, prompt round-trip. Excludes TUI rendering, YAML I/O (config), and tool implementations.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
+
+**Progress (2026-08-29):** Everything else in this spec is implemented and
+tested — `6c60023`. Not yet built: the "MCP tool calls use the standard
+tool prompt, extended once with an edit-shape follow-up" Decision (line
+57) and the matching Design bullet on MCP edit-shape detection. Building
+it needs a new prompt payload/response shape here plus a new persisted
+field in amundsen-config (grant strings are deliberately opaque
+`kind:pattern`, not a good fit for the path-arg/content-arg mapping) — a
+real, separable follow-up, not a prerequisite for the rest of this spec.
+Every MCP tool currently goes through the plain four-tier prompt with
+`edit_class: false`. Keep this spec active until that's built.
 
 ## Why
 

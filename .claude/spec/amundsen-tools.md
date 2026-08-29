@@ -2,10 +2,20 @@
 
 ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 
-**Status:** active
+**Status:** active — one known gap, see Progress below
 **Scope:** amundsen-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
+
+**Progress (2026-08-29):** All four V0 built-ins (Read, Edit, shell,
+Explain) and the MCP bridge are implemented and tested — `053792a`,
+`bcf6209`, `6eb4f6d`, audit-fixed in `bb8acff`. Explain's LSP support is
+V0-scoped to Rust only (rust-analyzer), matching the crate's own
+LSP-scope-creep Pitfall rather than a gap. Not yet built: the MCP
+first-invocation edit-shape follow-up ("MCP Edit-Shape Detection" — see
+amundsen-permissions.md's matching gap, which this depends on). Every MCP
+tool currently registers with `edit_class: false` and never graduates to
+Edit's binary approval gate. Keep this spec active until that's built.
 
 ## Why
 

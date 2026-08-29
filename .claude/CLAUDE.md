@@ -12,7 +12,7 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. All seven are `status: active` as of 2026-06-10. When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`.
+Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining three (permissions, tools, tui) stay active, each with a dated Progress note on its one or two known gaps. When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`.
 
 ## Key Constraints (non-negotiable)
 

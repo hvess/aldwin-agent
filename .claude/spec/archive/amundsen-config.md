@@ -2,10 +2,14 @@
 
 Per-domain YAML at project and global scope; typed accessors; refuse-to-start on bad config.
 
-**Status:** active
+**Status:** archived — implemented, tested, audited
 **Scope:** amundsen-config crate only. On-disk file layout, per-domain typed accessors, first-launch init, in-session reload. Excludes the runtime permission engine, the agent loop, and provider HTTP work.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-16
+
+**Completed:** 2026-08-29. Implemented in full — `b9d81f8`, plus a small
+additive `extended_thinking_budget` field on `ProviderConfig` (`5c868ce`,
+needed by amundsen-llm). No known gaps against this spec.
 
 ## Why
 

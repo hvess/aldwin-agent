@@ -2,10 +2,20 @@
 
 Binary crate — startup sequence, session bootstrap, impl wiring, slash-command dispatch.
 
-**Status:** active
+**Status:** archived — implemented, tested, audited
 **Scope:** crates/cli
 **Owner:** Maximilian
 **Last Updated:** 2026-06-10
+
+**Completed:** 2026-08-29 — `20a8d39`, plus an audit fix (`f023d4a`) that
+wired up context-file approval (was implemented in amundsen-permissions
+and amundsen-tui but never actually invoked from here — the session
+initializer now does exactly what this spec's Design section says: tests
+each candidate file before composing additional-context). No known gaps
+against this spec. Manually verified against the real binary: --help/
+--version, first-launch init, refuse-to-start on a missing env var, and
+the full startup path through TUI launch — but not yet a full live session
+against the real Anthropic API (no API key in this environment).
 
 ## Design
 

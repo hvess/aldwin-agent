@@ -2,10 +2,24 @@
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
-**Status:** active
+**Status:** active — two known gaps, see Progress below
 **Scope:** crates/tui
 **Owner:** Maximilian
 **Last Updated:** 2026-06-10
+
+**Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
+audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed
+rather than silently missing: (1) tool-activity groups don't literally
+"collapse after a short delay" — each call renders as one bounded summary
+line instead, which bounds log flooding without needing a redraw timer,
+but isn't the spec's literal mechanism. (2) Shift+Enter's terminal-
+dependence (the Pitfall naming kitty/iTerm2/xterm specifically) couldn't
+be verified against real terminal sessions in the sandbox this was built
+in — there was no terminal to attach to, only a piped/non-interactive
+shell. Ctrl+J is wired as a fallback on reasoning about the failure mode,
+not empirical cross-terminal testing. A live run (planned separately)
+should confirm or correct that reasoning — pay attention to both of these
+during it.
 
 ## Design
 

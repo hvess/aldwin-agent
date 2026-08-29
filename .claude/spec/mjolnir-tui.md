@@ -231,6 +231,46 @@ confirm the swap specifically when a request only asked for an addition
 elsewhere. The actual "malformed" cause (a genuine scaling bug from an
 earlier commit, per the developer) is still open — not yet diagnosed.
 
+**Progress (2026-08-29, wordmark lands on ANSI Shadow, beside the hammer
+again):** Fast-follow correction and font search. (1) The wordmark entry
+above put `WORDMARK_ART` *above* the hammer with a blank separator — a
+second unrequested deviation from the standing layout rule (art
+left-aligned, text alongside it on the right, from the same-day "mascot
+trace fixes" Progress entry) that the developer caught immediately
+("you broke the rule where the text is supposed to be alongside the
+hammer"). `ui::intro_lines` now builds one combined right-hand column —
+`WORDMARK_ART` stacked above blank/tagline/blank/version — placed beside
+`MJOLNIR_ART` on the same rows and vertically centered against its
+height, the same technique the tagline-only info block used before the
+wordmark existed. `INTRO_LINE_COUNT` is back to 18 (16 hammer rows + 2
+border) since the right column no longer adds rows of its own. (2) Font
+search: "Whimsy" was superseded twice more — two further developer
+reference pastes turned out not to be standard FIGlet fonts at all (most
+likely gradient-shaded text-art-generator output, not matched against
+the ~370-font collection or the highest `░▒▓█`-density candidates in it)
+— until the developer pasted a code snippet naming a `LOGO_ART` constant
+already in FIGlet's "ANSI Shadow" rendering a different product's name,
+asking for the same treatment on "MJOLNIR"; that font had already been
+fetched earlier in the session while chasing an unrelated lead, so it
+needed re-rendering, not rediscovery. Separately flagged and resolved:
+ANSI Shadow is the exact font the referenced `LOGO_ART` snippet's
+project (Hermes Agent) uses for its own banner — offered Whimsy (already
+built, not from Hermes) and two other distinct bold/3D fonts as
+alternatives; developer chose to keep ANSI Shadow anyway, since it's a
+public FIGlet font, not something proprietary to Hermes. (3) The
+hammer's real width (27 cols) plus a 3-space gap plus ANSI Shadow's
+"MJOLNIR" (59 cols) pushes total banner content past 80 columns for the
+first time — this broke over a dozen `ui.rs` tests that had assumed an
+80-col `TestBackend`/`rendered()` call, not because their own assertions
+were wrong but because the intro banner's own content wrapped inside an
+80-col `Paragraph`, corrupting `ScrollState`'s row math (which counts
+logical lines, not wrapped screen rows) for the whole log, not just the
+banner — every test using the shared `app()` fixture now needs at least
+~100 columns. Widened every affected `TestBackend::new`/`rendered(...)`
+call; two sites used a different local variable name than the sed
+pass's exact-match pattern (`assistant_app`, `user_app`) and needed a
+manual follow-up fix.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

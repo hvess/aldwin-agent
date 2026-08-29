@@ -86,14 +86,18 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// sub-character dots per cell) rather than a hand-drawn or
 /// procedurally-generated shape — per explicit developer feedback that
 /// procedural attempts "weren't a true representation" of the reference
-/// images supplied. `WORDMARK_ART` is FIGlet's "Whimsy" font (`-k` kerning
-/// layout — plain smushing ran the letters together), found by rendering
-/// "MJOLNIR" through the ~370-font xero/figlet-fonts collection and
-/// grepping for a fragment the developer pasted as their preferred
-/// reference, after two earlier wordmark attempts (hand-drawn angular
-/// block letters, then FIGlet's "Colossal") — the developer wanted a real
-/// existing font, not another from-scratch design, and Whimsy specifically
-/// once they saw it. See this crate's git history for the generating
+/// images supplied. `WORDMARK_ART` is FIGlet's "ANSI Shadow" font — found
+/// after several earlier wordmark attempts (hand-drawn angular block
+/// letters; FIGlet's "Colossal"; FIGlet's "Whimsy", found by grepping the
+/// ~370-font xero/figlet-fonts collection for a fragment the developer had
+/// pasted; two further reference pastes that turned out not to be
+/// standard FIGlet fonts at all, most likely output from a gradient-shaded
+/// text-art generator rather than a monospace font file) — until the
+/// developer pasted a code snippet naming a `LOGO_ART` constant in this
+/// exact font rendering a different two-word product name, asking for the
+/// same treatment on "MJOLNIR"; the font itself (already fetched earlier
+/// in the session while chasing a different lead) needed no rediscovery,
+/// just re-rendering. See this crate's git history for the generating
 /// scripts; neither is kept in the repo since they're one-time art
 /// pipelines, not runtime code. Always exactly `log::INTRO_LINE_COUNT`
 /// lines — that constant is a plain `usize` (not derived from this
@@ -104,17 +108,13 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// styling would be pointless; ACCENT is still the one deliberate
 /// expansion of accent beyond "card border and focused input only" (see
 /// the Palette Progress note in mjolnir-tui.md).
-const WORDMARK_ART: [&str; 10] = [
-    "               d8,          d8b             d8,        ",
-    "              `8P           88P            `8P         ",
-    "                           d88                         ",
-    "  88bd8b,d88b d88   d8888b 888    88bd88b   88b 88bd88b",
-    "  88P'`?8P'?8b?88  d8P' ?88?88    88P' ?8b  88P 88P'  `",
-    " d88  d88  88P 88b 88b  d88 88b  d88   88P d88 d88     ",
-    "d88' d88'  88b `88b`?8888P'  88bd88'   88bd88'd88'     ",
-    "                )88                                    ",
-    "               ,88P                                    ",
-    "            `?888P                                     ",
+const WORDMARK_ART: [&str; 6] = [
+    "███╗   ███╗     ██╗ ██████╗ ██╗     ███╗   ██╗██╗██████╗ ",
+    "████╗ ████║     ██║██╔═══██╗██║     ████╗  ██║██║██╔══██╗",
+    "██╔████╔██║     ██║██║   ██║██║     ██╔██╗ ██║██║██████╔╝",
+    "██║╚██╔╝██║██   ██║██║   ██║██║     ██║╚██╗██║██║██╔══██╗",
+    "██║ ╚═╝ ██║╚█████╔╝╚██████╔╝███████╗██║ ╚████║██║██║  ██║",
+    "╚═╝     ╚═╝ ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝",
 ];
 
 const MJOLNIR_ART: [&str; 16] = [
@@ -155,27 +155,32 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
     let meta = Style::default().fg(DIM);
 
-    // Beside the art, not below it — per explicit developer direction.
-    // Vertically centered against the art block's height.
-    let info: [(String, Style); 3] = [
-        ("a tool for thought.".to_string(), tagline),
-        (String::new(), meta),
-        (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta),
-    ];
+    // Beside the art, not above or below it — per the standing developer
+    // rule (art left-aligned, text alongside it on the right). The
+    // wordmark block sits at the top of this column, tagline/version
+    // below it, the whole column vertically centered against the art's
+    // height.
+    let mut info: Vec<(String, Style)> = WORDMARK_ART.iter().map(|row| (row.to_string(), wordmark_style)).collect();
+    info.push((String::new(), meta));
+    info.push(("a tool for thought.".to_string(), tagline));
+    info.push((String::new(), meta));
+    info.push((format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("MJOLNIR_GIT_HASH")), meta));
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
-    let mut content: Vec<Line<'static>> = WORDMARK_ART.iter().map(|row| Line::from(Span::styled(*row, wordmark_style))).collect();
-    content.push(Line::default());
-    content.extend(MJOLNIR_ART.iter().enumerate().map(|(i, art_row)| {
-        let mut spans = vec![Span::styled(*art_row, art_style)];
-        if let Some(row_i) = i.checked_sub(info_offset) {
-            if let Some((text, style)) = info.get(row_i) {
-                spans.push(Span::raw("   "));
-                spans.push(Span::styled(text.clone(), *style));
+    let content: Vec<Line<'static>> = MJOLNIR_ART
+        .iter()
+        .enumerate()
+        .map(|(i, art_row)| {
+            let mut spans = vec![Span::styled(*art_row, art_style)];
+            if let Some(row_i) = i.checked_sub(info_offset) {
+                if let Some((text, style)) = info.get(row_i) {
+                    spans.push(Span::raw("   "));
+                    spans.push(Span::styled(text.clone(), *style));
+                }
             }
-        }
-        Line::from(spans)
-    }));
+            Line::from(spans)
+        })
+        .collect();
     bordered(width, content, frame)
 }
 
@@ -609,7 +614,7 @@ mod tests {
         // Log area gets roughly height-2 rows (status bar + input box eat
         // the rest) — nowhere near the ~59 rows ten 5-line entries plus
         // nine separators need.
-        let out = rendered(&mut app, 80, 12);
+        let out = rendered(&mut app, 100, 12);
 
         assert!(out.contains("entry-9"), "the latest entry must be visible under auto-follow");
         assert!(!out.contains("entry-0"), "the earliest entry must have scrolled out of view");
@@ -618,7 +623,7 @@ mod tests {
     #[test]
     fn status_bar_shows_model_name_and_permission_summary() {
         let mut app = app();
-        let out = rendered(&mut app, 80, 20);
+        let out = rendered(&mut app, 100, 20);
         assert!(out.contains("claude-sonnet-5"));
         assert!(out.contains("read:deny"));
         assert!(out.contains("shell:deny"));
@@ -629,7 +634,7 @@ mod tests {
     fn user_message_appears_in_the_rendered_log() {
         let mut app = app();
         app.log.push(LogEntry::UserMessage { text: "hello world".into() });
-        let out = rendered(&mut app, 80, 20);
+        let out = rendered(&mut app, 100, 20);
         assert!(out.contains("hello world"));
     }
 
@@ -637,16 +642,16 @@ mod tests {
     fn thinking_indicator_renders_only_while_active() {
         let mut app = app();
         app.thinking = true;
-        assert!(rendered(&mut app, 80, 20).contains("thinking…"));
+        assert!(rendered(&mut app, 100, 20).contains("thinking…"));
         app.thinking = false;
-        assert!(!rendered(&mut app, 80, 20).contains("thinking…"));
+        assert!(!rendered(&mut app, 100, 20).contains("thinking…"));
     }
 
     #[test]
     fn approval_card_shows_labeled_keys_and_the_diff() {
         let mut app = app();
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
-        let out = rendered(&mut app, 80, 20);
+        let out = rendered(&mut app, 100, 20);
         assert!(out.contains("approve"));
         assert!(out.contains("deny"));
         assert!(out.contains("old"));
@@ -663,7 +668,7 @@ mod tests {
         // triggering auto-follow scroll — otherwise the offset below
         // (which assumes the viewport shows everything from row 0) would
         // be reading the wrong rows entirely.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -689,7 +694,7 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -708,7 +713,7 @@ mod tests {
     fn input_text_is_rendered_in_the_input_box() {
         let mut app = app();
         app.input = "draft text".into();
-        let out = rendered(&mut app, 80, 20);
+        let out = rendered(&mut app, 100, 20);
         assert!(out.contains("draft text"));
     }
 
@@ -733,13 +738,13 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "second".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let row = intro_offset() + 1;
-        let row_text: String = (0..80).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        let row_text: String = (0..100).map(|x| buffer[(x, row)].symbol().to_string()).collect();
         assert_eq!(row_text.trim(), "", "the row after the first entry must be the blank separator between the two entries");
     }
 
@@ -747,11 +752,11 @@ mod tests {
     fn assistant_text_gets_a_marker_that_user_text_does_not() {
         let mut assistant_app = app();
         assistant_app.log.push(LogEntry::AssistantText { text: "hi".into() });
-        assert!(rendered(&mut assistant_app, 80, 20).contains('●'), "assistant text should start with a marker");
+        assert!(rendered(&mut assistant_app, 100, 20).contains('●'), "assistant text should start with a marker");
 
         let mut user_app = app();
         user_app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        assert!(!rendered(&mut user_app, 80, 20).contains('●'), "user text should not get the assistant marker");
+        assert!(!rendered(&mut user_app, 100, 20).contains('●'), "user text should not get the assistant marker");
     }
 
     #[test]
@@ -760,7 +765,7 @@ mod tests {
         app.log.push(LogEntry::AssistantText { text: "here:\n```rust\nfn main() {}\n```\ndone".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -790,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wordmark_renders_above_the_hammer_art_with_info_beside_the_hammer() {
+    fn the_wordmark_and_tagline_render_beside_the_hammer_art() {
         let mut app = app();
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view.
@@ -799,16 +804,19 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // WORDMARK_ART starts right after the top border (screen row 0).
-        let wordmark_row = 1u16;
+        // The right-hand column (WORDMARK_ART, then blank/tagline/blank/
+        // version) is vertically centered against MJOLNIR_ART's 16 rows:
+        // offset = (16 - (6 wordmark + 4 info)) / 2 = 3. Screen row 0 is
+        // the top border, so the wordmark's first row is 1 + 3 = 4.
+        let info_len = WORDMARK_ART.len() + 4;
+        let offset = (MJOLNIR_ART.len() - info_len) / 2;
+        let wordmark_row = (1 + offset) as u16;
         let wordmark_row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
-        assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row right after the top border, got: {wordmark_row_text:?}");
+        assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row beside the hammer art, got: {wordmark_row_text:?}");
+        assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "that same row should still carry hammer art content to its left, not just the wordmark alone");
 
-        // The tagline sits beside the hammer art (vertically centered
-        // against MJOLNIR_ART's 16 rows, 3-line info block, offset
-        // (16-3)/2 = 6), well below the wordmark block + its separator.
-        let hammer_start = 1 + WORDMARK_ART.len() as u16 + 1;
-        let tagline_row = hammer_start + ((MJOLNIR_ART.len() - 3) / 2) as u16;
+        // Tagline is right after the wordmark block plus one blank line.
+        let tagline_row = (1 + offset + WORDMARK_ART.len() + 1) as u16;
         let tagline_row_text: String = (0..100).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
         assert!(tagline_row_text.contains("a tool for thought."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
     }
@@ -819,7 +827,7 @@ mod tests {
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
-        let out = rendered(&mut app(), 80, 40);
+        let out = rendered(&mut app(), 100, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
         assert!(out.contains(WORDMARK_ART[3].trim()), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
@@ -832,7 +840,7 @@ mod tests {
         assert!(app.log.is_empty());
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing the wordmark (near the top) out of view.
-        let out = rendered(&mut app, 80, 40);
+        let out = rendered(&mut app, 100, 40);
         assert!(out.contains(WORDMARK_ART[3].trim()));
     }
 
@@ -843,7 +851,7 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -859,13 +867,13 @@ mod tests {
     fn a_short_user_message_gets_the_background_tint_all_the_way_to_the_right_edge() {
         let mut app = app();
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let row = intro_offset();
-        let far_right_cell = &buffer[(79, row)]; // well past "> hi"
+        let far_right_cell = &buffer[(99, row)]; // well past "> hi"
         assert_eq!(far_right_cell.bg, USER_BG, "the background tint should fill the full row width, not just trail the text");
     }
 
@@ -875,16 +883,16 @@ mod tests {
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
-        let backend = TestBackend::new(80, 40);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         assert_eq!(buffer[(0, 0)].symbol(), "┌", "top-left corner of the banner's border");
-        assert_eq!(buffer[(79, 0)].symbol(), "┐", "top-right corner should reach the full render width");
+        assert_eq!(buffer[(99, 0)].symbol(), "┐", "top-right corner should reach the full render width");
         let bottom = crate::log::INTRO_LINE_COUNT as u16 - 1;
         assert_eq!(buffer[(0, bottom)].symbol(), "└", "bottom-left corner of the banner's border");
-        assert_eq!(buffer[(79, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
+        assert_eq!(buffer[(99, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
     }
 
     #[test]
@@ -929,7 +937,7 @@ mod tests {
     fn markdown_in_the_full_log_renders_without_literal_markup_characters() {
         let mut app = app();
         app.log.push(LogEntry::AssistantText { text: "**bold** and `code` and *italic*".into() });
-        let out = rendered(&mut app, 80, 20);
+        let out = rendered(&mut app, 100, 20);
         assert!(!out.contains('*'), "literal asterisks must not reach the screen: {out:?}");
         assert!(!out.contains('`'), "literal backticks must not reach the screen: {out:?}");
         assert!(out.contains("bold"));

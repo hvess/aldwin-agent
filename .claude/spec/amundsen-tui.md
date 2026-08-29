@@ -172,6 +172,30 @@ art's true proportions — noticeably taller than the owl or any of the
 procedural Mjolnir attempts, since a faithful trace doesn't compress to
 fit a target row count the way hand-authored art can.
 
+**Progress (2026-08-29, mascot trace fixes: quality, size, layout):** Three
+issues reported directly against the traced Mjolnir mark above. (1) "The
+ascii art looks malformed/incorrect" — the original trace hard-thresholded
+the resized image straight off the resize, which fragmented the fine
+knotwork linework into disconnected speckle; the pipeline now applies a
+Gaussian blur between resize and threshold (`-blur 0x0.6` before
+`-threshold 52%`) so thin strokes survive as continuous lines instead of
+broken dots. (2) "A little too large" — re-traced at a smaller target
+(54×64px source → 27×16 Braille cells, down from 35×21) using a
+height-constrained resize (`-resize x64`) rather than width-constrained,
+which also happens to read more cleanly at the smaller size since there's
+less linework crammed into the same dot budget. (3) "It should be left
+aligned with the name of AMUNDSEN alongside it on the right" — the banner
+was centering one stacked column (art, then wordmark/tagline/version below
+it); `ui::intro_lines` now builds the info block as a second column placed
+beside the art on the same rows (vertically centered against the art's
+height), and `ui::bordered` switched from centering to a small fixed left
+margin. This only works because `MJOLNIR_ART`'s rows are fixed-width (not
+trimmed of trailing blank Braille cells) — trimmed rows would put the info
+column at a different screen column on every row. `INTRO_LINE_COUNT`
+dropped to 18 (16 art rows + 2 border — the info block no longer adds
+rows of its own, since it now shares the art's rows instead of following
+them).
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart emits a dim "thinking…" indicator; ThinkingEnd removes it — no content shown (dropped at source per amundsen-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on G / End. Line scroll via arrow keys or j/k; page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

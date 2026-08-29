@@ -82,16 +82,19 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// procedurally generated — per explicit developer feedback that repeated
 /// procedural attempts "weren't a true representation" of the reference
 /// images supplied, it's a literal trace: a real reference photo
-/// (thresholded to pure black/white, trimmed, resized preserving aspect,
-/// and read back pixel-for-pixel — see this crate's git history for the
-/// generating script, not kept in the repo since it's a one-time art
-/// pipeline, not runtime code) mapped one source pixel per Braille dot
-/// (2×4 dots per cell — real sub-character resolution, unlike the `░▒▓█`
-/// shading levels the earlier attempts used). Plus the harness version,
-/// git commit (`build.rs` — `CARGO_PKG_VERSION` alone is the workspace's
-/// shared `0.1.0` and doesn't move between commits, so it can't tell a
-/// developer which build they're actually running), and active model,
-/// framed in a full-width bordered card (`bordered`). Always exactly
+/// (trimmed, resized preserving aspect ratio, Gaussian-blurred, then
+/// thresholded to pure black/white — the blur-before-threshold step
+/// matters: a hard threshold straight off the resize fragmented the fine
+/// knotwork linework into disconnected speckle, per direct developer
+/// feedback that the first traced version "looks malformed" — and read
+/// back pixel-for-pixel; see this crate's git history for the generating
+/// script, not kept in the repo since it's a one-time art pipeline, not
+/// runtime code) mapped one source pixel per Braille dot (2×4 dots per
+/// cell — real sub-character resolution, unlike the `░▒▓█` shading levels
+/// the earlier attempts used). Rendered left-aligned with the wordmark,
+/// tagline, and version/model line beside it (not below it, and not
+/// centered) — per explicit developer direction, `bordered` left-aligns
+/// with a fixed margin rather than centering. Always exactly
 /// `log::INTRO_LINE_COUNT` lines — that constant is a plain `usize` (not
 /// derived from this function) so `App::total_lines` can stay ratatui-free
 /// per `log::line_count`'s doc comment; keep the two in sync by hand if
@@ -101,63 +104,89 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
 /// ACCENT is still the one deliberate expansion of accent beyond "card
 /// border and focused input only" (see the Palette Progress note in
 /// amundsen-tui.md).
-const MJOLNIR_ART: [&str; 21] = [
-    "⠀⠀⠀⠀⠀⠀⠀⠀⢠⣤⠶⠶⠒⣛⣛⡛⠛⣛⠛⢛⣛⣓⠲⠶⢶⣤⡀",
-    "⠀⠀⠀⠀⠀⠀⠀⢀⡏⡜⢠⣾⠟⠛⠛⠿⣿⣿⣿⠟⠛⠛⠻⣦⡀⢇⢻",
-    "⠀⠀⠀⠀⠀⠀⠀⢸⡇⡇⣾⡃⢰⢋⠙⢦⣈⠟⢁⡴⠋⢙⡆⢸⡇⢸⢸⡆",
-    "⠀⠀⠀⠀⠀⠀⠀⠸⣇⡇⠘⣧⣈⠛⣁⡾⠋⣠⠻⣧⡈⠋⣁⡾⠃⢸⣸⠁",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠙⠳⢦⡀⠙⠛⠋⣠⣾⠿⣦⣈⠙⠛⠋⢁⡴⠟⠉",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⡀⠀⣀⠙⢿⣶⡿⠋⡀⠀⢠⡟",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⣿⣷⡴⠋⢠⣾⣿⠀⢸⡇",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢀⣿⡏⠠⣷⠄⢹⣿⠀⢸⡇",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢸⣿⣿⠞⢁⠴⣿⣿⡇⢸⡇",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠀⣈⣿⡁⠰⣿⠆⢸⣿⣀⠘⣇",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡏⢠⡏⢠⡿⠊⣁⠰⢿⡄⢹⡀⢻⡀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡞⠀⠸⣧⣄⣤⣾⣿⣷⣤⣠⣾⠇⠈⢷⡀",
-    "⠀⣠⢤⣤⣤⣤⣤⣤⠴⠾⠤⠶⠟⠛⠛⠛⢉⣉⣉⠙⠛⠛⠻⠶⠼⠷⠤⠤⢤⣤⡤⠤⠤⣄",
-    "⠀⡇⢠⣤⣤⣤⡤⠤⠀⠶⣶⣶⣶⡾⠟⠛⠉⠛⠻⢿⣿⣷⣶⠖⢀⣠⣤⣤⡤⣤⣤⣤⡄⢸⡆",
-    "⢸⡇⢸⣿⣿⡿⠀⣴⡶⣦⠈⣿⠏⣠⡶⠛⠛⠛⢶⡄⠹⣿⡏⢠⣿⣿⡿⠿⠧⠼⣿⣿⡇⠸⡇",
-    "⢸⠁⣼⣿⣿⣿⣄⣉⣀⡾⠀⡏⠀⣿⠁⣼⣿⣧⣨⡿⠀⣿⣇⠘⣟⣁⣤⣶⠶⢦⣤⡈⠻⠀⣷",
-    "⣿⠀⠉⣠⣤⣤⣈⣉⣉⣤⣾⣷⠀⢿⣄⠙⠻⠿⠟⢁⣼⣿⠟⢦⣈⣉⣉⣁⣴⣿⣿⣿⣆⠀⣿",
-    "⠙⢦⣤⡤⢤⣤⣈⣉⠙⠛⠿⣿⣷⣄⠙⠻⠶⣶⣾⠿⠛⢁⣴⣿⠿⠟⠛⢉⣉⣠⣤⣤⣤⡤⠟",
-    "⠀⠀⠀⠀⠀⠀⠀⠉⠙⠓⠦⣄⣉⠙⠻⣶⣦⣤⣤⣴⠾⠛⢉⣠⠴⠖⠛⠉⠁",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠦⣄⠙⠻⠋⣠⡴⠚⠉",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠶⠞⠁",
+const MJOLNIR_ART: [&str; 16] = [
+    "⠀⠀⠀⠀⠀⠀⣠⡶⠒⣺⣿⣿⣉⣏⣉⣿⣿⣗⠒⣦⡄⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⣿⠇⡾⢋⡭⣍⠻⣿⠟⡩⢭⡙⣷⢸⣿⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⣿⡀⢷⡘⠒⣨⡿⢡⢾⡀⠚⢁⡟⢠⣼⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠘⠳⣄⠉⠛⢉⣴⢿⣦⡙⠛⠋⡠⠞⠁⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⡆⢀⣤⣙⡿⢋⣤⡀⢸⠁⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠘⣿⠋⣤⠙⣿⠃⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⢸⣿⡶⠉⢴⣿⡇⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⢰⠃⣼⢿⣐⠿⢀⡿⣧⠸⡄⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⢀⡞⢰⣇⠚⣡⣶⣍⠃⣸⡄⢳⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⣀⣀⣀⣀⣀⣠⡾⠤⠾⠿⠛⠛⠛⠛⠛⠿⠷⠤⢷⣤⣄⣀⣀⣤⣄⠀",
+    "⢸⠁⣴⣤⣤⠆⠀⠲⣶⣶⠟⢛⣉⣙⠛⢿⣿⡶⢂⣠⣶⣶⢶⣶⣶⠀⡇",
+    "⣸⢀⣿⣿⣇⠸⠟⣷⢸⠃⣼⠋⣭⡍⢳⡈⣿⡇⣾⡿⠛⣛⣛⠛⢿⡄⣧",
+    "⡟⠘⢛⣉⣙⠓⢚⣡⣾⡀⣿⡘⠿⠿⠿⢠⣿⣷⣈⠓⠛⣋⣽⣿⣦⠀⢸",
+    "⠛⠤⠤⠤⢭⣉⡙⠻⠿⣷⣌⠛⠶⠶⠾⠟⣋⣴⡿⠟⢛⣉⣩⠭⠤⠤⠞",
+    "⠀⠀⠀⠀⠀⠀⠈⠙⠒⠤⣉⠛⢷⣶⡶⠟⣉⡤⠖⠋⠉⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠢⣄⡴⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
 
+/// One Braille glyph is one column — every `MJOLNIR_ART` row is exactly
+/// this many chars (not trimmed of trailing blank Braille cells), so the
+/// info column in `intro_lines` starts at the same screen column on every
+/// row regardless of how much art content that particular row has.
+const MJOLNIR_ART_WIDTH: usize = 27;
+
 fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
+    debug_assert!(
+        MJOLNIR_ART.iter().all(|row| row.chars().count() == MJOLNIR_ART_WIDTH),
+        "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
+    );
     let frame = Style::default().fg(ACCENT);
     let art_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let wordmark = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let tagline = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
     let meta = Style::default().fg(DIM);
 
-    let mut content: Vec<Line<'static>> = MJOLNIR_ART.iter().map(|row| Line::from(Span::styled(*row, art_style))).collect();
-    content.push(Line::default());
-    content.push(Line::from(Span::styled("A M U N D S E N", wordmark)));
-    content.push(Line::from(Span::styled("a tool for thought.", tagline)));
-    content.push(Line::default());
-    content.push(Line::from(Span::styled(format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta)));
+    // Beside the art, not below it — per explicit developer direction.
+    // Vertically centered against the art block's height.
+    let info: [(String, Style); 4] = [
+        ("A M U N D S E N".to_string(), wordmark),
+        ("a tool for thought.".to_string(), tagline),
+        (String::new(), meta),
+        (format!("v{} ({}) · {model_name}", env!("CARGO_PKG_VERSION"), env!("AMUNDSEN_GIT_HASH")), meta),
+    ];
+    let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
+
+    let content: Vec<Line<'static>> = MJOLNIR_ART
+        .iter()
+        .enumerate()
+        .map(|(i, art_row)| {
+            let mut spans = vec![Span::styled(*art_row, art_style)];
+            if let Some(row_i) = i.checked_sub(info_offset) {
+                if let Some((text, style)) = info.get(row_i) {
+                    spans.push(Span::raw("   "));
+                    spans.push(Span::styled(text.clone(), *style));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect();
     bordered(width, content, frame)
 }
 
 /// Wraps `content` in a border that spans the full render width (`width`,
 /// the log area's actual `Rect::width` — art alone can't know this, so it's
-/// threaded in from `draw_log` at render time), centering each line inside
-/// it. `content_width` sums `Span::content` char counts, which only holds
-/// up for single-width glyphs — true of every char used here (box-drawing
-/// and the mascot's own glyphs are Unicode East Asian Width "Narrow"/
-/// "Neutral") but would need adjustment for wide (CJK/emoji) text.
+/// threaded in from `draw_log` at render time), left-aligning each line
+/// with a small fixed margin rather than centering — per explicit
+/// developer direction that the banner should read left-to-right (art,
+/// then wordmark/info beside it), not sit centered in the middle of a wide
+/// terminal. `content_width` sums `Span::content` char counts, which only
+/// holds up for single-width glyphs — true of every char used here
+/// (box-drawing and Braille dot patterns are Unicode East Asian Width
+/// "Narrow"/"Neutral") but would need adjustment for wide (CJK/emoji) text.
 fn bordered(width: u16, content: Vec<Line<'static>>, border_style: Style) -> Vec<Line<'static>> {
+    const LEFT_MARGIN: usize = 2;
     let inner_width = (width as usize).saturating_sub(2);
     let mut out = Vec::with_capacity(content.len() + 2);
     out.push(Line::from(Span::styled(format!("┌{}┐", "─".repeat(inner_width)), border_style)));
     for line in content {
         let content_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-        let avail = inner_width.saturating_sub(2); // one space of margin inside each border char
-        let left_pad = avail.saturating_sub(content_width) / 2;
-        let right_pad = avail.saturating_sub(content_width) - left_pad;
-        let mut spans = vec![Span::styled(format!("│ {}", " ".repeat(left_pad)), border_style)];
+        let avail = inner_width.saturating_sub(LEFT_MARGIN + 1); // trailing space before the right border
+        let right_pad = avail.saturating_sub(content_width);
+        let mut spans = vec![Span::styled(format!("│{}", " ".repeat(LEFT_MARGIN)), border_style)];
         spans.extend(line.spans);
         spans.push(Span::styled(format!("{} │", " ".repeat(right_pad)), border_style));
         out.push(Line::from(spans));
@@ -739,6 +768,32 @@ mod tests {
         let code_row = intro_offset() + 2; // "● here:" / "┌─ rust" / "│ fn main() {}"
         let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
+    }
+
+    #[test]
+    fn every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars() {
+        for (i, row) in MJOLNIR_ART.iter().enumerate() {
+            assert_eq!(row.chars().count(), MJOLNIR_ART_WIDTH, "row {i} isn't fixed-width — the info column beside the art would drift off-alignment");
+        }
+    }
+
+    #[test]
+    fn the_wordmark_renders_beside_the_art_not_below_it() {
+        let mut app = app();
+        // Tall enough that the whole banner fits without auto-follow scroll
+        // pushing its top rows out of view.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // Vertically centered against MJOLNIR_ART's 16 rows (4-line info
+        // block, offset (16-4)/2 = 6) — the intro's top border is screen
+        // row 0, so the wordmark row is 1 (border) + 6.
+        let wordmark_row = (1 + (MJOLNIR_ART.len() - 4) / 2) as u16;
+        let row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
+        assert!(row_text.contains("A M U N D S E N"), "expected the wordmark on the art's vertically-centered row, got: {row_text:?}");
+        assert!(row_text.contains('⣿') || row_text.contains('⠀'), "that same row should still carry Braille art content to its left, not just the wordmark alone");
     }
 
     #[test]

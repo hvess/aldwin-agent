@@ -85,7 +85,7 @@ pub struct CacheStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StopReason { EndTurn, ToolUse }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryInfo {
     pub provider: String,
     pub status:   Option<u16>,

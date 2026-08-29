@@ -55,7 +55,7 @@ pub enum Event {
 
 // ── Commands (accepted downward) ─────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Submit         { text: String },
     Cancel,

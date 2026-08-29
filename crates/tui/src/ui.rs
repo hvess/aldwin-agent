@@ -162,7 +162,19 @@ pub(crate) fn log_row_count(app: &App, width: u16) -> usize {
 /// sub-character dots per cell) rather than a hand-drawn or
 /// procedurally-generated shape — per explicit developer feedback that
 /// procedural attempts "weren't a true representation" of the reference
-/// images supplied. `WORDMARK_ART` is FIGlet's "ANSI Shadow" font — found
+/// images supplied. This is that original 21-row trace, restored after a
+/// detour: a later "fix trace quality, shrink it" pass replaced it with a
+/// smaller, differently-traced 16-row mark to fit beside the info block,
+/// and a further pass mirror-symmetrized *that* mark's head — but the
+/// smaller trace's head read as flat noise next to its own eye/loop, and
+/// no amount of further hand-tuning (restoring its pre-symmetry-fix
+/// linework, then a from-scratch symmetric double-loop) matched the
+/// detail of this original — per explicit developer feedback across that
+/// whole detour. Wider (35 vs. 27 chars) and taller (21 vs. 16 rows) than
+/// the mark it replaces; the info column beside it, the vertical-centering
+/// math, and `log::INTRO_LINE_COUNT` all derive from `MJOLNIR_ART.len()`/
+/// `MJOLNIR_ART_WIDTH` rather than hardcoding the row count, so they
+/// scale with it automatically. `WORDMARK_ART` is FIGlet's "ANSI Shadow" font — found
 /// after several earlier wordmark attempts (hand-drawn angular block
 /// letters; FIGlet's "Colossal"; FIGlet's "Whimsy", found by grepping the
 /// ~370-font xero/figlet-fonts collection for a fragment the developer had
@@ -194,23 +206,28 @@ const WORDMARK_ART: [&str; 6] = [
     "╚═╝     ╚═╝ ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝",
 ];
 
-const MJOLNIR_ART: [&str; 16] = [
-    "⠀⠀⠀⠀⠀⠀⢠⡴⠒⣺⣿⣿⣉⣉⣉⣿⣿⣗⠒⢦⡄⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⣿⠇⣾⢋⡭⢍⠻⣿⠟⡩⢭⡙⣷⠸⣿⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⣿⡄⢿⡘⠒⢨⡷⣀⢾⡅⠒⢃⡿⢠⣿⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠈⠳⣄⠙⠛⢉⣴⠿⣦⡉⠛⠋⣠⠞⠁⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⡇⢀⣤⡙⠿⢋⣤⡀⢸⠁⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠘⣿⠋⣤⠙⣿⠃⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⢸⣿⡶⠉⢶⣿⡇⢸⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⢰⠇⣼⢿⣀⠿⣀⡿⣧⠸⡆⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⢀⡞⢠⣇⠚⣡⣶⣌⠓⣸⡄⢳⡀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⣠⣀⣀⣀⣀⣤⡾⠤⠾⠿⠛⠛⠛⠛⠛⠿⠷⠤⢷⣤⣀⣀⣀⣀⣄⠀",
-    "⢸⠁⣴⣶⣶⣶⣦⣤⣴⣶⣿⣿⢛⣉⡛⣿⣿⣶⣦⣤⣴⣶⣶⣶⣦⠈⡇",
-    "⣼⢀⣿⣿⣇⠙⠛⢿⡿⢉⣿⢃⣭⣉⣭⡘⣿⡉⢿⡿⠛⠋⣸⣿⣿⡀⣧",
-    "⡏⠀⣻⣿⣏⡙⠛⣃⣤⡼⣿⡈⠿⠿⠿⢁⣿⢧⣤⣘⠛⢋⣹⣿⣟⠀⢹",
-    "⠳⠤⠤⠤⢭⣉⡛⠻⠿⣷⣌⠻⠶⠶⠶⠟⣡⣾⠿⠟⢛⣉⡭⠤⠤⠤⠞",
-    "⠀⠀⠀⠀⠀⠀⠈⠙⠲⠤⣉⠛⢶⣶⡶⠛⣉⠤⠖⠋⠁⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⢦⣤⡴⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+const MJOLNIR_ART: [&str; 21] = [
+    "⠀⠀⠀⠀⠀⠀⠀⠀⢠⣤⠶⠶⠒⣛⣛⡛⠛⣛⠛⢛⣛⣓⠲⠶⢶⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⢀⡏⡜⢠⣾⠟⠛⠛⠿⣿⣿⣿⠟⠛⠛⠻⣦⡀⢇⢻⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⢸⡇⡇⣾⡃⢰⢋⠙⢦⣈⠟⢁⡴⠋⢙⡆⢸⡇⢸⢸⡆⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠸⣇⡇⠘⣧⣈⠛⣁⡾⠋⣠⠻⣧⡈⠋⣁⡾⠃⢸⣸⠁⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠙⠳⢦⡀⠙⠛⠋⣠⣾⠿⣦⣈⠙⠛⠋⢁⡴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⡀⠀⣀⠙⢿⣶⡿⠋⡀⠀⢠⡟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⣿⣷⡴⠋⢠⣾⣿⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢀⣿⡏⠠⣷⠄⢹⣿⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢸⣿⣿⠞⢁⠴⣿⣿⡇⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠀⣈⣿⡁⠰⣿⠆⢸⣿⣀⠘⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡏⢠⡏⢠⡿⠊⣁⠰⢿⡄⢹⡀⢻⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡞⠀⠸⣧⣄⣤⣾⣿⣷⣤⣠⣾⠇⠈⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⣠⢤⣤⣤⣤⣤⣤⠴⠾⠤⠶⠟⠛⠛⠛⢉⣉⣉⠙⠛⠛⠻⠶⠼⠷⠤⠤⢤⣤⡤⠤⠤⣄⠀",
+    "⠀⡇⢠⣤⣤⣤⡤⠤⠀⠶⣶⣶⣶⡾⠟⠛⠉⠛⠻⢿⣿⣷⣶⠖⢀⣠⣤⣤⡤⣤⣤⣤⡄⢸⡆",
+    "⢸⡇⢸⣿⣿⡿⠀⣴⡶⣦⠈⣿⠏⣠⡶⠛⠛⠛⢶⡄⠹⣿⡏⢠⣿⣿⡿⠿⠧⠼⣿⣿⡇⠸⡇",
+    "⢸⠁⣼⣿⣿⣿⣄⣉⣀⡾⠀⡏⠀⣿⠁⣼⣿⣧⣨⡿⠀⣿⣇⠘⣟⣁⣤⣶⠶⢦⣤⡈⠻⠀⣷",
+    "⣿⠀⠉⣠⣤⣤⣈⣉⣉⣤⣾⣷⠀⢿⣄⠙⠻⠿⠟⢁⣼⣿⠟⢦⣈⣉⣉⣁⣴⣿⣿⣿⣆⠀⣿",
+    "⠙⢦⣤⡤⢤⣤⣈⣉⠙⠛⠿⣿⣷⣄⠙⠻⠶⣶⣾⠿⠛⢁⣴⣿⠿⠟⠛⢉⣉⣠⣤⣤⣤⡤⠟",
+    "⠀⠀⠀⠀⠀⠀⠀⠉⠙⠓⠦⣄⣉⠙⠻⣶⣦⣤⣤⣴⠾⠛⢉⣠⠴⠖⠛⠉⠁⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠦⣄⠙⠻⠋⣠⡴⠚⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠶⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
 
 /// Per-row color for `MJOLNIR_ART`: bright electric cyan-white at the top
@@ -233,7 +250,7 @@ fn mjolnir_row_color(row: usize, total: usize) -> Color {
 /// art content that particular row has. `WORDMARK_ART` doesn't need this
 /// — nothing sits beside it — so its rows aren't held to a matching
 /// invariant.
-const MJOLNIR_ART_WIDTH: usize = 27;
+const MJOLNIR_ART_WIDTH: usize = 35;
 
 fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     debug_assert!(
@@ -998,7 +1015,7 @@ mod tests {
         // triggering auto-follow scroll — otherwise the offset below
         // (which assumes the viewport shows everything from row 0) would
         // be reading the wrong rows entirely.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1024,7 +1041,7 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1099,13 +1116,13 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "second".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let row = intro_offset() + 1;
-        let row_text: String = (0..100).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        let row_text: String = (0..110).map(|x| buffer[(x, row)].symbol().to_string()).collect();
         assert_eq!(row_text.trim(), "", "the row after the first entry must be the blank separator between the two entries");
     }
 
@@ -1126,7 +1143,7 @@ mod tests {
         app.log.push(LogEntry::AssistantText { text: "here:\n```rust\nfn main() {}\n```\ndone".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1171,7 +1188,7 @@ mod tests {
         let mut app = app();
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1184,13 +1201,13 @@ mod tests {
         let info_len = WORDMARK_ART.len() + 6;
         let offset = (MJOLNIR_ART.len() - info_len) / 2;
         let wordmark_row = (2 + offset) as u16;
-        let wordmark_row_text: String = (0..100).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
+        let wordmark_row_text: String = (0..110).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
         assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row beside the hammer art, got: {wordmark_row_text:?}");
         assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "that same row should still carry hammer art content to its left, not just the wordmark alone");
 
         // Tagline is right after the wordmark block plus one blank line.
         let tagline_row = (2 + offset + WORDMARK_ART.len() + 1) as u16;
-        let tagline_row_text: String = (0..100).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
+        let tagline_row_text: String = (0..110).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
         assert!(tagline_row_text.contains("every strike is yours to call."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
     }
 
@@ -1200,7 +1217,7 @@ mod tests {
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
-        let out = rendered(&mut app(), 100, 40);
+        let out = rendered(&mut app(), 110, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
         assert!(out.contains(WORDMARK_ART[3].trim()), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
@@ -1213,7 +1230,7 @@ mod tests {
         assert!(app.log.is_empty());
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing the wordmark (near the top) out of view.
-        let out = rendered(&mut app, 100, 40);
+        let out = rendered(&mut app, 110, 40);
         assert!(out.contains(WORDMARK_ART[3].trim()));
     }
 
@@ -1224,7 +1241,7 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
         // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1240,7 +1257,7 @@ mod tests {
     fn a_short_user_message_gets_the_background_tint_all_the_way_to_the_right_edge() {
         let mut app = app();
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1256,16 +1273,16 @@ mod tests {
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         assert_eq!(buffer[(0, 0)].symbol(), "┌", "top-left corner of the banner's border");
-        assert_eq!(buffer[(99, 0)].symbol(), "┐", "top-right corner should reach the full render width");
+        assert_eq!(buffer[(109, 0)].symbol(), "┐", "top-right corner should reach the full render width");
         let bottom = crate::log::INTRO_LINE_COUNT as u16 - 1;
         assert_eq!(buffer[(0, bottom)].symbol(), "└", "bottom-left corner of the banner's border");
-        assert_eq!(buffer[(99, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
+        assert_eq!(buffer[(109, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
     }
 
     #[test]

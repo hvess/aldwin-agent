@@ -55,11 +55,12 @@ fn render_entry(entry: &LogEntry) -> Vec<Line<'static>> {
         LogEntry::ToolActivity { calls, .. } => calls
             .iter()
             .map(|c| {
+                let label = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
                 let text = match &c.status {
-                    ToolActivityStatus::Running => format!("  [running] {}", c.call_id),
+                    ToolActivityStatus::Running => format!("  [running] {label}"),
                     ToolActivityStatus::Completed { is_error, summary } => {
                         let tag = if *is_error { "error" } else { "done" };
-                        format!("  [{tag}] {}: {summary}", c.call_id)
+                        format!("  [{tag}] {label}: {summary}")
                     }
                 };
                 Line::from(Span::styled(text, Style::default().fg(DIM)))

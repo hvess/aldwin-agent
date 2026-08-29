@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use amundsen_core::{Command, Event, StepId};
@@ -75,6 +76,11 @@ pub struct App {
     pub status:            StatusInfo,
     pub should_quit:       bool,
 
+    /// Populated on `ToolUseRequested` (the one event that carries the
+    /// tool's name), consumed on `ToolDispatched` (which only carries
+    /// `call_id`) to give `ToolActivityEntry` a name at all.
+    pending_tool_names: HashMap<String, String>,
+
     /// Commands `handle_key`/`apply_event` want sent — drained by the event
     /// loop after each call, rather than this struct holding a live sender,
     /// so both can be exercised in tests without a channel.
@@ -96,6 +102,7 @@ impl App {
             pending_prompt: None,
             status,
             should_quit: false,
+            pending_tool_names: HashMap::new(),
             outbox: Vec::new(),
         }
     }
@@ -127,15 +134,17 @@ impl App {
             }
             Event::ThinkingStart { .. } => self.thinking = true,
             Event::ThinkingEnd { .. } => self.thinking = false,
-            Event::ToolUseRequested { .. } => {}
+            Event::ToolUseRequested { call, .. } => {
+                self.pending_tool_names.insert(call.id, call.name);
+            }
             Event::ToolDispatched { step_id, call_id, .. } => {
                 self.status.running_tools.push(call_id.clone());
+                let name = self.pending_tool_names.remove(&call_id).unwrap_or_default();
                 match self.active_step_calls(step_id) {
-                    Some(calls) => calls.push(ToolActivityEntry { call_id, name: String::new(), status: ToolActivityStatus::Running }),
-                    None => self.push(LogEntry::ToolActivity {
-                        step_id,
-                        calls: vec![ToolActivityEntry { call_id, name: String::new(), status: ToolActivityStatus::Running }],
-                    }),
+                    Some(calls) => calls.push(ToolActivityEntry { call_id, name, status: ToolActivityStatus::Running }),
+                    None => {
+                        self.push(LogEntry::ToolActivity { step_id, calls: vec![ToolActivityEntry { call_id, name, status: ToolActivityStatus::Running }] })
+                    }
                 }
             }
             Event::ToolApprovalRequested { call_id, diff, .. } => {
@@ -519,6 +528,7 @@ mod tests {
 
         let LogEntry::ToolActivity { calls, .. } = &app.log[0] else { panic!("expected ToolActivity") };
         assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read", "name from ToolUseRequested must survive to the activity entry");
         assert!(matches!(&calls[0].status, ToolActivityStatus::Completed { is_error: false, summary } if summary == "file contents"));
     }
 

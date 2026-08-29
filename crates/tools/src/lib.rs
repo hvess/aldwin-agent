@@ -2,14 +2,18 @@
 //! `.claude/spec/amundsen-tools.md`.
 //!
 //! Covers the registry, dispatch flow, permissions wiring, all four V0
-//! built-ins (Read, Edit, shell, Explain), and the LSP client Explain uses.
-//! The MCP bridge (rmcp) is a separate, later addition to this crate.
+//! built-ins (Read, Edit, shell, Explain), the LSP client Explain uses, and
+//! the MCP bridge (`mcp`). One MCP sub-feature is deliberately not built
+//! yet: the first-invocation edit-shape follow-up that lets an MCP tool
+//! graduate to Edit's binary approval gate — see `mcp::tool`'s doc comment.
+//! Every MCP tool goes through the standard four-tier prompt for now.
 
 mod diff;
 mod dispatcher;
 mod error;
 mod gate;
 mod lsp;
+mod mcp;
 mod registry;
 mod tools;
 
@@ -19,6 +23,7 @@ mod test_support;
 pub use dispatcher::Dispatcher;
 pub use error::ToolError;
 pub use gate::ApprovalGate;
+pub use mcp::{register_mcp_tools, McpBridge, McpError, McpTool};
 pub use registry::{Registry, Tool, ToolDescriptor, ToolSource};
 pub use tools::{EditTool, ExplainTool, ReadTool, ShellTool};
 

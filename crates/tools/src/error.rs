@@ -37,4 +37,10 @@ pub enum ToolError {
 
     #[error("language server error: {0}")]
     Lsp(#[from] crate::lsp::LspError),
+
+    #[error("MCP bridge error: {0}")]
+    Mcp(#[from] crate::mcp::McpError),
+
+    #[error("MCP tool {server}:{tool} returned an error: {message}")]
+    McpToolError { server: String, tool: String, message: String },
 }

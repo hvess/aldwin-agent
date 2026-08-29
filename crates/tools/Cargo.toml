@@ -6,13 +6,14 @@ edition.workspace = true
 [dependencies]
 amundsen-core        = { path = "../core" }
 amundsen-permissions = { path = "../permissions" }
+amundsen-config      = { path = "../config" }
 tokio                = { workspace = true }
 async-trait          = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 thiserror            = { workspace = true }
 libc                 = "0.2"
+rmcp                 = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process"] }
 
 [dev-dependencies]
-tempfile        = "3"
-amundsen-config = { path = "../config" }
+tempfile = "3"

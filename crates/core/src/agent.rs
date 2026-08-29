@@ -285,8 +285,22 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // Commit observed tool calls to log only once the step is known to have
         // completed — logging these before a cancellation/error check would leave
         // a ToolUse record with no matching ToolResult or StepBoundary (a torn log).
+        //
+        // Must also land in the live `messages` vector, not just the log: the
+        // ToolResult pushed for this step (see ToolsDispatched above) rides as
+        // a `Role::User` message, and a provider that validates role sequencing
+        // (tool must follow an assistant message that actually requested it)
+        // rejects the request outright if the matching ToolUse block is
+        // missing — it was previously dropped on any step whose model response
+        // had no text (see `messages_from_log`, which reconstructs this
+        // correctly from the log and masked the gap at the start of every new
+        // turn — only a multi-step turn hit the live path here).
         for call in &tool_calls {
             self.log.append(LogRecord::ToolUse { turn_id, step_id, call: call.clone() });
+            match messages.last_mut() {
+                Some(last) if last.role == Role::Assistant => last.content.push(ContentBlock::ToolUse(call.clone())),
+                _ => messages.push(Message { role: Role::Assistant, content: vec![ContentBlock::ToolUse(call.clone())] }),
+            }
         }
 
         let outcome = step_outcome.expect("StepTerminal::Ok implies StepEnded was received");
@@ -506,22 +520,34 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Mutex;
 
-    /// Replays one canned event script per `stream()` call, one script per step.
+    /// Replays one canned event script per `stream()` call, one script per
+    /// step. Also records the `messages` slice it was called with, so a test
+    /// can inspect exactly what a later step's request looked like — the
+    /// only way to catch a message-history bug that only manifests once it's
+    /// serialised for a real (or strict-about-role-sequencing) provider.
     struct ScriptedClient {
-        scripts: Mutex<VecDeque<Vec<LlmEvent>>>,
+        scripts:       Mutex<VecDeque<Vec<LlmEvent>>>,
+        // Shared via `Arc` (not owned outright) so a test can hold its own
+        // handle after `self` is moved into `Agent::new`/`agent.run`.
+        seen_messages: Arc<Mutex<Vec<Vec<Message>>>>,
     }
 
     impl ScriptedClient {
         fn new(scripts: Vec<Vec<LlmEvent>>) -> Self {
-            Self { scripts: Mutex::new(scripts.into()) }
+            Self { scripts: Mutex::new(scripts.into()), seen_messages: Arc::new(Mutex::new(Vec::new())) }
+        }
+
+        fn seen_messages_handle(&self) -> Arc<Mutex<Vec<Vec<Message>>>> {
+            self.seen_messages.clone()
         }
     }
 
     impl LlmClient for ScriptedClient {
         fn stream<'a>(
             &'a self,
-            _request: LlmRequest<'a>,
+            request: LlmRequest<'a>,
         ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            self.seen_messages.lock().unwrap().push(request.messages.to_vec());
             let events = self.scripts.lock().unwrap().pop_front()
                 .expect("ScriptedClient: no more scripted steps");
             Box::pin(stream::iter(events.into_iter().map(Ok)))
@@ -923,5 +949,58 @@ mod tests {
             }
         }
         assert!(saw_result);
+    }
+
+    /// Regression test for the bug a live run surfaced: a step whose model
+    /// response was tool-use-only (no text) never got its ToolUse content
+    /// block added to the live `messages` vector, only to the log — so the
+    /// *next* step's request carried the ToolResult (`Role::User`) with no
+    /// matching assistant ToolUse in front of it. `messages_from_log`
+    /// (used only at the start of a fresh turn) reconstructed this
+    /// correctly, which is why the gap only showed up mid-turn, on a
+    /// provider that validates role sequencing strictly.
+    #[tokio::test]
+    async fn multi_step_turn_carries_tool_use_into_the_next_steps_live_request() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![
+                LlmEvent::TextDelta { text: "done".into() },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+        ]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+
+        let seen = seen_messages.lock().unwrap();
+        assert_eq!(seen.len(), 2, "expected one LlmClient::stream call per step");
+        let second_request = &seen[1];
+
+        let tool_use_idx = second_request
+            .iter()
+            .position(|m| m.role == Role::Assistant && m.content.iter().any(|c| matches!(c, ContentBlock::ToolUse(call) if call.id == "t1")))
+            .expect("second step's request must include the assistant's tool_use block for t1");
+        let tool_result_idx = second_request
+            .iter()
+            .position(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::ToolResult(r) if r.call_id == "t1")))
+            .expect("second step's request must include the tool result for t1");
+        assert_eq!(tool_result_idx, tool_use_idx + 1, "tool_use must be immediately followed by its tool_result, with nothing in between");
     }
 }

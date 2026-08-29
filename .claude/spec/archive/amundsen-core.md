@@ -11,6 +11,21 @@ Agent loop, append-only conversation state, and the typed boundary between LLM a
 event/command types, LlmClient/ToolDispatcher trait boundary) —
 `34760d6`, `440c699`. No known gaps against this spec.
 
+**Post-archive fix (2026-08-29):** A live run surfaced a real bug in
+`run_step`: the live in-turn `messages` vector only appended a `ToolUse`
+content block's *text* portion to the assistant message, never the
+`ToolUse` block itself — only `messages_from_log` (used at the start of a
+fresh turn) reconstructed that correctly. Any turn with more than one
+step involving a tool call therefore sent a request on step 2+ missing
+the assistant's `tool_calls`, which a provider that validates role
+sequencing (tool must follow the assistant message that requested it)
+rejected outright — "Unexpected role 'tool' after role 'user'" against
+an OpenAI-compatible endpoint. Fixed in `<commit-to-fill-in>` with a
+regression test (`multi_step_turn_carries_tool_use_into_the_next_steps_live_request`)
+that inspects the second step's actual request rather than only the log.
+This crate stays archived — the fix didn't reopen a design question, but
+note it here since "no known gaps" above was wrong until this landed.
+
 ## Why
 
 The narrow heart of Amundsen — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.

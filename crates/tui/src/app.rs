@@ -34,7 +34,7 @@ pub struct PendingApproval {
 }
 
 pub struct PendingPrompt {
-    pub id:      mjolnir_core::PromptId,
+    pub call_id: String,
     pub payload: PromptPayload,
 }
 
@@ -241,12 +241,12 @@ impl App {
                 self.turn_active = false;
                 self.push(LogEntry::TurnEnded { reason: reason.into() });
             }
-            Event::PromptRequested { id, payload } => {
+            Event::PromptRequested { call_id, payload } => {
                 let parsed: Result<PromptPayload, _> = serde_json::from_value(payload);
                 match parsed {
                     Ok(payload) => {
-                        self.pending_prompt = Some(PendingPrompt { id, payload: payload.clone() });
-                        self.push(LogEntry::PermissionPrompt { id, payload, resolution: None });
+                        self.pending_prompt = Some(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
+                        self.push(LogEntry::PermissionPrompt { call_id, payload, resolution: None });
                     }
                     Err(e) => self.push(LogEntry::Error { message: format!("malformed permission prompt: {e}") }),
                 }
@@ -470,17 +470,17 @@ impl App {
 
     fn resolve_prompt(&mut self, response: PromptResponse) {
         let Some(pending) = self.pending_prompt.take() else { return };
-        let id = pending.id;
+        let call_id = pending.call_id;
         let label = format!("{response:?}");
         for entry in self.log.iter_mut() {
-            if let LogEntry::PermissionPrompt { id: eid, resolution, .. } = entry {
-                if *eid == id {
+            if let LogEntry::PermissionPrompt { call_id: entry_call_id, resolution, .. } = entry {
+                if *entry_call_id == call_id {
                     *resolution = Some(label.clone());
                 }
             }
         }
         let payload = serde_json::to_value(&response).expect("PromptResponse always serialises");
-        self.outbox.push(Command::PromptResponse { id, payload });
+        self.outbox.push(Command::PromptResponse { call_id, payload });
     }
 }
 
@@ -673,7 +673,7 @@ mod tests {
     fn ctrl_c_declines_a_pending_tool_prompt_instead_of_being_swallowed() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompt.is_none(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
         match app.outbox.last() {
@@ -689,7 +689,7 @@ mod tests {
     fn ctrl_c_declines_a_pending_context_file_prompt() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompt.is_none());
         match app.outbox.last() {
@@ -705,7 +705,7 @@ mod tests {
     fn permission_prompt_resolves_on_labeled_key_and_records_resolution() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload });
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         assert!(app.pending_prompt.is_some());
 
         app.handle_key(press(KeyCode::Char('p'))); // allow, project tier
@@ -821,7 +821,7 @@ mod tests {
     #[test]
     fn malformed_prompt_payload_is_a_log_error_not_a_panic() {
         let mut app = app();
-        app.apply_event(Event::PromptRequested { id: mjolnir_core::PromptId(1), payload: serde_json::json!({"shape": "unknown_shape"}) });
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: serde_json::json!({"shape": "unknown_shape"}) });
         assert!(matches!(app.log.last(), Some(LogEntry::Error { .. })));
         assert!(app.pending_prompt.is_none());
     }

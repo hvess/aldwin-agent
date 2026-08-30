@@ -48,8 +48,11 @@ pub enum Event {
 
     TurnEnded    { turn_id: TurnId, reason: TurnEndReason },
 
-    /// Permission engine needs a developer decision. Payload is opaque to core.
-    PromptRequested  { id: PromptId, payload: serde_json::Value },
+    /// Permission engine needs a developer decision. Payload is opaque to
+    /// core. Keyed by `call_id`, same as `ToolApprovalRequested` — a call
+    /// has at most one of {approval, prompt} pending at a time, so there's
+    /// no need for a separate id scheme (see `PendingReply`).
+    PromptRequested  { call_id: String, payload: serde_json::Value },
     PermissionsChanged { payload: serde_json::Value },
 
     /// A message from outside the turn/step lifecycle — the session
@@ -76,7 +79,7 @@ pub enum Command {
     Cancel,
     ApproveTool    { call_id: String },
     DenyTool       { call_id: String },
-    PromptResponse { id: PromptId, payload: serde_json::Value },
+    PromptResponse { call_id: String, payload: serde_json::Value },
     /// `/clear` — wipes `ConversationLog` so the next turn starts from a
     /// blank slate. A no-op (with a warning) if received mid-turn, same as
     /// `Submit` mid-turn: there's no sound meaning for "forget everything"

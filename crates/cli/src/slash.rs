@@ -102,7 +102,6 @@ pub async fn run_interceptor(mut incoming: mpsc::Receiver<Command>, forward: mps
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_core::PromptId;
 
     fn config() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         let project = tempfile::tempdir().unwrap();
@@ -124,7 +123,7 @@ mod tests {
     async fn non_submit_commands_pass_through_unchanged() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let cmd = Command::PromptResponse { id: PromptId(1), payload: serde_json::Value::Null };
+        let cmd = Command::PromptResponse { call_id: "call-1".into(), payload: serde_json::Value::Null };
         let result = intercept(cmd, &cfg, &tx).await;
         assert!(matches!(result, Intercepted::Forward(Command::PromptResponse { .. })));
     }

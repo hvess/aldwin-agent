@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{cursor_line_col, App, PermState};
 use crate::highlight;
@@ -59,8 +60,16 @@ fn spinner_line(tick: u64, label: &str) -> Line<'static> {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let input_height = input_area_height(&app.input);
-    let [log_area, status_area, input_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(input_height)]).areas(area);
+    // A blank row between the log and the status bar — without it the last
+    // rendered line of LLM output butts directly against the status line,
+    // per explicit developer feedback that the two need breathing room.
+    let [log_area, _spacer, status_area, input_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(input_height),
+    ])
+    .areas(area);
 
     // Scroll math needs the real render width before `total_lines` (called
     // by `set_viewport_height` below) can count wrapped rows correctly —
@@ -344,10 +353,17 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // a source line that fits on one screen row: a line long enough
             // to wrap under Paragraph's own Wrap{trim:false} gets this
             // padding appended past the wrap point, not per wrapped row.
+            // Padding is sized in display columns (`UnicodeWidthStr::width`),
+            // not `chars().count()` — a chat message can contain CJK/emoji
+            // double-width glyphs, and undercounting those overshoots the
+            // real render width, pushing the "single-row bubble" onto an
+            // extra wrapped row (see mjolnir-tui.md's wide-char Progress
+            // note; `bordered`'s own char-count shortcut is fine since it
+            // only ever renders the narrow-glyph banner art).
             text.lines()
                 .map(|l| {
                     let content = format!("> {l}");
-                    let pad = (width as usize).saturating_sub(content.chars().count());
+                    let pad = (width as usize).saturating_sub(content.width());
                     Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
                 })
                 .collect()
@@ -786,7 +802,10 @@ fn render_diff_line(kind: &DiffLineKind, text: &str, width: u16) -> Line<'static
     if matches!(kind, DiffLineKind::Context) {
         return Line::from(Span::styled(content, style));
     }
-    let pad = (width as usize).saturating_sub(content.chars().count());
+    // Display-column width, not char count — see the matching note on
+    // `LogEntry::UserMessage`'s padding above; diff bodies can equally
+    // contain double-width glyphs.
+    let pad = (width as usize).saturating_sub(content.width());
     Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
 }
 

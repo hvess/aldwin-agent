@@ -26,6 +26,9 @@ pub enum ToolError {
     #[error("{path}: expected exactly one occurrence of the given text, found {count}")]
     AmbiguousMatch { path: PathBuf, count: usize },
 
+    #[error("{path}: file changed on disk while the edit was awaiting approval; re-read it and retry")]
+    ConcurrentModification { path: PathBuf },
+
     #[error("denied by permission policy")]
     Denied,
 

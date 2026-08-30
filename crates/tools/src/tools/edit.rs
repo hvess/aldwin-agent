@@ -87,6 +87,19 @@ impl Tool for EditTool {
             return Err(ToolError::Denied);
         }
 
+        // The approval wait is a real yield point, and dispatch runs
+        // multiple tool calls concurrently within a step (see
+        // `Agent::dispatch_tools`) — the file may have changed since
+        // `current` was read, whether from another Edit call on the same
+        // path or an external change. Re-read and compare before writing so
+        // the developer-approved diff can't be silently applied over
+        // content they never actually saw, clobbering whatever changed it
+        // in the interim.
+        let latest = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
+        if latest != current {
+            return Err(ToolError::ConcurrentModification { path });
+        }
+
         tokio::fs::write(&path, &updated).await.map_err(|source| ToolError::Io { path, source })?;
         Ok(format!("edited {}", args.path))
     }
@@ -153,6 +166,38 @@ mod tests {
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 0, .. }));
     }
 
+    /// Regression test for the TOCTOU the audit found: an approval-gated
+    /// edit used to write `updated` (computed from `current`, read before
+    /// the approval wait) unconditionally, even if the file had changed on
+    /// disk during that wait. This gate simulates exactly that: the file
+    /// changes underneath the pending approval, then approves — the stale
+    /// diff must be rejected instead of silently overwriting the new
+    /// content.
+    #[tokio::test]
+    async fn file_changed_during_approval_wait_is_rejected_not_silently_overwritten() {
+        struct ChangeFileThenApprove {
+            path: PathBuf,
+        }
+        #[async_trait]
+        impl ApprovalGate for ChangeFileThenApprove {
+            async fn request_approval(&self, _call_id: String, _diff: String) -> bool {
+                std::fs::write(&self.path, "changed-out-from-under-the-approval\n").unwrap();
+                true
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let path = write(&dir, "f.rs", "fn a() {}\n");
+        let tool = EditTool::new(dir.path().to_path_buf());
+        let gate = ChangeFileThenApprove { path: path.clone() };
+
+        let err = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { x(); }"}), &gate).await.unwrap_err();
+        assert!(matches!(err, ToolError::ConcurrentModification { .. }));
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(on_disk, "changed-out-from-under-the-approval\n", "the concurrent change must survive, not get clobbered by the stale edit");
+    }
+
     #[tokio::test]
     async fn multiple_matches_is_ambiguous() {
         let dir = tempdir().unwrap();
@@ -165,14 +210,14 @@ mod tests {
 
     /// Full round trip against the real `DispatchContext`, not the fixed
     /// fake — proves the tool actually drives `ToolApprovalRequested` /
-    /// resolves via the `approvals` map the way `Agent`'s command loop does.
+    /// resolves via the pending map the way `Agent`'s command loop does.
     #[tokio::test]
     async fn drives_the_real_approval_round_trip() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "old\n");
         let tool = EditTool::new(dir.path().to_path_buf());
 
-        let (ctx, mut events, approvals, _prompts) = dispatch_context();
+        let (ctx, mut events, pending) = dispatch_context();
 
         let call = tool.call("call-1", json!({"path": "f.rs", "before": "old", "after": "new"}), &ctx);
         let resolve = async {
@@ -181,7 +226,9 @@ mod tests {
                     assert_eq!(call_id, "call-1");
                     assert!(diff.contains("-old"));
                     assert!(diff.contains("+new"));
-                    let tx = approvals.lock().unwrap().remove(&call_id).unwrap();
+                    let Some(mjolnir_core::PendingReply::Approval(tx)) = pending.lock().unwrap().remove(&call_id) else {
+                        panic!("expected a pending Approval entry for {call_id}");
+                    };
                     tx.send(true).unwrap();
                 }
                 other => panic!("unexpected event: {other:?}"),

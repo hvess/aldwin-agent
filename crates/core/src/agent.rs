@@ -1,13 +1,13 @@
 use futures::{future, StreamExt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
     client::{LlmClient, LlmRequest},
-    dispatcher::{DispatchContext, ToolDispatcher},
+    dispatcher::{DispatchContext, PendingMap, PendingReply, ToolDispatcher},
     event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason},
     log::ConversationLog,
     prompt,
@@ -20,12 +20,13 @@ pub struct Agent<C, D> {
     log:        ConversationLog,
     model:      String,
     system:     String,
-    // Pending Edit approval gates and permission prompts, keyed by call_id /
-    // PromptId. Shared rather than owned locally by `run` so `DispatchContext`
-    // — handed to a dispatch future that runs concurrently with the command
-    // loop — can register into the same map the loop resolves against.
-    approvals:  Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
-    prompts:    Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
+    // Pending Edit approval gates and permission prompts, keyed by call_id
+    // (see `PendingReply` — a call is never mid-approval and mid-prompt at
+    // once, so one map keyed one way covers both). Shared rather than owned
+    // locally by `run` so `DispatchContext` — handed to a dispatch future
+    // that runs concurrently with the command loop — can register into the
+    // same map the loop resolves against.
+    pending: PendingMap,
 }
 
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
@@ -41,27 +42,33 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             log: ConversationLog::new(),
             model: model.into(),
             system: prompt::compose(additional_context),
-            approvals: Arc::new(Mutex::new(HashMap::new())),
-            prompts:   Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub fn log(&self) -> &ConversationLog { &self.log }
 
-    /// Resolve a pending Edit approval gate. Returns false if `call_id` has no
-    /// pending gate (already resolved, or never registered).
+    /// Resolve a pending Edit approval gate. Returns false if `call_id` has
+    /// no pending *approval* (already resolved, never registered, or its
+    /// pending entry is actually a prompt — put back unconsumed rather than
+    /// dropped, since that shouldn't happen but must not destroy a live
+    /// entry if it somehow does).
     fn resolve_approval(&self, call_id: &str, approved: bool) -> bool {
-        match self.approvals.lock().expect("approvals lock poisoned").remove(call_id) {
-            Some(tx) => { let _ = tx.send(approved); true }
+        let mut pending = self.pending.lock().expect("pending lock poisoned");
+        match pending.remove(call_id) {
+            Some(PendingReply::Approval(tx)) => { let _ = tx.send(approved); true }
+            Some(other) => { pending.insert(call_id.to_string(), other); false }
             None => false,
         }
     }
 
-    /// Resolve a pending permission prompt. Returns false if `id` has no
-    /// pending prompt (already resolved, or never registered).
-    fn resolve_prompt(&self, id: u64, payload: serde_json::Value) -> bool {
-        match self.prompts.lock().expect("prompts lock poisoned").remove(&id) {
-            Some(tx) => { let _ = tx.send(payload); true }
+    /// Resolve a pending permission prompt. Returns false if `call_id` has
+    /// no pending *prompt* — same reasoning as `resolve_approval` above.
+    fn resolve_prompt(&self, call_id: &str, payload: serde_json::Value) -> bool {
+        let mut pending = self.pending.lock().expect("pending lock poisoned");
+        match pending.remove(call_id) {
+            Some(PendingReply::Prompt(tx)) => { let _ = tx.send(payload); true }
+            Some(other) => { pending.insert(call_id.to_string(), other); false }
             None => false,
         }
     }
@@ -98,9 +105,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         warn!("DenyTool for unknown call_id {call_id}");
                     }
                 }
-                Command::PromptResponse { id, payload } => {
-                    if !self.resolve_prompt(id.0, payload) {
-                        warn!("PromptResponse for unknown prompt {}", id.0);
+                Command::PromptResponse { call_id, payload } => {
+                    if !self.resolve_prompt(&call_id, payload) {
+                        warn!("PromptResponse for unknown call_id {call_id}");
                     }
                 }
                 Command::Cancel => {} // no-op outside an active turn
@@ -219,7 +226,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                             }
                             Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
                             Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
-                            Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
+                            Some(Command::PromptResponse { call_id, payload }) => { self.resolve_prompt(&call_id, payload); }
                             Some(Command::Submit { .. }) => {
                                 warn!("Submit received mid-turn; discarding");
                             }
@@ -346,9 +353,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }).await;
         }
 
-        let ctx = DispatchContext::new(
-            turn_id, step_id, events.clone(), self.approvals.clone(), self.prompts.clone(),
-        );
+        let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
 
         // Drive all dispatch futures on the current task (cooperative).
         // Dispatcher impls use spawn_blocking internally for CPU-heavy work.
@@ -374,7 +379,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         }
                         Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
                         Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
-                        Some(Command::PromptResponse { id, payload }) => { self.resolve_prompt(id.0, payload); }
+                        Some(Command::PromptResponse { call_id, payload }) => { self.resolve_prompt(&call_id, payload); }
                         Some(Command::Submit { .. }) => warn!("Submit received mid-turn; discarding"),
                         Some(Command::ClearHistory) => warn!("ClearHistory received mid-turn; discarding"),
                         None => {
@@ -409,13 +414,16 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         events:  &mpsc::Sender<Event>,
         reason:  TurnEndReason,
     ) -> DispatchOutcome {
-        // A call whose dispatch future was mid-`request_approval` leaves a
-        // dangling entry here otherwise — nothing will ever resolve it once the
-        // future backing its receiver has been dropped.
+        // A call whose dispatch future was mid-`request_approval` or
+        // mid-`request_prompt` leaves a dangling entry here otherwise —
+        // nothing will ever resolve it once the future backing its receiver
+        // has been dropped. `pending` is keyed by `call_id` regardless of
+        // which of the two it holds (see `PendingReply`), so removing by
+        // `call.id` handles both uniformly.
         {
-            let mut approvals = self.approvals.lock().expect("approvals lock poisoned");
+            let mut pending = self.pending.lock().expect("pending lock poisoned");
             for call in calls {
-                approvals.remove(&call.id);
+                pending.remove(&call.id);
             }
         }
 
@@ -637,7 +645,7 @@ mod tests {
     #[async_trait]
     impl ToolDispatcher for PromptGatedDispatcher {
         async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
-            let payload = ctx.request_prompt(serde_json::json!({"ask": "confirm"})).await;
+            let payload = ctx.request_prompt(call.id.clone(), serde_json::json!({"ask": "confirm"})).await;
             ToolResult { call_id: call.id, content: payload.to_string(), is_error: false }
         }
         fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
@@ -960,8 +968,8 @@ mod tests {
 
         loop {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::PromptRequested { id, .. } => {
-                    cmd_tx.send(Command::PromptResponse { id, payload: serde_json::json!("yes") })
+                Event::PromptRequested { call_id, .. } => {
+                    cmd_tx.send(Command::PromptResponse { call_id, payload: serde_json::json!("yes") })
                         .await.unwrap();
                     break;
                 }
@@ -984,6 +992,56 @@ mod tests {
             }
         }
         assert!(saw_result);
+    }
+
+    /// Regression test for the audit-found leak: `abort_dispatch` used to
+    /// drain the approval half of the (then-separate) pending-request state
+    /// on cancel but never the prompt half, so cancelling a step with a
+    /// permission prompt in flight left a permanently dangling
+    /// `oneshot::Sender` behind (nothing else ever removes it, since only a
+    /// real `PromptResponse` does). Now that both share one `call_id`-keyed
+    /// map, `abort_dispatch` removes by `call_id` uniformly — this test
+    /// still exercises exactly that path. Clones the `Arc` behind `pending`
+    /// before `agent` moves into the spawned task, so it can still be
+    /// inspected after cancellation.
+    #[tokio::test]
+    async fn cancel_during_a_pending_prompt_does_not_leak_the_prompts_entry() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::ToolUseRequested {
+                call: ToolCall { id: "t1".into(), name: "risky".into(), input: serde_json::json!({}) },
+            },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+        ]]);
+        let agent = Agent::new(client, PromptGatedDispatcher, "test-model", None);
+        let pending = agent.pending.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::PromptRequested { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(pending.lock().unwrap().len(), 1, "the pending prompt should be registered before cancel");
+
+        cmd_tx.send(Command::Cancel).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { reason, .. } => {
+                    assert!(matches!(reason, TurnEndReason::Cancelled));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(pending.lock().unwrap().is_empty(), "abort_dispatch must clear dangling pending entries on cancel");
     }
 
     /// Regression test for the bug a live run surfaced: a step whose model

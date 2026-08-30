@@ -1459,6 +1459,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "tokio",
+ "unicode-width",
 ]
 
 [[package]]

@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TURN: AtomicU64 = AtomicU64::new(1);
 static NEXT_STEP: AtomicU64 = AtomicU64::new(1);
-static NEXT_PROMPT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub u64);
@@ -11,19 +10,12 @@ pub struct TurnId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StepId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PromptId(pub u64);
-
 impl TurnId {
     pub fn next() -> Self { Self(NEXT_TURN.fetch_add(1, Ordering::Relaxed)) }
 }
 
 impl StepId {
     pub fn next() -> Self { Self(NEXT_STEP.fetch_add(1, Ordering::Relaxed)) }
-}
-
-impl PromptId {
-    pub fn next() -> Self { Self(NEXT_PROMPT.fetch_add(1, Ordering::Relaxed)) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

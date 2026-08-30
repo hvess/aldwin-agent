@@ -1,4 +1,4 @@
-use mjolnir_core::{PromptId, RetryInfo, StepId, TurnEndReason};
+use mjolnir_core::{RetryInfo, StepId, TurnEndReason};
 use mjolnir_permissions::PromptPayload;
 
 /// One entry in the conversation log. Append-only per mjolnir-tui.md — the
@@ -17,8 +17,9 @@ pub enum LogEntry {
     /// `DenyTool`. Resolved in place once answered (see `resolution`).
     ApprovalCard { call_id: String, diff: String, resolution: Option<bool> },
     /// The permission engine's four-tier / two-tier prompt —
-    /// `PromptRequested`/`PromptResponse`. Resolved in place once answered.
-    PermissionPrompt { id: PromptId, payload: PromptPayload, resolution: Option<String> },
+    /// `PromptRequested`/`PromptResponse`. Resolved in place once answered,
+    /// matched by `call_id` (same identifier `ApprovalCard` uses).
+    PermissionPrompt { call_id: String, payload: PromptPayload, resolution: Option<String> },
     TurnEnded { reason: TurnEndReasonKind },
     Error { message: String },
     /// From `Event::Notice` — a message from outside the turn/step

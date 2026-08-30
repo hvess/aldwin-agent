@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use mjolnir_core::{DispatchContext, Event, StepId, TurnId};
+use mjolnir_core::{DispatchContext, Event, PendingMap, StepId, TurnId};
 use async_trait::async_trait;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::gate::ApprovalGate;
 
@@ -25,17 +25,13 @@ impl ApprovalGate for FixedApproval {
 pub const ALWAYS_APPROVE: FixedApproval = FixedApproval(true);
 pub const ALWAYS_DENY: FixedApproval = FixedApproval(false);
 
-pub type Approvals = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
-pub type Prompts = Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>;
-
 /// Builds a real `DispatchContext` (via core's now-public constructor) plus
-/// held-out clones of the event receiver and the `approvals`/`prompts` maps,
-/// so a test can resolve the round trip itself exactly as `Agent`'s command
-/// loop does in production.
-pub fn dispatch_context() -> (DispatchContext, mpsc::Receiver<Event>, Approvals, Prompts) {
+/// a held-out clone of the event receiver and the `call_id`-keyed pending
+/// map (see `mjolnir_core::PendingReply`), so a test can resolve the round
+/// trip itself exactly as `Agent`'s command loop does in production.
+pub fn dispatch_context() -> (DispatchContext, mpsc::Receiver<Event>, PendingMap) {
     let (tx, rx) = mpsc::channel(16);
-    let approvals = Arc::new(Mutex::new(HashMap::new()));
-    let prompts = Arc::new(Mutex::new(HashMap::new()));
-    let ctx = DispatchContext::for_testing(TurnId(1), StepId(1), tx, approvals.clone(), prompts.clone());
-    (ctx, rx, approvals, prompts)
+    let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+    let ctx = DispatchContext::for_testing(TurnId(1), StepId(1), tx, pending.clone());
+    (ctx, rx, pending)
 }

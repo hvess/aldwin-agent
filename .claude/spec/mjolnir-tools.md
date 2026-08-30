@@ -17,6 +17,35 @@ mjolnir-permissions.md's matching gap, which this depends on). Every MCP
 tool currently registers with `edit_class: false` and never graduates to
 Edit's binary approval gate. Keep this spec active until that's built.
 
+**Progress (2026-08-30, concurrency/path-safety audit-fix):** A rust-skills
+audit (unsafe-checker, m06-error-handling, m07-concurrency, m12-lifecycle,
+m15-anti-pattern) plus a follow-up 3-pass verification found and fixed
+three real defects, all confirmed reachable, not theoretical:
+(1) `LspClient::ensure_open` (`lsp/client.rs`) checked-then-inserted into
+its `opened` set across an `.await` using a `std::sync::Mutex`, so two tool
+calls dispatched concurrently on the same file (e.g. `definition` +
+`hover` in one step) could both see "not yet opened" and both send
+`didOpen` — an LSP protocol violation; fixed by switching `opened` to a
+`tokio::sync::Mutex` held across the notify. (2) `paths::resolve_in_project`
+only checked containment lexically, so a symlink planted inside
+`project_root` pointing outside it (legal in a git repo) passed the check
+while the real I/O followed it out — fixed by re-checking containment
+against the canonicalized, symlink-resolved form (see
+`canonicalize_existing_prefix`), with new regression tests for both an
+existing and a not-yet-existing (Edit-new-file) escape target. (3)
+`EditTool::call` (`tools/edit.rs`) computed its diff from content read
+before the approval wait, then wrote that stale content unconditionally
+after approval — a real TOCTOU, since dispatch runs multiple tool calls
+concurrently within a step; fixed by re-reading and rejecting
+(`ToolError::ConcurrentModification`) if the file changed during the wait.
+Also added the missing `// SAFETY:` comment on `shell.rs`'s `pre_exec`
+unsafe block (the call itself was already sound). A fourth suspected
+finding — MCP servers cold-starting concurrently and racing `bridge.rs`'s
+`running` guard — was investigated and refuted: `register_mcp_tools`
+already warms every configured server sequentially at startup, so the race
+needs two servers to both fail at boot and be retried concurrently later;
+not a practical defect.
+
 ## Why
 
 Owns every concrete tool Mjolnir can dispatch — the V0 built-ins (Read, Diff, Explain, Edit, shell) and the MCP bridge that maps remote tools onto the same dispatch surface. Implements core's ToolDispatcher trait. Hosts the Edit approval gate as structural friction the developer cannot configure away. Other crates supply policy and protocol; this crate supplies behaviour.

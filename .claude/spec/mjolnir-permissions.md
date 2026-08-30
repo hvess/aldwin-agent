@@ -18,6 +18,21 @@ real, separable follow-up, not a prerequisite for the rest of this spec.
 Every MCP tool currently goes through the plain four-tier prompt with
 `edit_class: false`. Keep this spec active until that's built.
 
+**Progress (2026-08-30, storage race audit-fix):** A rust-skills audit
+(m01-ownership through m15-anti-pattern, unsafe-checker, coding-guidelines)
+plus a follow-up 3-pass verification found this spec's own "Persisted
+denies silently overwritten by later allow" Pitfall was live, just not in
+the form it names: mjolnir-config's `Config::with_permissions_mut` (and the
+`with_mcp_mut`/`with_context_files_mut`/`set_provider`/`set_tui` siblings)
+released its read lock before mutating and only reacquired a write lock for
+the final swap, leaving a window where `/reload-config` (interceptor task)
+could land its own read-modify-write between a grant write's disk write and
+its in-memory swap and get silently reverted — a real lost-update, not just
+an allow/deny ordering bug. Fixed by holding a single write lock across the
+whole read → mutate → persist → swap sequence in every one of those
+helpers; see mjolnir-config's `store.rs` and its new
+`concurrent_grant_writes_do_not_lose_updates` regression test.
+
 ## Why
 
 Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request runs through this engine. It owns scope precedence, pattern matching, the tiered prompt round-trip, and the in-memory shape of allowlists and denylists. Cross-cutting — any crate that gates an action calls into this one rather than reimplementing the policy.

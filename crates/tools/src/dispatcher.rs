@@ -34,7 +34,7 @@ impl Dispatcher {
         match self.permissions.check_tool(&kind, &target, false) {
             CheckOutcome::Allow => Ok(true),
             CheckOutcome::Deny => Ok(false),
-            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, &target, payload, ctx).await,
+            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, &target, payload, &call.id, ctx).await,
         }
     }
 
@@ -43,10 +43,11 @@ impl Dispatcher {
         kind:    &str,
         target:  &str,
         payload: PromptPayload,
+        call_id: &str,
         ctx:     &DispatchContext,
     ) -> Result<bool, ToolError> {
         let value = serde_json::to_value(&payload).expect("PromptPayload always serialises");
-        let response_value = ctx.request_prompt(value).await;
+        let response_value = ctx.request_prompt(call_id.to_string(), value).await;
         let response: PromptResponse = serde_json::from_value(response_value).map_err(|_| ToolError::MalformedPromptResponse)?;
 
         match response {
@@ -158,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_returns_a_structured_error() {
         let dispatcher = Dispatcher::new(Registry::new(), engine());
-        let (ctx, _events, _approvals, _prompts) = dispatch_context();
+        let (ctx, _events, _pending) = dispatch_context();
 
         let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "nope".into(), input: json!({}) }, &ctx).await;
         assert!(result.is_error);
@@ -173,7 +174,7 @@ mod tests {
         permissions.record_tool_decision("echo", "hi", false, Decision::Allow, ToolTier::Session).unwrap();
 
         let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, _events, _approvals, _prompts) = dispatch_context();
+        let (ctx, _events, _pending) = dispatch_context();
 
         let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "echo".into(), input: json!({"text": "hi"}) }, &ctx).await;
         assert!(!result.is_error);
@@ -188,7 +189,7 @@ mod tests {
         permissions.record_tool_decision("echo", "hi", false, Decision::Deny, ToolTier::Session).unwrap();
 
         let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, _events, _approvals, _prompts) = dispatch_context();
+        let (ctx, _events, _pending) = dispatch_context();
 
         let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "echo".into(), input: json!({"text": "hi"}) }, &ctx).await;
         assert!(result.is_error);
@@ -202,17 +203,19 @@ mod tests {
         let permissions = engine();
 
         let dispatcher = Dispatcher::new(registry, permissions.clone());
-        let (ctx, mut events, _approvals, prompts) = dispatch_context();
+        let (ctx, mut events, pending) = dispatch_context();
 
         let call = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "echo".into(), input: json!({"text": "hi"}) }, &ctx);
         let resolve = async {
             match events.recv().await.unwrap() {
-                Event::PromptRequested { id, payload } => {
+                Event::PromptRequested { call_id, payload } => {
                     let payload: PromptPayload = serde_json::from_value(payload).unwrap();
                     assert_eq!(payload, PromptPayload::Tool { kind: "echo".into(), target: "hi".into() });
 
                     let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project };
-                    let tx = prompts.lock().unwrap().remove(&id.0).unwrap();
+                    let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
+                        panic!("expected a pending Prompt entry for {call_id}");
+                    };
                     tx.send(serde_json::to_value(response).unwrap()).unwrap();
                 }
                 other => panic!("unexpected event: {other:?}"),
@@ -235,13 +238,15 @@ mod tests {
         let dispatcher = Dispatcher::new(registry, permissions.clone());
 
         // First call: deny-by-absence prompts; answer "always allow".
-        let (ctx, mut events, _approvals, prompts) = dispatch_context();
+        let (ctx, mut events, pending) = dispatch_context();
         let call = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "fake:echo".into(), input: json!({"text": "hi"}) }, &ctx);
         let resolve = async {
             match events.recv().await.unwrap() {
-                Event::PromptRequested { id, .. } => {
+                Event::PromptRequested { call_id, .. } => {
                     let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Always };
-                    let tx = prompts.lock().unwrap().remove(&id.0).unwrap();
+                    let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
+                        panic!("expected a pending Prompt entry for {call_id}");
+                    };
                     tx.send(serde_json::to_value(response).unwrap()).unwrap();
                 }
                 other => panic!("unexpected event: {other:?}"),
@@ -255,7 +260,7 @@ mod tests {
         // broke before kind-escaping (the persisted grant's kind couldn't
         // be reconstructed from the "server:name:pattern" string, since
         // GrantKey::parse only splits on the first colon).
-        let (ctx2, _events2, _approvals2, _prompts2) = dispatch_context();
+        let (ctx2, _events2, _pending2) = dispatch_context();
         let result2 = dispatcher.dispatch(ToolCall { id: "c2".into(), name: "fake:echo".into(), input: json!({"text": "hi"}) }, &ctx2).await;
         assert!(!result2.is_error, "expected the always-allow grant to still apply: {}", result2.content);
         assert_eq!(result2.content, "hi");
@@ -268,7 +273,7 @@ mod tests {
         let permissions = engine();
 
         let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, _events, _approvals, _prompts) = dispatch_context();
+        let (ctx, _events, _pending) = dispatch_context();
 
         // No grant exists and nothing resolves a prompt — if the dispatcher
         // ran the generic check for this tool, dispatch would hang awaiting

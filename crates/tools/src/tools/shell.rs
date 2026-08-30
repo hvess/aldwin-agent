@@ -99,6 +99,19 @@ impl Tool for ShellTool {
         // New session (and therefore new process group, pgid == pid) so a
         // timeout/cancellation can SIGKILL the whole tree the shell spawned,
         // not just `sh` itself.
+        //
+        // SAFETY: `pre_exec`'s closure runs in the forked child between
+        // `fork` and `exec`, where only async-signal-safe operations are
+        // sound (allocating, taking locks, or touching Rust runtime state
+        // can deadlock or corrupt the child — the parent's other threads,
+        // and any locks they hold, are frozen mid-operation at the moment of
+        // `fork` but not copied). `libc::setsid()` is a single raw syscall:
+        // no allocation, no locking, nothing but a direct kernel call — safe
+        // to run in that window. Its `Result` is intentionally discarded:
+        // this closure can only fail with `EPERM` (already a process group
+        // leader), which just means the child keeps its current pgid — an
+        // already-safe fallback, not a condition worth failing the whole
+        // spawn over.
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();

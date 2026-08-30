@@ -353,6 +353,30 @@ gets clipped) before confirming it passes against the fix.
 7. Two smaller polish items: inline `` `code` `` in assistant prose used `Modifier::REVERSED` (bright-white block), which read as jarring against real terminal themes — swapped for a plain distinguishing color (`CODE_FG`), a scoped exception to the "modifiers only, never a new color" rule below (that rule predates this ask). And the ordinary end-of-turn line read as flat/mechanical ("— turn ended —") — reworded to "— answered —"; the cancelled/error variants keep their own wording since those already name a different outcome.
 8. **Slash commands only read as dim after Enter, not while being typed.** `is_command`'s dim styling (item covered in the 2026-08-29 second-follow-up entry above) only ever touched the already-submitted `LogEntry::UserMessage`; `draw_input` rendered the draft as a single unstyled `Paragraph::new(&str)`, so a command looked identical to a plain message until it was already sent. `draw_input` now builds its `Paragraph` from a `Text` of per-line `Line`s instead of the raw `&str`, so per-word styling can ride along. First cut only checked whether the input's very first character was `/`, mirroring `is_command`'s whole-message rule — developer follow-up caught that a command word typed anywhere past position 0 (e.g. `hi /exit there`) went unstyled even though it's the identical word. Reworked per explicit developer direction into `ui::highlight_command_tokens` (`KNOWN_COMMAND_WORDS`, duplicated from `cli::slash::intercept`'s match arms for the same reason `is_command` is duplicated): scans every whitespace-delimited word on every line and dims an exact match wherever it falls, deliberately *not* mirroring `is_command`'s "must be the whole message's leading token" rule — this is a cosmetic hint that a recognized command word was typed, independent of whether it would actually be intercepted (only a real leading `/`, per `is_command`, ever is).
 
+**Progress (2026-08-30, spacing + panic-safety/wide-char audit-fix):** Two
+unrelated changes. First, a developer-reported spacing complaint: the log's
+last rendered line butted directly against the status bar with no
+breathing room — `ui::draw`'s vertical `Layout` gained a 1-row blank
+spacer between them. Second, a rust-skills audit (coding-guidelines,
+m15-anti-pattern, domain-cli, m01-ownership) plus a follow-up 3-pass
+verification: (1) `run.rs` never restored the terminal (raw mode,
+alternate screen, cursor) on a panic unwinding through the event loop,
+only on a normal return — verified as a real gap (no panic hook, no
+`Drop` anywhere in the chain existed) though no currently-reachable panic
+site was found, so this is cheap insurance rather than a live bug; fixed
+with a `TerminalGuard` whose `Drop` is the panic-path fallback and whose
+explicit `restore()` is the normal-return path, and which (unlike the
+`?`-chain it replaces) always attempts all three restore steps even if an
+earlier one fails. (2) `render_entry`'s `UserMessage` padding and
+`render_diff_line`'s diff-line padding sized their full-width background
+tint by `chars().count()`, undercounting double-width glyphs (CJK, most
+emoji) in ordinary chat/diff content — not just the banner, which already
+disclosed this same assumption scoped to its own narrow-glyph-only art.
+Confirmed with a concrete repro (a 2-character CJK message breaking the
+single-row chat-bubble assumption at a narrow render width). Fixed by
+switching both to `unicode_width::UnicodeWidthStr::width`, a new direct
+dependency (already present transitively via ratatui).
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

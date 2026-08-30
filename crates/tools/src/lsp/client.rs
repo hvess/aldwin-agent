@@ -30,7 +30,12 @@ struct Inner {
     pending: PendingMap,
     // Servers (rust-analyzer included) answer position-based requests only
     // for documents the client has explicitly opened — see `ensure_open`.
-    opened:  Mutex<HashSet<String>>,
+    // A `tokio::sync::Mutex`, not `std::sync::Mutex`: `ensure_open` must hold
+    // this lock across the `didOpen` notify `.await` (a check-then-insert
+    // split across the await let two concurrent calls on the same URI both
+    // see "not yet opened" and both send `didOpen` — a protocol violation;
+    // see mjolnir-tools.md's Progress note).
+    opened:  tokio::sync::Mutex<HashSet<String>>,
     // Kept alive so `kill_on_drop` fires when the last `LspClient` clone is
     // dropped — the safety net under the graceful `shutdown()` handshake.
     _child:  std::sync::Mutex<tokio::process::Child>,
@@ -62,7 +67,7 @@ impl LspClient {
             stdin: tokio::sync::Mutex::new(stdin),
             next_id: AtomicI64::new(1),
             pending,
-            opened: Mutex::new(HashSet::new()),
+            opened: tokio::sync::Mutex::new(HashSet::new()),
             _child: std::sync::Mutex::new(child),
         });
         let client = Self { inner };
@@ -85,9 +90,13 @@ impl LspClient {
     /// hover, implementation) only for documents the client has opened,
     /// even when reading straight off disk otherwise. Idempotent per URI
     /// for this client's lifetime; V0 never edits through this path, so
-    /// there's no matching `didClose`/`didChange` to send.
+    /// there's no matching `didClose`/`didChange` to send. Holds `opened`'s
+    /// lock across the `notify` `.await` so two concurrent calls for the
+    /// same URI (e.g. `definition` and `hover` dispatched in the same step)
+    /// can't both observe "not yet opened" and both send `didOpen`.
     pub async fn ensure_open(&self, uri: &str, language_id: &str, text: &str) -> Result<(), LspError> {
-        if self.inner.opened.lock().expect("opened lock poisoned").contains(uri) {
+        let mut opened = self.inner.opened.lock().await;
+        if opened.contains(uri) {
             return Ok(());
         }
         self.notify(
@@ -95,7 +104,7 @@ impl LspClient {
             json!({ "textDocument": { "uri": uri, "languageId": language_id, "version": 1, "text": text } }),
         )
         .await?;
-        self.inner.opened.lock().expect("opened lock poisoned").insert(uri.to_string());
+        opened.insert(uri.to_string());
         Ok(())
     }
 

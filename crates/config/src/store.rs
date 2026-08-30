@@ -222,6 +222,29 @@ impl Config {
 
     // ── Write ────────────────────────────────────────────────────────────
 
+    /// Read → mutate → persist-atomically → swap, all under one *held*
+    /// write lock — not just the final swap. A concurrent writer (another
+    /// mutator on this same domain, or `reload_all` re-reading it from disk
+    /// on a different task) must block until this call has fully landed on
+    /// both disk and memory, or the two writes can silently clobber each
+    /// other. See mjolnir-permissions.md's Pitfall: "storage must express
+    /// deny-wins, not last-write-wins" — a lost concurrent write is exactly
+    /// that failure mode, just for grants generally rather than only
+    /// allow/deny ordering. Every domain-mutating method in this file
+    /// (`with_permissions_mut`, `with_mcp_mut`, `with_context_files_mut`,
+    /// `set_provider`, `set_tui`) is this same shape parameterized by which
+    /// `RwLock` and which on-disk path it targets — consolidated into one
+    /// generic here so the shape can't drift between domains, and a future
+    /// domain doesn't have to re-derive the locking argument above.
+    fn with_domain_mut<T: Clone + serde::Serialize>(&self, lock: &RwLock<T>, path: &Path, f: impl FnOnce(&mut T)) -> Result<(), ConfigError> {
+        let mut guard = lock.write().expect("lock poisoned");
+        let mut next = guard.clone();
+        f(&mut next);
+        fsio::write_atomic(path, &next)?;
+        *guard = next;
+        Ok(())
+    }
+
     fn permissions_lock(&self, scope: Scope) -> &RwLock<PermissionsConfig> {
         match scope {
             Scope::Project => &self.inner.project_permissions,
@@ -229,17 +252,8 @@ impl Config {
         }
     }
 
-    fn with_permissions_mut(
-        &self,
-        scope: Scope,
-        f: impl FnOnce(&mut PermissionsConfig),
-    ) -> Result<(), ConfigError> {
-        let lock = self.permissions_lock(scope);
-        let mut next = lock.read().expect("lock poisoned").clone();
-        f(&mut next);
-        fsio::write_atomic(&self.domain_path(scope, "permissions"), &next)?;
-        *lock.write().expect("lock poisoned") = next;
-        Ok(())
+    fn with_permissions_mut(&self, scope: Scope, f: impl FnOnce(&mut PermissionsConfig)) -> Result<(), ConfigError> {
+        self.with_domain_mut(self.permissions_lock(scope), &self.domain_path(scope, "permissions"), f)
     }
 
     pub fn add_grant(
@@ -269,13 +283,11 @@ impl Config {
         if !provider.has_valid_api_key_env() {
             return Err(ConfigError::MissingApiKeyEnv { path });
         }
-        fsio::write_atomic(&path, &provider)?;
         let lock = match scope {
             Scope::Project => &self.inner.project_provider,
             Scope::Global  => &self.inner.global_provider,
         };
-        *lock.write().expect("lock poisoned") = Some(provider);
-        Ok(())
+        self.with_domain_mut(lock, &path, move |current| *current = Some(provider))
     }
 
     fn mcp_lock(&self, scope: Scope) -> &RwLock<McpConfig> {
@@ -286,12 +298,7 @@ impl Config {
     }
 
     fn with_mcp_mut(&self, scope: Scope, f: impl FnOnce(&mut McpConfig)) -> Result<(), ConfigError> {
-        let lock = self.mcp_lock(scope);
-        let mut next = lock.read().expect("lock poisoned").clone();
-        f(&mut next);
-        fsio::write_atomic(&self.domain_path(scope, "mcp"), &next)?;
-        *lock.write().expect("lock poisoned") = next;
-        Ok(())
+        self.with_domain_mut(self.mcp_lock(scope), &self.domain_path(scope, "mcp"), f)
     }
 
     /// Upserts by server name — adding a server that already exists in this
@@ -309,21 +316,12 @@ impl Config {
     }
 
     pub fn set_tui(&self, tui: TuiConfig) -> Result<(), ConfigError> {
-        fsio::write_atomic(&self.domain_path(Scope::Global, "tui"), &tui)?;
-        *self.inner.global_tui.write().expect("lock poisoned") = tui;
-        Ok(())
+        let path = self.domain_path(Scope::Global, "tui");
+        self.with_domain_mut(&self.inner.global_tui, &path, move |current| *current = tui)
     }
 
-    fn with_context_files_mut(
-        &self,
-        f: impl FnOnce(&mut ContextFilesConfig),
-    ) -> Result<(), ConfigError> {
-        let lock = &self.inner.project_context_files;
-        let mut next = lock.read().expect("lock poisoned").clone();
-        f(&mut next);
-        fsio::write_atomic(&self.domain_path(Scope::Project, "context_files"), &next)?;
-        *lock.write().expect("lock poisoned") = next;
-        Ok(())
+    fn with_context_files_mut(&self, f: impl FnOnce(&mut ContextFilesConfig)) -> Result<(), ConfigError> {
+        self.with_domain_mut(&self.inner.project_context_files, &self.domain_path(Scope::Project, "context_files"), f)
     }
 
     pub fn add_context_file(&self, path: PathBuf) -> Result<(), ConfigError> {
@@ -604,6 +602,37 @@ mod tests {
         let cfg = config.project_permissions();
         assert_eq!(cfg.allow, vec!["shell:git *".to_string()]);
         assert_eq!(cfg.deny, vec!["shell:git *".to_string()]);
+    }
+
+    /// Regression test for the lost-update race the audit found: the
+    /// `with_*_mut` helpers used to release the read lock before mutating,
+    /// then reacquire a write lock only for the final swap, leaving a
+    /// window where two concurrent writers could both compute `next` from
+    /// the same stale snapshot and the second write would silently clobber
+    /// the first. Holding the write lock across the entire
+    /// read-mutate-persist-swap sequence (this test's real regression
+    /// target) serializes concurrent writers instead, so every one of these
+    /// threads' grants must survive.
+    #[test]
+    fn concurrent_grant_writes_do_not_lose_updates() {
+        let (_project, _global, config) = fresh();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let config = config.clone();
+                std::thread::spawn(move || {
+                    config.add_grant(Scope::Project, GrantList::Allow, format!("read:file{i}")).unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let allow = config.project_permissions().allow;
+        assert_eq!(allow.len(), 8, "every concurrent grant must survive, got {allow:?}");
+        for i in 0..8 {
+            assert!(allow.contains(&format!("read:file{i}")), "missing grant read:file{i} in {allow:?}");
+        }
     }
 
     #[test]

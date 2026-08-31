@@ -478,6 +478,82 @@ became mutually exclusive — most were converted from hand-derived row
 arithmetic to a `find_row` substring search instead, which is more robust
 to future layout changes than the coordinate math it replaced.
 
+**Progress (2026-08-31, posting-inspired polish: tinted borders, status
+badge, chip styling):** A follow-up UX pass, at the developer's explicit
+request, studying darrenburns/posting (a Textual-based terminal HTTP
+client the developer named directly, citing its design as something to
+learn from) and applying its *structural* design discipline — not its
+literal pink/magenta palette, which would clash with Mjolnir's own
+established cyan/hammer identity. Read posting's `themes.py` (its `Theme`
+model: primary/secondary/background/surface/panel/warning/error/success/
+accent, plus per-HTTP-method colors and a `border-title-status` pattern)
+and `posting.scss` (`.section { border: round $accent 40%;
+&:focus-within { border: round $accent 100%; } }`, `border-title-align:
+right`) directly from source, plus the project's own README screenshot, to
+ground this in what's actually there rather than a general impression.
+
+Four concrete, scoped changes, each screenshotted before/after via the same
+tmux-capture → ANSI-to-HTML → headless-chromium pipeline the prior redesign
+built: (1) `PANEL_BORDER` changed from a `DIM`-gray alias to a muted,
+desaturated tint of `ACCENT`'s own hue (`Rgb(45, 82, 87)`) — every panel
+now carries a whisper of the one accent color instead of unrelated neutral
+gray, mirroring posting's `$accent 40%`-vs-`100%` discipline (a hand-picked
+fixed RGB, since ratatui has no runtime alpha-blend-over-background
+primitive) — a refinement of, not an exception to, the standing "one
+accent, not scattered" rule: still one hue family everywhere, `ACCENT`
+itself still reserved for what should visually outrank ordinary chrome.
+(2) `access_spans` (read/shell/edit allow/deny, used by the header, hero,
+and now unified into `draw_header` too — previously a third, slightly
+different hand-rolled rendering of the same three states) now renders the
+state word as a small padded chip (colored background, not just colored
+text) — modeled on posting's `border-title-status`/method-color badges;
+right-padded only, not both sides, so the flattened `"read:deny"`-style
+substring several existing tests already keyed on survives unchanged. (3)
+The log panel's own border now carries a right-aligned status badge — "•
+live" (accent) or "⏸ scrolled" (amber) — mirroring posting's Response panel
+showing its HTTP status directly in the border title. This surfaces
+`ScrollState::following`, previously invisible on screen entirely (only
+shown when the log is non-empty; the hero has nothing to follow/scroll).
+(4) The footer's default key hints became small chips (key on a
+`PANEL_BORDER`-tinted badge, description dim) instead of one flat string,
+via new `DEFAULT_KEY_HINTS`/`key_hint_line` — and picked up `^T sidebar`,
+which the Ctrl+T toggle had never actually been advertised anywhere despite
+existing since the prior redesign. Sidebar running-tools also gained
+per-tool-name color coding (`tool_color`, a stable hash into a new 6-color
+`TOOL_PALETTE`), echoing posting's per-HTTP-method colors.
+
+Caught and fixed during self-review before landing: the "•" live-badge
+glyph was first tried as "●" — the same marker `render_assistant_text` uses
+for the assistant speaker — which broke
+`assistant_text_gets_a_marker_that_user_text_does_not` (a whole-buffer scan
+for "is there an assistant marker anywhere" is no longer a safe test once
+an unrelated widget can also render that exact glyph); switched to "•". The
+chip-badge footer hints, once `^T sidebar` was added, no longer fit an
+80-column terminal (the row isn't wrapped) — tightened `key_hint_line`'s
+padding from two-sided to leading-only, confirmed against an 80-col
+screenshot before and after. `TOOL_PALETTE`'s third entry was originally an
+exact RGB duplicate of `CODE_FG` (both `Rgb(224, 175, 104)`, picked
+independently) — caught by grepping every `Rgb(...)` literal in
+`palette.rs` for duplicates as part of the audit, not by visual inspection.
+
+Explicitly not adopted from posting, and why: jump-mode (single-key focus
+jumping between named widgets) and the command palette are real, well-
+executed posting features, but they exist to navigate *many* simultaneous
+focusable panes (collection tree, seven request tabs, five response tabs) —
+Mjolnir has exactly one focusable widget (the input box) outside of a
+modal card, so there is nothing for either feature to navigate between yet;
+building either now would be speculative complexity with no current use,
+not a UX gap this session actually has. Per-pane tabs (Headers/Body/Query/
+...) don't apply either — Mjolnir's "content" is one linear conversation
+log, not several independent structured sections. These are noted here as
+considered-and-deferred, not silently dropped, in case the interaction
+model ever grows enough panes to make them worth revisiting.
+
+92 `mjolnir-tui` tests pass (up from 89; new coverage: `tool_color`
+determinism, the live/scrolled badge in both states, its absence during the
+hero), full workspace `cargo test`/`cargo clippy -p mjolnir-tui -- -D
+warnings` both clean.
+
 - **Layout:** Four horizontal bands: a 1-row header (identity/status), the
   body (full-width scrollable conversation log, or the log beside a
   secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a
@@ -490,7 +566,7 @@ to future layout changes than the coordinate math it replaced.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border (rounded corners as of 2026-08-31, matching the panel chrome around it — a pure reskin, not a behavior change) and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card, and mirrored in the footer while the card is pending (`approval_key_hint`/`prompt_key_hint`, shared by both — see the 2026-08-31 entry) — the two can't drift apart since it's the same function. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
 - **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
 - **Header / Footer / Sidebar (2026-08-31, superseding the single "Status Bar" below):** A 1-row header (always visible): model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), a bare running-tool count. A 1-row footer (always visible): a context-sensitive keybinding legend — the card's own keys while one is pending, otherwise the general hints (send/newline/cancel/scroll/sidebar-toggle). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. None of the three participate in `ScrollState` — only the log panel scrolls.
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use a neutral `PANEL_BORDER` (an alias for the existing dim color, not a new hue) instead, keeping accent meaning "this needs your attention" rather than "this is a panel." Specific accent color still deferred pending mascot palette decision. One genuinely new color, `WARNING_FG` (amber), for retry entries. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
 ## Decisions
 

@@ -44,11 +44,35 @@ pub(crate) const DIFF_DEL_FG: Color = Color::Rgb(220, 150, 150);
 /// constant here.
 pub(crate) const WARNING_FG: Color = Color::Rgb(212, 163, 60);
 
-/// Neutral chrome color for the log panel, sidebar panel, and (while a card
-/// or prompt is pending) the dimmed input panel border. Deliberately an
-/// alias for `DIM` rather than a new hue — introduced only so "this is panel
-/// chrome" reads as an intentional choice at call sites, not because the
-/// underlying color needed to differ from ordinary dim text. Keeps `ACCENT`
-/// scoped to the approval/prompt card and the focused input border only, per
-/// the "one accent, not scattered" rule.
-pub(crate) const PANEL_BORDER: Color = DIM;
+/// Chrome color for the log panel, sidebar panel, and (while a card or
+/// prompt is pending) the dimmed input panel border. A muted, desaturated
+/// tint of `ACCENT`'s own hue — not `DIM` gray — per a UX pass modeled on
+/// darrenburns/posting (a Textual TUI whose polish comes substantially from
+/// exactly this discipline: every panel border carries the app's one accent
+/// hue at reduced intensity — Textual's `.section { border: round $accent
+/// 40%; &:focus-within { border: round $accent 100%; } }` — rather than
+/// switching between an unrelated neutral gray and the accent). Ratatui has
+/// no runtime alpha-blend-over-background primitive, so this is a
+/// hand-picked fixed RGB approximating "cyan at ~35% intensity over a near-
+/// black background" rather than a computed blend. This *refines* rather
+/// than reopens the "one accent, not scattered" rule below: it's still a
+/// single hue family used consistently for all chrome, never a second
+/// unrelated color — `ACCENT` itself stays reserved for the moments that
+/// should visually outrank ordinary chrome (the approval/prompt card, the
+/// focused input border, and the log panel's own live/scrolled title badge
+/// — see `ui::draw`).
+pub(crate) const PANEL_BORDER: Color = Color::Rgb(45, 82, 87);
+
+/// A small fixed set of hues for giving each distinct tool *name* a stable,
+/// repeatable color in the sidebar's running-tools list — modeled on
+/// posting's per-HTTP-method color coding (`method-get`/`method-post`/etc.,
+/// each a distinct hue so a scan of a request list reads categories at a
+/// glance without reading the text). `ui::tool_color` picks one of these
+/// deterministically from the tool's name (a stable hash, not an
+/// incrementing counter, so the same tool name always gets the same color
+/// across draws/sessions without needing to track an assignment table).
+/// Deliberately excludes `ACCENT`/`WARNING_FG`/the diff colors — those
+/// already carry specific meaning (focus/attention, retry, add/remove)
+/// elsewhere, and reusing them here would blur that meaning.
+pub(crate) const TOOL_PALETTE: [Color; 6] =
+    [Color::Rgb(122, 162, 247), Color::Rgb(158, 206, 106), Color::Rgb(224, 138, 90), Color::Rgb(187, 154, 247), Color::Rgb(125, 207, 255), Color::Rgb(247, 118, 142)];

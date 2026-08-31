@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, USER_BG, USER_FG, WARNING_FG};
+use crate::palette::{ACCENT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_BG, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -56,19 +56,36 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (body_area, None)
     };
 
-    let log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER));
+    let mut log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER));
     // `Block::inner` is a pure function of the block's border config and the
-    // outer rect — computed exactly once here, and this same `Rect` is what
-    // both `App::render_width`/`render_height` (cached for scroll math
-    // between draws) and `draw_log`'s own content pass use. There must
-    // never be a second, independently-derived "inner width" anywhere else
-    // in this call graph — see mjolnir-tui.md's scrolling-fix and wrapped-
-    // row-scroll-math Progress notes for the two real bugs that came from
-    // exactly this kind of divergence before.
+    // outer rect (titles don't affect it, only the border does) — computed
+    // exactly once here, and this same `Rect` is what both `App::
+    // render_width`/`render_height` (cached for scroll math between draws)
+    // and `draw_log`'s own content pass use. There must never be a second,
+    // independently-derived "inner width" anywhere else in this call graph
+    // — see mjolnir-tui.md's scrolling-fix and wrapped-row-scroll-math
+    // Progress notes for the two real bugs that came from exactly this kind
+    // of divergence before.
     let log_inner = log_block.inner(log_area);
     app.render_width = log_inner.width;
     app.render_height = log_inner.height;
     app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
+
+    // A right-aligned status badge embedded directly in the panel's own
+    // border — modeled on posting's `border-title-status` (its Response
+    // panel shows the colored HTTP status the same way). Surfaces something
+    // that was previously invisible: whether the view is still auto-
+    // following new output or has been left scrolled up. Only while there's
+    // real content to scroll (the empty-log hero has nothing to follow).
+    if !app.log.is_empty() {
+        // "•" not "●" — the latter is reserved as the assistant-speaker
+        // marker in the log itself (see `render_assistant_text`); reusing
+        // it here would make a whole-buffer scan for "is there assistant
+        // output" incorrectly true just because the view happens to be
+        // following.
+        let (glyph, label, color) = if app.scroll.following { ("•", "live", ACCENT) } else { ("⏸", "scrolled", WARNING_FG) };
+        log_block = log_block.title_top(Line::from(Span::styled(format!(" {glyph} {label} "), Style::default().fg(color))).right_aligned());
+    }
 
     draw_header(frame, header_area, app);
     draw_log(frame, log_area, log_inner, log_block, app);
@@ -292,13 +309,23 @@ const MJOLNIR_ART_WIDTH: usize = 21;
 /// (`draw_status`'s `perm` closure) — reusing the diff-tint colors
 /// (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than inventing new ones, since
 /// green-means-allowed/red-means-denied is the same "state at a glance"
-/// job those already do for added/removed diff lines.
+/// job those already do for added/removed diff lines. Rendered as a small
+/// padded chip (colored background, not just colored text) — per the
+/// posting-inspired UX pass: a categorical state word reads faster as a
+/// filled badge than as plain colored text sitting on the panel background,
+/// the same reasoning behind posting's `border-title-status`/method-color
+/// chips. Shared by the header, the welcome hero, and the sidebar, so all
+/// three render permission state identically.
 fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
-    let (word, color) = match state {
-        PermState::Allowed => ("allow", DIFF_ADD_FG),
-        PermState::Denied => ("deny", DIFF_DEL_FG),
+    let (word, fg, bg) = match state {
+        PermState::Allowed => ("allow", BRIGHT, DIFF_ADD_BG),
+        PermState::Denied => ("deny", BRIGHT, DIFF_DEL_BG),
     };
-    vec![Span::styled(format!("{label}:"), Style::default().fg(DIM)), Span::styled(word, Style::default().fg(color))]
+    // Right-padded only (no space before the word) so the flattened text
+    // stays exactly `"{label}:{word} "` — preserves the `"read:deny"`-style
+    // substring several tests and the hero/header both already key on —
+    // while still giving the word itself a colored chip background.
+    vec![Span::styled(format!("{label}:"), Style::default().fg(DIM)), Span::styled(format!("{word} "), Style::default().fg(fg).bg(bg))]
 }
 
 /// The welcome hero's content — Mjolnir hammer art beside the wordmark/
@@ -929,41 +956,76 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         (Some(t), None) => format!("T{t}"),
         _ => "-".to_string(),
     };
-    let perm = |label: &str, state: PermState| format!("{label}:{}", if state == PermState::Allowed { "allow" } else { "deny" });
     // A bare count, not the tool names — full detail (name + spinner per
     // running tool) lives in the sidebar now; this stays a glanceable
     // presence indicator for when the sidebar is hidden (narrow terminal,
     // or toggled off).
     let tools = if s.running_tools.is_empty() { String::new() } else { format!(" | tools: {}", s.running_tools.len()) };
 
-    let text = format!(
-        "{}  {turn_step}  {} {} {}{tools}",
-        s.model_name,
-        perm("read", s.read),
-        perm("shell", s.shell),
-        perm("edit", s.edit),
-    );
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(text, Style::default().fg(DIM)))), area);
+    let mut spans = vec![Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(DIM))];
+    // `access_spans` (chip-badge permission indicators) rather than a
+    // hand-rolled "label:state" string — the hero and sidebar already use
+    // it; this DRYs up what used to be a third, slightly different-looking
+    // rendering of the exact same three permission states.
+    for (label, state) in [("read", s.read), ("shell", s.shell), ("edit", s.edit)] {
+        spans.extend(access_spans(label, state));
+    }
+    spans.push(Span::styled(tools, Style::default().fg(DIM)));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Default keybinding legend shown when no card/prompt is pending.
-const DEFAULT_KEY_HINT: &str = "↵ send   ⇧↵ / ^J newline   ^C cancel   PgUp/PgDn scroll   End bottom";
+/// Default keybinding legend shown when no card/prompt is pending, as
+/// (key, description) pairs rather than one hand-joined string — lets
+/// `draw_footer` style the key itself as a small chip distinct from its
+/// description (see `key_hint_line`), the same "key badge, then dim label"
+/// treatment posting's own footer uses. `^T sidebar` was missing from the
+/// old single-string hint entirely — the toggle existed but wasn't
+/// discoverable anywhere on screen; caught during this pass.
+const DEFAULT_KEY_HINTS: &[(&str, &str)] =
+    &[("↵", "send"), ("⇧↵/^J", "newline"), ("^C", "cancel"), ("PgUp/PgDn", "scroll"), ("End", "bottom"), ("^T", "sidebar")];
+
+/// Builds a footer-style line from (key, description) pairs: each key
+/// rendered as a small chip (bright text on the same muted accent tint the
+/// panel borders use — `PANEL_BORDER` — so the chip reads as "chrome",
+/// distinct from `ACCENT` itself, which stays reserved for the moments
+/// that should outrank ordinary chrome), each description dim, pairs
+/// separated by two spaces.
+fn key_hint_line(pairs: &[(&str, &str)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(pairs.len() * 3);
+    for (i, (key, desc)) in pairs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        // A leading-only pad on the badge (not both sides) — the
+        // description's own leading space still reads as the pill's right
+        // edge, so this stays a "chip" while costing noticeably fewer
+        // columns per key; six pairs' worth of two-sided padding was wide
+        // enough to clip the trailing hints off the row on an 80-column
+        // terminal, a regression this row didn't have before this pass.
+        spans.push(Span::styled(format!(" {key}"), Style::default().fg(BRIGHT).bg(PANEL_BORDER)));
+        spans.push(Span::styled(format!(" {desc}"), Style::default().fg(DIM)));
+    }
+    Line::from(spans)
+}
 
 /// Context-sensitive keybinding legend, one row, always visible — replaces
 /// the old flat status line's trailing "Ctrl+C: cancel/quit" fragment.
 /// While a card or prompt is pending, shows that card's own keys (via the
 /// exact same functions the card itself renders with, so the two can't
 /// drift apart) instead of the default hints, since those are the only keys
-/// that do anything while input is blocked.
+/// that do anything while input is blocked — those stay plain dim text
+/// (not chip-styled) since they're already bracket-labeled inside the card
+/// itself (`[y] approve`) and restyling them here risks the two visually
+/// disagreeing about the same keys.
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let text = if let Some(prompt) = &app.pending_prompt {
-        prompt_key_hint(&prompt.payload)
+    let line = if let Some(prompt) = &app.pending_prompt {
+        Line::from(Span::styled(prompt_key_hint(&prompt.payload), Style::default().fg(DIM)))
     } else if app.pending_approval.is_some() {
-        approval_key_hint().to_string()
+        Line::from(Span::styled(approval_key_hint(), Style::default().fg(DIM)))
     } else {
-        DEFAULT_KEY_HINT.to_string()
+        key_hint_line(DEFAULT_KEY_HINTS)
     };
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(text, Style::default().fg(DIM)))), area);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Secondary, ambient state — permission grants, active tools (with a
@@ -974,6 +1036,17 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 /// `SIDEBAR_MIN_TOTAL_WIDTH`). Deliberately quieter than the log panel —
 /// neutral `PANEL_BORDER`, not `ACCENT` — since it's secondary state, not
 /// the primary surface.
+/// Deterministic per-tool-name color from `TOOL_PALETTE` — the same tool
+/// name always lands on the same color (a stable hash, not an assignment
+/// order that could shift between draws or sessions), so a scan of the
+/// sidebar's running-tools list distinguishes categories by color the same
+/// way posting's per-HTTP-method colors do, without needing to track a
+/// name-to-color table anywhere in `App`.
+fn tool_color(name: &str) -> Color {
+    let hash = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    TOOL_PALETTE[hash as usize % TOOL_PALETTE.len()]
+}
+
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).title(" session ");
     let inner = block.inner(area);
@@ -1002,7 +1075,10 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
         let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
         for tool in &s.running_tools {
             let name = if tool.name.is_empty() { tool.call_id.as_str() } else { tool.name.as_str() };
-            lines.push(Line::from(Span::styled(format!("  {spinner} {name}"), value)));
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {spinner} "), label),
+                Span::styled(name.to_string(), Style::default().fg(tool_color(name))),
+            ]));
         }
     }
     lines.push(Line::default());
@@ -1748,6 +1824,43 @@ mod tests {
         app.status.running_tools = vec![crate::app::RunningTool { call_id: "call-xyz".into(), name: "shell".into() }];
         let out = rendered(&mut app, 130, 40);
         assert!(out.contains("shell"), "expected the running tool's name in the sidebar, got: {out:?}");
+    }
+
+    #[test]
+    fn tool_color_is_stable_for_the_same_name_and_can_differ_for_different_names() {
+        assert_eq!(tool_color("shell"), tool_color("shell"), "the same tool name must always get the same color");
+        // Not a strict guarantee for every possible pair (a 6-color palette
+        // can collide), but true for this project's actual builtin tool
+        // names — a regression that flattened `tool_color` to a constant
+        // would still be caught here.
+        assert_ne!(tool_color("read"), tool_color("shell"));
+    }
+
+    /// The log panel's border shows a "live"/"scrolled" badge (see `draw`)
+    /// once there's real content — surfaces `ScrollState::following`, which
+    /// previously had no on-screen indicator at all.
+    #[test]
+    fn log_panel_title_reflects_whether_the_view_is_following_or_scrolled() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        let out = rendered(&mut app, 100, 12);
+        assert!(out.contains("live"), "a following view should show the live badge, got: {out:?}");
+        assert!(!out.contains("scrolled"));
+
+        app.scroll.line_up();
+        let out = rendered(&mut app, 100, 12);
+        assert!(out.contains("scrolled"), "scrolling away from the bottom should show the scrolled badge, got: {out:?}");
+        assert!(!out.contains("live"));
+    }
+
+    #[test]
+    fn log_panel_title_is_absent_when_the_hero_is_showing() {
+        let mut app = app();
+        assert!(app.log.is_empty());
+        let out = rendered(&mut app, 100, 20);
+        assert!(!out.contains("live") && !out.contains("scrolled"), "an empty log has nothing to follow/scroll, so no badge should show, got: {out:?}");
     }
 
     #[test]

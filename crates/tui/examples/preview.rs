@@ -75,7 +75,12 @@ fn tools(app: &mut App) {
         ],
     });
     app.turn_active = true;
-    app.status.running_tools = vec![mjolnir_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() }];
+    // Two differently-named tools running at once — visualizes the
+    // per-tool-name color coding in the sidebar (see `ui::tool_color`).
+    app.status.running_tools = vec![
+        mjolnir_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() },
+        mjolnir_tui::__PreviewRunningTool { call_id: "c3".into(), name: "shell".into() },
+    ];
     app.status.turn = Some(4);
     app.status.step = Some(1);
 }

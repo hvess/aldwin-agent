@@ -44,11 +44,11 @@ pub enum PermState {
     Denied,
 }
 
-/// A tool call currently in flight, for the sidebar's "active tools" list.
-/// Carries the human-readable name (not just the opaque `call_id`) so the
-/// sidebar can show what's actually running, not just an id — the name only
-/// otherwise exists transiently (`App::pending_tool_names`) or on the
-/// matching `ToolActivity` log entry.
+/// A tool call currently in flight, for the status line's "active tools"
+/// list. Carries the human-readable name (not just the opaque `call_id`) so
+/// the status line can show what's actually running, not just an id — the
+/// name only otherwise exists transiently (`App::pending_tool_names`) or on
+/// the matching `ToolActivity` log entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningTool {
     pub call_id: String,
@@ -116,13 +116,6 @@ pub struct App {
     /// itself (`total_lines()` only needs `render_width`), only by the
     /// hero-centering path.
     pub render_height:    u16,
-    /// The developer's sidebar preference, toggled by Ctrl+T. Whether the
-    /// sidebar is *actually* shown on a given frame also depends on the
-    /// terminal being wide enough (`ui::draw` combines this with a width
-    /// check) — that combination is computed only in `ui::draw`, never
-    /// cached here, so a narrow-terminal auto-collapse always wins over this
-    /// preference rather than the two being able to disagree.
-    pub sidebar_visible:  bool,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
     pub pending_approval:  Option<PendingApproval>,
@@ -163,7 +156,6 @@ impl App {
             scroll: ScrollState::default(),
             render_width: 80,
             render_height: 24,
-            sidebar_visible: true,
             input: String::new(),
             cursor: 0,
             pending_approval: None,
@@ -321,11 +313,6 @@ impl App {
             // through on terminals where Shift+Enter doesn't.
             (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.insert_char('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.cancel_or_quit(),
-            // Ctrl+T, not Ctrl+B — Ctrl+B is tmux's default prefix key, and
-            // this TUI is very likely run inside tmux (its own screenshot
-            // pipeline does), where Ctrl+B would just be eaten by tmux
-            // before reaching the app at all.
-            (KeyCode::Char('t'), m) if m.contains(KeyModifiers::CONTROL) => self.sidebar_visible = !self.sidebar_visible,
             (KeyCode::Backspace, _) => self.backspace(),
             (KeyCode::Delete, _) => self.delete_forward(),
             (KeyCode::Left, _) => self.cursor = self.cursor.saturating_sub(1),
@@ -634,16 +621,6 @@ mod tests {
         type_str(&mut app, "ab");
         app.handle_key(press(KeyCode::Backspace));
         assert_eq!(app.input, "a");
-    }
-
-    #[test]
-    fn ctrl_t_toggles_sidebar_visibility() {
-        let mut app = app();
-        assert!(app.sidebar_visible, "sidebar_visible should default on");
-        app.handle_key(press_mod(KeyCode::Char('t'), KeyModifiers::CONTROL));
-        assert!(!app.sidebar_visible);
-        app.handle_key(press_mod(KeyCode::Char('t'), KeyModifiers::CONTROL));
-        assert!(app.sidebar_visible);
     }
 
     #[test]

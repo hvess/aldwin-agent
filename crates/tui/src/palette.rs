@@ -49,13 +49,15 @@ pub(crate) const USER_FG: Color = Color::Rgb(190, 190, 195);
 /// whole frame (see `ui::draw`) and is also what the log panel's own
 /// scrollback content sits directly on (confirmed by sampling *between*
 /// message cards in the reference — it's the same color as the outer
-/// frame, not a separate panel tint); `BG_PANEL` fills the sidebar;
-/// `BG_ELEMENT` fills message-bubble and approval/prompt cards; `BG_INPUT`
-/// fills the chat input — sampled as the *lightest* of the four tiers, one
-/// step past `BG_ELEMENT`, since the input is the one surface that's always
-/// active/focused rather than passive content.
+/// frame, not a separate panel tint); `BG_ELEMENT` fills message-bubble and
+/// approval/prompt cards; `BG_INPUT` fills the chat input — sampled as the
+/// *lightest* of the tiers, one step past `BG_ELEMENT`, since the input is
+/// the one surface that's always active/focused rather than passive
+/// content. A fourth tier, `BG_PANEL`, filled the sidebar panel this scale
+/// was originally sampled for — removed along with the sidebar itself in
+/// the 2026-08-31 status-line correction (see `mjolnir-tui.md`'s Progress
+/// note of the same name); the other three tiers are unchanged.
 pub(crate) const BG_BASE: Color = Color::Rgb(34, 36, 53);
-pub(crate) const BG_PANEL: Color = Color::Rgb(40, 42, 62);
 pub(crate) const BG_ELEMENT: Color = Color::Rgb(47, 49, 72);
 pub(crate) const BG_INPUT: Color = Color::Rgb(54, 56, 83);
 
@@ -83,23 +85,22 @@ pub(crate) const WARNING_FG: Color = Color::Rgb(212, 163, 60);
 
 /// A muted, desaturated tint of `ACCENT`'s own hue — not `DIM` gray — for
 /// chrome that shouldn't outrank `ACCENT` itself: a card's left accent bar
-/// at rest (see `card_line`/`LogEntry::UserMessage`), the footer's key-chip
-/// badge background, and (while a card or prompt is pending) the dimmed
-/// input bar. No longer a *border* color in the literal sense — the log
-/// panel and sidebar dropped their drawn 4-sided borders in the same pass
-/// that replaced `BG_BASE`/`BG_PANEL`/`BG_ELEMENT` above: the reference
-/// screenshot that prompted that replacement also showed no box anywhere
-/// around the conversation, only filled cards floating directly on the
-/// frame background, and keeping our own outer panel border was producing
-/// a messy doubled line everywhere a card's own left bar met it. The name
-/// stays (and the constant itself is unchanged) since it's still doing the
-/// same "one accent hue, reduced intensity" job the original comment
-/// described, just applied to bars and chips now rather than 4-sided
-/// outlines.
+/// at rest (see `card_line`/`LogEntry::UserMessage`), diff context lines,
+/// and the log panel's own scrollbar. No longer a *border* color in the
+/// literal sense — the log panel and (former) sidebar dropped their drawn
+/// 4-sided borders in the same pass that replaced `BG_BASE`/`BG_ELEMENT`
+/// above: the reference screenshot that prompted that replacement also
+/// showed no box anywhere around the conversation, only filled cards
+/// floating directly on the frame background, and keeping our own outer
+/// panel border was producing a messy doubled line everywhere a card's own
+/// left bar met it. The name stays (and the constant itself is unchanged)
+/// since it's still doing the same "one accent hue, reduced intensity" job
+/// the original comment described, just applied to bars now rather than
+/// 4-sided outlines.
 pub(crate) const PANEL_BORDER: Color = Color::Rgb(45, 82, 87);
 
 /// A small fixed set of hues for giving each distinct tool *name* a stable,
-/// repeatable color in the sidebar's running-tools list — modeled on
+/// repeatable color in the status line's running-tools list — modeled on
 /// posting's per-HTTP-method color coding (`method-get`/`method-post`/etc.,
 /// each a distinct hue so a scan of a request list reads categories at a
 /// glance without reading the text). `ui::tool_color` picks one of these

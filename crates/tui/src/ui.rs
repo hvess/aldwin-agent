@@ -2,14 +2,14 @@ use mjolnir_permissions::PromptPayload;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BG_PANEL, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
+use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -26,42 +26,23 @@ fn spinner_line(tick: u64, label: &str) -> Line<'static> {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     // Opaque canvas, drawn first and under everything else — without this,
-    // every gap between panels (margins, the header/footer rows, blank
-    // space beside a hidden sidebar) renders as the terminal's own
-    // background, which is exactly the "transparent app" look the redesign
-    // is replacing. See `palette::BG_BASE`'s doc comment for the tier this
-    // belongs to.
+    // every gap between panels (margins, the status-line row) renders as
+    // the terminal's own background, which is exactly the "transparent app"
+    // look the redesign is replacing. See `palette::BG_BASE`'s doc comment
+    // for the tier this belongs to.
     frame.render_widget(Block::default().style(Style::default().bg(BG_BASE)), area);
     let input_height = input_area_height(&app.input);
-    // Header/footer are single-row bands rather than the old "borderless log
-    // + spacer + flat status line" shape — every junction below now has a
-    // bordered panel on one side of it, which already reads as separated,
-    // so the old blank spacer row (added 2026-08-30 for exactly the bare-
-    // text-to-bare-text case this no longer is) is dropped rather than kept
-    // alongside the new chrome.
-    let [header_area, body_area, footer_area, input_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(input_height),
-    ])
-    .areas(area);
-
-    // The sidebar is secondary, ambient state — the conversation log must
-    // stay the primary surface (mjolnir.md's discussion-first constraint).
-    // `sidebar_visible` is only the developer's *preference*; whether it's
-    // actually shown also requires `body_area` to be wide enough that the
-    // log still gets a comfortable majority of it — computed here, and only
-    // here, so a narrow terminal always wins over the preference rather
-    // than the two being able to disagree (`App` itself only ever stores
-    // the preference — see its doc comment).
-    let sidebar_shown = app.sidebar_visible && body_area.width >= SIDEBAR_MIN_TOTAL_WIDTH;
-    let (log_area, sidebar_area) = if sidebar_shown {
-        let [log_area, sidebar_area] = Layout::horizontal([Constraint::Min(1), Constraint::Length(SIDEBAR_WIDTH)]).areas(body_area);
-        (log_area, Some(sidebar_area))
-    } else {
-        (body_area, None)
-    };
+    // Three bands, not four: the body (conversation log), a 1-row status
+    // line (identity/activity — see `draw_status_line`), and the input box.
+    // The old separate 1-row header and 1-row footer are gone — per
+    // explicit developer feedback against a real screenshot, a header full
+    // of permission chips at the top and a footer full of half-dead
+    // keybinding hints at the bottom read as two disconnected, mostly-noise
+    // bars; one status line, positioned right above the input where the
+    // developer's eye already is while typing, replaces both.
+    let [body_area, status_area, input_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(input_height)]).areas(area);
+    let log_area = body_area;
 
     // No drawn border — the reference screenshot that prompted this pass
     // shows no box anywhere around the conversation, just filled cards
@@ -108,32 +89,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.render_height = log_inner.height;
     app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
 
-    draw_header(frame, header_area, app);
     draw_log(frame, log_area, log_inner, log_block, app);
-    if let Some(sidebar_area) = sidebar_area {
-        draw_sidebar(frame, sidebar_area, app);
-    }
-    draw_footer(frame, footer_area, app);
+    draw_status_line(frame, status_area, app);
     draw_input(frame, input_area, app);
 }
 
-/// Fixed width of the sidebar panel, and the minimum *total* `body_area`
-/// width required before it's allowed to show at all — at that exact
-/// threshold the log still keeps `SIDEBAR_MIN_TOTAL_WIDTH - SIDEBAR_WIDTH`
-/// (80) columns, never more cramped than the log area was before this
-/// redesign. Picked so the log panel stays comfortably the majority (~77%)
-/// of the body width whenever the sidebar shows at all.
-const SIDEBAR_WIDTH: u16 = 24;
-const SIDEBAR_MIN_TOTAL_WIDTH: u16 = 104;
-
 fn input_area_height(input: &str) -> u16 {
-    // The left-bar card (see `draw_input`) has no top/bottom border to
-    // reserve rows for — only its own top padding (1 row, `Padding::new(2,
-    // 1, 1, 0)`). +1 for that padding; at least 2 total so a single-line
-    // draft still gets a visible box, matching "multi-line textarea"
-    // without it collapsing to a bare single row when empty.
+    // No border at all (see `draw_input`) — just top/bottom padding (1 row
+    // each, `Padding::new(2, 1, 1, 1)`) around the content, so a single-line
+    // draft sits centered in the box rather than glued to one edge of it.
     let lines = input.matches('\n').count() as u16 + 1;
-    (lines + 1).max(2)
+    lines + 2
 }
 
 /// Builds every line the log panel's *inner* area can show, at `width` ×
@@ -328,17 +294,18 @@ fn mjolnir_row_color(row: usize, total: usize) -> Color {
 /// invariant.
 const MJOLNIR_ART_WIDTH: usize = 21;
 
-/// Same allow/deny vocabulary and per-state coloring the status bar uses
-/// (`draw_status`'s `perm` closure) — reusing the diff-tint colors
-/// (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than inventing new ones, since
-/// green-means-allowed/red-means-denied is the same "state at a glance"
-/// job those already do for added/removed diff lines. Rendered as a small
-/// padded chip (colored background, not just colored text) — per the
-/// posting-inspired UX pass: a categorical state word reads faster as a
-/// filled badge than as plain colored text sitting on the panel background,
-/// the same reasoning behind posting's `border-title-status`/method-color
-/// chips. Shared by the header, the welcome hero, and the sidebar, so all
-/// three render permission state identically.
+/// Reuses the diff-tint colors (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than
+/// inventing new ones, since green-means-allowed/red-means-denied is the
+/// same "state at a glance" job those already do for added/removed diff
+/// lines. Rendered as a small padded chip (colored background, not just
+/// colored text) — per the posting-inspired UX pass: a categorical state
+/// word reads faster as a filled badge than as plain colored text sitting
+/// on the panel background, the same reasoning behind posting's
+/// `border-title-status`/method-color chips. Used only by the welcome hero
+/// (`intro_content`) as of the 2026-08-31 status-line correction — the
+/// permission summary was dropped from the always-visible status line
+/// per explicit developer request; this stays the one place the current
+/// directory's read/shell/edit grants are surfaced on screen.
 fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
     let (word, fg, bg) = match state {
         PermState::Allowed => ("allow", BRIGHT, DIFF_ADD_BG),
@@ -1004,182 +971,106 @@ fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, 
     lines
 }
 
-/// Persistent identity/status strip, one row, always visible — replaces the
-/// old always-on welcome banner as the place the developer's eye finds
-/// "which model, which turn, what's allowed" once the banner itself only
-/// shows on an empty log (see `build_log_lines`). Keybinding hints live in
-/// `draw_footer` instead, not here.
-fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let s = &app.status;
-    let turn_step = match (s.turn, s.step) {
-        (Some(t), Some(st)) => format!("T{t} S{st}"),
-        (Some(t), None) => format!("T{t}"),
-        _ => "-".to_string(),
-    };
-    // A bare count, not the tool names — full detail (name + spinner per
-    // running tool) lives in the sidebar now; this stays a glanceable
-    // presence indicator for when the sidebar is hidden (narrow terminal,
-    // or toggled off).
-    let tools = if s.running_tools.is_empty() { String::new() } else { format!(" | tools: {}", s.running_tools.len()) };
-
-    let mut spans = vec![Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(DIM))];
-    // `access_spans` (chip-badge permission indicators) rather than a
-    // hand-rolled "label:state" string — the hero and sidebar already use
-    // it; this DRYs up what used to be a third, slightly different-looking
-    // rendering of the exact same three permission states.
-    for (label, state) in [("read", s.read), ("shell", s.shell), ("edit", s.edit)] {
-        spans.extend(access_spans(label, state));
-    }
-    spans.push(Span::styled(tools, Style::default().fg(DIM)));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-/// Default keybinding legend shown when no card/prompt is pending, as
-/// (key, description) pairs rather than one hand-joined string — lets
-/// `draw_footer` style the key itself as a small chip distinct from its
-/// description (see `key_hint_line`), the same "key badge, then dim label"
-/// treatment posting's own footer uses. `^T sidebar` was missing from the
-/// old single-string hint entirely — the toggle existed but wasn't
-/// discoverable anywhere on screen; caught during this pass.
-const DEFAULT_KEY_HINTS: &[(&str, &str)] =
-    &[("↵", "send"), ("⇧↵/^J", "newline"), ("^C", "cancel"), ("PgUp/PgDn", "scroll"), ("End", "bottom"), ("^T", "sidebar")];
-
-/// Builds a footer-style line from (key, description) pairs: each key
-/// rendered as a small chip (bright text on the same muted accent tint the
-/// panel borders use — `PANEL_BORDER` — so the chip reads as "chrome",
-/// distinct from `ACCENT` itself, which stays reserved for the moments
-/// that should outrank ordinary chrome), each description dim, pairs
-/// separated by two spaces.
-fn key_hint_line(pairs: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = Vec::with_capacity(pairs.len() * 3);
-    for (i, (key, desc)) in pairs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" "));
-        }
-        // A leading-only pad on the badge (not both sides) — the
-        // description's own leading space still reads as the pill's right
-        // edge, so this stays a "chip" while costing noticeably fewer
-        // columns per key; six pairs' worth of two-sided padding was wide
-        // enough to clip the trailing hints off the row on an 80-column
-        // terminal, a regression this row didn't have before this pass.
-        spans.push(Span::styled(format!(" {key}"), Style::default().fg(BRIGHT).bg(PANEL_BORDER)));
-        spans.push(Span::styled(format!(" {desc}"), Style::default().fg(DIM)));
-    }
-    Line::from(spans)
-}
-
-/// Context-sensitive keybinding legend, one row, always visible — replaces
-/// the old flat status line's trailing "Ctrl+C: cancel/quit" fragment.
-/// While a card or prompt is pending, shows that card's own keys (via the
-/// exact same functions the card itself renders with, so the two can't
-/// drift apart) instead of the default hints, since those are the only keys
-/// that do anything while input is blocked — those stay plain dim text
-/// (not chip-styled) since they're already bracket-labeled inside the card
-/// itself (`[y] approve`) and restyling them here risks the two visually
-/// disagreeing about the same keys.
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let line = if let Some(prompt) = &app.pending_prompt {
-        Line::from(Span::styled(prompt_key_hint(&prompt.payload), Style::default().fg(DIM)))
-    } else if app.pending_approval.is_some() {
-        Line::from(Span::styled(approval_key_hint(), Style::default().fg(DIM)))
-    } else {
-        key_hint_line(DEFAULT_KEY_HINTS)
-    };
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-/// Secondary, ambient state — permission grants, active tools (with a
-/// per-tool name, not just an opaque call id — see `app::RunningTool`), the
-/// turn/step counter, and a running message count — moved out of the
-/// header's single flat line, which couldn't fit all of it without turning
-/// into unreadable noise. Only shown when `draw`'s width gate allows it (see
-/// `SIDEBAR_MIN_TOTAL_WIDTH`). Deliberately quieter than the log panel —
-/// neutral `PANEL_BORDER`, not `ACCENT` — since it's secondary state, not
-/// the primary surface.
 /// Deterministic per-tool-name color from `TOOL_PALETTE` — the same tool
 /// name always lands on the same color (a stable hash, not an assignment
 /// order that could shift between draws or sessions), so a scan of the
-/// sidebar's running-tools list distinguishes categories by color the same
-/// way posting's per-HTTP-method colors do, without needing to track a
+/// status line's tool list distinguishes categories by color the same way
+/// posting's per-HTTP-method colors do, without needing to track a
 /// name-to-color table anywhere in `App`.
 fn tool_color(name: &str) -> Color {
     let hash = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     TOOL_PALETTE[hash as usize % TOOL_PALETTE.len()]
 }
 
-fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    // No drawn border — same reasoning as the log panel in `draw` (see its
-    // `log_block` doc comment): the `BG_PANEL` fill plus its position as its
-    // own column is what separates it, matching the reference's "filled
-    // surfaces, not boxes" look. `Block` is kept only for the title.
-    let block = Block::new().style(Style::default().bg(BG_PANEL)).title(" session ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+/// Persistent identity/activity strip, one row, positioned directly above
+/// the input box rather than at the top of the frame — replaces the old
+/// separate 1-row header (model/turn/permission chips), 1-row footer
+/// (keybinding legend), and the sidebar panel entirely, per explicit
+/// developer feedback against a real screenshot: three separate ambient-state
+/// surfaces (top bar, bottom bar, right column) read as noisy and too close
+/// to OpenCode's own layout rather than something distinctly Mjolnir's.
+/// While a card or prompt is pending, still shows that card's own keys (via
+/// the exact same functions the card itself renders with, so the two can't
+/// drift apart) since those are the only keys that do anything while input
+/// is blocked. Otherwise shows what's actually happening with the model —
+/// turn/step, live activity (thinking/working/idle, with the same spinner
+/// the log uses), any tools currently in flight (colored per name via
+/// `tool_color`, the same job the removed sidebar did), and a running
+/// message count. Permission state (read/shell/edit) is deliberately
+/// absent here — per explicit developer request, that belongs to the
+/// once-per-session welcome hero (`intro_content`) and an actual
+/// permission prompt when one fires, not a line that repaints every frame.
+fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
+    if let Some(prompt) = &app.pending_prompt {
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(prompt_key_hint(&prompt.payload), Style::default().fg(DIM)))), area);
+        return;
+    }
+    if app.pending_approval.is_some() {
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(approval_key_hint(), Style::default().fg(DIM)))), area);
+        return;
+    }
 
-    let label = Style::default().fg(DIM);
-    let value = Style::default().fg(BRIGHT);
     let s = &app.status;
     let turn_step = match (s.turn, s.step) {
         (Some(t), Some(st)) => format!("T{t} S{st}"),
         (Some(t), None) => format!("T{t}"),
         _ => "-".to_string(),
     };
+    let mut spans = vec![Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(DIM))];
 
-    let mut lines: Vec<Line> = vec![Line::from(vec![Span::styled("turn    ", label), Span::styled(turn_step, value)]), Line::default(), Line::from(Span::styled("access", label))];
-    for spans in [access_spans("read", s.read), access_spans("shell", s.shell), access_spans("edit", s.edit)] {
-        let mut row = vec![Span::raw("  ")];
-        row.extend(spans);
-        lines.push(Line::from(row));
-    }
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled("tools", label)));
-    if s.running_tools.is_empty() {
-        lines.push(Line::from(Span::styled("  none", label)));
+    let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
+    if app.thinking {
+        spans.push(Span::styled(format!("{spinner} thinking…  "), Style::default().fg(ACCENT)));
+    } else if app.turn_active {
+        spans.push(Span::styled(format!("{spinner} working…  "), Style::default().fg(ACCENT)));
     } else {
-        let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
-        for tool in &s.running_tools {
-            let name = if tool.name.is_empty() { tool.call_id.as_str() } else { tool.name.as_str() };
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {spinner} "), label),
-                Span::styled(name.to_string(), Style::default().fg(tool_color(name))),
-            ]));
-        }
+        spans.push(Span::styled("idle  ", Style::default().fg(DIM)));
     }
-    lines.push(Line::default());
-    lines.push(Line::from(vec![Span::styled("messages ", label), Span::styled(app.log.len().to_string(), value)]));
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    if !s.running_tools.is_empty() {
+        spans.push(Span::styled("tools: ", Style::default().fg(DIM)));
+        for (i, tool) in s.running_tools.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(", "));
+            }
+            let name = if tool.name.is_empty() { tool.call_id.as_str() } else { tool.name.as_str() };
+            spans.push(Span::styled(name.to_string(), Style::default().fg(tool_color(name))));
+        }
+        spans.push(Span::raw("  "));
+    }
+
+    let messages = app.log.len();
+    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(DIM)));
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Left-accent-bar "card" treatment — same mechanism OpenCode's own input
-/// component uses (`border={["left"]}` plus a solid element-tier fill and
-/// interior padding — see mjolnir-tui's opaque-surfaces redesign plan): no
-/// top/right/bottom border at all, so the padding (not the border) is what
-/// reads as "this is a text box" rather than raw terminal text.
+/// Solid filled "card" with no drawn border at all — per explicit developer
+/// feedback against a real screenshot that the left accent bar this used to
+/// carry (mirroring OpenCode's own `border={["left"]}` input) read as
+/// stray decoration, not something the input needed: the `BG_INPUT` fill
+/// plus its own padding already reads as "this is a text box" on its own,
+/// same as the log panel and every card lost their drawn borders for. Top
+/// and bottom padding are equal (`Padding::new(2, 1, 1, 1)`) so a
+/// single-line draft sits vertically centered in the box rather than
+/// pinned to one edge of it — the asymmetric top-only padding this
+/// replaces was what made a short draft look like it had collapsed to the
+/// bottom of the box.
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::new()
-        .borders(Borders::LEFT)
-        .border_style(if app.pending_approval.is_some() || app.pending_prompt.is_some() {
-            Style::default().fg(DIM)
-        } else {
-            Style::default().fg(ACCENT)
-        })
-        // `BG_INPUT`, not `BG_ELEMENT` — sampled as the lightest of the four
-        // background tiers (see its doc comment), one step past the fill
-        // message/card content uses, since the input is the one surface
-        // that's always active/focused rather than passive content.
-        .style(Style::default().bg(BG_INPUT))
-        .padding(Padding::new(2, 1, 1, 0));
+    // `BG_INPUT`, not `BG_ELEMENT` — sampled as the lightest of the four
+    // background tiers (see its doc comment), one step past the fill
+    // message/card content uses, since the input is the one surface that's
+    // always active/focused rather than passive content.
+    let block = Block::new().style(Style::default().bg(BG_INPUT)).padding(Padding::new(2, 1, 1, 1));
     let inner = block.inner(area);
     // Dim placeholder text when the draft is empty — an empty filled box
     // gave no hint at all that this was where a message goes, versus every
     // other panel now carrying a title/label of its own. While blocked, the
     // placeholder says so instead of inviting a keystroke it would silently
-    // drop — the dimmed bar alone (above) wasn't an obvious enough signal on
-    // its own.
+    // drop.
     if app.input.is_empty() {
         let blocked = app.pending_approval.is_some() || app.pending_prompt.is_some();
-        let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything, or / for commands" };
+        let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
         let placeholder = Line::from(Span::styled(text, Style::default().fg(DIM)));
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
         if app.pending_approval.is_none() && app.pending_prompt.is_none() {
@@ -1203,8 +1094,8 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // developer feedback that it was hard to tell where the cursor sat in
     // the input box. Ratatui doesn't draw one on its own; `set_cursor_position`
     // asks the real terminal cursor to sit there instead. Skipped while a
-    // card is pending (input is blocked then, and the bar already dims to
-    // say so — see the `border_style` above). `cursor_line_col` counts by
+    // card is pending (input is blocked then, and the placeholder text says
+    // so instead — see above). `cursor_line_col` counts by
     // source line, not wrapped screen row (see its doc comment), so a single
     // logical line long enough to wrap past the box's width places the
     // terminal cursor past the visible text — clamped to `inner`'s last
@@ -1233,16 +1124,7 @@ mod tests {
     fn app() -> App {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
-        let mut app = App::new("claude-sonnet-5".into(), Arc::new(Engine::new(config)));
-        // Most tests in this module exercise log-content rendering at a
-        // known width/column and predate the sidebar; the sidebar defaults
-        // on in real usage (`App::new`) but would silently shrink the log
-        // panel's inner width for any test using >= `SIDEBAR_MIN_TOTAL_WIDTH`
-        // columns, invalidating column-position assumptions those tests
-        // never intended to make about the sidebar. Sidebar-specific tests
-        // opt back in explicitly (`app.sidebar_visible = true`).
-        app.sidebar_visible = false;
-        app
+        App::new("claude-sonnet-5".into(), Arc::new(Engine::new(config)))
     }
 
     fn rendered(app: &mut App, width: u16, height: u16) -> String {
@@ -1270,14 +1152,14 @@ mod tests {
     }
 
     /// Screen row the first real log entry starts on once the log is
-    /// non-empty: the header (always exactly 1 row) plus the log panel's own
-    /// top border (1 row). Fixed, unlike the old always-on-banner layout —
-    /// the welcome hero and real log entries are mutually exclusive now (see
-    /// `build_log_lines`), so there's no banner/separator height to add.
-    /// Only valid when no sidebar is showing (none of these tests are wide
-    /// enough to trigger one).
+    /// non-empty: the log panel's own title row (reserved for the
+    /// live/scrolled badge — see `draw`'s `log_block` doc comment), directly
+    /// at the top of the frame now that there's no header above it. Fixed,
+    /// unlike the old always-on-banner layout — the welcome hero and real
+    /// log entries are mutually exclusive now (see `build_log_lines`), so
+    /// there's no banner/separator height to add.
     fn content_base() -> u16 {
-        2
+        1
     }
 
     /// Regression test for the bug the user actually hit: scroll math
@@ -1373,14 +1255,38 @@ mod tests {
         assert!(out.contains(tail), "the wrapped tail must be visible under auto-follow when scroll math is measured against the panel's inner width");
     }
 
+    /// Regression test for the 2026-08-31 status-line correction: the old
+    /// header showed a read/shell/edit permission summary on every frame —
+    /// per explicit developer feedback, that's gone from the always-visible
+    /// status line now (it still shows once, in the welcome hero, before
+    /// the first real log entry — see `intro_banner_shows_...` below). Log
+    /// pushed first so the hero (which still shows permissions) isn't what
+    /// this test is accidentally reading from.
     #[test]
-    fn header_shows_model_name_and_permission_summary() {
+    fn status_line_shows_the_model_name_without_a_permission_summary() {
         let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("claude-sonnet-5"));
-        assert!(out.contains("read:deny"));
-        assert!(out.contains("shell:deny"));
-        assert!(out.contains("edit:deny"));
+        assert!(!out.contains("read:deny"));
+        assert!(!out.contains("shell:deny"));
+        assert!(!out.contains("edit:deny"));
+    }
+
+    /// The status line replaces the removed sidebar as the place activity
+    /// (thinking/working), in-flight tools, and a running message count are
+    /// surfaced — per explicit developer direction that this information
+    /// belongs "right above the input field," not in a separate panel.
+    #[test]
+    fn status_line_shows_activity_running_tools_and_message_count() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.status.running_tools = vec![crate::app::RunningTool { call_id: "c1".into(), name: "shell".into() }];
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("working"), "an active turn should show in the status line: {out:?}");
+        assert!(out.contains("shell"), "an in-flight tool's name should show in the status line: {out:?}");
+        assert!(out.contains("1 message"), "the status line should show a running message count: {out:?}");
     }
 
     #[test]
@@ -1611,13 +1517,14 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Single-line draft -> 2-row input card (see `input_area_height`:
-        // 1 padding-top row + 1 content row, no bottom border/padding) at
-        // the very bottom of a 20-row frame; content sits on the bottom row
-        // (y=19), 3 cells in from the card's left edge (1 for the left
-        // border, 2 for the card's own left padding — see `draw_input`).
-        let slash_cell = &buffer[(3, 19)]; // '/'
-        let arg_cell = &buffer[(10, 19)]; // 'n' of "now"
+        // Single-line draft -> 3-row input card (see `input_area_height`:
+        // 1 padding-top row + 1 content row + 1 padding-bottom row, no
+        // border at all) at the very bottom of a 20-row frame; content sits
+        // on the middle row (y=18), 2 cells in from the card's left edge
+        // (the card's own left padding — see `draw_input`; there's no
+        // border to add to it any more).
+        let slash_cell = &buffer[(2, 18)]; // '/'
+        let arg_cell = &buffer[(9, 18)]; // 'n' of "now"
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(arg_cell.symbol(), "n");
         assert_ne!(
@@ -1640,9 +1547,9 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let leading_cell = &buffer[(3, 19)]; // 'h' of "hi"
-        let slash_cell = &buffer[(6, 19)]; // '/' of "/exit"
-        let trailing_cell = &buffer[(12, 19)]; // 't' of "there"
+        let leading_cell = &buffer[(2, 18)]; // 'h' of "hi"
+        let slash_cell = &buffer[(5, 18)]; // '/' of "/exit"
+        let trailing_cell = &buffer[(11, 18)]; // 't' of "there"
         assert_eq!(leading_cell.symbol(), "h");
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(trailing_cell.symbol(), "t");
@@ -1664,11 +1571,11 @@ mod tests {
 
         assert!(terminal.backend().cursor_visible(), "the terminal cursor must be shown while the input is focused");
         let pos = terminal.backend().cursor_position();
-        // Input card is the last Length(2) row of the layout (see
-        // `input_area_height`): padding-top row at height-2, content row at
-        // height-1.
-        assert_eq!(pos.y, 20 - 1, "cursor should sit on the input box's one content row");
-        assert_eq!(pos.x, 1 + 2 + 2, "cursor should sit right after \"hi\" (1 for the left border, 2 for the card's own left padding, 2 for the two typed chars)");
+        // Input card is the last Length(3) row of the layout (see
+        // `input_area_height`): padding-top row at height-3, content row at
+        // height-2, padding-bottom row at height-1.
+        assert_eq!(pos.y, 20 - 2, "cursor should sit on the input box's one content row");
+        assert_eq!(pos.x, 2 + 2, "cursor should sit right after \"hi\" (2 for the card's own left padding — no border any more, 2 for the two typed chars)");
     }
 
     #[test]
@@ -1879,47 +1786,13 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let top = 1; // directly below the 1-row header
-        let bottom = height - 1 - input_area_height("") - 1; // above the footer + input box
+        let top = 0; // the very top of the frame — no header above it any more
+        let bottom = height - 1 - input_area_height("") - 1; // above the status line + input box
         for &(x, y) in &[(0, top), (width - 1, top), (0, bottom), (width - 1, bottom)] {
             let cell = &buffer[(x, y)];
             assert_ne!(cell.symbol(), "╭", "the log panel must not draw a border corner");
             assert_eq!(cell.bg, BG_BASE, "the log panel must still be opaque at its edges even without a drawn border");
         }
-    }
-
-    #[test]
-    fn sidebar_shows_when_wide_enough_and_the_developer_hasnt_hidden_it() {
-        let mut app = app();
-        app.sidebar_visible = true;
-        let out = rendered(&mut app, 130, 40);
-        assert!(out.contains("session"), "expected the sidebar's title at a comfortably wide terminal, got: {out:?}");
-    }
-
-    /// The width auto-collapse must override the developer's own preference
-    /// — a narrow terminal never shows a sidebar just because
-    /// `sidebar_visible` happens to be true (see `App::sidebar_visible`'s
-    /// doc comment: `App` only ever stores the preference, `ui::draw`
-    /// applies the width gate on top of it every frame).
-    #[test]
-    fn sidebar_is_hidden_below_the_width_threshold_even_when_sidebar_visible_is_true() {
-        let mut app = app();
-        app.sidebar_visible = true;
-        let out = rendered(&mut app, 90, 40);
-        assert!(!out.contains("session"), "a narrow terminal must not show the sidebar regardless of the developer's preference, got: {out:?}");
-    }
-
-    /// Guards the `app::RunningTool` change reaching the render path, not
-    /// just `App`'s event handling (`app.rs` has its own test for that
-    /// side) — the sidebar must show what the tool actually is, not the
-    /// opaque `call_id` alone.
-    #[test]
-    fn sidebar_shows_the_tool_name_not_just_the_call_id() {
-        let mut app = app();
-        app.sidebar_visible = true;
-        app.status.running_tools = vec![crate::app::RunningTool { call_id: "call-xyz".into(), name: "shell".into() }];
-        let out = rendered(&mut app, 130, 40);
-        assert!(out.contains("shell"), "expected the running tool's name in the sidebar, got: {out:?}");
     }
 
     #[test]

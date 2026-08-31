@@ -2,14 +2,14 @@ use mjolnir_permissions::PromptPayload;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_BG, USER_FG, WARNING_FG};
+use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_PANEL, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -25,6 +25,13 @@ fn spinner_line(tick: u64, label: &str) -> Line<'static> {
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    // Opaque canvas, drawn first and under everything else — without this,
+    // every gap between panels (margins, the header/footer rows, blank
+    // space beside a hidden sidebar) renders as the terminal's own
+    // background, which is exactly the "transparent app" look the redesign
+    // is replacing. See `palette::BG_BASE`'s doc comment for the tier this
+    // belongs to.
+    frame.render_widget(Block::default().style(Style::default().bg(BG_BASE)), area);
     let input_height = input_area_height(&app.input);
     // Header/footer are single-row bands rather than the old "borderless log
     // + spacer + flat status line" shape — every junction below now has a
@@ -56,7 +63,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (body_area, None)
     };
 
-    let mut log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER));
+    let mut log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).style(Style::default().bg(BG_PANEL));
     // `Block::inner` is a pure function of the block's border config and the
     // outer rect (titles don't affect it, only the border does) — computed
     // exactly once here, and this same `Rect` is what both `App::
@@ -106,11 +113,13 @@ const SIDEBAR_WIDTH: u16 = 24;
 const SIDEBAR_MIN_TOTAL_WIDTH: u16 = 104;
 
 fn input_area_height(input: &str) -> u16 {
-    // +2 for the border; at least 3 total so a single-line draft still gets
-    // a visible box, matching "multi-line textarea" without it collapsing
-    // to a single row when empty.
+    // The left-bar card (see `draw_input`) has no top/bottom border to
+    // reserve rows for — only its own top padding (1 row, `Padding::new(2,
+    // 1, 1, 0)`). +1 for that padding; at least 2 total so a single-line
+    // draft still gets a visible box, matching "multi-line textarea"
+    // without it collapsing to a bare single row when empty.
     let lines = input.matches('\n').count() as u16 + 1;
-    (lines + 2).max(3)
+    (lines + 1).max(2)
 }
 
 /// Builds every line the log panel's *inner* area can show, at `width` ×
@@ -431,10 +440,20 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
         // not conversation, the same way tool metadata and notices are dim
         // (and it skips the background tint, since it isn't a chat message).
         LogEntry::UserMessage { text } => {
-            let style = if is_command(text) { Style::default().fg(DIM) } else { Style::default().fg(USER_FG).bg(USER_BG) };
-            // Padded to the full render width so the background tint reads
-            // as a chat bubble even for a short message, not just a tinted
-            // "> " prefix — per explicit developer feedback. Only exact for
+            // Slash-command lines skip the bar-and-fill treatment entirely —
+            // dim, unfilled text — since they aren't a chat message (see
+            // `is_command`'s own doc comment: directed at the harness, never
+            // the model).
+            if is_command(text) {
+                return text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(DIM)))).collect();
+            }
+            // Left-accent-bar "card", same mechanism as `draw_input` and the
+            // approval/prompt cards below (see mjolnir-tui's opaque-surfaces
+            // redesign plan) — a bar glyph with no fill of its own (so it
+            // reads as a rule against the panel background, not swallowed
+            // into the card), then the message content filled and padded to
+            // the full render width so the fill reads as a chat bubble even
+            // for a short message, not just a tinted prefix. Only exact for
             // a source line that fits on one screen row: a line long enough
             // to wrap under Paragraph's own Wrap{trim:false} gets this
             // padding appended past the wrap point, not per wrapped row.
@@ -447,9 +466,10 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // only ever renders the narrow-glyph banner art).
             text.lines()
                 .map(|l| {
-                    let content = format!("> {l}");
-                    let pad = (width as usize).saturating_sub(content.width());
-                    Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
+                    let bar = Span::styled("┃ ", Style::default().fg(PANEL_BORDER));
+                    let pad = (width as usize).saturating_sub(2).saturating_sub(l.width());
+                    let content = Span::styled(format!("{l}{}", " ".repeat(pad)), Style::default().fg(USER_FG).bg(BG_ELEMENT));
+                    Line::from(vec![bar, content])
                 })
                 .collect()
         }
@@ -482,7 +502,7 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             ))]
         }
         LogEntry::ApprovalCard { diff, resolution, .. } => render_approval_card(diff, *resolution, width),
-        LogEntry::PermissionPrompt { payload, resolution, .. } => render_prompt_card(payload, resolution.as_deref()),
+        LogEntry::PermissionPrompt { payload, resolution, .. } => render_prompt_card(payload, resolution.as_deref(), width),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
             // "— turn ended —" read as flat/mechanical for the ordinary
@@ -823,7 +843,22 @@ fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) 
     (path, body)
 }
 
-/// The Edit approval card: bordered title/keys (same shape as
+/// One line of a left-accent-bar "card" — a bar glyph with no fill of its
+/// own (so it reads as a rule against the panel background, not swallowed
+/// into the card) followed by `content`, filled per `content_style` and
+/// padded to the full render width so the fill reads as one continuous card
+/// rather than per-line background patches. Same mechanism `draw_input` and
+/// `LogEntry::UserMessage` use for the same reason — see mjolnir-tui's
+/// opaque-surfaces redesign plan. `content_style` carries whatever bg the
+/// caller wants (the neutral `BG_ELEMENT` card fill, or a semantic tint like
+/// `DIFF_ADD_BG` that should win over it) — this helper doesn't pick one.
+fn card_line(bar_color: Color, content: &str, content_style: Style, width: u16) -> Line<'static> {
+    let bar = Span::styled("┃ ", Style::default().fg(bar_color));
+    let pad = (width as usize).saturating_sub(2).saturating_sub(content.width());
+    Line::from(vec![bar, Span::styled(format!("{content}{}", " ".repeat(pad)), content_style)])
+}
+
+/// The Edit approval card: bar/fill title and keys (same shape as
 /// `render_card`) around a diff-aware body — added/removed lines get a
 /// full-width background tint (see `DIFF_ADD_BG`/`DIFF_DEL_BG`), and
 /// unchanged context beyond `DIFF_CONTEXT_RADIUS` lines from the nearest
@@ -833,9 +868,9 @@ fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) 
 /// at a glance.
 fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
-    let mut lines = vec![Line::from(Span::styled("╭─ Approve this edit?", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
+    let mut lines = vec![card_line(ACCENT, "Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     if let Some(path) = path {
-        lines.push(Line::from(Span::styled(format!("│ {path}"), Style::default().fg(DIM))));
+        lines.push(card_line(PANEL_BORDER, &path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
     }
 
     let n = body.len();
@@ -862,19 +897,23 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
                 i += 1;
             }
             let count = i - elided_start;
-            lines.push(Line::from(Span::styled(
-                format!("│ ⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
-                Style::default().fg(DIM),
-            )));
+            lines.push(card_line(
+                PANEL_BORDER,
+                &format!("⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
+                Style::default().fg(DIM).bg(BG_ELEMENT),
+                width,
+            ));
         }
     }
 
     match resolution {
-        Some(approved) => lines.push(Line::from(Span::styled(
-            format!("╰─ resolved: {}", if approved { "approved" } else { "denied" }),
-            Style::default().fg(ACCENT),
-        ))),
-        None => lines.push(Line::from(Span::styled(format!("╰─ {}", approval_key_hint()), Style::default().fg(ACCENT)))),
+        Some(approved) => lines.push(card_line(
+            ACCENT,
+            &format!("resolved: {}", if approved { "approved" } else { "denied" }),
+            Style::default().fg(ACCENT).bg(BG_ELEMENT),
+            width,
+        )),
+        None => lines.push(card_line(ACCENT, approval_key_hint(), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
     lines
 }
@@ -887,37 +926,28 @@ fn approval_key_hint() -> &'static str {
     "[y] approve   [n] deny   [Ctrl+C] deny"
 }
 
-/// Renders one kept diff line. Added/removed lines get a full-width
-/// background tint — same "pad to render width" technique `LogEntry::
-/// UserMessage` uses for its chat-bubble background — so a change reads as
-/// a colored row at a glance, not just a leading +/- character in an
-/// otherwise uniformly-styled card; context lines stay plain (no
-/// background at all), since only the changed lines should compete for
-/// attention.
+/// Renders one kept diff line via `card_line`. Added/removed lines get
+/// their semantic `DIFF_ADD_BG`/`DIFF_DEL_BG` tint (which wins over the
+/// card's own neutral fill) so a change reads as a colored row at a glance,
+/// not just a leading +/- character; context lines get the plain
+/// `BG_ELEMENT` card fill, same as every other card line, since only the
+/// changed lines' brighter tint should compete for attention.
 fn render_diff_line(kind: &DiffLineKind, text: &str, width: u16) -> Line<'static> {
     let (marker, style) = match kind {
         DiffLineKind::Added => ("+", Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG)),
         DiffLineKind::Removed => ("-", Style::default().fg(DIFF_DEL_FG).bg(DIFF_DEL_BG)),
-        DiffLineKind::Context => (" ", Style::default().fg(BRIGHT)),
+        DiffLineKind::Context => (" ", Style::default().fg(BRIGHT).bg(BG_ELEMENT)),
     };
-    let content = format!("│{marker}{text}");
-    if matches!(kind, DiffLineKind::Context) {
-        return Line::from(Span::styled(content, style));
-    }
-    // Display-column width, not char count — see the matching note on
-    // `LogEntry::UserMessage`'s padding above; diff bodies can equally
-    // contain double-width glyphs.
-    let pad = (width as usize).saturating_sub(content.width());
-    Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), style))
+    card_line(PANEL_BORDER, &format!("{marker}{text}"), style, width)
 }
 
-fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>) -> Vec<Line<'static>> {
+fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, width: u16) -> Vec<Line<'static>> {
     let title = match payload {
         PromptPayload::Tool { kind, target } => format!("Allow {kind}: {target}?"),
         PromptPayload::ContextFile { path } => format!("Inject context file {}?", path.display()),
         PromptPayload::Edit { kind } => format!("Edit approval for {kind}"),
     };
-    render_card(&title, "", &prompt_key_hint(payload), resolution.map(str::to_string))
+    render_card(&title, "", &prompt_key_hint(payload), resolution.map(str::to_string), width)
 }
 
 /// The permission prompt's own key labels, by payload shape — also shown in
@@ -932,14 +962,14 @@ fn prompt_key_hint(payload: &PromptPayload) -> String {
     }
 }
 
-fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(Span::styled(format!("╭─ {title}"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
+fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![card_line(ACCENT, title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     for l in body.lines() {
-        lines.push(Line::from(Span::styled(format!("│ {l}"), Style::default().fg(BRIGHT))));
+        lines.push(card_line(PANEL_BORDER, l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
     }
     match resolution {
-        Some(r) => lines.push(Line::from(Span::styled(format!("╰─ resolved: {r}"), Style::default().fg(ACCENT)))),
-        None => lines.push(Line::from(Span::styled(format!("╰─ {keys}"), Style::default().fg(ACCENT)))),
+        Some(r) => lines.push(card_line(ACCENT, &format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
+        None => lines.push(card_line(ACCENT, keys, Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
     lines
 }
@@ -1048,7 +1078,7 @@ fn tool_color(name: &str) -> Color {
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).title(" session ");
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).style(Style::default().bg(BG_PANEL)).title(" session ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1087,25 +1117,35 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+/// Left-accent-bar "card" treatment — same mechanism OpenCode's own input
+/// component uses (`border={["left"]}` plus a solid element-tier fill and
+/// interior padding — see mjolnir-tui's opaque-surfaces redesign plan): no
+/// top/right/bottom border at all, so the padding (not the border) is what
+/// reads as "this is a text box" rather than raw terminal text.
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(if app.pending_approval.is_some() || app.pending_prompt.is_some() {
-        Style::default().fg(DIM)
-    } else {
-        Style::default().fg(ACCENT)
-    });
-    // Dim placeholder text when the draft is empty — an empty bordered box
+    let block = Block::new()
+        .borders(Borders::LEFT)
+        .border_style(if app.pending_approval.is_some() || app.pending_prompt.is_some() {
+            Style::default().fg(DIM)
+        } else {
+            Style::default().fg(ACCENT)
+        })
+        .style(Style::default().bg(BG_ELEMENT))
+        .padding(Padding::new(2, 1, 1, 0));
+    let inner = block.inner(area);
+    // Dim placeholder text when the draft is empty — an empty filled box
     // gave no hint at all that this was where a message goes, versus every
     // other panel now carrying a title/label of its own. While blocked, the
     // placeholder says so instead of inviting a keystroke it would silently
-    // drop — the dimmed border alone (above) wasn't an obvious enough
-    // signal on its own.
+    // drop — the dimmed bar alone (above) wasn't an obvious enough signal on
+    // its own.
     if app.input.is_empty() {
         let blocked = app.pending_approval.is_some() || app.pending_prompt.is_some();
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything, or / for commands" };
         let placeholder = Line::from(Span::styled(text, Style::default().fg(DIM)));
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
         if app.pending_approval.is_none() && app.pending_prompt.is_none() {
-            frame.set_cursor_position((area.x + 1, area.y + 1));
+            frame.set_cursor_position((inner.x, inner.y));
         }
         return;
     }
@@ -1125,19 +1165,19 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // developer feedback that it was hard to tell where the cursor sat in
     // the input box. Ratatui doesn't draw one on its own; `set_cursor_position`
     // asks the real terminal cursor to sit there instead. Skipped while a
-    // card is pending (input is blocked then, and the border already dims
-    // to say so — see the `border_style` above). `cursor_line_col` counts
-    // by source line, not wrapped screen row (see its doc comment), so a
-    // single logical line long enough to wrap past the box's width places
-    // the terminal cursor past the visible text — clamped to the inner
-    // area's last column/row below so it never lands outside the box
-    // rather than fixing the underlying wrap mismatch.
+    // card is pending (input is blocked then, and the bar already dims to
+    // say so — see the `border_style` above). `cursor_line_col` counts by
+    // source line, not wrapped screen row (see its doc comment), so a single
+    // logical line long enough to wrap past the box's width places the
+    // terminal cursor past the visible text — clamped to `inner`'s last
+    // column/row below so it never lands outside the box rather than fixing
+    // the underlying wrap mismatch.
     if app.pending_approval.is_none() && app.pending_prompt.is_none() {
         let (line, col) = cursor_line_col(&app.input, app.cursor);
-        let inner_right = area.x + area.width.saturating_sub(2);
-        let inner_bottom = area.y + area.height.saturating_sub(2);
-        let x = (area.x + 1 + col as u16).min(inner_right);
-        let y = (area.y + 1 + line as u16).min(inner_bottom);
+        let inner_right = inner.x + inner.width.saturating_sub(1);
+        let inner_bottom = inner.y + inner.height.saturating_sub(1);
+        let x = (inner.x + col as u16).min(inner_right);
+        let y = (inner.y + line as u16).min(inner_bottom);
         frame.set_cursor_position((x, y));
     }
 }
@@ -1407,10 +1447,12 @@ mod tests {
 
         let removed_row = find_row(&buffer, "old");
         let added_row = find_row(&buffer, "new");
-        // Column 1, not 0 — column 0 is now the log panel's own left border.
-        assert_eq!(buffer[(1, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
-        assert_eq!(buffer[(1, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
-        assert_ne!(buffer[(1, removed_row)].bg, buffer[(1, added_row)].bg, "added and removed lines must be visually distinct");
+        // Column 3, not 0 or 1 — column 0 is the log panel's own left
+        // border, columns 1-2 are the card's own left accent bar ("┃ ",
+        // unfilled — see `card_line`), so the filled content starts at 3.
+        assert_eq!(buffer[(3, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
+        assert_eq!(buffer[(3, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
+        assert_ne!(buffer[(3, removed_row)].bg, buffer[(3, added_row)].bg, "added and removed lines must be visually distinct");
     }
 
     #[test]
@@ -1531,11 +1573,13 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Single-line draft -> 3-row input box (see `input_area_height`) at
-        // the very bottom of a 20-row frame; content sits on the middle row
-        // (y=18), one cell in from the left border (x=1).
-        let slash_cell = &buffer[(1, 18)]; // '/'
-        let arg_cell = &buffer[(8, 18)]; // 'n' of "now"
+        // Single-line draft -> 2-row input card (see `input_area_height`:
+        // 1 padding-top row + 1 content row, no bottom border/padding) at
+        // the very bottom of a 20-row frame; content sits on the bottom row
+        // (y=19), 3 cells in from the card's left edge (1 for the left
+        // border, 2 for the card's own left padding — see `draw_input`).
+        let slash_cell = &buffer[(3, 19)]; // '/'
+        let arg_cell = &buffer[(10, 19)]; // 'n' of "now"
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(arg_cell.symbol(), "n");
         assert_ne!(
@@ -1558,9 +1602,9 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let leading_cell = &buffer[(1, 18)]; // 'h' of "hi"
-        let slash_cell = &buffer[(4, 18)]; // '/' of "/exit"
-        let trailing_cell = &buffer[(10, 18)]; // 't' of "there"
+        let leading_cell = &buffer[(3, 19)]; // 'h' of "hi"
+        let slash_cell = &buffer[(6, 19)]; // '/' of "/exit"
+        let trailing_cell = &buffer[(12, 19)]; // 't' of "there"
         assert_eq!(leading_cell.symbol(), "h");
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(trailing_cell.symbol(), "t");
@@ -1582,10 +1626,11 @@ mod tests {
 
         assert!(terminal.backend().cursor_visible(), "the terminal cursor must be shown while the input is focused");
         let pos = terminal.backend().cursor_position();
-        // Input box is the last Length(3) row of the layout: border at
-        // height-3, content row at height-2.
-        assert_eq!(pos.y, 20 - 2, "cursor should sit on the input box's one content row");
-        assert_eq!(pos.x, 1 + 2, "cursor should sit right after \"hi\" (1 for the left border, 2 for the two typed chars)");
+        // Input card is the last Length(2) row of the layout (see
+        // `input_area_height`): padding-top row at height-2, content row at
+        // height-1.
+        assert_eq!(pos.y, 20 - 1, "cursor should sit on the input box's one content row");
+        assert_eq!(pos.x, 1 + 2 + 2, "cursor should sit right after \"hi\" (1 for the left border, 2 for the card's own left padding, 2 for the two typed chars)");
     }
 
     #[test]
@@ -1749,10 +1794,16 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         let base = content_base();
-        let plain_cell = &buffer[(2, base)]; // "> hi"
+        // Column 3 for the plain message: column 0 is the log panel's own
+        // left border, columns 1-2 are the message's own left accent bar
+        // ("┃ ", unfilled — see `card_line`/`LogEntry::UserMessage`), so the
+        // filled content starts at 3. The slash command keeps the old
+        // unbarred "> {l}" shape (see `render_entry`), so column 2 (its
+        // content) still applies there.
+        let plain_cell = &buffer[(3, base)]; // "hi" (content span, after the bar)
         let command_cell = &buffer[(2, base + 2)]; // "> /exit"
-        assert_eq!(plain_cell.bg, USER_BG, "a plain user message should carry the subtle background tint");
-        assert_ne!(command_cell.bg, USER_BG, "a slash command must not carry the chat-message background tint");
+        assert_eq!(plain_cell.bg, BG_ELEMENT, "a plain user message should carry the subtle background tint");
+        assert_ne!(command_cell.bg, BG_ELEMENT, "a slash command must not carry the chat-message background tint");
     }
 
     #[test]
@@ -1766,7 +1817,7 @@ mod tests {
 
         let row = content_base();
         let far_right_cell = &buffer[(99, row)]; // well past "> hi"
-        assert_eq!(far_right_cell.bg, USER_BG, "the background tint should fill the full row width, not just trail the text");
+        assert_eq!(far_right_cell.bg, BG_ELEMENT, "the background tint should fill the full row width, not just trail the text");
     }
 
     /// Replaces the old `the_welcome_banner_is_framed_by_a_border_spanning_

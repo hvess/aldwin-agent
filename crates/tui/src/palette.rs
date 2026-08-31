@@ -18,9 +18,25 @@ pub(crate) const BRIGHT: Color = Color::White;
 /// both assistant text (BRIGHT, no bg) and dim metadata without fighting
 /// the terminal's own palette. Fixed RGB rather than a named ANSI color so
 /// the "subtle" tint doesn't get reinterpreted by whatever the terminal
-/// theme maps that ANSI slot to.
+/// theme maps that ANSI slot to. The tint itself is `BG_ELEMENT` below —
+/// message bubbles are one of that scale's "element" surfaces, not a
+/// separately hand-tuned color.
 pub(crate) const USER_FG: Color = Color::Rgb(190, 190, 195);
-pub(crate) const USER_BG: Color = Color::Rgb(40, 40, 46);
+
+/// Three-tier neutral background scale for the opaque-surfaces redesign —
+/// values are OpenCode's own tuned dark-theme `darkStep1/2/3`
+/// (github.com/anomalyco/opencode, `theme/assets/opencode.json`), reused
+/// verbatim rather than re-derived, since ratatui has no runtime
+/// alpha-compositing to recompute them from. Each tier is one step lighter
+/// than the one "behind" it, so nesting reads as depth without needing more
+/// border: `BG_BASE` fills the whole frame (see `ui::draw`) so gaps between
+/// panels are opaque instead of the terminal's own background; `BG_PANEL`
+/// fills the log panel and sidebar; `BG_ELEMENT` fills the "card" surfaces —
+/// the chat input, user message bubbles, and approval/prompt cards. Same
+/// fixed-RGB-not-named-ANSI reasoning as every other color in this file.
+pub(crate) const BG_BASE: Color = Color::Rgb(10, 10, 10);
+pub(crate) const BG_PANEL: Color = Color::Rgb(20, 20, 20);
+pub(crate) const BG_ELEMENT: Color = Color::Rgb(30, 30, 30);
 
 /// Inline `` `code` `` in assistant prose used `Modifier::REVERSED` (fg/bg
 /// swapped) to stand out, which reads as a jarring bright-white block

@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
@@ -554,7 +554,18 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             // filled chat bubble's own text does, via `filled_line`'s
             // identical `BOX_PAD_H` inset.
             Segment::Prose(s) => {
-                lines.extend(s.lines().map(|l| indent_prose_line(render_markdown_line(l))));
+                // Pre-wrapped here (rather than left to the log paragraph's
+                // own `Wrap`) and indented per resulting row — see
+                // `wrap_prose_line`'s doc comment for why: `Wrap` has no
+                // concept of this line's left padding, so a wrapped
+                // continuation row it produced came out flush against the
+                // panel edge instead of under the inset every other row gets.
+                let inner_width = (width as usize).saturating_sub(BOX_PAD_H);
+                lines.extend(
+                    s.lines()
+                        .flat_map(|l| wrap_prose_line(render_markdown_line(l), inner_width))
+                        .map(indent_prose_line),
+                );
             }
             // A fenced ```diff block gets the same full-width red/green
             // per-line treatment (now with a line-number gutter — see
@@ -608,6 +619,146 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
     // matches assistant messages to the same single-row gap everything
     // else gets.
     lines
+}
+
+/// Word-wraps one logical prose `Line` to `max_width` display columns,
+/// breaking only at whitespace and preserving each span's style across a
+/// break, into however many `Line`s it takes.
+///
+/// This exists instead of leaning on the log paragraph's own
+/// `Wrap { trim: false }` (`draw_log`) because `Wrap` has no concept of a
+/// per-row left inset: it treats one logical `Line`'s spans as a single
+/// continuous run of styled graphemes and only ever emits `indent_prose_line`'s
+/// inserted padding span wherever it happens to land in the first wrapped
+/// row — a real paragraph longer than one screen row came out with its
+/// first row correctly inset and every wrapped continuation row flush
+/// against the log panel's left edge (reported as: "the first line of text
+/// is correctly in line, but when the text wraps onto a second line, it
+/// doesn't respect the padding"). Doing the wrap here means every row this
+/// returns is already ≤ `max_width` columns before the caller insets it, so
+/// `Wrap` never has to touch it — the wrapping happens once, not twice.
+///
+/// Doesn't hang-indent list/blockquote markers under wrapped continuation
+/// text (a wrapped `• ` bullet's second row starts at the same column every
+/// other prose row does, not under the first row's text) — only the flat
+/// inset every prose row gets from `indent_prose_line` regardless of what
+/// produced it.
+fn wrap_prose_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
+    #[derive(Clone)]
+    struct Grapheme {
+        text:     String,
+        style:    Style,
+        width:    usize,
+        is_space: bool,
+    }
+
+    if max_width == 0 {
+        return vec![line];
+    }
+
+    let graphemes: Vec<Grapheme> = line
+        .spans
+        .into_iter()
+        .flat_map(|span| {
+            let style = span.style;
+            span.content
+                .chars()
+                .map(move |ch| Grapheme { text: ch.to_string(), style, width: ch.width().unwrap_or(0), is_space: ch.is_whitespace() })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if graphemes.is_empty() {
+        return vec![Line::default()];
+    }
+
+    let mut rows: Vec<Vec<Grapheme>> = vec![Vec::new()];
+    let mut row_width = 0usize;
+    let mut i = 0;
+
+    // The line's own genuine leading whitespace (if any) is kept as literal
+    // content on the first row, same as before this function existed — only
+    // whitespace a wrap decision below introduces at a row break gets
+    // dropped, so a rare hand-indented prose line doesn't lose that
+    // indentation just because it happens to be short enough to fit on one
+    // row anyway.
+    if graphemes[0].is_space {
+        let end = graphemes.iter().position(|g| !g.is_space).unwrap_or(graphemes.len());
+        row_width = graphemes[..end].iter().map(|g| g.width).sum();
+        rows[0].extend_from_slice(&graphemes[..end]);
+        i = end;
+    }
+
+    // Greedy fill: walk whitespace/non-whitespace runs in order, breaking
+    // before whichever run would overflow the current row. A run of
+    // whitespace is only ever kept mid-row (never used to open one), so a
+    // wrapped row never starts with the space that caused the break — same
+    // "don't start a wrapped line with the space that broke it" convention
+    // ratatui's own word-wrapper follows.
+    while i < graphemes.len() {
+        let is_space = graphemes[i].is_space;
+        let start = i;
+        while i < graphemes.len() && graphemes[i].is_space == is_space {
+            i += 1;
+        }
+        let run = &graphemes[start..i];
+        let run_width: usize = run.iter().map(|g| g.width).sum();
+
+        if is_space {
+            if !rows.last().unwrap().is_empty() {
+                if row_width + run_width > max_width {
+                    rows.push(Vec::new());
+                    row_width = 0;
+                } else {
+                    row_width += run_width;
+                    rows.last_mut().unwrap().extend_from_slice(run);
+                }
+            }
+            continue;
+        }
+
+        if row_width > 0 && row_width + run_width > max_width {
+            rows.push(Vec::new());
+            row_width = 0;
+        }
+        if run_width > max_width {
+            // A single word wider than the whole row (e.g. a long URL):
+            // hard-break it grapheme by grapheme rather than overflowing.
+            for g in run {
+                if row_width > 0 && row_width + g.width > max_width {
+                    rows.push(Vec::new());
+                    row_width = 0;
+                }
+                row_width += g.width;
+                rows.last_mut().unwrap().push(g.clone());
+            }
+        } else {
+            row_width += run_width;
+            rows.last_mut().unwrap().extend_from_slice(run);
+        }
+    }
+
+    rows.into_iter()
+        .map(|row| {
+            // A wrap decision can leave trailing whitespace dangling at a
+            // row's end (the space that caused the break, kept out of the
+            // *next* row but already appended to this one before the
+            // overflow check above); trim it so it doesn't count toward
+            // width for anyone measuring this row later.
+            let end = row.iter().rposition(|g| !g.is_space).map(|i| i + 1).unwrap_or(0);
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for g in &row[..end] {
+                match spans.last_mut() {
+                    Some(Span { content, style }) if *style == g.style => {
+                        let mut merged = content.to_string();
+                        merged.push_str(&g.text);
+                        *content = merged.into();
+                    }
+                    _ => spans.push(Span::styled(g.text.clone(), g.style)),
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Left-insets an unfilled line by `BOX_PAD_H` columns — a plain raw space,
@@ -2122,5 +2273,38 @@ mod tests {
         assert!(out.contains("bold"));
         assert!(out.contains("code"));
         assert!(out.contains("italic"));
+    }
+
+    /// Regression test: a long assistant prose line used to lose its left
+    /// inset on every wrapped row after the first — the manually-inserted
+    /// padding span only ever landed at the literal start of the logical
+    /// `Line`'s content, and ratatui's own `Wrap` (which actually splits it
+    /// across rows) has no concept of repeating that padding on the
+    /// continuation rows it produces. Reported as: "the first line of text
+    /// is correctly in line, but when the text wraps onto a second line, it
+    /// doesn't respect the padding."
+    #[test]
+    fn wrapped_assistant_prose_keeps_the_left_inset_on_every_row() {
+        let mut app = app();
+        // A single unbroken run, long enough to force at least one wrapped
+        // continuation row regardless of the exact viewport width below —
+        // no whitespace in it, so wrapping can only happen via the
+        // hard-break path, keeping this independent of word-boundary logic.
+        app.log.push(LogEntry::AssistantText { text: "x".repeat(300) });
+
+        let backend = TestBackend::new(40, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let mut insets = Vec::new();
+        for y in 0..buffer.area.height {
+            let row: Vec<char> = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' ')).collect();
+            if let Some(inset) = row.iter().position(|&c| c == 'x') {
+                insets.push(inset);
+            }
+        }
+        assert!(insets.len() > 1, "expected the long line to wrap onto multiple rows, got insets {insets:?}");
+        assert!(insets.iter().all(|&i| i == insets[0]), "every wrapped row must share the same left inset, got {insets:?}");
     }
 }

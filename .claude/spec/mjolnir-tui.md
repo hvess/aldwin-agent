@@ -659,6 +659,66 @@ blank row exists between entries — `a_blank_line_separates_consecutive_
 log_entries`); `mjolnir-core`'s 11 tests pass unmodified; `cargo clippy -p
 mjolnir-tui -p mjolnir-core --all-targets` clean on both touched files.
 
+**Progress (2026-08-31, duplicated-input turn + wrapped-prose padding):**
+Two more developer-reported live-use bugs, one in each of a
+still-active spec (`mjolnir-tui`) and an already-archived one
+(`mjolnir-core`) — noted here since this file is where a developer would
+look first for a TUI-surfaced complaint, even though the root cause landed
+outside this crate. (1) The developer reported that submitted input
+sometimes reached the model duplicated — visible by asking the model to
+echo back what was sent. Not a TUI input-handling bug (`handle_key` already
+filters to `KeyEventKind::Press`, and crossterm reports paste as ordinary
+key events with bracketed paste unhandled/off, so pasted text was never
+actually duplicated at the input layer) — the real bug was in `mjolnir-
+core::Agent::run_turn` (`crates/core/src/agent.rs`): the `Command::Submit`
+handler appended the new turn's `UserMessage` to `self.log` *before*
+calling `run_turn`, which then built its first step's request as
+`messages_from_log()` (already including that just-appended record) *plus*
+an explicit `messages.push(Message::user(user_text))` of the same text —
+so every turn sent the developer's message to the LLM twice, though the
+conversation log itself only ever recorded it once and stayed clean (which
+is why no existing test caught it — none asserted on the actual request
+`ScriptedClient` received, only on the log). Fixed by dropping the
+redundant push and the now-unused `user_text` parameter `run_turn` took
+solely to make it; `messages_from_log()` alone is authoritative. New
+regression test `submitted_text_reaches_the_llm_exactly_once` asserts the
+submitted text appears exactly once in the first request `ScriptedClient`
+observes (confirmed to fail against the pre-fix code, reproducing the
+report, before confirming it passes against the fix). (2) The developer
+also reported that a long assistant reply's first screen row had the
+correct left padding but every wrapped continuation row after it did not.
+Root cause: `render_assistant_text`'s `Prose` arm built one full logical
+`Line` per source line of markdown (via `render_markdown_line`) and
+inserted the `BOX_PAD_H` left-inset span once, at that `Line`'s start
+(`indent_prose_line`) — but the actual row-splitting for anything longer
+than the panel width happens later, inside `draw_log`'s `Paragraph::
+wrap(Wrap { trim: false })`, and ratatui's word-wrapper has no concept of
+repeating a caller's padding span on the continuation rows it produces; it
+just carries on the same styled-grapheme stream from wherever the previous
+row left off. New helper `wrap_prose_line` (`crates/tui/src/ui.rs`) does
+the word-wrap itself — greedy fill at whitespace boundaries, hard-breaking
+a single word wider than the row, preserving per-span styling across a
+break, keeping a line's own genuine leading whitespace on its first row but
+dropping whitespace a wrap decision introduces on later rows — so every row
+`render_assistant_text` now emits is already ≤ the available width *before*
+`indent_prose_line` runs on it individually; `Wrap` never has to further
+split anything this crate builds for the log (true already of every
+`filled_line`/`card_line` row elsewhere — this brings prose to the same
+invariant, closing the one place it didn't hold). New regression test
+`wrapped_assistant_prose_keeps_the_left_inset_on_every_row` renders a
+single unbroken 300-character run in a narrow viewport and asserts every
+wrapped row shares the same left inset (confirmed to fail — `[1, 0, 0, 0,
+0, 0, 0, 0]` — against the pre-fix code before confirming it passes).
+
+Verified: `mjolnir-tui`'s 94 tests pass (93 + the one new one) and
+`mjolnir-core`'s 12 tests pass (11 + the one new one), `cargo build
+--workspace` and `cargo test --workspace` clean, `cargo clippy -p
+mjolnir-tui --all-targets` clean on the touched file (`ui.rs`); `agent.rs`'s
+new test reuses the same `loop { match ev_rx.recv()... { Event::X => break,
+_ => {} } }` idiom every other test in that file already uses, including
+clippy's pre-existing `single_match` note on that idiom, which this file
+already carries elsewhere and doesn't gate on.
+
 - **Layout:** Four horizontal bands: a 1-row header (identity/status), the
   body (full-width scrollable conversation log, or the log beside a
   secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a

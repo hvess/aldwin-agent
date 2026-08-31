@@ -84,11 +84,11 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 Command::Submit { text } => {
                     let turn_id = TurnId::next();
                     self.log.append(LogRecord::TurnStarted { turn_id });
-                    self.log.append(LogRecord::UserMessage { turn_id, text: text.clone() });
+                    self.log.append(LogRecord::UserMessage { turn_id, text });
 
                     let cancel = CancellationToken::new();
                     let reason = self
-                        .run_turn(turn_id, text, &events, &mut commands, cancel)
+                        .run_turn(turn_id, &events, &mut commands, cancel)
                         .await;
 
                     self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
@@ -122,16 +122,18 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
     async fn run_turn(
         &mut self,
-        turn_id:   TurnId,
-        user_text: String,
-        events:    &mpsc::Sender<Event>,
-        commands:  &mut mpsc::Receiver<Command>,
-        cancel:    CancellationToken,
+        turn_id:  TurnId,
+        events:   &mpsc::Sender<Event>,
+        commands: &mut mpsc::Receiver<Command>,
+        cancel:   CancellationToken,
     ) -> TurnEndReason {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
 
+        // The just-submitted user message is already in `self.log` (appended
+        // by the `Command::Submit` handler before `run_turn` is called), so
+        // `messages_from_log` reconstructs it — pushing it again here would
+        // send it to the LLM twice.
         let mut messages: Vec<Message> = self.messages_from_log();
-        messages.push(Message::user(user_text));
 
         loop {
             let step_id = StepId::next();
@@ -690,6 +692,43 @@ mod tests {
         assert!(matches!(snap[2], LogRecord::AssistantMessage { .. }));
         assert!(matches!(snap[3], LogRecord::StepBoundary { .. }));
         assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
+    }
+
+    /// Regression test: `run_turn` used to build its first step's request by
+    /// combining `messages_from_log` (which already includes the just-logged
+    /// current-turn `UserMessage`, appended by the `Submit` handler before
+    /// `run_turn` runs) with an extra explicit push of the same text — so
+    /// every turn sent the developer's message to the LLM twice, though the
+    /// conversation log itself only ever recorded it once and stayed clean.
+    #[tokio::test]
+    async fn submitted_text_reaches_the_llm_exactly_once() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::TextDelta { text: "hi".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+        ]]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "ls -la".into() }).await.unwrap();
+
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+
+        let seen = seen_messages.lock().unwrap();
+        assert_eq!(seen.len(), 1, "expected one LlmClient::stream call for a single-step turn");
+        let user_message_count = seen[0]
+            .iter()
+            .filter(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::Text { text } if text == "ls -la")))
+            .count();
+        assert_eq!(user_message_count, 1, "the submitted text must appear exactly once in the request sent to the LLM");
     }
 
     #[tokio::test]

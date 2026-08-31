@@ -9,19 +9,12 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
+use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
 /// the same visual language rather than a mismatched borrowed spinner.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// `tick` is `App::tick` — a free-running frame counter, not wall-clock
-/// time, so this stays deterministic and testable without a real clock.
-fn spinner_line(tick: u64, label: &str) -> Line<'static> {
-    let frame = SPINNER_FRAMES[tick as usize % SPINNER_FRAMES.len()];
-    Line::from(Span::styled(format!("{frame} {label}…"), Style::default().fg(DIM)))
-}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -32,19 +25,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // for the tier this belongs to.
     frame.render_widget(Block::default().style(Style::default().bg(BG_BASE)), area);
     let input_height = input_area_height(&app.input);
-    // Four bands: the body (conversation log), a 1-row status line
-    // (identity/activity — see `draw_status_line`), a 1-row blank spacer,
-    // then the input box. The old separate 1-row header and 1-row footer
-    // are gone — per explicit developer feedback against a real screenshot,
-    // a header full of permission chips at the top and a footer full of
+    // Four bands: the body (conversation log), a 1-row blank spacer, a
+    // 1-row status line (identity/activity — see `draw_status_line`), then
+    // the input box. The old separate 1-row header and 1-row footer are
+    // gone — per explicit developer feedback against a real screenshot, a
+    // header full of permission chips at the top and a footer full of
     // half-dead keybinding hints at the bottom read as two disconnected,
     // mostly-noise bars; one status line, positioned right above the input
-    // where the developer's eye already is while typing, replaces both. The
-    // spacer row is otherwise blank (the opaque `BG_BASE` canvas painted
-    // above already covers it) — per explicit developer feedback that the
-    // status line sat glued directly to the top of the input box with no
-    // breathing room between them.
-    let [body_area, status_area, _spacer_area, input_area] = Layout::vertical([
+    // where the developer's eye already is while typing, replaces both.
+    //
+    // The spacer sits *above* the status line, not below it — per a later
+    // round of explicit developer feedback: the original placement (spacer
+    // between the status line and the input box) left the log's last line
+    // glued directly to the status line above it (no top padding) while
+    // stacking two rows of breathing room below it (this spacer plus the
+    // input box's own internal top `Padding` row — see `draw_input`),
+    // which read as an oversized gap under the status line. Moving the one
+    // spacer here gives the status line padding on both sides: top padding
+    // from this row, bottom padding from the input box's own internal
+    // padding, neither doubled up. The spacer row is otherwise blank (the
+    // opaque `BG_BASE` canvas painted above already covers it).
+    let [body_area, _spacer_area, status_area, input_area] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -120,18 +121,12 @@ fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
         }
         lines.extend(rendered);
     }
-    // An animated spinner rather than static text — per explicit developer
-    // feedback that waiting for the next turn gave no loading/progress
-    // feedback at all. `thinking` (an extended-thinking block) takes
-    // priority over the broader `turn_active` (true for the whole turn,
-    // including the stretch between tool calls and before the first token
-    // streams back, which `thinking` alone doesn't cover) since only one of
-    // the two labels is shown at a time.
-    if app.thinking {
-        lines.push(spinner_line(app.tick, "thinking"));
-    } else if app.turn_active {
-        lines.push(spinner_line(app.tick, "working"));
-    }
+    // No spinner row appended here any more — per explicit developer
+    // feedback, an active turn used to get an animated "thinking…"/
+    // "working…" row both here (trailing the log) *and* in `draw_status_line`
+    // right above the input, which read as a plain duplicate of the same
+    // information. The status line is now the one place live turn activity
+    // shows; see its own doc comment.
     lines
 }
 
@@ -426,24 +421,26 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // developer feedback that the bar (mirroring OpenCode's own
             // `border={["left"]}` treatment) was unwanted borrowed
             // decoration; the background tint alone, padded to the full
-            // render width, already reads as a chat bubble even for a short
-            // message, not just a tinted prefix. Only exact for a source
-            // line that fits on one screen row: a line long enough to wrap
-            // under Paragraph's own Wrap{trim:false} gets this padding
-            // appended past the wrap point, not per wrapped row. Padding is
-            // sized in display columns (`UnicodeWidthStr::width`), not
-            // `chars().count()` — a chat message can contain CJK/emoji
+            // render width via `card_line` (which also gives every row its
+            // `BOX_PAD_H` left/right inset), already reads as a chat bubble
+            // even for a short message, not just a tinted prefix. A blank
+            // `BG_ELEMENT`-filled row above and below the text (see
+            // `card_padding_line`) gives the bubble the same top/bottom
+            // padding its own left/right inset already has — per explicit
+            // developer feedback that a chat message needs "padding on the
+            // top, the right, the left, and the bottom," equally on every
+            // side. Padding is sized in display columns
+            // (`UnicodeWidthStr::width`, inside `card_line`/`filled_line`),
+            // not `chars().count()` — a chat message can contain CJK/emoji
             // double-width glyphs, and undercounting those overshoots the
             // real render width, pushing the "single-row bubble" onto an
             // extra wrapped row (see mjolnir-tui.md's wide-char Progress
-            // note; `bordered`'s own char-count shortcut is fine since it
-            // only ever renders the narrow-glyph banner art).
-            text.lines()
-                .map(|l| {
-                    let pad = (width as usize).saturating_sub(l.width());
-                    Line::from(Span::styled(format!("{l}{}", " ".repeat(pad)), Style::default().fg(USER_FG).bg(BG_ELEMENT)))
-                })
-                .collect()
+            // note).
+            let style = Style::default().fg(USER_FG).bg(BG_ELEMENT);
+            let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
+            lines.extend(text.lines().map(|l| card_line(l, style, width)));
+            lines.push(card_padding_line(BG_ELEMENT, width));
+            lines
         }
         LogEntry::AssistantText { text } => render_assistant_text(text, width),
         // A leading glyph per status — running/done/error — instead of a
@@ -547,54 +544,75 @@ fn split_code_fences(text: &str) -> Vec<Segment> {
 
 fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    // Tracks whether the very first segment was a diff fence, so the
-    // assistant-marker pass below can skip it — see that comment.
-    let mut starts_with_diff = false;
-    for (i, segment) in split_code_fences(text).into_iter().enumerate() {
+    for segment in split_code_fences(text) {
         match segment {
+            // Left-inset by `BOX_PAD_H` (`indent_prose_line`) — no fill of
+            // its own (assistant prose deliberately stays unfilled; see
+            // mjolnir-tui.md's Palette section), but per explicit developer
+            // feedback every chat component should carry the same amount of
+            // padding, so plain prose still starts at the same column a
+            // filled chat bubble's own text does, via `filled_line`'s
+            // identical `BOX_PAD_H` inset.
             Segment::Prose(s) => {
-                lines.extend(s.lines().map(render_markdown_line));
+                lines.extend(s.lines().map(|l| indent_prose_line(render_markdown_line(l))));
             }
             // A fenced ```diff block gets the same full-width red/green
-            // per-line treatment as the Edit approval card (`render_diff_line`/
-            // `parse_diff_body`) instead of the generic hand-drawn `╭─`/`╰─`
-            // code-block box — per explicit developer feedback that a
+            // per-line treatment (now with a line-number gutter — see
+            // `number_diff_lines`) as the Edit approval card
+            // (`render_diff_line`/`parse_diff_body`) instead of the generic
+            // code-block box below — per explicit developer feedback that a
             // proposed diff inside assistant prose showing a box labeled
             // "diff" around plain unhighlighted +/- text was the wrong
             // treatment: the card mechanism already exists precisely for
             // "show a diff," so this reuses it rather than inventing a
             // second diff presentation.
             Segment::Code { lang, body } if lang.eq_ignore_ascii_case("diff") => {
-                starts_with_diff |= i == 0;
-                let (_, diff_lines) = parse_diff_body(&body);
-                lines.extend(diff_lines.iter().map(|(kind, line_text)| render_diff_line(kind, line_text, width)));
+                let (_, diff_body) = parse_diff_body(&body);
+                lines.extend(number_diff_lines(diff_body).iter().map(|line| render_diff_line(line, width)));
             }
+            // A real filled code-block box — dark `CODE_BG`, a language
+            // label instead of the fence's own literal ` ``` ` markers, no
+            // hand-drawn `╭─`/`│ `/`╰─` ASCII border — per explicit
+            // developer feedback that the border read as "ugly ASCII art"
+            // and a code block should look like "a real code block in a
+            // document," the same "colored box, not a hand-drawn frame"
+            // treatment the diff/approval cards already got. `filled_line`
+            // gives every row (label included) the box's own left/right
+            // padding and a `card_padding_line` spacer under the label and
+            // at the bottom gives it top/bottom padding too, same as every
+            // other filled box in the log.
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.push(Line::from(Span::styled(format!("╭─ {label}"), Style::default().fg(DIM))));
+                lines.push(card_line(&label, Style::default().fg(DIM).bg(CODE_BG), width));
+                lines.push(card_padding_line(CODE_BG, width));
                 for code_line in highlight::highlight_lines(&lang, &body) {
-                    let mut spans = vec![Span::styled("│ ", Style::default().fg(DIM))];
-                    spans.extend(code_line);
-                    lines.push(Line::from(spans));
+                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(CODE_BG))).collect();
+                    lines.push(filled_line(spans, CODE_BG, width));
                 }
-                lines.push(Line::from(Span::styled("╰─", Style::default().fg(DIM))));
+                lines.push(card_padding_line(CODE_BG, width));
             }
         }
     }
-    // A single marker on the very first rendered line — prose or a code
-    // fence's header, whichever comes first — scans as "here's where the
-    // assistant's turn starts" without repeating on every line. Skipped
-    // when a diff fence leads the message: prepending an unstyled "● " onto
-    // a full-width-tinted diff row would punch a 2-column gap of un-tinted
-    // background right at its left edge, undermining the "full width"
-    // fill the diff box exists to show. The diff's own red/green fill
-    // already reads as distinct from a plain chat bubble without it.
-    if !starts_with_diff {
-        if let Some(first) = lines.first_mut() {
-            first.spans.insert(0, Span::styled("● ", Style::default().fg(BRIGHT).add_modifier(Modifier::BOLD)));
-        }
-    }
-    lines
+    // Blank rows above and below the whole message — per explicit developer
+    // feedback that a chat message needs padding "on the top... and also
+    // the bottom," the same amount every other chat component gets (the
+    // user bubble's own `card_padding_line` rows above). Left unstyled
+    // rather than filled: assistant prose has no background of its own to
+    // extend (see the Prose arm's comment above), so a plain blank row is
+    // this message's equivalent padding.
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    out.push(Line::default());
+    out.extend(lines);
+    out.push(Line::default());
+    out
+}
+
+/// Left-insets an unfilled line by `BOX_PAD_H` columns — a plain raw space,
+/// not a styled span, since there's no background to carry; see
+/// `render_assistant_text`'s `Prose` arm for why this exists.
+fn indent_prose_line(mut line: Line<'static>) -> Line<'static> {
+    line.spans.insert(0, Span::raw(" ".repeat(BOX_PAD_H)));
+    line
 }
 
 /// Renders one prose line (never a fenced-code line — those are already
@@ -842,19 +860,47 @@ fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) 
     (path, body)
 }
 
+/// Horizontal inset applied inside every filled box in the log — chat
+/// bubbles, code blocks, and diff/approval-card rows — so text doesn't sit
+/// flush against the box's own left/right edge. Per explicit developer
+/// feedback that chat messages need "padding on the top, the right, the
+/// left, and the bottom," and that every chat component should carry the
+/// same amount of it: one shared constant, applied by the one shared
+/// primitive below (`filled_line`), keeps every box's padding identical by
+/// construction instead of separately hand-tuned per call site.
+const BOX_PAD_H: usize = 1;
+
+/// The shared padding primitive every filled box in the log builds its rows
+/// from: `BOX_PAD_H` columns of `bg`, then `spans`, then `bg`-filled columns
+/// out to `width` — giving left+right padding and a full-width fill in one
+/// step. `spans` must already carry whatever `bg` they should show against
+/// (this only pads around them, it doesn't recolor them), so a caller
+/// mixing a semantic tint (e.g. `DIFF_ADD_BG`) into an otherwise-`bg`
+/// row still reads correctly.
+fn filled_line(mut spans: Vec<Span<'static>>, bg: Color, width: u16) -> Line<'static> {
+    let content_width: usize = spans.iter().map(|s| s.content.width()).sum();
+    let pad = (width as usize).saturating_sub(BOX_PAD_H).saturating_sub(content_width);
+    let mut out = Vec::with_capacity(spans.len() + 2);
+    out.push(Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg)));
+    out.append(&mut spans);
+    out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+    Line::from(out)
+}
+
 /// One line of a filled "card": `content`, styled per `content_style` and
-/// padded to the full render width so the fill reads as one continuous card
-/// rather than per-line background patches. Used to carry a left accent bar
-/// glyph (mirroring OpenCode's own `border={["left"]}` input) — dropped per
-/// explicit developer feedback that it read as stray decoration borrowed
-/// from OpenCode rather than something Mjolnir's own cards needed; the flat
-/// full-width fill alone already reads as "this is a card." `content_style`
-/// carries whatever bg the caller wants (the neutral `BG_ELEMENT` card
-/// fill, or a semantic tint like `DIFF_ADD_BG` that should win over it) —
-/// this helper doesn't pick one.
+/// padded (via `filled_line`) to the full render width so the fill reads as
+/// one continuous card rather than per-line background patches. Used to
+/// carry a left accent bar glyph (mirroring OpenCode's own
+/// `border={["left"]}` input) — dropped per explicit developer feedback
+/// that it read as stray decoration borrowed from OpenCode rather than
+/// something Mjolnir's own cards needed; the flat full-width fill alone
+/// already reads as "this is a card." `content_style` carries whatever bg
+/// the caller wants (the neutral `BG_ELEMENT` card fill, or a semantic tint
+/// like `DIFF_ADD_BG` that should win over it) — this helper doesn't pick
+/// one, it just reads it back out to pad with the matching color.
 fn card_line(content: &str, content_style: Style, width: u16) -> Line<'static> {
-    let pad = (width as usize).saturating_sub(content.width());
-    Line::from(Span::styled(format!("{content}{}", " ".repeat(pad)), content_style))
+    let bg = content_style.bg.unwrap_or(BG_BASE);
+    filled_line(vec![Span::styled(content.to_string(), content_style)], bg, width)
 }
 
 /// The Edit approval card: filled title and keys (same shape as
@@ -867,19 +913,20 @@ fn card_line(content: &str, content_style: Style, width: u16) -> Line<'static> {
 /// at a glance.
 fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
+    let body = number_diff_lines(body);
     // A blank filled row top and bottom (see `card_padding_line`'s doc
     // comment) — plain terminal text sat flush against the card's edges,
     // which read as cramped next to the reference's generous interior
     // padding.
-    let mut lines = vec![card_padding_line(width), card_line("Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+    let mut lines = vec![card_padding_line(BG_ELEMENT, width), card_line("Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     if let Some(path) = path {
         lines.push(card_line(&path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
     }
 
     let n = body.len();
     let mut keep = vec![false; n];
-    for (i, (kind, _)) in body.iter().enumerate() {
-        if !matches!(kind, DiffLineKind::Context) {
+    for (i, line) in body.iter().enumerate() {
+        if !matches!(line.kind, DiffLineKind::Context) {
             let start = i.saturating_sub(DIFF_CONTEXT_RADIUS);
             let end = (i + DIFF_CONTEXT_RADIUS).min(n.saturating_sub(1));
             for k in &mut keep[start..=end] {
@@ -891,8 +938,8 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
     let mut i = 0;
     while i < n {
         if keep[i] {
-            let (kind, text) = &body[i];
-            lines.push(render_diff_line(kind, text, width));
+            let line = &body[i];
+            lines.push(render_diff_line(line, width));
             i += 1;
         } else {
             let elided_start = i;
@@ -916,15 +963,15 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
         )),
         None => lines.push(card_line(approval_key_hint(), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
-    lines.push(card_padding_line(width));
+    lines.push(card_padding_line(BG_ELEMENT, width));
     lines
 }
 
 /// A blank, filled row — same fill mechanism as `card_line`, just with
 /// empty content — used as a leading/trailing spacer inside a card so its
 /// content doesn't sit flush against the card's own top/bottom edge.
-fn card_padding_line(width: u16) -> Line<'static> {
-    card_line("", Style::default().bg(BG_ELEMENT), width)
+fn card_padding_line(bg: Color, width: u16) -> Line<'static> {
+    card_line("", Style::default().bg(bg), width)
 }
 
 /// The approval card's own key labels — also shown in the footer key-hint
@@ -935,19 +982,72 @@ fn approval_key_hint() -> &'static str {
     "[y] approve   [n] deny   [Ctrl+C] deny"
 }
 
-/// Renders one kept diff line via `card_line`. Added/removed lines get
+/// One diff body line plus the line number(s) it carries in each side of the
+/// change — see `number_diff_lines`.
+struct DiffLine {
+    kind: DiffLineKind,
+    text: String,
+    old_no: Option<usize>,
+    new_no: Option<usize>,
+}
+
+/// Assigns old-file/new-file line numbers to a parsed diff body — per
+/// explicit developer feedback that diffs rendered with no line numbers at
+/// all. `mjolnir_tools::diff::unified` emits no `@@ -a,b +c,d @@` hunk
+/// header (see its own doc comment: it diffs a single already-replaced
+/// hunk, not a whole file), so there's no absolute file offset to anchor
+/// on — these are relative to the start of the shown diff, numbered from 1
+/// on each side, the same convention a hunk header's own numbers use
+/// relative to itself. Context lines advance both counters (they exist on
+/// both sides); removed lines only the old counter; added lines only the
+/// new one — mirroring the two-column gutter GitHub/most diff UIs show.
+fn number_diff_lines(body: Vec<(DiffLineKind, String)>) -> Vec<DiffLine> {
+    let mut old_no = 1usize;
+    let mut new_no = 1usize;
+    body.into_iter()
+        .map(|(kind, text)| {
+            let (o, n) = match kind {
+                DiffLineKind::Context => (Some(old_no), Some(new_no)),
+                DiffLineKind::Removed => (Some(old_no), None),
+                DiffLineKind::Added => (None, Some(new_no)),
+            };
+            if o.is_some() {
+                old_no += 1;
+            }
+            if n.is_some() {
+                new_no += 1;
+            }
+            DiffLine { kind, text, old_no: o, new_no: n }
+        })
+        .collect()
+}
+
+/// Right-aligned `old │ new` line-number gutter, blank on whichever side a
+/// line doesn't exist on (an added line has no old-file number, a removed
+/// line has no new-file number) — same shape as `card_line`'s own filled
+/// rows, just multi-span so the gutter can carry its own dim color
+/// independent of the marker/text's semantic fg.
+fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color) -> Span<'static> {
+    let o = old_no.map(|n| n.to_string()).unwrap_or_default();
+    let n = new_no.map(|n| n.to_string()).unwrap_or_default();
+    Span::styled(format!("{o:>4} {n:>4} │ "), Style::default().fg(DIM).bg(bg))
+}
+
+/// Renders one kept diff line via `filled_line`, prefixed with its
+/// old/new line-number gutter (see `diff_gutter`). Added/removed lines get
 /// their semantic `DIFF_ADD_BG`/`DIFF_DEL_BG` tint (which wins over the
 /// card's own neutral fill) so a change reads as a colored row at a glance,
 /// not just a leading +/- character; context lines get the plain
 /// `BG_ELEMENT` card fill, same as every other card line, since only the
 /// changed lines' brighter tint should compete for attention.
-fn render_diff_line(kind: &DiffLineKind, text: &str, width: u16) -> Line<'static> {
-    let (marker, style) = match kind {
-        DiffLineKind::Added => ("+", Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG)),
-        DiffLineKind::Removed => ("-", Style::default().fg(DIFF_DEL_FG).bg(DIFF_DEL_BG)),
-        DiffLineKind::Context => (" ", Style::default().fg(BRIGHT).bg(BG_ELEMENT)),
+fn render_diff_line(line: &DiffLine, width: u16) -> Line<'static> {
+    let (marker, fg, bg) = match line.kind {
+        DiffLineKind::Added => ("+", DIFF_ADD_FG, DIFF_ADD_BG),
+        DiffLineKind::Removed => ("-", DIFF_DEL_FG, DIFF_DEL_BG),
+        DiffLineKind::Context => (" ", BRIGHT, BG_ELEMENT),
     };
-    card_line(&format!("{marker}{text}"), style, width)
+    let spans = vec![diff_gutter(line.old_no, line.new_no, bg), Span::styled(format!("{marker}{}", line.text), Style::default().fg(fg).bg(bg))];
+    filled_line(spans, bg, width)
 }
 
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, width: u16) -> Vec<Line<'static>> {
@@ -972,7 +1072,7 @@ fn prompt_key_hint(payload: &PromptPayload) -> String {
 }
 
 fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![card_padding_line(width), card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+    let mut lines = vec![card_padding_line(BG_ELEMENT, width), card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     for l in body.lines() {
         lines.push(card_line(l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
     }
@@ -980,7 +1080,7 @@ fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, 
         Some(r) => lines.push(card_line(&format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
         None => lines.push(card_line(keys, Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
-    lines.push(card_padding_line(width));
+    lines.push(card_padding_line(BG_ELEMENT, width));
     lines
 }
 
@@ -1377,7 +1477,18 @@ mod tests {
 
     #[test]
     fn the_spinner_animates_across_ticks() {
-        assert_ne!(spinner_line(0, "working").spans[0].content, spinner_line(1, "working").spans[0].content, "advancing the tick should change the spinner glyph");
+        // `spinner_line` (the log's own copy of this animation) was removed
+        // along with the log's duplicate working/thinking row — see
+        // `build_log_lines`'s doc comment — so this now exercises the one
+        // remaining spinner, `draw_status_line`'s own glyph indexing.
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.tick = 0;
+        let frame0 = rendered(&mut app, 100, 20);
+        app.tick = 1;
+        let frame1 = rendered(&mut app, 100, 20);
+        assert_ne!(frame0, frame1, "advancing the tick should change the spinner glyph shown in the status line");
     }
 
     #[test]
@@ -1451,26 +1562,65 @@ mod tests {
         assert!(out.contains("c") && out.contains("d"), "the 2 lines of context immediately after a change must be kept");
     }
 
+    /// Regression test for explicit developer feedback that diffs rendered
+    /// with no line numbers at all. `number_diff_lines` numbers each side
+    /// relative to the shown diff (no absolute file offset is available —
+    /// see its own doc comment); a context line carries the same number on
+    /// both sides, a removed line only its old-file number, an added line
+    /// only its new-file number.
+    #[test]
+    fn diff_lines_show_old_and_new_line_numbers() {
+        let diff = "--- f.rs\n+++ f.rs\n one\n-old\n+new\n three\n";
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: diff.into(), resolution: None });
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row_text = |y: u16| -> String { (0..100).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
+
+        let context_row = row_text(find_row(&buffer, "one"));
+        let removed_row = row_text(find_row(&buffer, "old"));
+        let added_row = row_text(find_row(&buffer, "new"));
+        assert!(context_row.contains("1    1 │  one"), "a context line should show the same line number on both sides: {context_row:?}");
+        assert!(removed_row.contains("2      │ -old"), "a removed line should show only its old-file line number: {removed_row:?}");
+        assert!(added_row.contains("2 │ +new"), "an added line should show only its new-file line number: {added_row:?}");
+    }
+
+    /// Regression test for explicit developer feedback that posting a chat
+    /// message triggered a duplicate "working…" status row: one in the log
+    /// itself (`build_log_lines`, now removed) and one in the status line
+    /// (`draw_status_line`, which already showed the same thing right above
+    /// the input). The status line is now the only place it shows.
+    #[test]
+    fn active_turn_activity_shows_once_not_duplicated_between_log_and_status_line() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        let out = rendered(&mut app, 100, 20);
+        assert_eq!(out.matches("working…").count(), 1, "the working indicator must show exactly once (in the status line), not duplicated in the log: {out:?}");
+    }
+
     #[test]
     fn user_and_assistant_messages_are_visually_distinct() {
         let mut app = app();
-        app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        app.log.push(LogEntry::AssistantText { text: "hi".into() });
+        // Distinct text per speaker (not both "hi") so `find_row` can locate
+        // each one independently — needed since a user message now renders
+        // as a multi-row padded bubble (see `render_entry`'s `UserMessage`
+        // arm), so the two entries' exact row offsets aren't worth pinning
+        // down by hand here (see `find_row`'s own doc comment).
+        app.log.push(LogEntry::UserMessage { text: "user-hi".into() });
+        app.log.push(LogEntry::AssistantText { text: "assistant-hi".into() });
 
-        // Tall enough that the banner plus both entries fit without
-        // triggering auto-follow scroll — otherwise the offset below
-        // (which assumes the viewport shows everything from row 0) would
-        // be reading the wrong rows entirely.
         let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Header (1 row) + the log panel's own top border (1 row), then the
-        // first entry directly, a blank separator, then the second entry.
-        let base = content_base();
-        let user_cell = &buffer[(2, base)]; // "> hi"
-        let assistant_cell = &buffer[(2, base + 2)]; // "● hi"
+        let user_row = find_row(&buffer, "user-hi");
+        let assistant_row = find_row(&buffer, "assistant-hi");
+        let user_cell = &buffer[(2, user_row)];
+        let assistant_cell = &buffer[(2, assistant_row)];
         assert_ne!(
             (user_cell.fg, user_cell.modifier),
             (assistant_cell.fg, assistant_cell.modifier),
@@ -1484,15 +1634,19 @@ mod tests {
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
-        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
         let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let base = content_base();
-        let plain_cell = &buffer[(2, base)]; // "> hi"
-        let command_cell = &buffer[(2, base + 2)]; // "> /exit" — the next row is the blank separator line
+        // `find_row`, not a hand-derived offset — the plain message is now
+        // a multi-row padded bubble (blank pad row, content, blank pad
+        // row), so "the next entry starts 2 rows down" no longer holds; see
+        // `render_entry`'s `UserMessage` arm.
+        let plain_row = find_row(&buffer, "hi");
+        let command_row = find_row(&buffer, "/exit");
+        let plain_cell = &buffer[(2, plain_row)]; // inside "hi"'s filled bubble
+        let command_cell = &buffer[(2, command_row)]; // "> /exit"
         assert_ne!(
             (plain_cell.fg, plain_cell.modifier),
             (command_cell.fg, command_cell.modifier),
@@ -1628,40 +1782,46 @@ mod tests {
         assert!(!terminal.backend().cursor_visible(), "input is blocked while a card is pending — no cursor should show");
     }
 
-    /// The row-index assumptions the two style-comparison tests above make
-    /// (the row right after the banner is blank, the second entry lands two
-    /// rows after that) only hold because `draw_log` inserts exactly one
-    /// blank line between entries — pin that down directly so a change to
-    /// the spacing logic fails loudly here instead of silently making those
-    /// tests compare the wrong cells.
+    /// Each entry now carries its own padding (a chat bubble's top/bottom
+    /// blank fill rows — see `render_entry`'s `UserMessage` arm — or
+    /// `render_assistant_text`'s own leading/trailing blank rows), so a
+    /// hand-derived "the row right after entry one is the separator" offset
+    /// no longer holds the way it used to; this checks the same underlying
+    /// property (there's a genuinely blank, unfilled row between the two
+    /// entries' own bubbles, not just their own padding) via `find_row`
+    /// instead.
     #[test]
     fn a_blank_line_separates_consecutive_log_entries() {
         let mut app = app();
         app.log.push(LogEntry::UserMessage { text: "first".into() });
         app.log.push(LogEntry::UserMessage { text: "second".into() });
 
-        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
         let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let row = content_base() + 1;
-        // Columns 1..109, not 0..110 — the outer columns are now the log
-        // panel's own left/right border, not log content.
-        let row_text: String = (1..109).map(|x| buffer[(x, row)].symbol().to_string()).collect();
-        assert_eq!(row_text.trim(), "", "the row after the first entry must be the blank separator between the two entries");
+        let first_row = find_row(&buffer, "first");
+        let second_row = find_row(&buffer, "second");
+        assert!(second_row > first_row + 1, "the two entries must not land on adjacent rows: {first_row} vs {second_row}");
+        let unfilled_row_between = (first_row + 1..second_row).any(|y| buffer[(1, y)].bg != BG_ELEMENT);
+        assert!(unfilled_row_between, "there must be a genuinely blank row between the two entries' own bubble fills");
     }
 
+    /// Regression guard for the removed assistant-speaker marker — per
+    /// explicit developer feedback that the leading "●" needed to go, since
+    /// text color (bright assistant vs. muted-and-tinted user — see
+    /// `user_and_assistant_messages_are_visually_distinct`) already
+    /// separates the two speakers without it.
     #[test]
-    fn assistant_text_gets_a_marker_that_user_text_does_not() {
+    fn no_chat_message_renders_the_old_assistant_marker() {
         let mut assistant_app = app();
         assistant_app.log.push(LogEntry::AssistantText { text: "hi".into() });
-        assert!(rendered(&mut assistant_app, 100, 20).contains('●'), "assistant text should start with a marker");
+        assert!(!rendered(&mut assistant_app, 100, 20).contains('●'), "the assistant marker was removed and must not reappear");
 
         let mut user_app = app();
         user_app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        assert!(!rendered(&mut user_app, 100, 20).contains('●'), "user text should not get the assistant marker");
+        assert!(!rendered(&mut user_app, 100, 20).contains('●'));
     }
 
     #[test]
@@ -1669,7 +1829,6 @@ mod tests {
         let mut app = app();
         app.log.push(LogEntry::AssistantText { text: "here:\n```rust\nfn main() {}\n```\ndone".into() });
 
-        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
         let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1677,17 +1836,19 @@ mod tests {
         let out: String = buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("");
 
         assert!(!out.contains("```"), "the literal fence markers must not reach the screen");
+        assert!(!out.contains('╭') && !out.contains('╰'), "the code block must not draw the old hand-drawn ASCII border any more");
         assert!(out.contains("rust"), "the language tag should appear in the block's header");
         assert!(out.contains("fn main"), "the code itself must still be shown");
 
+        let label_row = find_row(&buffer, "rust");
+        assert_eq!(buffer[(0, label_row)].bg, CODE_BG, "the language label row should carry the code block's own dark background");
+
         // At least two distinct foreground colors within the code line —
         // proof it went through the highlighter, not just plain dim text.
-        // No blank-line separator here beyond the banner's own: draw_log
-        // only inserts one between entries, and this is all one
-        // AssistantText entry. Restricted to the line's own width so
-        // unstyled padding cells past the printed text can't manufacture a
-        // spurious second color.
-        let code_row = content_base() + 2; // "● here:" / "╭─ rust" / "│ fn main() {}"
+        // Restricted to a narrow column range so unstyled padding cells
+        // past the printed text can't manufacture a spurious second color.
+        let code_row = find_row(&buffer, "fn main");
+        assert_eq!(buffer[(0, code_row)].bg, CODE_BG, "the code line should carry the code block's own dark background, like a real code block in a document");
         let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
     }
@@ -1837,15 +1998,20 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let base = content_base();
+        // `find_row`, not a hand-derived offset — the plain message is now
+        // a multi-row padded bubble (see `render_entry`'s `UserMessage`
+        // arm), so "the command lands 2 rows after the plain message"
+        // no longer holds.
+        let plain_row = find_row(&buffer, "hi");
+        let command_row = find_row(&buffer, "/exit");
         // Column 3 for the plain message: no accent bar or panel border
         // ahead of it any more (the fill starts at column 0), but "hi"'s
         // own padding fill is one uniformly-styled span covering the whole
         // row width, so any column here still reads the fill's background.
         // The slash command's unbarred "> {l}" shape (see `render_entry`)
         // is unchanged, so column 2 (its content) still applies there.
-        let plain_cell = &buffer[(3, base)]; // padding past "hi", same fill
-        let command_cell = &buffer[(2, base + 2)]; // "> /exit"
+        let plain_cell = &buffer[(3, plain_row)]; // padding past "hi", same fill
+        let command_cell = &buffer[(2, command_row)]; // "> /exit"
         assert_eq!(plain_cell.bg, BG_ELEMENT, "a plain user message should carry the subtle background tint");
         assert_ne!(command_cell.bg, BG_ELEMENT, "a slash command must not carry the chat-message background tint");
     }

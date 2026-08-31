@@ -554,6 +554,71 @@ determinism, the live/scrolled badge in both states, its absence during the
 hero), full workspace `cargo test`/`cargo clippy -p mjolnir-tui -- -D
 warnings` both clean.
 
+**Progress (2026-08-31, chat padding, code-block redesign, diff line
+numbers):** A live-review batch against the status-line-polish pass
+(`ab8c237`), all per explicit developer feedback: (1) chat messages had
+inconsistent/no padding — user bubbles filled to the render width with no
+inset and no top/bottom breathing room, assistant text had none of either.
+New shared primitive `filled_line`/`BOX_PAD_H` (1 column) gives every filled
+box in the log — chat bubbles, code blocks, diff/approval-card rows — the
+same left/right inset by construction; `card_line` now delegates to it, so
+every existing card gained the same inset for free. User messages gained a
+`card_padding_line` blank row above/below (matching the approval card's own
+top/bottom padding); assistant prose gained a matching blank row above/below
+plus a 1-column left indent (`indent_prose_line`) for the same visual
+alignment, staying unfilled (no bg) per the standing "assistant has no
+background" design. (2) An active turn showed "working…"/"thinking…" twice —
+once appended to the log itself (`build_log_lines`), once in the status line
+above the input, which already showed the identical thing. The log's copy is
+removed outright (`spinner_line` deleted with it); the status line is now
+the only place live turn activity shows — see
+`active_turn_activity_shows_once_not_duplicated_between_log_and_status_line`.
+(3) The status line had padding below it (a spacer row plus the input box's
+own internal top `Padding`) but none above, read as an oversized gap under
+the line and none above it. `draw`'s vertical `Layout` moved the one spacer
+row from between the status line and the input box to between the log and
+the status line — same total row budget, so the input box's position and
+height are unaffected (confirmed no `the_terminal_cursor_...`/`command_token_
+is_dimmed_...` test needed touching), the status line now has one row of
+padding on both sides instead of two below and none above. (4) The
+assistant-speaker "●" marker is removed outright (per explicit "that needs
+to go") — user/assistant are still visually distinct by color alone (bright
+vs. muted+tinted; see `user_and_assistant_messages_are_visually_distinct`),
+same as every intermediate design already relied on for everything except
+this one glyph. (5) Fenced code blocks dropped the hand-drawn `╭─ lang` /
+`│ ` / `╰─` ASCII border entirely in favor of a real filled box: a new
+`palette::CODE_BG` (its own darker tier, distinct from `BG_ELEMENT` so it
+still reads as its own surface nested inside the assistant bubble), a
+language-label header row, and a `card_padding_line` spacer under the label
+plus one at the bottom — "a real code block in a document," per the
+developer's own phrasing, not ASCII art. (6) Diff lines (both the Edit
+approval card and a ```diff fence in assistant prose) gained an old-file/
+new-file line-number gutter (`number_diff_lines`, `diff_gutter`) — numbered
+relative to the shown diff since `mjolnir_tools::diff::unified` emits no
+`@@ -a,b +c,d @@` hunk header to anchor an absolute file offset on (it diffs
+a single already-replaced hunk, not a whole file; see that function's own
+doc comment). A context line shows the same number on both sides, a removed
+line only its old number, an added line only its new one — the same
+two-column convention GitHub's own diff view uses. Diff backgrounds
+(`DIFF_ADD_BG`/`DIFF_DEL_BG`) were already full-width as of `ab8c237`; the
+developer's report that they showed "no background" was against a build
+older than that commit, not a real gap — confirmed by inspecting the
+already-current source before touching it, rather than re-doing work that
+was already done.
+
+Verified two ways: 93 `mjolnir-tui` tests pass (up from 91; two coordinate-
+pinned tests — `user_and_assistant_messages_are_visually_distinct`,
+`a_slash_command_renders_differently_from_a_plain_user_message`, and three
+more — were converted from hand-derived row offsets to `find_row` since the
+padding changes shifted them, the same migration this file's history already
+describes doing once before for the same reason), `cargo clippy -p
+mjolnir-tui --all-targets -- -D warnings` clean; and a throwaway scratch unit
+test (written, run once with `--nocapture` to dump the rendered buffer as a
+text+background-color-tag grid, then deleted — not committed, same spirit as
+the design-iteration harness in `examples/preview.rs`) confirmed the actual
+column alignment of the padding inset, the code block's box boundaries, and
+the diff gutter's exact spacing before considering this done.
+
 - **Layout:** Four horizontal bands: a 1-row header (identity/status), the
   body (full-width scrollable conversation log, or the log beside a
   secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a

@@ -68,6 +68,16 @@ pub(crate) const BG_INPUT: Color = Color::Rgb(54, 56, 83);
 /// reasoning as `USER_FG`/`USER_BG` above.
 pub(crate) const CODE_FG: Color = Color::Rgb(224, 175, 104);
 
+/// Background for a fenced fixed-width code block — its own darker tier,
+/// not `BG_ELEMENT` (chat bubbles and cards) — per explicit developer
+/// feedback that a code block should look like "a real code block in a
+/// document," a distinct dark box with a language label, not the hand-drawn
+/// `╭─ lang` / `│ ` / `╰─` ASCII border it replaces (see
+/// `ui::render_assistant_text`). Darker than every other tier so a code
+/// block still reads as its own surface even nested inside the assistant
+/// message's own `BG_ELEMENT` bubble.
+pub(crate) const CODE_BG: Color = Color::Rgb(22, 23, 35);
+
 /// Approval-card diff coloring: a full-width background tint (same
 /// technique as `USER_BG`) behind added/removed lines so a diff reads at a
 /// glance instead of every line rendering in the same plain `BRIGHT`.

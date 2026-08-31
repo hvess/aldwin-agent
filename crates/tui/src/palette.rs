@@ -7,7 +7,15 @@
 
 use ratatui::style::Color;
 
-pub(crate) const ACCENT: Color = Color::Cyan;
+/// Bright sky-blue rather than named ANSI `Cyan` — sampled directly (via
+/// ImageMagick pixel-sampling, not eyeballed) from a real OpenCode
+/// screenshot the developer pointed at as the actual reference after the
+/// first pass at this redesign (fixed-RGB values guessed from OpenCode's
+/// theme *source* rather than measured from a rendered screenshot) came
+/// back rejected as "horrific" — too low-contrast and the wrong hue
+/// entirely. Reused verbatim from `TOOL_PALETTE`'s existing sky-blue entry
+/// rather than introduced as a fourth near-identical blue.
+pub(crate) const ACCENT: Color = Color::Rgb(125, 207, 255);
 pub(crate) const DIM: Color = Color::DarkGray;
 pub(crate) const BRIGHT: Color = Color::White;
 
@@ -23,20 +31,33 @@ pub(crate) const BRIGHT: Color = Color::White;
 /// separately hand-tuned color.
 pub(crate) const USER_FG: Color = Color::Rgb(190, 190, 195);
 
-/// Three-tier neutral background scale for the opaque-surfaces redesign —
-/// values are OpenCode's own tuned dark-theme `darkStep1/2/3`
-/// (github.com/anomalyco/opencode, `theme/assets/opencode.json`), reused
-/// verbatim rather than re-derived, since ratatui has no runtime
-/// alpha-compositing to recompute them from. Each tier is one step lighter
-/// than the one "behind" it, so nesting reads as depth without needing more
-/// border: `BG_BASE` fills the whole frame (see `ui::draw`) so gaps between
-/// panels are opaque instead of the terminal's own background; `BG_PANEL`
-/// fills the log panel and sidebar; `BG_ELEMENT` fills the "card" surfaces —
-/// the chat input, user message bubbles, and approval/prompt cards. Same
-/// fixed-RGB-not-named-ANSI reasoning as every other color in this file.
-pub(crate) const BG_BASE: Color = Color::Rgb(10, 10, 10);
-pub(crate) const BG_PANEL: Color = Color::Rgb(20, 20, 20);
-pub(crate) const BG_ELEMENT: Color = Color::Rgb(30, 30, 30);
+/// Background scale for the opaque-surfaces redesign. The first attempt
+/// used a *neutral* near-black scale (10/10/10 → 20/20/20 → 30/30/30) taken
+/// from OpenCode's theme JSON *source* — rejected by the developer as
+/// "horrific": a 10-unit neutral-gray step is essentially imperceptible on
+/// a real screen, so panels and cards didn't read as distinct filled
+/// surfaces at all, just as one flat dark mass. These values are pixel-
+/// sampled instead (ImageMagick `convert … -format "%[pixel:p{x,y}]"`,
+/// exact coordinates and readings kept in the session transcript, not
+/// re-derivable from this file alone) from a real rendered OpenCode
+/// screenshot the developer linked as the actual reference. Two things the
+/// neutral scale missed, both confirmed by the samples: the steps are
+/// larger (~7-10 units *per channel*, not ~10 total) and every tier is
+/// blue-shifted (B noticeably higher than R/G, not R=G=B) rather than
+/// neutral gray — an indigo-slate family, not a black-and-white one. Each
+/// tier is one step lighter than the one "behind" it: `BG_BASE` fills the
+/// whole frame (see `ui::draw`) and is also what the log panel's own
+/// scrollback content sits directly on (confirmed by sampling *between*
+/// message cards in the reference — it's the same color as the outer
+/// frame, not a separate panel tint); `BG_PANEL` fills the sidebar;
+/// `BG_ELEMENT` fills message-bubble and approval/prompt cards; `BG_INPUT`
+/// fills the chat input — sampled as the *lightest* of the four tiers, one
+/// step past `BG_ELEMENT`, since the input is the one surface that's always
+/// active/focused rather than passive content.
+pub(crate) const BG_BASE: Color = Color::Rgb(34, 36, 53);
+pub(crate) const BG_PANEL: Color = Color::Rgb(40, 42, 62);
+pub(crate) const BG_ELEMENT: Color = Color::Rgb(47, 49, 72);
+pub(crate) const BG_INPUT: Color = Color::Rgb(54, 56, 83);
 
 /// Inline `` `code` `` in assistant prose used `Modifier::REVERSED` (fg/bg
 /// swapped) to stand out, which reads as a jarring bright-white block
@@ -60,23 +81,21 @@ pub(crate) const DIFF_DEL_FG: Color = Color::Rgb(220, 150, 150);
 /// constant here.
 pub(crate) const WARNING_FG: Color = Color::Rgb(212, 163, 60);
 
-/// Chrome color for the log panel, sidebar panel, and (while a card or
-/// prompt is pending) the dimmed input panel border. A muted, desaturated
-/// tint of `ACCENT`'s own hue — not `DIM` gray — per a UX pass modeled on
-/// darrenburns/posting (a Textual TUI whose polish comes substantially from
-/// exactly this discipline: every panel border carries the app's one accent
-/// hue at reduced intensity — Textual's `.section { border: round $accent
-/// 40%; &:focus-within { border: round $accent 100%; } }` — rather than
-/// switching between an unrelated neutral gray and the accent). Ratatui has
-/// no runtime alpha-blend-over-background primitive, so this is a
-/// hand-picked fixed RGB approximating "cyan at ~35% intensity over a near-
-/// black background" rather than a computed blend. This *refines* rather
-/// than reopens the "one accent, not scattered" rule below: it's still a
-/// single hue family used consistently for all chrome, never a second
-/// unrelated color — `ACCENT` itself stays reserved for the moments that
-/// should visually outrank ordinary chrome (the approval/prompt card, the
-/// focused input border, and the log panel's own live/scrolled title badge
-/// — see `ui::draw`).
+/// A muted, desaturated tint of `ACCENT`'s own hue — not `DIM` gray — for
+/// chrome that shouldn't outrank `ACCENT` itself: a card's left accent bar
+/// at rest (see `card_line`/`LogEntry::UserMessage`), the footer's key-chip
+/// badge background, and (while a card or prompt is pending) the dimmed
+/// input bar. No longer a *border* color in the literal sense — the log
+/// panel and sidebar dropped their drawn 4-sided borders in the same pass
+/// that replaced `BG_BASE`/`BG_PANEL`/`BG_ELEMENT` above: the reference
+/// screenshot that prompted that replacement also showed no box anywhere
+/// around the conversation, only filled cards floating directly on the
+/// frame background, and keeping our own outer panel border was producing
+/// a messy doubled line everywhere a card's own left bar met it. The name
+/// stays (and the constant itself is unchanged) since it's still doing the
+/// same "one accent hue, reduced intensity" job the original comment
+/// described, just applied to bars and chips now rather than 4-sided
+/// outlines.
 pub(crate) const PANEL_BORDER: Color = Color::Rgb(45, 82, 87);
 
 /// A small fixed set of hues for giving each distinct tool *name* a stable,

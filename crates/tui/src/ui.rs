@@ -2,14 +2,14 @@ use mjolnir_permissions::PromptPayload;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_PANEL, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
+use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BG_PANEL, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -63,27 +63,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (body_area, None)
     };
 
-    let mut log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).style(Style::default().bg(BG_PANEL));
-    // `Block::inner` is a pure function of the block's border config and the
-    // outer rect (titles don't affect it, only the border does) — computed
-    // exactly once here, and this same `Rect` is what both `App::
-    // render_width`/`render_height` (cached for scroll math between draws)
-    // and `draw_log`'s own content pass use. There must never be a second,
-    // independently-derived "inner width" anywhere else in this call graph
-    // — see mjolnir-tui.md's scrolling-fix and wrapped-row-scroll-math
-    // Progress notes for the two real bugs that came from exactly this kind
-    // of divergence before.
-    let log_inner = log_block.inner(log_area);
-    app.render_width = log_inner.width;
-    app.render_height = log_inner.height;
-    app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
-
-    // A right-aligned status badge embedded directly in the panel's own
-    // border — modeled on posting's `border-title-status` (its Response
-    // panel shows the colored HTTP status the same way). Surfaces something
-    // that was previously invisible: whether the view is still auto-
-    // following new output or has been left scrolled up. Only while there's
-    // real content to scroll (the empty-log hero has nothing to follow).
+    // No drawn border — the reference screenshot that prompted this pass
+    // shows no box anywhere around the conversation, just filled cards
+    // floating directly on the frame background (see `palette::BG_BASE`'s
+    // doc comment), and a 4-sided outline here was doubling up messily with
+    // every card's own left accent bar right at this panel's edge. `Block`
+    // is kept only for its title mechanism (see the `title_top` call below,
+    // and `mjolnir-tui.md`'s doc note that title rendering doesn't depend on
+    // `Borders` at all) — it reserves the top row for the live/scrolled
+    // badge exactly like a real border would, with no border glyphs drawn.
+    let mut log_block = Block::new().style(Style::default().bg(BG_BASE));
+    // A right-aligned status badge in the panel's (now border-less) title
+    // row — originally modeled on posting's `border-title-status` (its
+    // Response panel shows the colored HTTP status the same way), kept
+    // after the border itself was dropped since `Block` titles render
+    // independently of `Borders`. Surfaces something that was previously
+    // invisible: whether the view is still auto-following new output or has
+    // been left scrolled up. Only while there's real content to scroll (the
+    // empty-log hero has nothing to follow). Must happen *before* `inner()`
+    // below — a title only reserves its row if it's already attached when
+    // `inner()` runs (`Block::inner` checks `has_title_at_position`, not
+    // some later state), so building the title after computing `log_inner`
+    // silently stopped reserving that row the moment the border (which used
+    // to reserve it unconditionally) was removed.
     if !app.log.is_empty() {
         // "•" not "●" — the latter is reserved as the assistant-speaker
         // marker in the log itself (see `render_assistant_text`); reusing
@@ -93,6 +95,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let (glyph, label, color) = if app.scroll.following { ("•", "live", ACCENT) } else { ("⏸", "scrolled", WARNING_FG) };
         log_block = log_block.title_top(Line::from(Span::styled(format!(" {glyph} {label} "), Style::default().fg(color))).right_aligned());
     }
+    // `Block::inner` is a pure function of the block's border/title config
+    // and the outer rect — computed exactly once here, and this same `Rect`
+    // is what both `App::render_width`/`render_height` (cached for scroll
+    // math between draws) and `draw_log`'s own content pass use. There must
+    // never be a second, independently-derived "inner width" anywhere else
+    // in this call graph — see mjolnir-tui.md's scrolling-fix and
+    // wrapped-row-scroll-math Progress notes for the two real bugs that
+    // came from exactly this kind of divergence before.
+    let log_inner = log_block.inner(log_area);
+    app.render_width = log_inner.width;
+    app.render_height = log_inner.height;
+    app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
 
     draw_header(frame, header_area, app);
     draw_log(frame, log_area, log_inner, log_block, app);
@@ -868,7 +882,11 @@ fn card_line(bar_color: Color, content: &str, content_style: Style, width: u16) 
 /// at a glance.
 fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
-    let mut lines = vec![card_line(ACCENT, "Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+    // A blank filled row top and bottom (see `card_padding_line`'s doc
+    // comment) — plain terminal text sat flush against the card's edges,
+    // which read as cramped next to the reference's generous interior
+    // padding.
+    let mut lines = vec![card_padding_line(width), card_line(ACCENT, "Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     if let Some(path) = path {
         lines.push(card_line(PANEL_BORDER, &path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
     }
@@ -915,7 +933,18 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
         )),
         None => lines.push(card_line(ACCENT, approval_key_hint(), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
+    lines.push(card_padding_line(width));
     lines
+}
+
+/// A blank, filled row — same bar+fill mechanism as `card_line`, just with
+/// empty content — used as a leading/trailing spacer inside a card so its
+/// content doesn't sit flush against the card's own top/bottom edge. `bar`
+/// is `PANEL_BORDER` rather than whatever hue the card's title uses: a
+/// padding row is chrome, not a title repeated, so it stays visually quiet
+/// the same way a diff's context lines do.
+fn card_padding_line(width: u16) -> Line<'static> {
+    card_line(PANEL_BORDER, "", Style::default().bg(BG_ELEMENT), width)
 }
 
 /// The approval card's own key labels — also shown in the footer key-hint
@@ -963,7 +992,7 @@ fn prompt_key_hint(payload: &PromptPayload) -> String {
 }
 
 fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![card_line(ACCENT, title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+    let mut lines = vec![card_padding_line(width), card_line(ACCENT, title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
     for l in body.lines() {
         lines.push(card_line(PANEL_BORDER, l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
     }
@@ -971,6 +1000,7 @@ fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, 
         Some(r) => lines.push(card_line(ACCENT, &format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
         None => lines.push(card_line(ACCENT, keys, Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
     }
+    lines.push(card_padding_line(width));
     lines
 }
 
@@ -1078,7 +1108,11 @@ fn tool_color(name: &str) -> Color {
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).style(Style::default().bg(BG_PANEL)).title(" session ");
+    // No drawn border — same reasoning as the log panel in `draw` (see its
+    // `log_block` doc comment): the `BG_PANEL` fill plus its position as its
+    // own column is what separates it, matching the reference's "filled
+    // surfaces, not boxes" look. `Block` is kept only for the title.
+    let block = Block::new().style(Style::default().bg(BG_PANEL)).title(" session ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1130,7 +1164,11 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(ACCENT)
         })
-        .style(Style::default().bg(BG_ELEMENT))
+        // `BG_INPUT`, not `BG_ELEMENT` — sampled as the lightest of the four
+        // background tiers (see its doc comment), one step past the fill
+        // message/card content uses, since the input is the one surface
+        // that's always active/focused rather than passive content.
+        .style(Style::default().bg(BG_INPUT))
         .padding(Padding::new(2, 1, 1, 0));
     let inner = block.inner(area);
     // Dim placeholder text when the draft is empty — an empty filled box
@@ -1827,7 +1865,13 @@ mod tests {
     /// content identically whether the hero or real entries are showing. No
     /// dependency on the hero's row count, unlike the test this replaces.
     #[test]
-    fn the_log_panel_is_framed_by_a_rounded_border_spanning_the_full_render_width() {
+    fn the_log_panel_has_no_drawn_border_but_is_still_opaque() {
+        // Replaces the old `..._is_framed_by_a_rounded_border_...`: the
+        // opaque-surfaces redesign's reference screenshot showed no box
+        // anywhere around the conversation (see `draw`'s `log_block` doc
+        // comment) — the log panel's own 4-sided border was dropped, but it
+        // must still be a filled, opaque surface, not the terminal's own
+        // background showing through at its edges.
         let mut app = app();
         let (width, height) = (110u16, 40u16);
         let backend = TestBackend::new(width, height);
@@ -1837,10 +1881,11 @@ mod tests {
 
         let top = 1; // directly below the 1-row header
         let bottom = height - 1 - input_area_height("") - 1; // above the footer + input box
-        assert_eq!(buffer[(0, top)].symbol(), "╭", "top-left corner of the log panel, directly below the header");
-        assert_eq!(buffer[(width - 1, top)].symbol(), "╮", "top-right corner should reach the full render width");
-        assert_eq!(buffer[(0, bottom)].symbol(), "╰", "bottom-left corner of the log panel");
-        assert_eq!(buffer[(width - 1, bottom)].symbol(), "╯", "bottom-right corner should reach the full render width");
+        for &(x, y) in &[(0, top), (width - 1, top), (0, bottom), (width - 1, bottom)] {
+            let cell = &buffer[(x, y)];
+            assert_ne!(cell.symbol(), "╭", "the log panel must not draw a border corner");
+            assert_eq!(cell.bg, BG_BASE, "the log panel must still be opaque at its edges even without a drawn border");
+        }
     }
 
     #[test]

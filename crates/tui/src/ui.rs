@@ -593,18 +593,21 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             }
         }
     }
-    // Blank rows above and below the whole message — per explicit developer
-    // feedback that a chat message needs padding "on the top... and also
-    // the bottom," the same amount every other chat component gets (the
-    // user bubble's own `card_padding_line` rows above). Left unstyled
-    // rather than filled: assistant prose has no background of its own to
-    // extend (see the Prose arm's comment above), so a plain blank row is
-    // this message's equivalent padding.
-    let mut out = Vec::with_capacity(lines.len() + 2);
-    out.push(Line::default());
-    out.extend(lines);
-    out.push(Line::default());
-    out
+    // No extra leading/trailing blank rows of its own any more — per
+    // explicit developer feedback that assistant messages read with
+    // noticeably more top/bottom padding than the user's own input. The
+    // reason: `build_log_lines` already inserts one blank separator row
+    // between every pair of rendered entries. A filled bubble (user
+    // messages, code blocks, diff/approval cards) pads with its own
+    // `card_padding_line`, which is visually distinct from that blank
+    // separator (colored fill vs. plain gap), so the two don't read as
+    // doubled. Assistant prose has no fill to pad with, so it used to add
+    // its own *blank* row on top of the separator's blank row — two
+    // indistinguishable blank rows stacking into a gap twice the size of
+    // every other component's. Leaving padding to the separator alone
+    // matches assistant messages to the same single-row gap everything
+    // else gets.
+    lines
 }
 
 /// Left-insets an unfilled line by `BOX_PAD_H` columns — a plain raw space,

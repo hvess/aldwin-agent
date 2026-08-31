@@ -619,6 +619,46 @@ the design-iteration harness in `examples/preview.rs`) confirmed the actual
 column alignment of the padding inset, the code block's box boundaries, and
 the diff gutter's exact spacing before considering this done.
 
+**Progress (2026-08-31, assistant padding correction + triple-diff fix):**
+Two more developer-reported live-use complaints, against the chat-padding
+pass directly above. (1) Assistant messages read with noticeably more top/
+bottom padding than the input box or a user chat bubble. Root cause: that
+same pass gave `render_assistant_text` its own leading/trailing blank
+`Line::default()` row *in addition to* the blank separator row
+`build_log_lines` already inserts between every pair of rendered entries — a
+filled bubble's own `card_padding_line` padding is visually distinct from
+that separator (colored fill vs. plain gap), so the two don't read as
+doubled the way two indistinguishable blank rows do. `render_assistant_text`
+no longer pushes its own leading/trailing blank rows; the separator alone
+now gives assistant messages the same single-row gap every other unfilled
+entry (tool activity, notices, retries) already got. (2) The developer
+described a single proposed edit showing its diff three times: once as the
+LLM's own prose before the tool call, once in the real approval gate, once
+again after the edit landed. The approval gate itself (`ToolApprovalRequested`
+→ `ApprovalCard`) only ever fires once per edit call — confirmed by tracing
+every emission site (`core::dispatcher`) and the `edit_class: true` bypass of
+the generic four-tier check (`tools::dispatcher`, `permissions::Engine::
+check_tool`) — so this was never a duplicate-render bug in the log. The
+actual cause lives in `mjolnir-core`'s base system prompt
+(`crates/core/src/prompt.rs`): it told the model to "always propose a diff
+and wait for approval," which is instructions to do by hand, in chat text,
+exactly what the `edit` tool's own structural gate already does
+automatically and unconditionally (see CLAUDE.md's "Edit is never
+allowlistable" constraint) — so a compliant model narrates the diff itself,
+then the tool call triggers the real card, then it narrates a change summary
+afterward. Reworded to say the tool call itself is the proposal and the
+model should not also narrate the diff before or after calling it — one
+call, one approval, one diff shown. No test pinned the old wording (the
+comment above `BASE` already calls the prose "its own deliverable," open to
+revision without touching the structural-ordering guarantees the rest of
+that file's tests do cover).
+
+Verified: `mjolnir-tui`'s existing 93 tests still pass unmodified (none
+asserted an exact blank-row count around assistant text, only that *a*
+blank row exists between entries — `a_blank_line_separates_consecutive_
+log_entries`); `mjolnir-core`'s 11 tests pass unmodified; `cargo clippy -p
+mjolnir-tui -p mjolnir-core --all-targets` clean on both touched files.
+
 - **Layout:** Four horizontal bands: a 1-row header (identity/status), the
   body (full-width scrollable conversation log, or the log beside a
   secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a

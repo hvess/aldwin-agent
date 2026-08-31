@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{cursor_line_col, App, PermState};
+use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
@@ -96,7 +96,7 @@ fn input_area_height(input: &str) -> u16 {
 /// (renders it) and `log_row_count` (counts its wrapped rows for scroll
 /// math), so the two can never disagree about what the log contains.
 fn build_log_lines(app: &App, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = intro_lines(&app.status.model_name, width);
+    let mut lines: Vec<Line> = intro_lines(&app.status, width);
     // Separates the banner from the first real entry, same as the
     // inter-entry separator below — skipped when the log is still empty so
     // a fresh session doesn't end in a trailing blank line.
@@ -215,28 +215,32 @@ const WORDMARK_ART: [&str; 6] = [
     "╚═╝     ╚═╝ ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝",
 ];
 
-const MJOLNIR_ART: [&str; 21] = [
-    "⠀⠀⠀⠀⠀⠀⠀⠀⢠⣤⠶⠶⠒⣛⣛⡛⠛⣛⠛⢛⣛⣓⠲⠶⢶⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⢀⡏⡜⢠⣾⠟⠛⠛⠿⣿⣿⣿⠟⠛⠛⠻⣦⡀⢇⢻⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⢸⡇⡇⣾⡃⢰⢋⠙⢦⣈⠟⢁⡴⠋⢙⡆⢸⡇⢸⢸⡆⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠸⣇⡇⠘⣧⣈⠛⣁⡾⠋⣠⠻⣧⡈⠋⣁⡾⠃⢸⣸⠁⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠙⠳⢦⡀⠙⠛⠋⣠⣾⠿⣦⣈⠙⠛⠋⢁⡴⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢳⡀⠀⣀⠙⢿⣶⡿⠋⡀⠀⢠⡟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⠀⣿⣷⡴⠋⢠⣾⣿⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢀⣿⡏⠠⣷⠄⢹⣿⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⢸⣿⣿⠞⢁⠴⣿⣿⡇⢸⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⠀⣈⣿⡁⠰⣿⠆⢸⣿⣀⠘⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡏⢠⡏⢠⡿⠊⣁⠰⢿⡄⢹⡀⢻⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡞⠀⠸⣧⣄⣤⣾⣿⣷⣤⣠⣾⠇⠈⢷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⣠⢤⣤⣤⣤⣤⣤⠴⠾⠤⠶⠟⠛⠛⠛⢉⣉⣉⠙⠛⠛⠻⠶⠼⠷⠤⠤⢤⣤⡤⠤⠤⣄⠀",
-    "⠀⡇⢠⣤⣤⣤⡤⠤⠀⠶⣶⣶⣶⡾⠟⠛⠉⠛⠻⢿⣿⣷⣶⠖⢀⣠⣤⣤⡤⣤⣤⣤⡄⢸⡆",
-    "⢸⡇⢸⣿⣿⡿⠀⣴⡶⣦⠈⣿⠏⣠⡶⠛⠛⠛⢶⡄⠹⣿⡏⢠⣿⣿⡿⠿⠧⠼⣿⣿⡇⠸⡇",
-    "⢸⠁⣼⣿⣿⣿⣄⣉⣀⡾⠀⡏⠀⣿⠁⣼⣿⣧⣨⡿⠀⣿⣇⠘⣟⣁⣤⣶⠶⢦⣤⡈⠻⠀⣷",
-    "⣿⠀⠉⣠⣤⣤⣈⣉⣉⣤⣾⣷⠀⢿⣄⠙⠻⠿⠟⢁⣼⣿⠟⢦⣈⣉⣉⣁⣴⣿⣿⣿⣆⠀⣿",
-    "⠙⢦⣤⡤⢤⣤⣈⣉⠙⠛⠿⣿⣷⣄⠙⠻⠶⣶⣾⠿⠛⢁⣴⣿⠿⠟⠛⢉⣉⣠⣤⣤⣤⡤⠟",
-    "⠀⠀⠀⠀⠀⠀⠀⠉⠙⠓⠦⣄⣉⠙⠻⣶⣦⣤⣤⣴⠾⠛⢉⣠⠴⠖⠛⠉⠁⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠦⣄⠙⠻⠋⣠⡴⠚⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠶⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+/// Downscaled 2026-08-31 to 13×21 (from the 21×35 trace above/still in git
+/// history) per explicit developer feedback that the full-size mark read
+/// as "quite large" in the banner. Not a fresh trace or a hand edit: a
+/// script decoded every Braille cell of the original back into its 2×4 dot
+/// bitmap (84×70 dots), box-filtered that bitmap down by a uniform 0.6 in
+/// both dimensions (so the mark stays *proportionate* — same aspect ratio,
+/// not squashed on one axis), thresholded each output dot at ≥30% coverage,
+/// and re-encoded the result into Braille cells — same technique the
+/// original trace used going the other direction, just resampling
+/// pixel data instead of hand-placing it. The script isn't kept in the
+/// repo, same reasoning as the original trace/wordmark pipelines noted
+/// above.
+const MJOLNIR_ART: [&str; 13] = [
+    "⠀⠀⠀⠀⢀⣶⢛⣯⣿⣯⣿⣽⣿⣽⡛⣦⡀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⢸⣿⣿⢱⡒⣭⡟⣡⢒⡎⣷⣿⡇⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠘⢿⣘⠶⠵⣫⣾⡻⠮⠾⣃⡿⠃⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠘⡆⢠⡹⡿⢏⡄⢰⠃⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⡇⣸⡟⣧⢻⣇⢸⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⢀⡇⢿⠟⣵⢻⡿⢸⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⣼⢹⠫⠗⣋⠾⠝⡟⣇⠀⠀⠀⠀⠀⠀",
+    "⢀⣀⣀⣀⣀⣴⣣⡼⠷⠿⣿⡿⠾⢧⣼⣆⣀⣀⣀⣀⡀",
+    "⣸⢰⣶⡶⢒⣐⢶⡶⢛⣯⣝⡻⣿⡶⢢⣴⣶⢶⣶⡆⣷",
+    "⡟⣼⣿⣧⣛⡹⢸⢳⡟⣶⣦⣿⢸⣇⢿⣫⣭⢭⣍⠳⢹",
+    "⢧⣀⣒⡒⠶⢶⣿⣏⠳⣭⣛⣵⡿⣫⣶⣶⠶⢟⣛⣓⣸",
+    "⠀⠉⠈⠉⠉⠓⠮⣭⡛⢶⣭⡵⢞⣫⠵⠚⠋⠉⠉⠉⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠉⠳⣬⠞⠋⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
 
 /// Per-row color for `MJOLNIR_ART`: bright electric cyan-white at the top
@@ -259,9 +263,22 @@ fn mjolnir_row_color(row: usize, total: usize) -> Color {
 /// art content that particular row has. `WORDMARK_ART` doesn't need this
 /// — nothing sits beside it — so its rows aren't held to a matching
 /// invariant.
-const MJOLNIR_ART_WIDTH: usize = 35;
+const MJOLNIR_ART_WIDTH: usize = 21;
 
-fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
+/// Same allow/deny vocabulary and per-state coloring the status bar uses
+/// (`draw_status`'s `perm` closure) — reusing the diff-tint colors
+/// (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than inventing new ones, since
+/// green-means-allowed/red-means-denied is the same "state at a glance"
+/// job those already do for added/removed diff lines.
+fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
+    let (word, color) = match state {
+        PermState::Allowed => ("allow", DIFF_ADD_FG),
+        PermState::Denied => ("deny", DIFF_DEL_FG),
+    };
+    vec![Span::styled(format!("{label}:"), Style::default().fg(DIM)), Span::styled(word, Style::default().fg(color))]
+}
+
+fn intro_lines(status: &StatusInfo, width: u16) -> Vec<Line<'static>> {
     debug_assert!(
         MJOLNIR_ART.iter().all(|row| row.chars().count() == MJOLNIR_ART_WIDTH),
         "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
@@ -277,14 +294,30 @@ fn intro_lines(model_name: &str, width: u16) -> Vec<Line<'static>> {
     // wordmark block sits at the top of this column, tagline/stats below
     // it, the whole column vertically centered against the art's height.
     // Stats render as separate labeled lines (model/version/commit) —
-    // per explicit developer request, not packed onto one line.
+    // per explicit developer request, not packed onto one line. `access`
+    // is the fourth stat line, added 2026-08-31 per explicit developer
+    // request that the banner surface the current permission model (what's
+    // allowed/denied in this directory) rather than making the developer
+    // discover it only by triggering a prompt — the same merged
+    // session/project/global view (against an empty target, so it reads
+    // as "the broadest grant currently in force") already computed for the
+    // status bar's own read/shell/edit indicator (`App::refresh_permissions`
+    // / `perm_state`), just surfaced a second time where it's visible before
+    // the first turn even starts.
     let mut info: Vec<Vec<Span<'static>>> = WORDMARK_ART.iter().map(|row| vec![Span::styled(*row, wordmark_style)]).collect();
     info.push(vec![]);
     info.push(vec![Span::styled("every strike is yours to call. nothing moves without you.", tagline_style)]);
     info.push(vec![]);
-    info.push(vec![Span::styled("model    ", stat_label), Span::styled(model_name.to_string(), stat_value)]);
+    info.push(vec![Span::styled("model    ", stat_label), Span::styled(status.model_name.clone(), stat_value)]);
     info.push(vec![Span::styled("version  ", stat_label), Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), stat_value)]);
     info.push(vec![Span::styled("commit   ", stat_label), Span::styled(env!("MJOLNIR_GIT_HASH"), stat_value)]);
+    let mut access = vec![Span::styled("access   ", stat_label)];
+    access.extend(access_spans("read", status.read));
+    access.push(Span::raw("  "));
+    access.extend(access_spans("shell", status.shell));
+    access.push(Span::raw("  "));
+    access.extend(access_spans("edit", status.edit));
+    info.push(access);
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
     // A blank line above and below the art gives it breathing room inside
@@ -1347,11 +1380,11 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         // The right-hand column (WORDMARK_ART, then blank/tagline/blank/
-        // model/version/commit) is vertically centered against
-        // MJOLNIR_ART's 16 rows: offset = (16 - (6 wordmark + 6 info)) / 2
-        // = 2. Screen row 0 is the top border, row 1 is the padding blank
-        // line above the art, so the wordmark's first row is 2 + 2 = 4.
-        let info_len = WORDMARK_ART.len() + 6;
+        // model/version/commit/access) is vertically centered against
+        // MJOLNIR_ART's 13 rows: offset = (13 - (6 wordmark + 7 info)) / 2
+        // = 0. Screen row 0 is the top border, row 1 is the padding blank
+        // line above the art, so the wordmark's first row is 2 + 0 = 2.
+        let info_len = WORDMARK_ART.len() + 7;
         let offset = (MJOLNIR_ART.len() - info_len) / 2;
         let wordmark_row = (2 + offset) as u16;
         let wordmark_row_text: String = (0..110).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
@@ -1366,7 +1399,16 @@ mod tests {
 
     #[test]
     fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
-        assert_eq!(intro_lines("claude-sonnet-5", 80).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
+        let status = StatusInfo {
+            model_name:    "claude-sonnet-5".into(),
+            turn:          None,
+            step:          None,
+            running_tools: vec![],
+            read:          PermState::Denied,
+            shell:         PermState::Denied,
+            edit:          PermState::Denied,
+        };
+        assert_eq!(intro_lines(&status, 80).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
@@ -1375,6 +1417,7 @@ mod tests {
         assert!(out.contains(WORDMARK_ART[3].trim()), "the wordmark should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
         assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
+        assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "the banner should surface the current directory's permission model");
     }
 
     #[test]

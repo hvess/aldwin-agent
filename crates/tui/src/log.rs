@@ -63,11 +63,13 @@ impl From<TurnEndReason> for TurnEndReasonKind {
 }
 
 /// Rows the welcome banner (`ui::intro_lines`) always renders: a blank
-/// padding row, `MJOLNIR_ART`'s 21 traced Braille rows (the `WORDMARK_ART`
-/// block plus the tagline/stats render beside the hammer art on those same
-/// rows, as one combined right-hand column — not as extra rows above,
-/// below, or around it — see `ui::intro_lines`), then another blank
-/// padding row — 23 content rows — plus the top/bottom border
+/// padding row, `MJOLNIR_ART`'s 13 traced Braille rows (a 2026-08-31
+/// downscale of the original 21-row trace, still proportionate — see
+/// `ui::MJOLNIR_ART`'s doc comment) (the `WORDMARK_ART` block plus the
+/// tagline/stats/access-permissions lines render beside the hammer art on
+/// those same rows, as one combined right-hand column — not as extra rows
+/// above, below, or around it — see `ui::intro_lines`), then another blank
+/// padding row — 15 content rows — plus the top/bottom border
 /// `ui::bordered` always adds regardless of render width. Fixed shape, not
 /// derived from any state but the model name (itself always one line) and
 /// the render width (which changes the border's length, not its row
@@ -81,7 +83,7 @@ impl From<TurnEndReason> for TurnEndReasonKind {
 /// alongside `ui::intro_lines`/`ui::WORDMARK_ART`/`ui::MJOLNIR_ART` if its
 /// shape ever changes.
 #[cfg(test)]
-pub const INTRO_LINE_COUNT: usize = 25;
+pub const INTRO_LINE_COUNT: usize = 17;
 
 /// Truncates a tool result to a one-line summary for a closed
 /// `ToolActivityEntry` — the full content already went into the model's

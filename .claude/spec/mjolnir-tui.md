@@ -377,6 +377,25 @@ single-row chat-bubble assumption at a narrow render width). Fixed by
 switching both to `unicode_width::UnicodeWidthStr::width`, a new direct
 dependency (already present transitively via ratatui).
 
+**Progress (2026-08-31, banner rescale + permission model):** Two developer
+requests on the welcome banner: (1) `MJOLNIR_ART` read as "quite large" —
+downscaled from 21×35 to 13×21 per explicit "must be proportionate"
+direction, by decoding the existing trace's Braille dots back into an
+84×70 bitmap, box-filtering it down by a uniform 0.6 in both dimensions
+(not a naive per-cell crop, which would have distorted rather than
+shrunk the shape), and re-encoding the result — same aspect ratio,
+same trace, smaller. `MJOLNIR_ART_WIDTH` and `log::INTRO_LINE_COUNT`
+(17, down from 25) both derive from/track the new shape per the existing
+convention. (2) The banner gave no indication of the current permission
+model until a tool actually triggered a prompt — `ui::intro_lines` now
+takes `&StatusInfo` instead of a bare model-name string and renders a
+fourth stat line, `access`, showing the same merged read/shell/edit
+allow/deny view the status bar already computes (`App::refresh_permissions`
+/ `perm_state`) — the effective grant for *this* directory (project scope
+merged under global, session on top), not a config dump. Colored with the
+existing diff-tint colors (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than new
+ones, matching their established "state at a glance" job.
+
 - **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
 - **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
 - **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.

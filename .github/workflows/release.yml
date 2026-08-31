@@ -17,10 +17,13 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            name: x86_64-unknown-linux-gnu
           - target: x86_64-apple-darwin
             os: macos-latest
+            name: apple_intel
           - target: aarch64-apple-darwin
             os: macos-latest
+            name: apple_silicon
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,14 +41,14 @@ jobs:
 
       - name: Package
         run: |
-          out="mjolnir-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          out="mjolnir-${{ github.ref_name }}-${{ matrix.name }}.tar.gz"
           tar czf "$out" -C target/${{ matrix.target }}/release mjolnir
           mkdir -p dist
           mv "$out" dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mjolnir-${{ matrix.target }}
+          name: mjolnir-${{ matrix.name }}
           path: dist/*
 
   release:

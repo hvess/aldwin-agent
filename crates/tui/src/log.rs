@@ -62,28 +62,30 @@ impl From<TurnEndReason> for TurnEndReasonKind {
     }
 }
 
-/// Rows the welcome banner (`ui::intro_lines`) always renders: a blank
+/// Rows the welcome hero (`ui::intro_content`) always renders: a blank
 /// padding row, `MJOLNIR_ART`'s 13 traced Braille rows (a 2026-08-31
 /// downscale of the original 21-row trace, still proportionate — see
 /// `ui::MJOLNIR_ART`'s doc comment) (the `WORDMARK_ART` block plus the
 /// tagline/stats/access-permissions lines render beside the hammer art on
 /// those same rows, as one combined right-hand column — not as extra rows
-/// above, below, or around it — see `ui::intro_lines`), then another blank
-/// padding row — 15 content rows — plus the top/bottom border
-/// `ui::bordered` always adds regardless of render width. Fixed shape, not
-/// derived from any state but the model name (itself always one line) and
-/// the render width (which changes the border's length, not its row
-/// count), so this is a hand-kept constant rather than a function.
+/// above, below, or around it — see `ui::intro_content`), then another blank
+/// padding row — 15 rows total. Fixed shape, not derived from any state but
+/// the model name (itself always one line), so this is a hand-kept constant
+/// rather than a function.
 ///
-/// No longer part of live scroll math (`App::total_lines` gets exact
-/// wrapped-row counts from `ui::log_row_count` instead — see its doc
-/// comment) — this constant's only remaining job is letting `ui.rs`'s own
-/// tests compute "the screen row the first real log entry starts on"
-/// without duplicating the banner's shape, hence `#[cfg(test)]`. Update
-/// alongside `ui::intro_lines`/`ui::WORDMARK_ART`/`ui::MJOLNIR_ART` if its
-/// shape ever changes.
+/// Since the visual redesign that made the log panel itself a bordered
+/// ratatui panel (the hero used to draw its own `┌─┐`/`└─┘` border directly;
+/// that's gone — see `ui::intro_content`'s doc comment), this no longer
+/// includes any border rows, and it's no longer used to compute "the screen
+/// row the first real log entry starts on" either (the hero and real log
+/// entries are mutually exclusive now — see `ui::build_log_lines` — so
+/// there's no such offset to compute). Its only remaining job is pinning
+/// down the hero's exact content-row count in
+/// `intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows`,
+/// hence `#[cfg(test)]`. Update alongside `ui::intro_content`/
+/// `ui::WORDMARK_ART`/`ui::MJOLNIR_ART` if its shape ever changes.
 #[cfg(test)]
-pub const INTRO_LINE_COUNT: usize = 17;
+pub const INTRO_LINE_COUNT: usize = 15;
 
 /// Truncates a tool result to a one-line summary for a closed
 /// `ToolActivityEntry` — the full content already went into the model's

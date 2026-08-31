@@ -20,6 +20,7 @@
 mod app;
 mod highlight;
 mod log;
+mod palette;
 mod run;
 mod scroll;
 mod ui;
@@ -28,3 +29,12 @@ pub use app::App;
 pub use log::{LogEntry, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 pub use run::run;
 pub use scroll::ScrollState;
+
+/// Exposed only for `examples/preview.rs` — the design-iteration harness
+/// that seeds an `App` with representative `LogEntry`s and draws it once
+/// outside the normal core/channel wiring. Not part of the supported public
+/// API.
+#[doc(hidden)]
+pub use app::{PendingApproval as __PreviewPendingApproval, PendingPrompt as __PreviewPendingPrompt, RunningTool as __PreviewRunningTool};
+#[doc(hidden)]
+pub use ui::draw as __preview_draw;

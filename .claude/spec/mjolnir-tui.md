@@ -5,7 +5,7 @@ ratatui frontend — renders the core event stream, submits commands, approval g
 **Status:** active — two known gaps, see Progress below
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-06-10
+**Last Updated:** 2026-08-31
 
 **Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
 audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed
@@ -396,22 +396,111 @@ merged under global, session on top), not a config dump. Colored with the
 existing diff-tint colors (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than new
 ones, matching their established "state at a glance" job.
 
-- **Layout:** Three horizontal bands: full-width scrollable conversation log (most of the height), single-line status bar, multi-line input area. No persistent sidebar in V0 — all ambient state lives in the two bottom bands or inline in the log.
-- **Conversation Log:** Append-only rendered view of core events, prefixed on every draw by a fixed welcome banner (see the 2026-08-29 Progress entry below) that isn't itself a core event or a `LogEntry`. Each event type maps to a distinct entry shape. Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
-- **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
-- **Input Area:** Multi-line textarea with a visible terminal cursor and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Input is blocked while an approval card is pending.
-- **Status Bar:** Single line, always visible. Shows: model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), names of tools currently running within the active step (e.g. "tools: Read shell").
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why. Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, status bar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage). Specific accent color still deferred pending mascot palette decision. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `┌─`/`│`/`└─` border, independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to; never a new color beyond that one scoped exception and the diff/user-message background tints already named above.
+**Progress (2026-08-31, visual redesign — polished layout, hero-only-when-empty
+banner, panels, sidebar):** A full visual pass, prompted by the developer
+describing the TUI as "quite rough and barebones," not "immersive," and not
+using the terminal's full area — confirmed concretely by screenshotting the
+running binary (a small ANSI-capture → HTML → headless-chromium pipeline
+built for this pass) before touching any code: the welcome banner rendered
+on *every* draw, not just an empty session, still eating ~40% of a typical
+terminal's height mid-conversation, with a large dead void below whatever
+content fit, and no panel/border around the log at all — text just floated
+on the terminal background. This is a visual-only change: every interaction
+(input-blocking while a card/prompt is pending, scroll auto-follow/
+disengage/re-engage, Ctrl+C cancel-vs-quit, approval y/n/Ctrl+C-denies,
+multiline input navigation, markdown/diff rendering) is byte-for-byte
+unchanged — confirmed by diffing `handle_approval_key`/`handle_prompt_key`/
+`resolve_prompt` against git, which show no changes at all.
+
+Four bands now, not three: a persistent 1-row header (identity/status,
+replacing the always-on banner's job once real content exists), the body
+(conversation log, optionally beside a sidebar), a 1-row footer
+(context-sensitive keybinding legend), and the input box. The welcome
+banner (`ui::intro_lines`, now split into `intro_content` + `hero_lines`)
+only renders when `app.log.is_empty()` — mutually exclusive with real
+entries, not stacked above them — and is vertically centered within
+whatever pane height it has, using a new `App::render_height` field
+threaded the same way `render_width` already was. The log panel is now a
+real bordered ratatui `Block` (`BorderType::Rounded`), with a `Scrollbar`
+shown when content overflows the viewport. This is the one place the
+redesign risked reintroducing the exact class of bug this file's history
+already documents twice (scroll math desyncing from what's actually
+rendered): `draw`'s `Block::inner()` call is now the single place an
+"inner width/height" is ever computed, feeding both `App::render_width`/
+`render_height` and the same-frame render call — never two independently-
+derived values — guarded by a new regression test
+(`log_row_count_uses_the_bordered_panels_inner_width_not_the_outer_width`,
+verified red against a deliberately reintroduced bug before confirming
+green against the fix, same discipline as the incidents it guards against).
+
+A secondary, optional sidebar (`draw_sidebar`, fixed 24 cols) shows
+permission detail, active tools (now with a name, not just an opaque
+call_id — `StatusInfo.running_tools` changed from `Vec<String>` to
+`Vec<RunningTool>`), turn/step, and a message count — state the single flat
+status line had no room for. Toggled by Ctrl+T (not Ctrl+B — that's tmux's
+own prefix key). Auto-collapses below 104 total body columns regardless of
+the developer's toggle preference — `App` only ever stores the preference;
+`ui::draw` is the only place that combines it with the width check, so a
+narrow terminal always wins and the conversation log never drops below 80
+columns when the sidebar shows at all. This narrows, rather than reopens,
+the "split-pane layout with persistent sidebar — deferred" Out of Scope
+item below: it's secondary/ambient and width-gated, not a primary layout
+element competing with the conversation.
+
+Card/footer key labels (`approval_key_hint`/`prompt_key_hint`) are now
+single functions called by both the inline card and the footer, so the two
+can't drift apart (guarded by
+`footer_and_approval_card_show_identical_key_labels`). Tool-activity/retry/
+error entries gained leading glyphs (▸/✓/✗/⟳/ℹ) instead of bracketed text
+tags; retry gained the one genuinely new color (`WARNING_FG`, amber) —
+extracted, along with every existing color constant, into a new
+`palette.rs` module now that `ui.rs` covers header/footer/sidebar rendering
+too. Hand-drawn card corners switched from `┌┐└┘` to `╭╮╰╯` to match the new
+ratatui panels. Input box switched to a rounded border and gained dim
+placeholder text when empty.
+
+Verified via a design-iteration harness built for this pass and kept in the
+repo (`crates/tui/examples/preview.rs` — seeds an `App` with one of six
+named scenes and draws one frame to a real alternate-screen terminal,
+`#[doc(hidden)]` re-exports in `lib.rs` expose just enough of `ui::draw`/
+`app::{PendingApproval,PendingPrompt,RunningTool}` for it to do so without
+becoming part of the supported public API) plus a driver script
+(tmux capture-pane → ANSI-to-HTML → headless chromium screenshot) — not
+committed, but documented here since it's the reason this pass could be
+visually validated step by step rather than shipped on faith. 89
+`mjolnir-tui` tests pass (up from 82; new coverage: the inner-width
+regression above, sidebar width-gate-overrides-preference, Ctrl+T toggle,
+footer/card key-label parity, sidebar shows tool name not call_id), full
+workspace `cargo test`/`cargo clippy -- -D warnings` both clean. Many
+existing `ui.rs` tests keyed to exact buffer coordinates relative to the
+old always-on banner needed rework once the banner and real log entries
+became mutually exclusive — most were converted from hand-derived row
+arithmetic to a `find_row` substring search instead, which is more robust
+to future layout changes than the coordinate math it replaced.
+
+- **Layout:** Four horizontal bands: a 1-row header (identity/status), the
+  body (full-width scrollable conversation log, or the log beside a
+  secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a
+  1-row footer (context-sensitive keybinding legend), and the multi-line
+  input area. The sidebar is optional, off by a narrow-terminal width gate
+  regardless of the developer's own Ctrl+T preference, and never taken as
+  license to shrink the log panel below 80 columns when shown — ambient
+  state, not a primary layout element competing with the conversation.
+- **Conversation Log:** Rendered inside a bordered, rounded ratatui panel (see the 2026-08-31 visual-redesign Progress entry) with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome banner (see the 2026-08-29 Progress entry below) only shows when the log is empty — mutually exclusive with real entries, not prefixed above them, since the two used to always coexist and that's what made the banner eat real screen space mid-conversation. Each event type maps to a distinct entry shape, most with a leading glyph (● assistant, ▸/✓/✗ tool activity, ⟳ retry, ✗ error, ℹ notice — see the 2026-08-31 entry). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
+- **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border (rounded corners as of 2026-08-31, matching the panel chrome around it — a pure reskin, not a behavior change) and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card, and mirrored in the footer while the card is pending (`approval_key_hint`/`prompt_key_hint`, shared by both — see the 2026-08-31 entry) — the two can't drift apart since it's the same function. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
+- **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
+- **Header / Footer / Sidebar (2026-08-31, superseding the single "Status Bar" below):** A 1-row header (always visible): model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), a bare running-tool count. A 1-row footer (always visible): a context-sensitive keybinding legend — the card's own keys while one is pending, otherwise the general hints (send/newline/cancel/scroll/sidebar-toggle). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. None of the three participate in `ScrollState` — only the log panel scrolls.
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use a neutral `PANEL_BORDER` (an alias for the existing dim color, not a new hue) instead, keeping accent meaning "this needs your attention" rather than "this is a panel." Specific accent color still deferred pending mascot palette decision. One genuinely new color, `WARNING_FG` (amber), for retry entries. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
 ## Decisions
 
-- **Conversation-first layout — full-width log, status bar, input bar at bottom.** — Keeps the conversation as the primary surface; state lives in the status bar rather than consuming persistent screen space. Split-pane rejected for V0 — adds complexity without payoff until the conversation log is proven sufficient.
+- **Conversation-first layout — full-width log, status bar, input bar at bottom.** — Keeps the conversation as the primary surface; state lives in the status bar rather than consuming persistent screen space. Split-pane rejected for V0 — adds complexity without payoff until the conversation log is proven sufficient. *Refined, not reversed, 2026-08-31:* an optional, secondary, width-gated sidebar was added for ambient state (permissions/tools/turn/messages) the header/footer couldn't fit — it is not the primary split-pane this decision rejected: it auto-collapses on narrow terminals and never takes the log panel below 80 columns when shown, so the conversation stays the primary surface either way.
 
 - **Approval card is inline in the conversation log, not a full-screen overlay.** — Inline preserves conversational context during review. Visually distinguished via border + accent color so it cannot be mistaken for assistant output. Input blocked while pending — the developer cannot accidentally bypass the gate by typing ahead.
 
 - **Multi-line input; Enter submits, Shift+Enter inserts newline.** — Discussion-first posture benefits from longer prompts. Standard convention for multi-line TUI inputs. Single-line-only rejected as too restrictive for the intended interaction mode.
 
-- **Minimal monochrome palette with one accent color in V0.** — Avoids colour decisions blocked on the open mascot palette. One accent is sufficient to make the approval card unmistakable. Rich theming deferred until the mascot palette is settled.
+- **Minimal monochrome palette with one accent color in V0.** — Avoids colour decisions blocked on the open mascot palette. One accent is sufficient to make the approval card unmistakable. Rich theming deferred until the mascot palette is settled. *Extended, not reopened, across several 2026-08-29/08-31 Progress entries:* a small, cohesive set of semantic colors (diff add/remove, code, user tint, warning) was added incrementally, each scoped to one clear role — this is still a fixed, hardcoded palette, not the configurable/user-selectable "rich theming" this decision deferred; that remains blocked on the mascot palette question.
 
 - **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in mjolnir-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 
@@ -455,10 +544,10 @@ ones, matching their established "state at a glance" job.
 ## Out of Scope
 
 - Mouse support — keyboard-only in V0.
-- Color theming system — minimal palette only; rich theming blocked on mascot palette decision.
+- Color theming system — a small fixed semantic palette exists now (see the Palette bullet and its Decisions entry), but it's hardcoded, not user-configurable; rich/configurable theming is still blocked on the mascot palette decision.
 - Syntax highlighting in diff blocks — plain text diff in V0.
 - Conversation log search or filtering.
-- Split-pane layout with persistent sidebar — deferred.
+- Split-pane layout as the *primary* layout element — still deferred. What exists as of 2026-08-31 is a secondary, optional, width-gated sidebar for ambient state, not a split-pane the developer's attention is meant to divide between — see the Conversation-first layout Decision entry above.
 - Session persistence, conversation save/restore — out of V0 per parent spec.
 - Web client rendering — V1.
 

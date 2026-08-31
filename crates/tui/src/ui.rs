@@ -1,49 +1,15 @@
 use mjolnir_permissions::PromptPayload;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{cursor_line_col, App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const BRIGHT: Color = Color::White;
-// A dedicated LightGreen was tried first for user/assistant separation
-// (see the git history) but read as too loud against real terminal color
-// schemes, per explicit developer feedback — swapped for a muted gray text
-// color plus a subtle background tint, which separates user input from
-// both assistant text (BRIGHT, no bg) and dim metadata without fighting
-// the terminal's own palette. Fixed RGB rather than a named ANSI color so
-// the "subtle" tint doesn't get reinterpreted by whatever the terminal
-// theme maps that ANSI slot to.
-const USER_FG: Color = Color::Rgb(190, 190, 195);
-const USER_BG: Color = Color::Rgb(40, 40, 46);
-
-/// Inline `` `code` `` in assistant prose used `Modifier::REVERSED` (fg/bg
-/// swapped) to stand out, which reads as a jarring bright-white block
-/// against most terminal themes — per explicit developer feedback, swapped
-/// for a plain distinguishing color, same fixed-RGB-not-named-ANSI
-/// reasoning as `USER_FG`/`USER_BG` above. A one-off, scoped exception to
-/// mjolnir-tui.md's "modifiers only, never a new color" rule for inline
-/// markdown — that rule was written when the alternative on the table was
-/// REVERSED, not a plain fg color; superseded by this developer's later,
-/// more specific ask.
-const CODE_FG: Color = Color::Rgb(224, 175, 104);
-
-/// Approval-card diff coloring: a full-width background tint (same
-/// technique as `USER_BG`) behind added/removed lines so a diff reads at a
-/// glance instead of every line rendering in the same plain `BRIGHT`, which
-/// is what the card did before — per explicit developer feedback that
-/// diffs "are not very clear."
-const DIFF_ADD_BG: Color = Color::Rgb(28, 46, 30);
-const DIFF_ADD_FG: Color = Color::Rgb(150, 210, 160);
-const DIFF_DEL_BG: Color = Color::Rgb(48, 28, 28);
-const DIFF_DEL_FG: Color = Color::Rgb(220, 150, 150);
+use crate::palette::{ACCENT, BRIGHT, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, USER_BG, USER_FG, WARNING_FG};
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -60,28 +26,67 @@ fn spinner_line(tick: u64, label: &str) -> Line<'static> {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let input_height = input_area_height(&app.input);
-    // A blank row between the log and the status bar — without it the last
-    // rendered line of LLM output butts directly against the status line,
-    // per explicit developer feedback that the two need breathing room.
-    let [log_area, _spacer, status_area, input_area] = Layout::vertical([
-        Constraint::Min(1),
+    // Header/footer are single-row bands rather than the old "borderless log
+    // + spacer + flat status line" shape — every junction below now has a
+    // bordered panel on one side of it, which already reads as separated,
+    // so the old blank spacer row (added 2026-08-30 for exactly the bare-
+    // text-to-bare-text case this no longer is) is dropped rather than kept
+    // alongside the new chrome.
+    let [header_area, body_area, footer_area, input_area] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(input_height),
     ])
     .areas(area);
 
-    // Scroll math needs the real render width before `total_lines` (called
-    // by `set_viewport_height` below) can count wrapped rows correctly —
-    // see `App::render_width`'s doc comment.
-    app.render_width = log_area.width;
-    let log_inner_height = log_area.height as usize;
-    app.scroll.set_viewport_height(log_inner_height, app.total_lines());
+    // The sidebar is secondary, ambient state — the conversation log must
+    // stay the primary surface (mjolnir.md's discussion-first constraint).
+    // `sidebar_visible` is only the developer's *preference*; whether it's
+    // actually shown also requires `body_area` to be wide enough that the
+    // log still gets a comfortable majority of it — computed here, and only
+    // here, so a narrow terminal always wins over the preference rather
+    // than the two being able to disagree (`App` itself only ever stores
+    // the preference — see its doc comment).
+    let sidebar_shown = app.sidebar_visible && body_area.width >= SIDEBAR_MIN_TOTAL_WIDTH;
+    let (log_area, sidebar_area) = if sidebar_shown {
+        let [log_area, sidebar_area] = Layout::horizontal([Constraint::Min(1), Constraint::Length(SIDEBAR_WIDTH)]).areas(body_area);
+        (log_area, Some(sidebar_area))
+    } else {
+        (body_area, None)
+    };
 
-    draw_log(frame, log_area, app);
-    draw_status(frame, status_area, app);
+    let log_block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER));
+    // `Block::inner` is a pure function of the block's border config and the
+    // outer rect — computed exactly once here, and this same `Rect` is what
+    // both `App::render_width`/`render_height` (cached for scroll math
+    // between draws) and `draw_log`'s own content pass use. There must
+    // never be a second, independently-derived "inner width" anywhere else
+    // in this call graph — see mjolnir-tui.md's scrolling-fix and wrapped-
+    // row-scroll-math Progress notes for the two real bugs that came from
+    // exactly this kind of divergence before.
+    let log_inner = log_block.inner(log_area);
+    app.render_width = log_inner.width;
+    app.render_height = log_inner.height;
+    app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
+
+    draw_header(frame, header_area, app);
+    draw_log(frame, log_area, log_inner, log_block, app);
+    if let Some(sidebar_area) = sidebar_area {
+        draw_sidebar(frame, sidebar_area, app);
+    }
+    draw_footer(frame, footer_area, app);
     draw_input(frame, input_area, app);
 }
+
+/// Fixed width of the sidebar panel, and the minimum *total* `body_area`
+/// width required before it's allowed to show at all — at that exact
+/// threshold the log still keeps `SIDEBAR_MIN_TOTAL_WIDTH - SIDEBAR_WIDTH`
+/// (80) columns, never more cramped than the log area was before this
+/// redesign. Picked so the log panel stays comfortably the majority (~77%)
+/// of the body width whenever the sidebar shows at all.
+const SIDEBAR_WIDTH: u16 = 24;
+const SIDEBAR_MIN_TOTAL_WIDTH: u16 = 104;
 
 fn input_area_height(input: &str) -> u16 {
     // +2 for the border; at least 3 total so a single-line draft still gets
@@ -91,18 +96,21 @@ fn input_area_height(input: &str) -> u16 {
     (lines + 2).max(3)
 }
 
-/// Builds every line the log area can show — banner, entries, separators,
-/// the transient "thinking…" indicator — at `width`. Shared by `draw_log`
+/// Builds every line the log panel's *inner* area can show, at `width` ×
+/// `height` (the bordered panel's inner rect — see `draw`'s doc comment on
+/// why this must be the inner, not outer, rect). Shared by `draw_log`
 /// (renders it) and `log_row_count` (counts its wrapped rows for scroll
-/// math), so the two can never disagree about what the log contains.
-fn build_log_lines(app: &App, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = intro_lines(&app.status, width);
-    // Separates the banner from the first real entry, same as the
-    // inter-entry separator below — skipped when the log is still empty so
-    // a fresh session doesn't end in a trailing blank line.
-    if !app.log.is_empty() {
-        lines.push(Line::default());
+/// math), so the two can never disagree about what the log contains. An
+/// empty log shows the welcome hero instead of any entries — the banner
+/// used to render above the log on every draw regardless of content, which
+/// is what made it eat real screen space mid-conversation; now the two are
+/// mutually exclusive, so there's no longer a "separate the banner from the
+/// first real entry" case to special-case either.
+fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
+    if app.log.is_empty() {
+        return hero_lines(&app.status, height);
     }
+    let mut lines: Vec<Line> = Vec::new();
     for (i, entry) in app.log.iter().enumerate() {
         // Blank line between entries — not just at the user/assistant
         // boundary, since every entry kind benefits from more breathing
@@ -127,8 +135,12 @@ fn build_log_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
-    let lines = build_log_lines(app, area.width);
+/// Renders the log panel: `block` onto `outer`, its content onto `inner`
+/// (already computed once by `draw` — see its doc comment), plus a
+/// `Scrollbar` on the inner-right edge when there's more content than the
+/// viewport can show and the log isn't showing the (never-scrollable) hero.
+fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, app: &App) {
+    let lines = build_log_lines(app, inner.width, inner.height);
     // `scroll.offset` is in *wrapped screen rows* (see `log_row_count`), so
     // it must go through `Paragraph::scroll`, which advances the same
     // wrapping line-composer `Paragraph::line_count` uses internally —
@@ -136,23 +148,34 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     // (pre-wrap) rows instead and drift out of sync the moment anything
     // wraps.
     let offset = app.scroll.offset.min(u16::MAX as usize) as u16;
+    let total = app.total_lines();
+
+    frame.render_widget(block, outer);
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).scroll((offset, 0));
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, inner);
+
+    if !app.log.is_empty() && total > inner.height as usize {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(PANEL_BORDER));
+        let mut state = ScrollbarState::new(total).position(offset as usize);
+        // Renders into the block's own right-border column, inset by 1 row
+        // top/bottom so it doesn't overwrite the panel's rounded corners —
+        // the standard ratatui pattern (see `Scrollbar`'s own doc example).
+        frame.render_stateful_widget(scrollbar, outer.inner(Margin { vertical: 1, horizontal: 0 }), &mut state);
+    }
 }
 
-/// The number of terminal rows the log area needs to fully render at
-/// `width` — what `ScrollState` (see `scroll.rs`) actually compares against
-/// viewport height, wrapping included. Delegates to ratatui's own
-/// `Paragraph::line_count`, which runs the exact same word-wrapper
-/// `draw_log`'s render path uses, rather than re-deriving wrap behaviour by
-/// hand — the previous approach (`log::line_count`, counting logical source
-/// lines) silently under- or over-counted the moment any single line — a
-/// long tool-result summary, a long retry message, a long assistant line —
-/// was wide enough to wrap, corrupting `ScrollState`'s offset math and
-/// clipping content at the bottom of the log area. See mjolnir-tui.md's
-/// 2026-08-29 scrolling-fix Progress note for the incident this replaces.
-pub(crate) fn log_row_count(app: &App, width: u16) -> usize {
-    let lines = build_log_lines(app, width);
+/// The number of terminal rows the log panel's inner area needs to fully
+/// render at `width` × `height` — what `ScrollState` (see `scroll.rs`)
+/// actually compares against viewport height, wrapping included. Delegates
+/// to ratatui's own `Paragraph::line_count`, which runs the exact same
+/// word-wrapper `draw_log`'s render path uses, rather than re-deriving wrap
+/// behaviour by hand — see mjolnir-tui.md's 2026-08-29 scrolling-fix and
+/// wrapped-row-scroll-math Progress notes for the two incidents this
+/// discipline exists to prevent from recurring. `height` only matters for
+/// the empty-log hero path (`hero_lines` uses it to vertically center); the
+/// non-empty path's row count is width-only, same as before.
+pub(crate) fn log_row_count(app: &App, width: u16, height: u16) -> usize {
+    let lines = build_log_lines(app, width, height);
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).line_count(width)
 }
 
@@ -278,12 +301,21 @@ fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
     vec![Span::styled(format!("{label}:"), Style::default().fg(DIM)), Span::styled(word, Style::default().fg(color))]
 }
 
-fn intro_lines(status: &StatusInfo, width: u16) -> Vec<Line<'static>> {
+/// The welcome hero's content — Mjolnir hammer art beside the wordmark/
+/// tagline/stats column — unbordered. `hero_lines` (called only when the
+/// log is empty; see `build_log_lines`) centers this vertically within the
+/// log panel's own inner height and lets that panel's ratatui-drawn rounded
+/// border frame it. This used to end with a hand-drawn `┌─┐`/`└─┘` border of
+/// its own (`bordered()`, since removed) when the hero sat directly on the
+/// terminal background with no panel of its own — wrapping it in a second
+/// border now that it's nested inside the log panel's border just double-
+/// boxed the same content (tried during the redesign, discarded after
+/// screenshotting both).
+fn intro_content(status: &StatusInfo) -> Vec<Line<'static>> {
     debug_assert!(
         MJOLNIR_ART.iter().all(|row| row.chars().count() == MJOLNIR_ART_WIDTH),
         "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
     );
-    let frame = Style::default().fg(ACCENT);
     let wordmark_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let tagline_style = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
     let stat_label = Style::default().fg(DIM);
@@ -320,15 +352,20 @@ fn intro_lines(status: &StatusInfo, width: u16) -> Vec<Line<'static>> {
     info.push(access);
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
-    // A blank line above and below the art gives it breathing room inside
-    // the border, on top of the existing left margin and the border's own
-    // fill-to-width on the right — per explicit developer request for
-    // padding "all the way around" the hammer, not just on one side.
+    // A small fixed left margin (matching the log panel's own left border +
+    // a little breathing room) rather than centering — per the standing
+    // developer rule that the banner should read left-to-right (art, then
+    // wordmark/info beside it), not sit centered in the middle of a wide
+    // terminal. A blank line above and below the art gives it vertical
+    // breathing room too, per the earlier explicit "padding all the way
+    // around" request — still honored, just no longer via a hand-drawn
+    // border's own margin math.
+    const LEFT_MARGIN: &str = "   ";
     let mut content: Vec<Line<'static>> = Vec::with_capacity(MJOLNIR_ART.len() + 2);
     content.push(Line::default());
     content.extend(MJOLNIR_ART.iter().enumerate().map(|(i, art_row)| {
         let art_style = Style::default().fg(mjolnir_row_color(i, MJOLNIR_ART.len())).add_modifier(Modifier::BOLD);
-        let mut spans = vec![Span::styled(*art_row, art_style)];
+        let mut spans = vec![Span::raw(LEFT_MARGIN), Span::styled(*art_row, art_style)];
         if let Some(row_i) = i.checked_sub(info_offset) {
             if let Some(line_spans) = info.get(row_i) {
                 spans.push(Span::raw("   "));
@@ -338,35 +375,23 @@ fn intro_lines(status: &StatusInfo, width: u16) -> Vec<Line<'static>> {
         Line::from(spans)
     }));
     content.push(Line::default());
-    bordered(width, content, frame)
+    content
 }
 
-/// Wraps `content` in a border that spans the full render width (`width`,
-/// the log area's actual `Rect::width` — art alone can't know this, so it's
-/// threaded in from `draw_log` at render time), left-aligning each line
-/// with a small fixed margin rather than centering — per explicit
-/// developer direction that the banner should read left-to-right (art,
-/// then wordmark/info beside it), not sit centered in the middle of a wide
-/// terminal. `content_width` sums `Span::content` char counts, which only
-/// holds up for single-width glyphs — true of every char used here
-/// (box-drawing and Braille dot patterns are Unicode East Asian Width
-/// "Narrow"/"Neutral") but would need adjustment for wide (CJK/emoji) text.
-fn bordered(width: u16, content: Vec<Line<'static>>, border_style: Style) -> Vec<Line<'static>> {
-    const LEFT_MARGIN: usize = 3;
-    let inner_width = (width as usize).saturating_sub(2);
-    let mut out = Vec::with_capacity(content.len() + 2);
-    out.push(Line::from(Span::styled(format!("┌{}┐", "─".repeat(inner_width)), border_style)));
-    for line in content {
-        let content_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-        let avail = inner_width.saturating_sub(LEFT_MARGIN + 1); // trailing space before the right border
-        let right_pad = avail.saturating_sub(content_width);
-        let mut spans = vec![Span::styled(format!("│{}", " ".repeat(LEFT_MARGIN)), border_style)];
-        spans.extend(line.spans);
-        spans.push(Span::styled(format!("{} │", " ".repeat(right_pad)), border_style));
-        out.push(Line::from(spans));
-    }
-    out.push(Line::from(Span::styled(format!("└{}┘", "─".repeat(inner_width)), border_style)));
-    out
+/// Vertically centers `intro_content` within the log panel's inner
+/// `height`; `height` is real render-time information, so this can only
+/// happen at draw time via `build_log_lines`, same as `MJOLNIR_ART`'s width
+/// used to be threaded through `bordered()`'s `width` parameter before the
+/// hero's own border was removed. On a terminal short enough that the
+/// content doesn't fit, `pad_top` saturates to 0 and the content simply
+/// starts at the top and scrolls like any other tall log content would.
+fn hero_lines(status: &StatusInfo, height: u16) -> Vec<Line<'static>> {
+    let content = intro_content(status);
+    let pad_top = (height as usize).saturating_sub(content.len()) / 2;
+    let mut lines = Vec::with_capacity(pad_top + content.len());
+    lines.extend(std::iter::repeat_with(Line::default).take(pad_top));
+    lines.extend(content);
+    lines
 }
 
 fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
@@ -402,25 +427,31 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
                 .collect()
         }
         LogEntry::AssistantText { text } => render_assistant_text(text),
+        // A leading glyph per status — running/done/error — instead of a
+        // bracketed text tag, so a scan of the log reads statuses at a
+        // glance the same way the diff/access indicators already do
+        // elsewhere. Done/error reuse the diff-tint colors (green/red) —
+        // the same "state at a glance" job those already do — rather than
+        // introducing new ones.
         LogEntry::ToolActivity { calls, .. } => calls
             .iter()
             .map(|c| {
                 let label = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
-                let text = match &c.status {
-                    ToolActivityStatus::Running => format!("  [running] {label}"),
-                    ToolActivityStatus::Completed { is_error, summary } => {
-                        let tag = if *is_error { "error" } else { "done" };
-                        format!("  [{tag}] {label}: {summary}")
-                    }
+                let (glyph, color, text) = match &c.status {
+                    ToolActivityStatus::Running => ("▸", DIM, label),
+                    ToolActivityStatus::Completed { is_error: false, summary } => ("✓", DIFF_ADD_FG, format!("{label}: {summary}")),
+                    ToolActivityStatus::Completed { is_error: true, summary } => ("✗", DIFF_DEL_FG, format!("{label}: {summary}")),
                 };
-                Line::from(Span::styled(text, Style::default().fg(DIM)))
+                Line::from(Span::styled(format!("  {glyph} {text}"), Style::default().fg(color)))
             })
             .collect(),
+        // Amber — the one new color the redesign adds (`WARNING_FG`) — so a
+        // retry reads as worth noticing, not just more dim tool metadata.
         LogEntry::RetryAttempt { info } => {
             let status = info.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
             vec![Line::from(Span::styled(
-                format!("  [retry {}] {} {status}: {}", info.attempt, info.provider, info.message),
-                Style::default().fg(DIM),
+                format!("  ⟳ [retry {}] {} {status}: {}", info.attempt, info.provider, info.message),
+                Style::default().fg(WARNING_FG),
             ))]
         }
         LogEntry::ApprovalCard { diff, resolution, .. } => render_approval_card(diff, *resolution, width),
@@ -440,8 +471,11 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             };
             vec![Line::from(Span::styled(text, Style::default().fg(DIM)))]
         }
-        LogEntry::Error { message } => vec![Line::from(Span::styled(format!("error: {message}"), Style::default().fg(Color::Red)))],
-        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("— {message} —"), Style::default().fg(DIM)))],
+        // `DIFF_DEL_FG` rather than a bare `Color::Red` — cohesion with the
+        // rest of the error/removed/deny semantic group instead of a color
+        // that belongs to no other role in the palette.
+        LogEntry::Error { message } => vec![Line::from(Span::styled(format!("✗ error: {message}"), Style::default().fg(DIFF_DEL_FG)))],
+        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("ℹ {message}"), Style::default().fg(DIM)))],
     }
 }
 
@@ -498,13 +532,13 @@ fn render_assistant_text(text: &str) -> Vec<Line<'static>> {
             }
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.push(Line::from(Span::styled(format!("┌─ {label}"), Style::default().fg(DIM))));
+                lines.push(Line::from(Span::styled(format!("╭─ {label}"), Style::default().fg(DIM))));
                 for code_line in highlight::highlight_lines(&lang, &body) {
                     let mut spans = vec![Span::styled("│ ", Style::default().fg(DIM))];
                     spans.extend(code_line);
                     lines.push(Line::from(spans));
                 }
-                lines.push(Line::from(Span::styled("└─", Style::default().fg(DIM))));
+                lines.push(Line::from(Span::styled("╰─", Style::default().fg(DIM))));
             }
         }
     }
@@ -772,7 +806,7 @@ fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) 
 /// at a glance.
 fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
-    let mut lines = vec![Line::from(Span::styled("┌─ Approve this edit?", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
+    let mut lines = vec![Line::from(Span::styled("╭─ Approve this edit?", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
     if let Some(path) = path {
         lines.push(Line::from(Span::styled(format!("│ {path}"), Style::default().fg(DIM))));
     }
@@ -810,12 +844,20 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
 
     match resolution {
         Some(approved) => lines.push(Line::from(Span::styled(
-            format!("└─ resolved: {}", if approved { "approved" } else { "denied" }),
+            format!("╰─ resolved: {}", if approved { "approved" } else { "denied" }),
             Style::default().fg(ACCENT),
         ))),
-        None => lines.push(Line::from(Span::styled("└─ [y] approve   [n] deny   [Ctrl+C] deny", Style::default().fg(ACCENT)))),
+        None => lines.push(Line::from(Span::styled(format!("╰─ {}", approval_key_hint()), Style::default().fg(ACCENT)))),
     }
     lines
+}
+
+/// The approval card's own key labels — also shown in the footer key-hint
+/// bar (`draw_footer`) while the card is pending, via this exact function,
+/// so the two can never drift apart (guarded by
+/// `footer_and_approval_card_show_identical_key_labels`).
+fn approval_key_hint() -> &'static str {
+    "[y] approve   [n] deny   [Ctrl+C] deny"
 }
 
 /// Renders one kept diff line. Added/removed lines get a full-width
@@ -843,29 +885,44 @@ fn render_diff_line(kind: &DiffLineKind, text: &str, width: u16) -> Line<'static
 }
 
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>) -> Vec<Line<'static>> {
-    let (title, keys) = match payload {
-        PromptPayload::Tool { kind, target } => {
-            (format!("Allow {kind}: {target}?"), "[o]nce [s]ession [p]roject [a]lways   Shift = deny at the same tier   Ctrl+C = deny once".to_string())
-        }
-        PromptPayload::ContextFile { path } => (format!("Inject context file {}?", path.display()), "[s]ession [p]roject [n]o   Ctrl+C = no".to_string()),
-        PromptPayload::Edit { kind } => (format!("Edit approval for {kind}"), String::new()),
+    let title = match payload {
+        PromptPayload::Tool { kind, target } => format!("Allow {kind}: {target}?"),
+        PromptPayload::ContextFile { path } => format!("Inject context file {}?", path.display()),
+        PromptPayload::Edit { kind } => format!("Edit approval for {kind}"),
     };
-    render_card(&title, "", &keys, resolution.map(str::to_string))
+    render_card(&title, "", &prompt_key_hint(payload), resolution.map(str::to_string))
+}
+
+/// The permission prompt's own key labels, by payload shape — also shown in
+/// the footer key-hint bar (`draw_footer`) while the prompt is pending, via
+/// this exact function, so the two can never drift apart (same guard as
+/// `approval_key_hint`).
+fn prompt_key_hint(payload: &PromptPayload) -> String {
+    match payload {
+        PromptPayload::Tool { .. } => "[o]nce [s]ession [p]roject [a]lways   Shift = deny at the same tier   Ctrl+C = deny once".to_string(),
+        PromptPayload::ContextFile { .. } => "[s]ession [p]roject [n]o   Ctrl+C = no".to_string(),
+        PromptPayload::Edit { .. } => String::new(),
+    }
 }
 
 fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(Span::styled(format!("┌─ {title}"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
+    let mut lines = vec![Line::from(Span::styled(format!("╭─ {title}"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))];
     for l in body.lines() {
         lines.push(Line::from(Span::styled(format!("│ {l}"), Style::default().fg(BRIGHT))));
     }
     match resolution {
-        Some(r) => lines.push(Line::from(Span::styled(format!("└─ resolved: {r}"), Style::default().fg(ACCENT)))),
-        None => lines.push(Line::from(Span::styled(format!("└─ {keys}"), Style::default().fg(ACCENT)))),
+        Some(r) => lines.push(Line::from(Span::styled(format!("╰─ resolved: {r}"), Style::default().fg(ACCENT)))),
+        None => lines.push(Line::from(Span::styled(format!("╰─ {keys}"), Style::default().fg(ACCENT)))),
     }
     lines
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+/// Persistent identity/status strip, one row, always visible — replaces the
+/// old always-on welcome banner as the place the developer's eye finds
+/// "which model, which turn, what's allowed" once the banner itself only
+/// shows on an empty log (see `build_log_lines`). Keybinding hints live in
+/// `draw_footer` instead, not here.
+fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let s = &app.status;
     let turn_step = match (s.turn, s.step) {
         (Some(t), Some(st)) => format!("T{t} S{st}"),
@@ -873,10 +930,14 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         _ => "-".to_string(),
     };
     let perm = |label: &str, state: PermState| format!("{label}:{}", if state == PermState::Allowed { "allow" } else { "deny" });
-    let tools = if s.running_tools.is_empty() { String::new() } else { format!(" | tools: {}", s.running_tools.join(" ")) };
+    // A bare count, not the tool names — full detail (name + spinner per
+    // running tool) lives in the sidebar now; this stays a glanceable
+    // presence indicator for when the sidebar is hidden (narrow terminal,
+    // or toggled off).
+    let tools = if s.running_tools.is_empty() { String::new() } else { format!(" | tools: {}", s.running_tools.len()) };
 
     let text = format!(
-        "{}  {turn_step}  {} {} {}{tools}  |  Ctrl+C: cancel/quit",
+        "{}  {turn_step}  {} {} {}{tools}",
         s.model_name,
         perm("read", s.read),
         perm("shell", s.shell),
@@ -885,12 +946,93 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(Span::styled(text, Style::default().fg(DIM)))), area);
 }
 
+/// Default keybinding legend shown when no card/prompt is pending.
+const DEFAULT_KEY_HINT: &str = "↵ send   ⇧↵ / ^J newline   ^C cancel   PgUp/PgDn scroll   End bottom";
+
+/// Context-sensitive keybinding legend, one row, always visible — replaces
+/// the old flat status line's trailing "Ctrl+C: cancel/quit" fragment.
+/// While a card or prompt is pending, shows that card's own keys (via the
+/// exact same functions the card itself renders with, so the two can't
+/// drift apart) instead of the default hints, since those are the only keys
+/// that do anything while input is blocked.
+fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let text = if let Some(prompt) = &app.pending_prompt {
+        prompt_key_hint(&prompt.payload)
+    } else if app.pending_approval.is_some() {
+        approval_key_hint().to_string()
+    } else {
+        DEFAULT_KEY_HINT.to_string()
+    };
+    frame.render_widget(Paragraph::new(Line::from(Span::styled(text, Style::default().fg(DIM)))), area);
+}
+
+/// Secondary, ambient state — permission grants, active tools (with a
+/// per-tool name, not just an opaque call id — see `app::RunningTool`), the
+/// turn/step counter, and a running message count — moved out of the
+/// header's single flat line, which couldn't fit all of it without turning
+/// into unreadable noise. Only shown when `draw`'s width gate allows it (see
+/// `SIDEBAR_MIN_TOTAL_WIDTH`). Deliberately quieter than the log panel —
+/// neutral `PANEL_BORDER`, not `ACCENT` — since it's secondary state, not
+/// the primary surface.
+fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(PANEL_BORDER)).title(" session ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let label = Style::default().fg(DIM);
+    let value = Style::default().fg(BRIGHT);
+    let s = &app.status;
+    let turn_step = match (s.turn, s.step) {
+        (Some(t), Some(st)) => format!("T{t} S{st}"),
+        (Some(t), None) => format!("T{t}"),
+        _ => "-".to_string(),
+    };
+
+    let mut lines: Vec<Line> = vec![Line::from(vec![Span::styled("turn    ", label), Span::styled(turn_step, value)]), Line::default(), Line::from(Span::styled("access", label))];
+    for spans in [access_spans("read", s.read), access_spans("shell", s.shell), access_spans("edit", s.edit)] {
+        let mut row = vec![Span::raw("  ")];
+        row.extend(spans);
+        lines.push(Line::from(row));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled("tools", label)));
+    if s.running_tools.is_empty() {
+        lines.push(Line::from(Span::styled("  none", label)));
+    } else {
+        let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
+        for tool in &s.running_tools {
+            let name = if tool.name.is_empty() { tool.call_id.as_str() } else { tool.name.as_str() };
+            lines.push(Line::from(Span::styled(format!("  {spinner} {name}"), value)));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![Span::styled("messages ", label), Span::styled(app.log.len().to_string(), value)]));
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).border_style(if app.pending_approval.is_some() || app.pending_prompt.is_some() {
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(if app.pending_approval.is_some() || app.pending_prompt.is_some() {
         Style::default().fg(DIM)
     } else {
         Style::default().fg(ACCENT)
     });
+    // Dim placeholder text when the draft is empty — an empty bordered box
+    // gave no hint at all that this was where a message goes, versus every
+    // other panel now carrying a title/label of its own. While blocked, the
+    // placeholder says so instead of inviting a keystroke it would silently
+    // drop — the dimmed border alone (above) wasn't an obvious enough
+    // signal on its own.
+    if app.input.is_empty() {
+        let blocked = app.pending_approval.is_some() || app.pending_prompt.is_some();
+        let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything, or / for commands" };
+        let placeholder = Line::from(Span::styled(text, Style::default().fg(DIM)));
+        frame.render_widget(Paragraph::new(placeholder).block(block), area);
+        if app.pending_approval.is_none() && app.pending_prompt.is_none() {
+            frame.set_cursor_position((area.x + 1, area.y + 1));
+        }
+        return;
+    }
     // Live counterpart to `is_command`'s dim styling of an already-submitted
     // slash command in the log (see `render_entry`) — without this, a
     // command only reads as "directed at the harness, not the model" after
@@ -937,7 +1079,16 @@ mod tests {
     fn app() -> App {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
-        App::new("claude-sonnet-5".into(), Arc::new(Engine::new(config)))
+        let mut app = App::new("claude-sonnet-5".into(), Arc::new(Engine::new(config)));
+        // Most tests in this module exercise log-content rendering at a
+        // known width/column and predate the sidebar; the sidebar defaults
+        // on in real usage (`App::new`) but would silently shrink the log
+        // panel's inner width for any test using >= `SIDEBAR_MIN_TOTAL_WIDTH`
+        // columns, invalidating column-position assumptions those tests
+        // never intended to make about the sidebar. Sidebar-specific tests
+        // opt back in explicitly (`app.sidebar_visible = true`).
+        app.sidebar_visible = false;
+        app
     }
 
     fn rendered(app: &mut App, width: u16, height: u16) -> String {
@@ -946,6 +1097,33 @@ mod tests {
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("")
+    }
+
+    /// The first screen row containing `needle`, scanning top to bottom.
+    /// Used instead of hand-derived coordinates wherever a test cares about
+    /// relative position (e.g. "does this row also carry that content")
+    /// rather than an exact row number — more robust to layout changes than
+    /// pinning down arithmetic that has to track every band's height by
+    /// hand.
+    fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
+        for y in 0..buffer.area.height {
+            let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+            if row.contains(needle) {
+                return y;
+            }
+        }
+        panic!("row containing {needle:?} not found");
+    }
+
+    /// Screen row the first real log entry starts on once the log is
+    /// non-empty: the header (always exactly 1 row) plus the log panel's own
+    /// top border (1 row). Fixed, unlike the old always-on-banner layout —
+    /// the welcome hero and real log entries are mutually exclusive now (see
+    /// `build_log_lines`), so there's no banner/separator height to add.
+    /// Only valid when no sidebar is showing (none of these tests are wide
+    /// enough to trigger one).
+    fn content_base() -> u16 {
+        2
     }
 
     /// Regression test for the bug the user actually hit: scroll math
@@ -1004,8 +1182,45 @@ mod tests {
         assert!(!out.contains("short-0"), "earlier entries must have scrolled out of view to make room for the wrapped entry");
     }
 
+    /// Regression test for the exact bug class the visual redesign risked
+    /// reintroducing: once the log panel got a real border, `render_width`/
+    /// `render_height` (and therefore `build_log_lines`/`log_row_count`)
+    /// must be sourced from the panel's *inner* rect, not the outer one —
+    /// see `draw`'s doc comment. A line here is sized to land exactly on
+    /// that 2-column boundary: at the true inner width (98, for a 100-wide
+    /// outer area) it wraps into 2 rows; at the outer width (100) it would
+    /// be miscounted as fitting in 1. The actual on-screen render always
+    /// wraps correctly (ratatui re-wraps against the real inner `Rect` at
+    /// render time, regardless of what width the *count* used) — so a
+    /// regression here doesn't clip anything directly, it desyncs
+    /// `ScrollState`'s offset math from what's really on screen by exactly
+    /// 1 row, same as the two historical incidents this file already
+    /// documents, and the tail ends up scrolled just out of view. Verified
+    /// against a deliberately reintroduced bug (sourcing `render_width`
+    /// from `log_area.width` instead of `log_inner.width` in `draw`) before
+    /// confirming this passes against the real code.
     #[test]
-    fn status_bar_shows_model_name_and_permission_summary() {
+    fn log_row_count_uses_the_bordered_panels_inner_width_not_the_outer_width() {
+        let mut app = app();
+        for i in 0..8 {
+            app.log.push(LogEntry::AssistantText { text: format!("short-{i}") });
+        }
+        let tail = "END-OF-LONG-LINE"; // 16 chars
+        // `render_assistant_text` prepends a 2-char marker onto an entry's
+        // first rendered line — accounted for here so the total (marker +
+        // 80 'x's + " " + the 16-char tail = 99 chars) lands exactly on the
+        // boundary: wraps at width 98 (inner), fits on one row at width 100
+        // (outer).
+        let filler = "x".repeat(80);
+        app.log.push(LogEntry::AssistantText { text: format!("{filler} {tail}") });
+
+        let out = rendered(&mut app, 100, 12);
+
+        assert!(out.contains(tail), "the wrapped tail must be visible under auto-follow when scroll math is measured against the panel's inner width");
+    }
+
+    #[test]
+    fn header_shows_model_name_and_permission_summary() {
         let mut app = app();
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("claude-sonnet-5"));
@@ -1025,6 +1240,14 @@ mod tests {
     #[test]
     fn thinking_indicator_renders_only_while_active() {
         let mut app = app();
+        // The spinner only ever renders below real log entries — in real
+        // usage the log is never empty by the time `thinking`/`turn_active`
+        // can be true, since `submit()` pushes the `UserMessage` before core
+        // even has a chance to send `TurnStarted`/`ThinkingStart` back (see
+        // `build_log_lines`'s hero-vs-entries branch). Push one here so this
+        // exercises the same reachable state, not an empty-log + active-turn
+        // combination that can't actually happen.
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.thinking = true;
         assert!(rendered(&mut app, 100, 20).contains("thinking…"));
         app.thinking = false;
@@ -1034,6 +1257,7 @@ mod tests {
     #[test]
     fn working_spinner_shows_during_an_active_turn_with_no_thinking_block() {
         let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() }); // see thinking_indicator_renders_only_while_active
         app.turn_active = true;
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("working…"), "an active turn with no other feedback should still show loading progress: {out:?}");
@@ -1045,6 +1269,7 @@ mod tests {
     #[test]
     fn thinking_takes_priority_over_the_working_spinner() {
         let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() }); // see thinking_indicator_renders_only_while_active
         app.turn_active = true;
         app.thinking = true;
         let out = rendered(&mut app, 100, 20);
@@ -1068,6 +1293,33 @@ mod tests {
         assert!(out.contains("new"));
     }
 
+    /// Guards the `approval_key_hint`/`prompt_key_hint` extraction: the
+    /// footer (`draw_footer`) and the inline card (`render_approval_card`/
+    /// `render_prompt_card`) call the exact same functions for their key
+    /// labels, so they can never silently drift apart the way two
+    /// hand-duplicated strings could.
+    #[test]
+    fn footer_and_approval_card_show_identical_key_labels() {
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
+        app.pending_approval = Some(crate::app::PendingApproval { call_id: "c1".into() });
+        let out = rendered(&mut app, 100, 20);
+        let hint = approval_key_hint();
+        // The hint text appears twice: once in the card itself, once in the footer.
+        assert_eq!(out.matches(hint).count(), 2, "expected the approval card and the footer to show the exact same key labels, got: {out:?}");
+    }
+
+    #[test]
+    fn footer_mirrors_a_pending_permission_prompts_keys() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
+        app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload: payload.clone(), resolution: None });
+        app.pending_prompt = Some(crate::app::PendingPrompt { call_id: "c1".into(), payload: payload.clone() });
+        let out = rendered(&mut app, 100, 20);
+        let hint = prompt_key_hint(&payload);
+        assert_eq!(out.matches(hint.as_str()).count(), 2, "expected the prompt card and the footer to show the exact same key labels, got: {out:?}");
+    }
+
     #[test]
     fn approval_card_colors_added_and_removed_lines_distinctly() {
         let mut app = app();
@@ -1077,20 +1329,12 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let find_row = |needle: &str| -> u16 {
-            for y in 0..buffer.area.height {
-                let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
-                if row.contains(needle) {
-                    return y;
-                }
-            }
-            panic!("row containing {needle:?} not found");
-        };
-        let removed_row = find_row("old");
-        let added_row = find_row("new");
-        assert_eq!(buffer[(0, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
-        assert_eq!(buffer[(0, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
-        assert_ne!(buffer[(0, removed_row)].bg, buffer[(0, added_row)].bg, "added and removed lines must be visually distinct");
+        let removed_row = find_row(&buffer, "old");
+        let added_row = find_row(&buffer, "new");
+        // Column 1, not 0 — column 0 is now the log panel's own left border.
+        assert_eq!(buffer[(1, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
+        assert_eq!(buffer[(1, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
+        assert_ne!(buffer[(1, removed_row)].bg, buffer[(1, added_row)].bg, "added and removed lines must be visually distinct");
     }
 
     #[test]
@@ -1121,11 +1365,9 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // The welcome banner (log::INTRO_LINE_COUNT rows) plus its own
-        // separator come first, then the same "row 1 is the blank
-        // separator between entries, row 2 is the second entry" shape as
-        // before, just offset past the banner.
-        let base = intro_offset();
+        // Header (1 row) + the log panel's own top border (1 row), then the
+        // first entry directly, a blank separator, then the second entry.
+        let base = content_base();
         let user_cell = &buffer[(2, base)]; // "> hi"
         let assistant_cell = &buffer[(2, base + 2)]; // "● hi"
         assert_ne!(
@@ -1147,7 +1389,7 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let base = intro_offset();
+        let base = content_base();
         let plain_cell = &buffer[(2, base)]; // "> hi"
         let command_cell = &buffer[(2, base + 2)]; // "> /exit" — the next row is the blank separator line
         assert_ne!(
@@ -1281,14 +1523,6 @@ mod tests {
         assert!(!terminal.backend().cursor_visible(), "input is blocked while a card is pending — no cursor should show");
     }
 
-    /// Rows the welcome banner always occupies before the first real log
-    /// entry: `log::INTRO_LINE_COUNT` art/text rows plus the one separator
-    /// `draw_log` inserts between the banner and the log (present here
-    /// since every caller pushes at least one entry before measuring).
-    fn intro_offset() -> u16 {
-        (crate::log::INTRO_LINE_COUNT + 1) as u16
-    }
-
     /// The row-index assumptions the two style-comparison tests above make
     /// (the row right after the banner is blank, the second entry lands two
     /// rows after that) only hold because `draw_log` inserts exactly one
@@ -1307,8 +1541,10 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let row = intro_offset() + 1;
-        let row_text: String = (0..110).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+        let row = content_base() + 1;
+        // Columns 1..109, not 0..110 — the outer columns are now the log
+        // panel's own left/right border, not log content.
+        let row_text: String = (1..109).map(|x| buffer[(x, row)].symbol().to_string()).collect();
         assert_eq!(row_text.trim(), "", "the row after the first entry must be the blank separator between the two entries");
     }
 
@@ -1346,7 +1582,7 @@ mod tests {
         // AssistantText entry. Restricted to the line's own width so
         // unstyled padding cells past the printed text can't manufacture a
         // spurious second color.
-        let code_row = intro_offset() + 2; // "● here:" / "┌─ rust" / "│ fn main() {}"
+        let code_row = content_base() + 2; // "● here:" / "╭─ rust" / "│ fn main() {}"
         let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
     }
@@ -1379,22 +1615,16 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // The right-hand column (WORDMARK_ART, then blank/tagline/blank/
-        // model/version/commit/access) is vertically centered against
-        // MJOLNIR_ART's 13 rows: offset = (13 - (6 wordmark + 7 info)) / 2
-        // = 0. Screen row 0 is the top border, row 1 is the padding blank
-        // line above the art, so the wordmark's first row is 2 + 0 = 2.
-        let info_len = WORDMARK_ART.len() + 7;
-        let offset = (MJOLNIR_ART.len() - info_len) / 2;
-        let wordmark_row = (2 + offset) as u16;
+        // find_row rather than hand-derived coordinates — the hero is now
+        // vertically centered within the log panel's inner height (a
+        // render-time value), so its exact screen row isn't worth
+        // recomputing by hand here; what matters is the relative shape.
+        let wordmark_row = find_row(&buffer, WORDMARK_ART[0].trim());
         let wordmark_row_text: String = (0..110).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
-        assert!(wordmark_row_text.contains(WORDMARK_ART[0].trim()), "expected the wordmark's first row beside the hammer art, got: {wordmark_row_text:?}");
-        assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "that same row should still carry hammer art content to its left, not just the wordmark alone");
+        assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "the wordmark's row should still carry hammer art content to its left, not just the wordmark alone");
 
-        // Tagline is right after the wordmark block plus one blank line.
-        let tagline_row = (2 + offset + WORDMARK_ART.len() + 1) as u16;
-        let tagline_row_text: String = (0..110).map(|x| buffer[(x, tagline_row)].symbol().to_string()).collect();
-        assert!(tagline_row_text.contains("every strike is yours to call."), "expected the tagline beside the hammer art, got: {tagline_row_text:?}");
+        let tagline_row = find_row(&buffer, "every strike is yours to call.");
+        assert!(tagline_row > wordmark_row, "the tagline should render below the wordmark's first row");
     }
 
     #[test]
@@ -1408,7 +1638,7 @@ mod tests {
             shell:         PermState::Denied,
             edit:          PermState::Denied,
         };
-        assert_eq!(intro_lines(&status, 80).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_lines must stay in sync with log::INTRO_LINE_COUNT");
+        assert_eq!(intro_content(&status).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_content must stay in sync with log::INTRO_LINE_COUNT");
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
@@ -1442,7 +1672,7 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let base = intro_offset();
+        let base = content_base();
         let plain_cell = &buffer[(2, base)]; // "> hi"
         let command_cell = &buffer[(2, base + 2)]; // "> /exit"
         assert_eq!(plain_cell.bg, USER_BG, "a plain user message should carry the subtle background tint");
@@ -1458,27 +1688,66 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let row = intro_offset();
+        let row = content_base();
         let far_right_cell = &buffer[(99, row)]; // well past "> hi"
         assert_eq!(far_right_cell.bg, USER_BG, "the background tint should fill the full row width, not just trail the text");
     }
 
+    /// Replaces the old `the_welcome_banner_is_framed_by_a_border_spanning_
+    /// the_full_render_width` — the hero no longer draws its own border
+    /// (see `intro_content`'s doc comment); it's framed by the log panel's
+    /// own ratatui-drawn rounded border instead, which frames real log
+    /// content identically whether the hero or real entries are showing. No
+    /// dependency on the hero's row count, unlike the test this replaces.
     #[test]
-    fn the_welcome_banner_is_framed_by_a_border_spanning_the_full_render_width() {
+    fn the_log_panel_is_framed_by_a_rounded_border_spanning_the_full_render_width() {
         let mut app = app();
-        // Tall enough that the whole banner fits without auto-follow scroll
-        // pushing its top rows out of view — see the sizing comment on
-        // user_and_assistant_messages_are_visually_distinct.
-        let backend = TestBackend::new(110, 40);
+        let (width, height) = (110u16, 40u16);
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        assert_eq!(buffer[(0, 0)].symbol(), "┌", "top-left corner of the banner's border");
-        assert_eq!(buffer[(109, 0)].symbol(), "┐", "top-right corner should reach the full render width");
-        let bottom = crate::log::INTRO_LINE_COUNT as u16 - 1;
-        assert_eq!(buffer[(0, bottom)].symbol(), "└", "bottom-left corner of the banner's border");
-        assert_eq!(buffer[(109, bottom)].symbol(), "┘", "bottom-right corner should reach the full render width");
+        let top = 1; // directly below the 1-row header
+        let bottom = height - 1 - input_area_height("") - 1; // above the footer + input box
+        assert_eq!(buffer[(0, top)].symbol(), "╭", "top-left corner of the log panel, directly below the header");
+        assert_eq!(buffer[(width - 1, top)].symbol(), "╮", "top-right corner should reach the full render width");
+        assert_eq!(buffer[(0, bottom)].symbol(), "╰", "bottom-left corner of the log panel");
+        assert_eq!(buffer[(width - 1, bottom)].symbol(), "╯", "bottom-right corner should reach the full render width");
+    }
+
+    #[test]
+    fn sidebar_shows_when_wide_enough_and_the_developer_hasnt_hidden_it() {
+        let mut app = app();
+        app.sidebar_visible = true;
+        let out = rendered(&mut app, 130, 40);
+        assert!(out.contains("session"), "expected the sidebar's title at a comfortably wide terminal, got: {out:?}");
+    }
+
+    /// The width auto-collapse must override the developer's own preference
+    /// — a narrow terminal never shows a sidebar just because
+    /// `sidebar_visible` happens to be true (see `App::sidebar_visible`'s
+    /// doc comment: `App` only ever stores the preference, `ui::draw`
+    /// applies the width gate on top of it every frame).
+    #[test]
+    fn sidebar_is_hidden_below_the_width_threshold_even_when_sidebar_visible_is_true() {
+        let mut app = app();
+        app.sidebar_visible = true;
+        let out = rendered(&mut app, 90, 40);
+        assert!(!out.contains("session"), "a narrow terminal must not show the sidebar regardless of the developer's preference, got: {out:?}");
+    }
+
+    /// Guards the `app::RunningTool` change reaching the render path, not
+    /// just `App`'s event handling (`app.rs` has its own test for that
+    /// side) — the sidebar must show what the tool actually is, not the
+    /// opaque `call_id` alone.
+    #[test]
+    fn sidebar_shows_the_tool_name_not_just_the_call_id() {
+        let mut app = app();
+        app.sidebar_visible = true;
+        app.status.running_tools = vec![crate::app::RunningTool { call_id: "call-xyz".into(), name: "shell".into() }];
+        let out = rendered(&mut app, 130, 40);
+        assert!(out.contains("shell"), "expected the running tool's name in the sidebar, got: {out:?}");
     }
 
     #[test]

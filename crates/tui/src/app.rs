@@ -44,11 +44,22 @@ pub enum PermState {
     Denied,
 }
 
+/// A tool call currently in flight, for the sidebar's "active tools" list.
+/// Carries the human-readable name (not just the opaque `call_id`) so the
+/// sidebar can show what's actually running, not just an id — the name only
+/// otherwise exists transiently (`App::pending_tool_names`) or on the
+/// matching `ToolActivity` log entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningTool {
+    pub call_id: String,
+    pub name:    String,
+}
+
 pub struct StatusInfo {
     pub model_name:    String,
     pub turn:          Option<u64>,
     pub step:          Option<u64>,
-    pub running_tools: Vec<String>,
+    pub running_tools: Vec<RunningTool>,
     pub read:          PermState,
     pub shell:         PermState,
     pub edit:          PermState,
@@ -98,6 +109,20 @@ pub struct App {
     /// plausible starting width so `total_lines()` is never called before
     /// any draw has run.
     pub render_width:     u16,
+    /// The log panel's real inner render height (post-border), last set by
+    /// `ui::draw` alongside `render_width` — same reasoning: `hero_lines`
+    /// needs a pane height to vertically center the welcome banner, and
+    /// that number is only known at render time. Not used by scroll math
+    /// itself (`total_lines()` only needs `render_width`), only by the
+    /// hero-centering path.
+    pub render_height:    u16,
+    /// The developer's sidebar preference, toggled by Ctrl+T. Whether the
+    /// sidebar is *actually* shown on a given frame also depends on the
+    /// terminal being wide enough (`ui::draw` combines this with a width
+    /// check) — that combination is computed only in `ui::draw`, never
+    /// cached here, so a narrow-terminal auto-collapse always wins over this
+    /// preference rather than the two being able to disagree.
+    pub sidebar_visible:  bool,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
     pub pending_approval:  Option<PendingApproval>,
@@ -137,6 +162,8 @@ impl App {
             thinking: false,
             scroll: ScrollState::default(),
             render_width: 80,
+            render_height: 24,
+            sidebar_visible: true,
             input: String::new(),
             cursor: 0,
             pending_approval: None,
@@ -182,7 +209,7 @@ impl App {
     /// `ui::draw_log` renders, using ratatui's own wrapper rather than a
     /// hand-kept approximation.
     pub fn total_lines(&self) -> usize {
-        crate::ui::log_row_count(self, self.render_width)
+        crate::ui::log_row_count(self, self.render_width, self.render_height)
     }
 
     fn active_step_calls(&mut self, step_id: StepId) -> Option<&mut Vec<ToolActivityEntry>> {
@@ -212,8 +239,8 @@ impl App {
                 self.pending_tool_names.insert(call.id, call.name);
             }
             Event::ToolDispatched { step_id, call_id, .. } => {
-                self.status.running_tools.push(call_id.clone());
                 let name = self.pending_tool_names.remove(&call_id).unwrap_or_default();
+                self.status.running_tools.push(RunningTool { call_id: call_id.clone(), name: name.clone() });
                 match self.active_step_calls(step_id) {
                     Some(calls) => calls.push(ToolActivityEntry { call_id, name, status: ToolActivityStatus::Running }),
                     None => {
@@ -226,7 +253,7 @@ impl App {
                 self.push(LogEntry::ApprovalCard { call_id, diff, resolution: None });
             }
             Event::ToolCompleted { step_id, result, .. } => {
-                self.status.running_tools.retain(|id| id != &result.call_id);
+                self.status.running_tools.retain(|t| t.call_id != result.call_id);
                 let summary = summarise(&result.content, SUMMARY_MAX_LEN);
                 if let Some(calls) = self.active_step_calls(step_id) {
                     if let Some(call) = calls.iter_mut().find(|c| c.call_id == result.call_id) {
@@ -294,6 +321,11 @@ impl App {
             // through on terminals where Shift+Enter doesn't.
             (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.insert_char('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.cancel_or_quit(),
+            // Ctrl+T, not Ctrl+B — Ctrl+B is tmux's default prefix key, and
+            // this TUI is very likely run inside tmux (its own screenshot
+            // pipeline does), where Ctrl+B would just be eaten by tmux
+            // before reaching the app at all.
+            (KeyCode::Char('t'), m) if m.contains(KeyModifiers::CONTROL) => self.sidebar_visible = !self.sidebar_visible,
             (KeyCode::Backspace, _) => self.backspace(),
             (KeyCode::Delete, _) => self.delete_forward(),
             (KeyCode::Left, _) => self.cursor = self.cursor.saturating_sub(1),
@@ -605,6 +637,16 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_t_toggles_sidebar_visibility() {
+        let mut app = app();
+        assert!(app.sidebar_visible, "sidebar_visible should default on");
+        app.handle_key(press_mod(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert!(!app.sidebar_visible);
+        app.handle_key(press_mod(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert!(app.sidebar_visible);
+    }
+
+    #[test]
     fn ctrl_c_with_no_active_turn_quits() {
         let mut app = app();
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
@@ -744,7 +786,7 @@ mod tests {
         let call = ToolCall { id: "c1".into(), name: "read".into(), input: serde_json::json!({}) };
         app.apply_event(Event::ToolUseRequested { turn_id: TurnId(1), step_id: StepId(1), call });
         app.apply_event(Event::ToolDispatched { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into() });
-        assert_eq!(app.status.running_tools, vec!["c1".to_string()]);
+        assert_eq!(app.status.running_tools, vec![RunningTool { call_id: "c1".into(), name: "read".into() }]);
 
         app.apply_event(Event::ToolCompleted {
             turn_id: TurnId(1),

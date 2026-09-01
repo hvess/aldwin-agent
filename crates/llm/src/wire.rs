@@ -10,8 +10,9 @@ use crate::config::ProviderConfig;
 pub const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Anthropic requires `max_tokens > thinking.budget_tokens`; headroom above
-/// the configured thinking budget for the actual response content.
+/// Headroom above `extended_thinking_budget` for the actual response
+/// content, so `max_tokens` isn't sized down to exactly the thinking spend
+/// with nothing left for the answer.
 const MAX_TOKENS_HEADROOM: u32 = 4096;
 
 // ── Request ──────────────────────────────────────────────────────────────
@@ -28,11 +29,23 @@ pub struct WireRequest {
     pub messages:   Vec<WireMessage>,
 }
 
+/// Adaptive thinking is the only mode current Claude models (Sonnet 5, Opus
+/// 5, and the rest of the 4.6+ family this project targets) accept —
+/// `{ "type": "enabled", "budget_tokens": N }` is the pre-4.6 shape and gets
+/// rejected with a 400 ("thinking.type.enabled is not support for this
+/// model") on all of them. No `budget_tokens` field exists on this variant;
+/// `extended_thinking_budget` still sizes `max_tokens`' headroom (see
+/// `build_request`) but no longer names a literal request field.
 #[derive(Debug, Serialize)]
 pub struct WireThinking {
     #[serde(rename = "type")]
-    pub kind:         &'static str,
-    pub budget_tokens: u32,
+    pub kind: &'static str,
+}
+
+impl WireThinking {
+    fn adaptive() -> Self {
+        Self { kind: "adaptive" }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -136,7 +149,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
         system: request.system.to_string(),
         max_tokens: budget + MAX_TOKENS_HEADROOM,
         stream: true,
-        thinking: WireThinking { kind: "enabled", budget_tokens: budget },
+        thinking: WireThinking::adaptive(),
         tools,
         messages,
     }
@@ -563,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn build_request_max_tokens_exceeds_the_thinking_budget() {
+    fn build_request_max_tokens_gives_headroom_above_the_thinking_budget() {
         let config = crate::config::ProviderConfig {
             kind: mjolnir_config::ProviderKind::Anthropic,
             model: "m".into(),
@@ -573,6 +586,29 @@ mod tests {
         };
         let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &[], cache_breakpoints: &[] };
         let wire = build_request(&config, &request);
-        assert!(wire.max_tokens > wire.thinking.budget_tokens);
+        assert!(wire.max_tokens > config.extended_thinking_budget);
+    }
+
+    /// Regression test: current Claude models (Sonnet 5, Opus 5, the rest of
+    /// the 4.6+ family) reject the pre-4.6 `{"type": "enabled",
+    /// "budget_tokens": N}` thinking shape outright — reported live as
+    /// `provider error 400: "thinking.type.enabled" is not support for this
+    /// model`. The request must send adaptive thinking instead, with no
+    /// `budget_tokens` field at all.
+    #[test]
+    fn build_request_sends_adaptive_thinking_with_no_budget_tokens_field() {
+        let config = crate::config::ProviderConfig {
+            kind: mjolnir_config::ProviderKind::Anthropic,
+            model: "claude-sonnet-5".into(),
+            api_key_env: "X".into(),
+            base_url: None,
+            extended_thinking_budget: 8000,
+        };
+        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let wire = build_request(&config, &request);
+        assert_eq!(wire.thinking.kind, "adaptive");
+
+        let body = serde_json::to_value(&wire).unwrap();
+        assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     }
 }

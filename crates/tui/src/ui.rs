@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientatio
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{cursor_line_col, App, PermState, StatusInfo};
+use crate::app::{cursor_line_col, App, DecisionOption, PendingFront, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
@@ -25,14 +25,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // for the tier this belongs to.
     frame.render_widget(Block::default().style(Style::default().bg(BG_BASE)), area);
     let input_height = input_area_height(&app.input);
-    // Four bands: the body (conversation log), a 1-row blank spacer, a
-    // 1-row status line (identity/activity — see `draw_status_line`), then
-    // the input box. The old separate 1-row header and 1-row footer are
-    // gone — per explicit developer feedback against a real screenshot, a
-    // header full of permission chips at the top and a footer full of
-    // half-dead keybinding hints at the bottom read as two disconnected,
-    // mostly-noise bars; one status line, positioned right above the input
-    // where the developer's eye already is while typing, replaces both.
+    // Five bands: the body (conversation log), a 1-row blank spacer, a
+    // 1-row status line (identity/activity — see `draw_status_line`), the
+    // decision panel (Edit approval / permission prompt — see
+    // `decision_panel_lines`, zero-height and invisible when nothing is
+    // pending), then the input box. The old separate 1-row header and
+    // 1-row footer are gone — per explicit developer feedback against a
+    // real screenshot, a header full of permission chips at the top and a
+    // footer full of half-dead keybinding hints at the bottom read as two
+    // disconnected, mostly-noise bars; one status line, positioned right
+    // above the input where the developer's eye already is while typing,
+    // replaces both.
     //
     // The spacer sits *above* the status line, not below it — per a later
     // round of explicit developer feedback: the original placement (spacer
@@ -45,10 +48,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // from this row, bottom padding from the input box's own internal
     // padding, neither doubled up. The spacer row is otherwise blank (the
     // opaque `BG_BASE` canvas painted above already covers it).
-    let [body_area, _spacer_area, status_area, input_area] = Layout::vertical([
+    //
+    // `panel_lines` (and therefore `panel_height`) is computed once, up
+    // front, the same discipline `log_inner`'s width/height follow below —
+    // there must never be a second, independently-derived height for what
+    // the panel actually renders, or the two can drift the way `log_inner`'s
+    // own doc comment describes two real historical bugs happening.
+    //
+    // `panel_height` counts *wrapped* rows (`panel_row_count`, the same
+    // `Paragraph::line_count` technique `log_row_count` already uses — see
+    // its doc comment), not `panel_lines.len()` — a permission prompt's
+    // title/keys can easily be wider than the frame (an arbitrarily long
+    // shell command in `PromptPayload::Tool`'s `target`, say), and this
+    // panel's own `Paragraph` below wraps rather than truncates, same as
+    // the log panel's own render path.
+    let (panel_body, panel_tail) = decision_panel_lines(app, area.width);
+    let panel_lines = clamp_panel(panel_body, panel_max_height(area.height), panel_tail, area.width);
+    let panel_height = panel_row_count(&panel_lines, area.width) as u16;
+
+    let [body_area, _spacer_area, status_area, panel_area, input_area] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(panel_height),
         Constraint::Length(input_height),
     ])
     .areas(area);
@@ -79,7 +101,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_log(frame, log_area, log_inner, log_block, app);
     draw_status_line(frame, status_area, app);
+    draw_decision_panel(frame, panel_area, panel_lines);
     draw_input(frame, input_area, app);
+}
+
+/// Maximum rows the decision panel (see `decision_panel_lines`) is allowed
+/// to claim, derived from the frame's total height rather than fixed —
+/// reserves room for at least one row of the conversation log plus the
+/// spacer/status-line/input bands below it, so an unusually large diff (a
+/// new file, a big added block — see `clamp_panel`'s own doc comment on why
+/// the existing context-collapsing alone doesn't bound this) can never push
+/// the rest of the UI off-frame the way an unbounded `Constraint::Length`
+/// could. Floors at 6 (enough for a short title/keys/padding-only panel)
+/// even on a terminal too short to honor the reservation in full — a
+/// degenerate case, not one worth failing gracefully out of.
+fn panel_max_height(frame_height: u16) -> usize {
+    const RESERVED_FOR_REST_OF_UI: u16 = 1 /* one row of log */ + 1 /* spacer */ + 1 /* status line */ + 3 /* input, one line */;
+    (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI) as usize).max(6)
+}
+
+/// Wrapped-row count of `lines` at `width` — same `Paragraph::line_count`
+/// technique as `log_row_count`, applied to the decision panel instead of
+/// the conversation log, so the two can never disagree about how tall a
+/// wrapping line actually renders.
+fn panel_row_count(lines: &[Line<'static>], width: u16) -> usize {
+    Paragraph::new(Text::from(lines.to_vec())).wrap(Wrap { trim: false }).line_count(width)
+}
+
+fn draw_decision_panel(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+    if area.height == 0 {
+        return;
+    }
+    // `Wrap { trim: false }` — matches `panel_row_count`'s own wrap mode, so
+    // `draw`'s precomputed `panel_height` and what actually renders here can
+    // never desync (see its doc comment).
+    frame.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), area);
 }
 
 fn input_area_height(input: &str) -> u16 {
@@ -438,7 +494,7 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // note).
             let style = Style::default().fg(USER_FG).bg(BG_ELEMENT);
             let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
-            lines.extend(text.lines().map(|l| card_line(l, style, width)));
+            lines.extend(text.lines().flat_map(|l| card_line(l, style, width)));
             lines.push(card_padding_line(BG_ELEMENT, width));
             lines
         }
@@ -470,8 +526,22 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
                 Style::default().fg(WARNING_FG),
             ))]
         }
-        LogEntry::ApprovalCard { diff, resolution, .. } => render_approval_card(diff, *resolution, width),
-        LogEntry::PermissionPrompt { payload, resolution, .. } => render_prompt_card(payload, resolution.as_deref(), width),
+        // While pending (`resolution: None`), this renders nothing at all
+        // here — the decision panel (`decision_panel_lines`, a fixed band
+        // above the input, driven by `App::pending_approvals`/
+        // `pending_prompts`) is now the only place an unresolved request is
+        // interactive. Per explicit developer feedback: a card that
+        // appeared as "a temporary row in the chat" was "ugly, not clear,
+        // disjointed" — it could scroll out of view with the rest of the
+        // log, and there was no one consistent place to look for "what does
+        // the harness want from me right now." Once resolved, it still
+        // renders here exactly as before — the log remains the permanent
+        // record of what was approved/denied, only the *live* interaction
+        // moved.
+        LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => render_approval_card(diff, Some(*approved), Vec::new(), width),
+        LogEntry::ApprovalCard { resolution: None, .. } => Vec::new(),
+        LogEntry::PermissionPrompt { payload, resolution: Some(r), .. } => render_prompt_card(payload, Some(r.as_str()), Vec::new(), width),
+        LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
             // The ordinary case renders nothing at all — per explicit
@@ -579,7 +649,7 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             // second diff presentation.
             Segment::Code { lang, body } if lang.eq_ignore_ascii_case("diff") => {
                 let (_, diff_body) = parse_diff_body(&body);
-                lines.extend(number_diff_lines(diff_body).iter().map(|line| render_diff_line(line, width)));
+                lines.extend(number_diff_lines(diff_body).iter().flat_map(|line| render_diff_line(line, width)));
             }
             // A real filled code-block box — dark `CODE_BG`, a language
             // label instead of the fence's own literal ` ``` ` markers, no
@@ -594,11 +664,11 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             // other filled box in the log.
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.push(card_line(&label, Style::default().fg(DIM).bg(CODE_BG), width));
+                lines.extend(card_line(&label, Style::default().fg(DIM).bg(CODE_BG), width));
                 lines.push(card_padding_line(CODE_BG, width));
                 for code_line in highlight::highlight_lines(&lang, &body) {
                     let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(CODE_BG))).collect();
-                    lines.push(filled_line(spans, CODE_BG, width));
+                    lines.extend(filled_line(spans, CODE_BG, width));
                 }
                 lines.push(card_padding_line(CODE_BG, width));
             }
@@ -1031,50 +1101,82 @@ const BOX_PAD_H: usize = 1;
 /// (this only pads around them, it doesn't recolor them), so a caller
 /// mixing a semantic tint (e.g. `DIFF_ADD_BG`) into an otherwise-`bg`
 /// row still reads correctly.
-fn filled_line(mut spans: Vec<Span<'static>>, bg: Color, width: u16) -> Line<'static> {
-    let content_width: usize = spans.iter().map(|s| s.content.width()).sum();
-    let pad = (width as usize).saturating_sub(BOX_PAD_H).saturating_sub(content_width);
-    let mut out = Vec::with_capacity(spans.len() + 2);
-    out.push(Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg)));
-    out.append(&mut spans);
-    out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-    Line::from(out)
+///
+/// Returns more than one `Line` when `spans` is too wide for `width` —
+/// word-wrapped via `wrap_prose_line` (the same primitive assistant prose
+/// already used), with the `BOX_PAD_H` inset and `bg` fill applied to *every*
+/// resulting row here, not just assumed to happen once downstream. Before
+/// this, a card/diff/code-block row wider than its panel relied on the
+/// caller's own `Paragraph::wrap` (`draw_log`/`draw_decision_panel`) to
+/// split it — but `Wrap` treats one `Line`'s spans as a single flat run of
+/// graphemes with no idea this function had already inset/filled it, so it
+/// only ever produced the inset/fill on whichever row the wrap decision
+/// happened to land the start of the content on (normally the first),
+/// leaving every wrapped continuation row flush against the edge with no
+/// background at all. Doing the wrap here, before any padding is added,
+/// means every row this function returns is already ≤ `width` and already
+/// fully padded/filled on its own — `Wrap` downstream never has to split
+/// anything this function produces, the same discipline `wrap_prose_line`
+/// itself already established for prose.
+fn filled_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'static>> {
+    let avail = (width as usize).saturating_sub(BOX_PAD_H);
+    wrap_prose_line(Line::from(spans), avail)
+        .into_iter()
+        .map(|row| {
+            let content_width: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            let pad = (width as usize).saturating_sub(BOX_PAD_H).saturating_sub(content_width);
+            let mut out = Vec::with_capacity(row.spans.len() + 2);
+            out.push(Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg)));
+            out.extend(row.spans);
+            out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+            Line::from(out)
+        })
+        .collect()
 }
 
-/// One line of a filled "card": `content`, styled per `content_style` and
-/// padded (via `filled_line`) to the full render width so the fill reads as
-/// one continuous card rather than per-line background patches. Used to
-/// carry a left accent bar glyph (mirroring OpenCode's own
-/// `border={["left"]}` input) — dropped per explicit developer feedback
-/// that it read as stray decoration borrowed from OpenCode rather than
-/// something Mjolnir's own cards needed; the flat full-width fill alone
-/// already reads as "this is a card." `content_style` carries whatever bg
-/// the caller wants (the neutral `BG_ELEMENT` card fill, or a semantic tint
-/// like `DIFF_ADD_BG` that should win over it) — this helper doesn't pick
-/// one, it just reads it back out to pad with the matching color.
-fn card_line(content: &str, content_style: Style, width: u16) -> Line<'static> {
+/// One or more lines of a filled "card": `content`, styled per
+/// `content_style` and padded (via `filled_line`) to the full render width
+/// so the fill reads as one continuous card rather than per-line background
+/// patches — more than one row when `content` is wider than `width` (see
+/// `filled_line`'s doc comment). Used to carry a left accent bar glyph
+/// (mirroring OpenCode's own `border={["left"]}` input) — dropped per
+/// explicit developer feedback that it read as stray decoration borrowed
+/// from OpenCode rather than something Mjolnir's own cards needed; the flat
+/// full-width fill alone already reads as "this is a card." `content_style`
+/// carries whatever bg the caller wants (the neutral `BG_ELEMENT` card fill,
+/// or a semantic tint like `DIFF_ADD_BG` that should win over it) — this
+/// helper doesn't pick one, it just reads it back out to pad with the
+/// matching color.
+fn card_line(content: &str, content_style: Style, width: u16) -> Vec<Line<'static>> {
     let bg = content_style.bg.unwrap_or(BG_BASE);
     filled_line(vec![Span::styled(content.to_string(), content_style)], bg, width)
 }
 
-/// The Edit approval card: filled title and keys (same shape as
+/// The Edit approval card: filled title and options list (same shape as
 /// `render_card`) around a diff-aware body — added/removed lines get a
 /// full-width background tint (see `DIFF_ADD_BG`/`DIFF_DEL_BG`), and
 /// unchanged context beyond `DIFF_CONTEXT_RADIUS` lines from the nearest
 /// change collapses to a single "N unchanged lines" marker — per explicit
 /// developer feedback that the card previously rendered every diff line in
 /// the same plain style, which made it hard to tell what actually changed
-/// at a glance.
-fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec<Line<'static>> {
+/// at a glance. Shared by two very different call sites: the decision panel
+/// (`decision_panel_lines`, `resolution: None`, `pending_tail` carries the
+/// live numbered options list — see `render_decision_options` — plus any
+/// queue-count note and the card's own closing padding, built and owned
+/// entirely by the caller) and a resolved entry's permanent record inline in
+/// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused
+/// since the "resolved: …" line takes its place instead).
+fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
     let body = number_diff_lines(body);
     // A blank filled row top and bottom (see `card_padding_line`'s doc
     // comment) — plain terminal text sat flush against the card's edges,
     // which read as cramped next to the reference's generous interior
     // padding.
-    let mut lines = vec![card_padding_line(BG_ELEMENT, width), card_line("Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+    let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
+    lines.extend(card_line("Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width));
     if let Some(path) = path {
-        lines.push(card_line(&path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
+        lines.extend(card_line(&path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
     }
 
     let n = body.len();
@@ -1093,7 +1195,7 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
     while i < n {
         if keep[i] {
             let line = &body[i];
-            lines.push(render_diff_line(line, width));
+            lines.extend(render_diff_line(line, width));
             i += 1;
         } else {
             let elided_start = i;
@@ -1101,7 +1203,7 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
                 i += 1;
             }
             let count = i - elided_start;
-            lines.push(card_line(
+            lines.extend(card_line(
                 &format!("⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
                 Style::default().fg(DIM).bg(BG_ELEMENT),
                 width,
@@ -1110,46 +1212,52 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, width: u16) -> Vec
     }
 
     match resolution {
-        Some(approved) => lines.push(card_line(
-            &format!("resolved: {}", if approved { "approved" } else { "denied" }),
-            Style::default().fg(ACCENT).bg(BG_ELEMENT),
-            width,
-        )),
-        None => lines.push(card_line(approval_key_hint(), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
+        Some(approved) => {
+            lines.extend(card_line(
+                &format!("resolved: {}", if approved { "approved" } else { "denied" }),
+                Style::default().fg(ACCENT).bg(BG_ELEMENT),
+                width,
+            ));
+            lines.push(card_padding_line(BG_ELEMENT, width));
+        }
+        None => lines.extend(pending_tail),
     }
-    lines.push(card_padding_line(BG_ELEMENT, width));
     lines
 }
 
 /// A blank, filled row — same fill mechanism as `card_line`, just with
 /// empty content — used as a leading/trailing spacer inside a card so its
-/// content doesn't sit flush against the card's own top/bottom edge.
+/// content doesn't sit flush against the card's own top/bottom edge. Always
+/// exactly one row (empty content never wraps), so this stays single-`Line`
+/// for its many `.push` call sites rather than propagating `card_line`'s
+/// `Vec` return all the way through every padding site too.
 fn card_padding_line(bg: Color, width: u16) -> Line<'static> {
-    card_line("", Style::default().bg(bg), width)
+    card_line("", Style::default().bg(bg), width).into_iter().next().expect("card_line(\"\", ..) never wraps empty content, so it always returns exactly one row")
 }
 
-/// The approval card's own key labels — also shown in the footer key-hint
-/// bar (`draw_footer`) while the card is pending, via this exact function,
-/// so the two can never drift apart (guarded by
-/// `footer_and_approval_card_show_identical_key_labels`).
-fn approval_key_hint() -> &'static str {
-    "[y] approve   [n] deny   [Ctrl+C] deny"
-}
-
-/// Appends a "+N more pending" suffix to a card's own key hint when its
-/// queue (`App::pending_approvals`/`pending_prompts`) holds more than the
-/// one currently interactive entry — see `draw_status_line`. Kept separate
-/// from `approval_key_hint`/`prompt_key_hint` themselves rather than
-/// threading a count through them: those two are also what each card's own
-/// key row in the log renders with (per `draw_status_line`'s doc comment,
-/// "the exact same functions"), and a per-card queue-depth suffix would be
-/// wrong there — a card only ever represents itself, not how many other
-/// cards are waiting behind it.
-fn queue_hint(hint: String, queue_len: usize) -> String {
-    match queue_len.saturating_sub(1) {
-        0 => hint,
-        n => format!("{hint}   (+{n} more pending)"),
-    }
+/// Renders the decision panel's numbered, keyboard-navigable list of
+/// choices — one row per `DecisionOption`, `"{n}. {label}"` — replacing the
+/// old flat `"[y] approve   [n] deny"`-style keybinding hint entirely, per
+/// explicit developer request: "make sure the approval options appear as a
+/// list and not some weird keyboard shortcuts... key bindings for 1-3 or
+/// selecting with arrow keys and pressing enter are valid inputs." The
+/// currently selected row (`App::decision_selected`) gets a leading `▸`
+/// marker plus the accent color/bold — Up/Down navigation needs something
+/// visible to track, a number alone doesn't show *where the cursor is*
+/// versus what a digit key would jump straight to.
+fn render_decision_options(options: &[DecisionOption], selected: usize, width: u16) -> Vec<Line<'static>> {
+    options
+        .iter()
+        .enumerate()
+        .flat_map(|(i, opt)| {
+            let (marker, style) = if i == selected {
+                ("▸ ", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD))
+            } else {
+                ("  ", Style::default().fg(BRIGHT).bg(BG_ELEMENT))
+            };
+            card_line(&format!("{marker}{}. {}", i + 1, opt.label), style, width)
+        })
+        .collect()
 }
 
 /// One diff body line plus the line number(s) it carries in each side of the
@@ -1210,7 +1318,7 @@ fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color) -> Span<
 /// not just a leading +/- character; context lines get the plain
 /// `BG_ELEMENT` card fill, same as every other card line, since only the
 /// changed lines' brighter tint should compete for attention.
-fn render_diff_line(line: &DiffLine, width: u16) -> Line<'static> {
+fn render_diff_line(line: &DiffLine, width: u16) -> Vec<Line<'static>> {
     let (marker, fg, bg) = match line.kind {
         DiffLineKind::Added => ("+", DIFF_ADD_FG, DIFF_ADD_BG),
         DiffLineKind::Removed => ("-", DIFF_DEL_FG, DIFF_DEL_BG),
@@ -1220,37 +1328,32 @@ fn render_diff_line(line: &DiffLine, width: u16) -> Line<'static> {
     filled_line(spans, bg, width)
 }
 
-fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, width: u16) -> Vec<Line<'static>> {
+/// Shared by the decision panel (`resolution: None`, `pending_tail` is the
+/// live numbered options list — see `render_approval_card`'s own doc
+/// comment on the same param) and a resolved prompt's permanent record in
+/// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused).
+fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending_tail: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     let title = match payload {
         PromptPayload::Tool { kind, target } => format!("Allow {kind}: {target}?"),
         PromptPayload::ContextFile { path } => format!("Inject context file {}?", path.display()),
         PromptPayload::Edit { kind } => format!("Edit approval for {kind}"),
     };
-    render_card(&title, "", &prompt_key_hint(payload), resolution.map(str::to_string), width)
+    render_card(&title, "", pending_tail, resolution.map(str::to_string), width)
 }
 
-/// The permission prompt's own key labels, by payload shape — also shown in
-/// the footer key-hint bar (`draw_footer`) while the prompt is pending, via
-/// this exact function, so the two can never drift apart (same guard as
-/// `approval_key_hint`).
-fn prompt_key_hint(payload: &PromptPayload) -> String {
-    match payload {
-        PromptPayload::Tool { .. } => "[o]nce [s]ession [p]roject [a]lways   Shift = deny at the same tier   Ctrl+C = deny once".to_string(),
-        PromptPayload::ContextFile { .. } => "[s]ession [p]roject [n]o   Ctrl+C = no".to_string(),
-        PromptPayload::Edit { .. } => String::new(),
-    }
-}
-
-fn render_card(title: &str, body: &str, keys: &str, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![card_padding_line(BG_ELEMENT, width), card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width)];
+fn render_card(title: &str, body: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
+    lines.extend(card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width));
     for l in body.lines() {
-        lines.push(card_line(l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
+        lines.extend(card_line(l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
     }
     match resolution {
-        Some(r) => lines.push(card_line(&format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
-        None => lines.push(card_line(keys, Style::default().fg(ACCENT).bg(BG_ELEMENT), width)),
+        Some(r) => {
+            lines.extend(card_line(&format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width));
+            lines.push(card_padding_line(BG_ELEMENT, width));
+        }
+        None => lines.extend(pending_tail),
     }
-    lines.push(card_padding_line(BG_ELEMENT, width));
     lines
 }
 
@@ -1265,6 +1368,129 @@ fn tool_color(name: &str) -> Color {
     TOOL_PALETTE[hash as usize % TOOL_PALETTE.len()]
 }
 
+/// Builds the fixed decision panel's content: whichever pending
+/// approval/prompt is at the front of its queue, styled exactly like the
+/// card that used to render inline (same `render_approval_card`/
+/// `render_prompt_card`), or nothing at all when both queues are empty (the
+/// panel band then collapses to zero height — see `draw`). Checks
+/// `pending_approvals` before `pending_prompts`, mirroring `App::handle_key`'s
+/// own priority (approvals resolve first when both queues hold an entry) —
+/// what's shown here must always be exactly what the next keypress actually
+/// resolves. This is a real correctness fix, not just cosmetic ordering: the
+/// old status-line key-hint checked prompts first, which was already
+/// latently backwards on the rare step where both queues held an entry at
+/// once — invisible before since it only cost a one-line hint mismatch, but
+/// would have shown an entirely wrong request front-and-center in a full
+/// panel, so it's corrected here rather than carried forward.
+///
+/// Returns the lines alongside how many trailing rows are the numbered
+/// options list (plus any queue-count note and the card's own closing
+/// padding) — `clamp_panel` must never truncate into that tail, since the
+/// options list is the one thing a developer absolutely still needs to see
+/// and select, however large the body above it gets.
+fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
+    let options = app.decision_options();
+    if options.is_empty() {
+        return (Vec::new(), 0);
+    }
+    // `App::pending_front` is the single source of truth for "approvals
+    // before prompts" — consolidated here (a rust-skills audit flagged this
+    // function, plus `App::decision_options`/`decline_outcome`, as each
+    // independently re-deriving the same priority check) so it can never
+    // drift from what `App::handle_key` actually resolves. The two arms
+    // still each build their own "(+N more pending)" note, since that part
+    // genuinely differs — it reads a different `VecDeque`'s length — but the
+    // *which-queue-is-front* question is answered exactly once, here.
+    match app.pending_front() {
+        PendingFront::Approval(pending) => {
+            let mut tail = render_decision_options(&options, app.decision_selected, width);
+            let queue_len = app.pending_approvals.len();
+            if queue_len > 1 {
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(DIM).bg(BG_ELEMENT), width));
+            }
+            tail.push(card_padding_line(BG_ELEMENT, width));
+            let tail_len = tail.len();
+            (render_approval_card(&pending.diff, None, tail, width), tail_len)
+        }
+        PendingFront::Prompt(pending) => {
+            let mut tail = render_decision_options(&options, app.decision_selected, width);
+            let queue_len = app.pending_prompts.len();
+            if queue_len > 1 {
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(DIM).bg(BG_ELEMENT), width));
+            }
+            tail.push(card_padding_line(BG_ELEMENT, width));
+            let tail_len = tail.len();
+            (render_prompt_card(&pending.payload, None, tail, width), tail_len)
+        }
+        PendingFront::None => (Vec::new(), 0),
+    }
+}
+
+/// Caps the decision panel to `max` rows so an unusually large diff can
+/// never squeeze the rest of the UI off-frame (see `panel_max_height`) — the
+/// existing `DIFF_CONTEXT_RADIUS` collapsing in `render_approval_card` only
+/// elides unchanged *context* lines, so it does nothing for the common case
+/// of one big added block (a new file, a large new function): every line of
+/// that block is itself a change, so none of it collapses. Keeps the
+/// leading rows (blank padding + title, and a path line if there is one) and
+/// the caller-supplied `tail` rows (the numbered options list, any
+/// queue-count note, and the closing padding — see `decision_panel_lines`)
+/// intact — those are what a developer actually needs to make the call —
+/// and collapses whatever body content doesn't fit between them into a
+/// single marker line, the same "⋯ N more … ⋯" shape `render_approval_card`
+/// already uses for elided context. `tail` (not a fixed constant) is what
+/// makes this correct once the options list can be anywhere from 2 rows
+/// (Approve/Deny) to 8 (a Tool prompt's four tiers × allow/deny) — a fixed
+/// guess would either truncate real options away or protect rows that
+/// aren't actually the list.
+fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, width: u16) -> Vec<Line<'static>> {
+    const HEAD: usize = 2;
+    if lines.len() <= max {
+        return lines;
+    }
+    let mut lines = lines;
+    let tail_lines = lines.split_off(lines.len().saturating_sub(tail));
+    let head_lines: Vec<_> = lines.drain(..HEAD.min(lines.len())).collect();
+    // `keep` (how many of the remaining body rows survive) is found by
+    // shrinking until head + kept body + the marker actually fit in `max`,
+    // re-measuring the marker itself on every attempt — regression fix:
+    // this used to assume the marker was always exactly one row
+    // (`max - head - tail - 1`), but `card_line` wraps it, just like any
+    // other card row, once its text is wider than `width` (its own text is
+    // ~70 columns, so this isn't a rare case — it wraps on any panel
+    // narrower than that). The undercounted budget let the *tail* — the
+    // options list, the one thing that must never be cut — get silently
+    // pushed past the panel's real row budget and clipped off the bottom by
+    // the outer layout, confirmed via a real render: an ordinary 8-option
+    // Tool prompt on a modest terminal lost its last four options entirely,
+    // with no on-screen indication anything was missing. `keep == 0` is the
+    // floor — even then, no marker is added if there was nothing left to
+    // hide (`hidden == 0`), fixing the companion bug where a degenerate
+    // head+tail-only panel used to print a nonsensical "0 more lines not
+    // shown" row it didn't need and couldn't afford.
+    let mut keep = lines.len();
+    loop {
+        let hidden = lines.len() - keep;
+        let marker: Vec<Line<'static>> = if hidden == 0 {
+            Vec::new()
+        } else {
+            card_line(
+                &format!("⋯ {hidden} more line{} not shown — deciding doesn't require scrolling them ⋯", if hidden == 1 { "" } else { "s" }),
+                Style::default().fg(DIM).bg(BG_ELEMENT),
+                width,
+            )
+        };
+        if keep == 0 || head_lines.len() + keep + marker.len() + tail_lines.len() <= max {
+            let mut out = head_lines;
+            out.extend(lines.into_iter().take(keep));
+            out.extend(marker);
+            out.extend(tail_lines);
+            return out;
+        }
+        keep -= 1;
+    }
+}
+
 /// Persistent identity/activity strip, one row, positioned directly above
 /// the input box rather than at the top of the frame — replaces the old
 /// separate 1-row header (model/turn/permission chips), 1-row footer
@@ -1272,35 +1498,20 @@ fn tool_color(name: &str) -> Color {
 /// developer feedback against a real screenshot: three separate ambient-state
 /// surfaces (top bar, bottom bar, right column) read as noisy and too close
 /// to OpenCode's own layout rather than something distinctly Mjolnir's.
-/// While a card or prompt is pending, still shows that card's own keys (via
-/// the exact same functions the card itself renders with, so the two can't
-/// drift apart) since those are the only keys that do anything while input
-/// is blocked. Otherwise shows what's actually happening with the model —
-/// turn/step, live activity (thinking/working/idle, with the same spinner
-/// the log uses), any tools currently in flight (colored per name via
-/// `tool_color`, the same job the removed sidebar did), and a running
-/// message count. Permission state (read/shell/edit) is deliberately
-/// absent here — per explicit developer request, that belongs to the
-/// once-per-session welcome hero (`intro_content`) and an actual
-/// permission prompt when one fires, not a line that repaints every frame.
+/// Always shows normal turn/activity content, even while a decision is
+/// pending — the fixed decision panel directly below it (`decision_panel_lines`)
+/// is now the one place pending keys show; this used to short-circuit into
+/// just the pending card's own key hint, which is no longer needed now that
+/// the panel has a permanent, unambiguous home of its own. Shows what's
+/// actually happening with the model — turn/step, live activity
+/// (thinking/working/idle, with the same spinner the log uses), any tools
+/// currently in flight (colored per name via `tool_color`, the same job the
+/// removed sidebar did), and a running message count. Permission state
+/// (read/shell/edit) is deliberately absent here — per explicit developer
+/// request, that belongs to the once-per-session welcome hero
+/// (`intro_content`) and an actual permission prompt when one fires, not a
+/// line that repaints every frame.
 fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
-    // Both queues (see `App::pending_approvals`/`pending_prompts`) can hold
-    // more than one entry when the model dispatched several approval- or
-    // prompt-gated calls in one step — only the front is ever interactive,
-    // so its hint is what's shown, with a "+N more pending" suffix instead
-    // of silently leaving the developer to discover the next one only after
-    // resolving this one.
-    if let Some(prompt) = app.pending_prompts.front() {
-        let hint = queue_hint(prompt_key_hint(&prompt.payload), app.pending_prompts.len());
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(DIM)))), area);
-        return;
-    }
-    if !app.pending_approvals.is_empty() {
-        let hint = queue_hint(approval_key_hint().to_string(), app.pending_approvals.len());
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(DIM)))), area);
-        return;
-    }
-
     let s = &app.status;
     // Activity leads the row — per explicit developer request that "what's
     // the LLM doing right now" is the single most useful thing this line
@@ -1420,6 +1631,47 @@ mod tests {
         let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
         App::new("claude-sonnet-5".into(), Arc::new(Engine::new(config)))
     }
+
+    /// Regression test found during a rust-skills audit of this session's
+    /// changes: `clamp_panel`'s budget math assumed its own truncation
+    /// marker always cost exactly one row, but `card_line` wraps it — like
+    /// any other card row — once its ~70-column text is wider than the
+    /// panel, which is common, not exotic (any panel narrower than ~70-75
+    /// columns). The undercounted budget let the *tail* (the options list —
+    /// the one thing that must never be cut, per `clamp_panel`'s own doc
+    /// comment) get silently pushed past the panel's real row budget: an
+    /// unusually long permission-prompt target (an arbitrarily long shell
+    /// command is realistic user input, not contrived) forced its title to
+    /// wrap across many rows on a modest terminal, and the resulting
+    /// truncation lost part of the *options list itself* — not just part of
+    /// the title, which would at least be the intended trade-off. Confirmed
+    /// to fail against the pre-fix `clamp_panel` (options 7-8 absent) before
+    /// confirming it passes against the iterative budget-refit fix, which
+    /// correctly sacrifices more of the (already-abbreviated) title instead.
+    #[test]
+    fn a_long_prompt_title_can_be_abbreviated_but_the_full_options_list_must_survive() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "x".repeat(300) };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 30, 20);
+        assert!(out.contains("Deny for this project") && out.contains("Always deny"), "all 8 tiers must stay visible even when the title itself needs to be abbreviated: {out:?}");
+    }
+
+    /// Companion regression: the same budget bug also printed a nonsensical
+    /// "0 more lines not shown" marker whenever the panel's mandatory head
+    /// and tail already accounted for the whole panel with nothing left in
+    /// the middle to actually hide.
+    #[test]
+    fn no_truncation_marker_appears_when_nothing_was_actually_hidden() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into() };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 50, 14);
+        assert!(!out.contains("0 more line"), "a degenerate all-head-and-tail panel must not claim to have hidden 0 lines: {out:?}");
+    }
+
+
+
 
     fn rendered(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
@@ -1670,41 +1922,109 @@ mod tests {
     }
 
     #[test]
-    fn approval_card_shows_labeled_keys_and_the_diff() {
+    fn decision_panel_shows_labeled_keys_and_the_diff() {
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("approve"));
-        assert!(out.contains("deny"));
+        assert!(out.contains("Approve"));
+        assert!(out.contains("Deny"));
         assert!(out.contains("old"));
         assert!(out.contains("new"));
     }
 
-    /// Guards the `approval_key_hint`/`prompt_key_hint` extraction: the
-    /// footer (`draw_footer`) and the inline card (`render_approval_card`/
-    /// `render_prompt_card`) call the exact same functions for their key
-    /// labels, so they can never silently drift apart the way two
-    /// hand-duplicated strings could.
+    /// Regression test for the actual developer complaint that prompted this
+    /// panel: an approval/prompt used to render as "a temporary row" mixed
+    /// into the scrolling chat log — described as "ugly, not clear,
+    /// disjointed." A pending card must not appear in the log at all any
+    /// more; `decision_panel_shows_labeled_keys_and_the_diff` above covers
+    /// that it does appear, in the fixed panel, via `App::pending_approvals`
+    /// instead.
     #[test]
-    fn footer_and_approval_card_show_identical_key_labels() {
+    fn a_pending_approval_does_not_render_inline_in_the_conversation_log() {
         let mut app = app();
+        // Deliberately not added to `pending_approvals` — this exercises
+        // only `render_entry`'s own handling of an unresolved log entry.
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
         let out = rendered(&mut app, 100, 20);
-        let hint = approval_key_hint();
-        // The hint text appears twice: once in the card itself, once in the footer.
-        assert_eq!(out.matches(hint).count(), 2, "expected the approval card and the footer to show the exact same key labels, got: {out:?}");
+        assert!(!out.contains("Approve this edit?"), "a pending card must not render inline in the log any more — see the decision panel instead: {out:?}");
+    }
+
+    /// Once resolved, the full card (diff included) still leaves a
+    /// permanent record inline in the log, unchanged from before this
+    /// panel existed — only the *live* interaction moved, not the history.
+    #[test]
+    fn a_resolved_approval_still_leaves_a_full_record_in_the_conversation_log() {
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: Some(true) });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("Approve this edit?") && out.contains("old") && out.contains("new"), "a resolved card should keep its full historical record: {out:?}");
+        assert!(out.contains("resolved: approved"));
     }
 
     #[test]
-    fn footer_mirrors_a_pending_permission_prompts_keys() {
+    fn a_pending_permission_prompt_does_not_render_inline_in_the_conversation_log() {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
-        app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload: payload.clone(), resolution: None });
-        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload: payload.clone() });
+        app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload, resolution: None });
         let out = rendered(&mut app, 100, 20);
-        let hint = prompt_key_hint(&payload);
-        assert_eq!(out.matches(hint.as_str()).count(), 2, "expected the prompt card and the footer to show the exact same key labels, got: {out:?}");
+        assert!(!out.contains("Allow shell: git status?"), "a pending prompt must not render inline in the log — see the decision panel instead: {out:?}");
+    }
+
+    /// Regression test for the class of bug the "disjointed" complaint
+    /// described: an inline card was part of the scrolling log, so scrolling
+    /// away from the bottom could carry it out of view entirely. The fixed
+    /// panel doesn't participate in log scroll at all — it must stay visible
+    /// regardless of where the log's own scroll position sits.
+    #[test]
+    fn pending_approval_stays_visible_even_when_the_log_is_scrolled_away_from_the_bottom() {
+        let mut app = app();
+        for i in 0..30 {
+            app.log.push(LogEntry::AssistantText { text: format!("entry-{i}") });
+        }
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
+        app.scroll.line_up(); // disengage auto-follow, away from the bottom
+        let out = rendered(&mut app, 100, 12);
+        assert!(out.contains("Approve this edit?"), "the pending decision must stay visible in its own fixed panel regardless of log scroll position: {out:?}");
+    }
+
+    /// The decision panel shows a real numbered list, not keybinding hints —
+    /// per explicit developer request: "make sure the approval options
+    /// appear as a list and not some weird keyboard shortcuts." "Approve"/
+    /// "Deny" must each appear as a distinctly numbered row, and the first
+    /// (default-selected) option carries the `▸` cursor marker.
+    #[test]
+    fn the_decision_panel_shows_a_numbered_approve_deny_list() {
+        let mut app = app();
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("▸ 1. Approve"), "the first option must be numbered and show the selection cursor: {out:?}");
+        assert!(out.contains("2. Deny"), "the second option must be numbered: {out:?}");
+    }
+
+    #[test]
+    fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("▸ 1. Allow once"), "the first option must be numbered and show the selection cursor: {out:?}");
+        assert!(out.contains("3. Allow for this project"), "later options must be numbered too: {out:?}");
+        assert!(out.contains("8. Always deny"), "the full 8-option tier list must be shown, not a shortened set: {out:?}");
+    }
+
+    /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
+    /// — exercised directly here since `ui.rs`'s own tests only touch
+    /// render-relevant state, not key handling, which `app.rs`'s tests
+    /// already cover) must move the `▸` marker in the rendered list, not
+    /// just the underlying index silently.
+    #[test]
+    fn moving_the_decision_cursor_moves_the_selection_marker_in_the_rendered_list() {
+        let mut app = app();
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
+        app.decision_selected = 1;
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("  1. Approve"), "the cursor must have left the first option: {out:?}");
+        assert!(out.contains("▸ 2. Deny"), "the cursor must now be on the second option: {out:?}");
     }
 
     /// A single pending approval must not claim there's more behind it — a
@@ -1714,32 +2034,98 @@ mod tests {
     /// actually queues); this covers the queue depth becoming visible to the
     /// developer once it does.
     #[test]
-    fn footer_shows_no_queue_count_for_a_single_pending_approval() {
+    fn decision_panel_shows_no_queue_count_for_a_single_pending_approval() {
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
         let out = rendered(&mut app, 100, 20);
         assert!(!out.contains("more pending"), "one pending approval must not claim there's another queued: {out:?}");
     }
 
     /// A second queued approval — the actual scenario the queueing fix
-    /// covers — must surface as a visible count in the footer, not just be
-    /// silently resolvable one at a time with no warning that another card
-    /// is about to demand input right after this one.
+    /// covers — must surface as a visible count in the decision panel, not
+    /// just be silently resolvable one at a time with no warning that
+    /// another card is about to demand input right after this one.
     #[test]
-    fn footer_shows_a_count_of_additional_pending_approvals() {
+    fn decision_panel_shows_a_count_of_additional_pending_approvals() {
         let mut app = app();
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c2".into() });
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c3".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c2".into(), diff: "".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c3".into(), diff: "".into() });
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("+2 more pending"), "expected the footer to show 2 more queued beyond the front card, got: {out:?}");
+        assert!(out.contains("+2 more pending"), "expected the decision panel to show 2 more queued beyond the front card, got: {out:?}");
+    }
+
+    /// Regression test for a very large diff (e.g. a big added block — see
+    /// `clamp_panel`'s own doc comment on why the existing context-collapsing
+    /// doesn't bound this): the panel must truncate the body rather than
+    /// pushing the approve/deny keys off-frame, since those are the one
+    /// thing a developer absolutely must still be able to reach.
+    #[test]
+    fn a_very_large_diff_is_truncated_in_the_panel_but_the_buttons_stay_visible() {
+        let mut app = app();
+        let big_diff: String = (0..200).map(|i| format!("+line-{i}\n")).collect();
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: big_diff });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("1. Approve") && out.contains("2. Deny"), "the numbered options must still be visible even when the diff is too large to show in full: {out:?}");
+        assert!(out.contains("more line"), "a truncated panel should say how much was hidden: {out:?}");
+    }
+
+    /// Regression test: `draw_decision_panel`'s `Paragraph` initially had no
+    /// `Wrap` at all — ratatui truncates rather than wraps an un-wrapped
+    /// `Paragraph`, so a permission prompt's title/keys (built from
+    /// arbitrary tool-call data, e.g. a long shell command in
+    /// `PromptPayload::Tool`'s `target`) could silently lose content past
+    /// the frame's right edge instead of the log panel's own established
+    /// wrap-and-recount behavior (`log_row_count`/`draw_log`). Caught before
+    /// this landed by visually inspecting a real render, not by an
+    /// automated check first — this test exists so a future regression is.
+    #[test]
+    fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
+        let mut app = app();
+        let long_target = "x".repeat(200);
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: long_target.clone() };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 60, 30);
+        // Not a single contiguous run: each wrapped row now gets its own
+        // fresh `BOX_PAD_H` left inset (the fix for the follow-up "known
+        // limitation" complaint below), which breaks up the run of 'x's with
+        // one inset space per wrapped row — counting characters, not
+        // matching a literal substring, is what actually proves nothing was
+        // dropped.
+        assert_eq!(out.matches('x').count(), 200, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+    }
+
+    /// Regression test for the actual reported defect, not just the
+    /// clipping symptom above: a wrapped continuation row of a filled
+    /// card/diff line used to fall back to the frame's plain background past
+    /// whatever content ratatui's own `Wrap` happened to draw on it, since
+    /// `filled_line` only ever padded/filled the *first* row it built. Checks
+    /// the title's last wrapped row (identified by its trailing "?", which
+    /// has real padding after it since the target doesn't land exactly on a
+    /// row boundary) still carries the card's own `BG_ELEMENT` fill all the
+    /// way to the panel's right edge.
+    #[test]
+    fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "y".repeat(200) };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let backend = TestBackend::new(60, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let last_title_row = find_row(&buffer, "?");
+        let last_col = buffer.area.width - 1;
+        assert_eq!(
+            buffer[(last_col, last_title_row)].bg,
+            BG_ELEMENT,
+            "a wrapped card row's trailing padding must keep the card's own background fill, not fall back to the frame background"
+        );
     }
 
     #[test]
     fn approval_card_colors_added_and_removed_lines_distinctly() {
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1760,7 +2146,7 @@ mod tests {
     fn approval_card_collapses_unchanged_context_beyond_the_radius() {
         let diff = "--- f.rs\n+++ f.rs\n far\n context\n a\n b\n-old\n+new\n c\n d\n near\n";
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: diff.into(), resolution: None });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
         let out = rendered(&mut app, 100, 30);
         assert!(out.contains("unchanged line"), "a long run of unmodified context should collapse to an elision marker: {out:?}");
         assert!(!out.contains("far"), "context far from any change should be elided");
@@ -1779,7 +2165,7 @@ mod tests {
     fn diff_lines_show_old_and_new_line_numbers() {
         let diff = "--- f.rs\n+++ f.rs\n one\n-old\n+new\n three\n";
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: diff.into(), resolution: None });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1981,8 +2367,7 @@ mod tests {
     #[test]
     fn the_terminal_cursor_is_hidden_while_an_approval_card_is_pending() {
         let mut app = app();
-        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "diff".into(), resolution: None });
-        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "diff".into() });
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();

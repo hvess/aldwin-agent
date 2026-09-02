@@ -5,7 +5,7 @@ ratatui frontend — renders the core event stream, submits commands, approval g
 **Status:** active — two known gaps, see Progress below
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-08-31
+**Last Updated:** 2026-09-02
 
 **Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
 audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed
@@ -776,25 +776,339 @@ every touched file (`app.rs`, `ui.rs`, `examples/preview.rs` — the latter's
 design-iteration harness also constructed the old `Option` fields directly
 and needed the same field-name/queue update to keep compiling).
 
-- **Layout:** Four horizontal bands: a 1-row header (identity/status), the
-  body (full-width scrollable conversation log, or the log beside a
-  secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a
-  1-row footer (context-sensitive keybinding legend), and the multi-line
-  input area. The sidebar is optional, off by a narrow-terminal width gate
-  regardless of the developer's own Ctrl+T preference, and never taken as
-  license to shrink the log panel below 80 columns when shown — ambient
-  state, not a primary layout element competing with the conversation.
+**Progress (2026-09-02, decision panel replaces the inline approval/prompt
+card):** Direct developer feedback on the approval-card UX: "when an LLM
+needs to ask for permission, or approval a new temporary row shows up in the
+chat, it's very ugly, not clear and disjointed" — expected instead "some
+kind of universal panel that shows up above the text field input box,
+clearly stating what the approval is for and then buttons for
+approvals/rejections." Root complaint was structural, not cosmetic: a
+pending `ApprovalCard`/`PermissionPrompt` was a `LogEntry`, rendered inline
+by `build_log_lines` like any other chat entry — it scrolled with the rest
+of the conversation (so scrolling up could carry it out of view entirely,
+with no fixed place to look for "what does the harness want from me right
+now"), and the only other trace of it was a one-line key hint in the status
+line.
+
+Fixed by adding a fifth, fixed-height layout band directly above the input
+box (`ui::draw`'s `panel_area`, between the status line and the input),
+driven by `App::pending_approvals`/`pending_prompts` rather than `App::log`:
+`decision_panel_lines` builds whichever request is at the front of the
+queue using the exact same `render_approval_card`/`render_prompt_card` the
+old inline card used (now taking a `keys: &str` param instead of always
+reaching for `approval_key_hint()`, so the panel and a resolved card's
+historical log record can each pass what's right for their own case), and
+`render_entry`'s `LogEntry::ApprovalCard`/`PermissionPrompt` arms now render
+nothing at all while `resolution: None` — the panel is the only pending-state
+UI. Once resolved, the exact same full card (diff included) still renders
+inline in the log as a permanent record, completely unchanged from before —
+only the *live* interaction moved, not the history a developer might
+scroll back to later. `PendingApproval` gained its own `diff: String` field
+(mirroring `PendingPrompt`'s existing `payload`) so the panel is
+self-sufficient from the queue alone, rather than reaching back into `App::log`
+by `call_id` and depending on an invariant ("there's always exactly one
+matching unresolved entry") the type system can't enforce.
+
+Two correctness details worth recording. (1) `decision_panel_lines` checks
+`pending_approvals` before `pending_prompts` — mirroring `App::handle_key`'s
+real priority. The *old* status-line hint checked prompts first, which was
+already latently backwards on the rare step where both queues held an entry
+at once; invisible before since it only cost a one-line hint mismatch, but
+would have shown an entirely wrong request front-and-center in a full panel,
+so this fixes it rather than carrying it forward. (2) The panel's own
+`Paragraph` needed the same wrap-and-recount discipline `log_row_count`/
+`draw_log` already established for the conversation log
+(`unstable-rendered-line-info`'s `Paragraph::line_count`) — caught by
+visually inspecting a real render (a scratch `#[test]` dumping a `TestBackend`
+buffer row-by-row via `eprintln!`/`--nocapture`, same technique as the
+2026-08-31 chat-padding pass's throwaway verification, not committed) before
+any automated test existed: a permission prompt's title/keys are built from
+arbitrary tool-call data (e.g. `PromptPayload::Tool`'s `target`, an
+unbounded shell-command string), and the panel's first `Paragraph` had no
+`Wrap` at all — ratatui truncates rather than wraps an un-wrapped
+`Paragraph`, so a long target would have silently lost content past the
+frame's right edge. Fixed by adding `ui::panel_row_count` (identical
+technique to `log_row_count`) for the layout's height computation and
+`Wrap { trim: false }` on the actual render call, so the two can never
+desync the way `log_inner`'s own doc comment describes two earlier
+incidents doing. New regression test:
+`a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped`.
+
+Also new: `ui::clamp_panel`/`panel_max_height`, since the panel is a fixed
+`Constraint::Length` band (unlike the old inline card, which relied on the
+log's own scrolling to cope with unbounded content) — an Edit call adding
+one large new block (all "added" diff lines, none of which
+`DIFF_CONTEXT_RADIUS`'s collapsing helps with, since that only elides
+unchanged *context*) could otherwise produce a panel taller than the
+terminal itself. `panel_max_height` reserves room for at least one row of
+the log plus the spacer/status-line/input bands below it; `clamp_panel`
+keeps the panel's leading (title/path) and trailing (keys/padding) rows
+intact and collapses whatever body doesn't fit into one "⋯ N more lines ⋯"
+marker — approving/denying never actually requires scrolling through every
+line. Regression test:
+`a_very_large_diff_is_truncated_in_the_panel_but_the_buttons_stay_visible`
+(asserts the keys are still present after truncation, not just that
+truncation happened at all).
+
+The status line (`draw_status_line`) lost its own pending-hint branches
+entirely — it now always shows normal turn/activity content, even while a
+decision is pending, since the panel is the one place that job belongs now.
+This is not misleading: `join_all`-driven parallel tool dispatch means other
+non-gated calls can genuinely still be running while one call sits blocked
+on approval, so "working…" stays accurate throughout.
+
+Test suite: `mjolnir-tui` 104 tests pass (98 + 6 new — the two clipping/
+truncation regressions above, plus four asserting the core behavior directly:
+pending content is absent from the log, a resolved card's record is
+unchanged, the panel stays visible when the log is scrolled away from the
+bottom, and the panel's own key hint now appears exactly once instead of
+twice). Several existing tests (`approval_card_colors_added_and_removed_
+lines_distinctly`, `approval_card_collapses_unchanged_context_beyond_the_
+radius`, `diff_lines_show_old_and_new_line_numbers`, and the renamed
+`footer_*` key-label tests) were updated to populate `App::pending_approvals`/
+`pending_prompts` instead of pushing an unresolved `LogEntry` directly, since
+that's no longer where this content renders. Full workspace `cargo test`
+(311 tests, 1 ignored, pre-existing) and `cargo clippy -p mjolnir-tui
+--all-targets -- -D warnings` both clean; a pre-existing, unrelated
+`single_match` clippy failure in `mjolnir-core::agent.rs`'s own test module
+(the same idiom mjolnir-tui.md's 2026-08-31 wrapped-row-scroll-math entry
+already disclosed for a different file) was confirmed present on the
+pre-change tree too, via a stash-based comparison, before ruling it out as
+unrelated to this change.
+
+**Progress (2026-09-02, follow-up: wrapped card/diff rows now keep their own
+padding, not left as a disclosed gap):** The entry above shipped with a
+disclosed cosmetic gap — a card/prompt row wide enough to wrap lost its
+1-column left inset and full-width background fill on the wrapped
+continuation row, since `filled_line` only ever built one `Line` and left
+any further splitting to the caller's own `Paragraph::wrap`, which has no
+idea `filled_line` had already inset/filled it. Called out as "known
+limitation, not fixed" in the first cut — developer pushback was immediate
+and correct: "if it doesn't work properly then it needs to be fixed," not
+documented around. Fixed properly rather than patched around: `filled_line`
+now does its own wrapping via `wrap_prose_line` (the same word-wrapper
+`render_assistant_text`'s `Prose` arm already established for exactly this
+class of problem — greedy fill at whitespace, hard-break a single token
+wider than the row, preserve per-span styling across a break) *before*
+adding any padding, then applies the `BOX_PAD_H` inset and `bg` fill to
+*every* resulting row itself. `card_line`/`render_diff_line` (its two
+callers) now return `Vec<Line<'static>>` instead of a single `Line`, and
+every call site across `render_entry`'s `UserMessage` arm,
+`render_assistant_text`'s diff-fence and code-block paths,
+`render_approval_card`, `render_card`, and `clamp_panel`'s truncation marker
+switched from `.push(...)` to `.extend(...)`/`.flat_map(...)` accordingly —
+this was the right layer to fix it at since every filled row in the log
+*and* the decision panel goes through this one primitive, not just the
+permission-prompt case the same-day entry above already covered.
+
+Verified with the same before/after discipline as every other fix in this
+file: a new regression test,
+`a_wrapped_card_row_keeps_its_full_width_background_fill`, was confirmed to
+fail (right edge showed `BG_BASE`, the frame background, instead of
+`BG_ELEMENT`) against a deliberately reintroduced single-`Line` version of
+`filled_line` before confirming it passes against the real fix.
+`a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped`
+(the earlier entry's own regression test) needed a small correction once
+this landed: it originally asserted the 200-character target appeared as
+one contiguous substring, which broke once wrapped rows correctly gained
+their own fresh leading inset (a single space now interrupts the run at
+each wrap point, which is the fix working, not a regression) — switched to
+counting characters (`out.matches('x').count() == 200`) instead, which
+verifies the same "nothing was dropped" property without depending on
+exact spacing. `mjolnir-tui` 105 tests pass (104 + 1 new); full workspace
+`cargo test` (312 tests) and `cargo clippy -p mjolnir-tui --all-targets --
+-D warnings` both clean.
+
+**Progress (2026-09-02, decision panel becomes a numbered, arrow/digit-
+navigable list):** Direct developer follow-up on the decision panel: "make
+sure the approval options appear as a list and not some weird keyboard
+shortcuts, like so: `Approval / 1. Yes / 2. Yes session / 3. No` (key
+bindings for 1-3 or selecting with arrow keys and pressing enter are valid
+inputs here)." The panel's content already lived in one place (the same-day
+entries above); this replaces *how it's chosen*, not where it lives —
+raw per-payload letter shortcuts (`y`/`n`; `o`/`s`/`p`/`a` + Shift for
+deny-at-tier; `s`/`p`/`n` for context files) are gone outright, replaced by
+one generic numbered list every pending gate now shares.
+
+`App` gained `DecisionOutcome` (`Approve(bool)` | `Prompt(PromptResponse)`)
+and `DecisionOption { label, outcome }`, plus `App::decision_options()` — a
+pure function from whichever request is at the front of the queue (same
+approvals-before-prompts priority as everywhere else) to its numbered list,
+called by both key handling and rendering so the two can never disagree
+about what option N means. `App::decision_selected: usize` tracks the list
+cursor, reset to 0 whenever the front of either queue actually changes (a
+fresh push into an empty queue, or a pop revealing the next item) — not on
+every push, so a second/third item queuing up behind an already-interactive
+one doesn't disturb the visible cursor. The old three functions
+(`handle_approval_key`, `handle_prompt_key`, `resolve_prompt`) collapsed
+into two: `handle_decision_key` (Up/Down move the cursor, clamped rather
+than wrapping; Enter confirms whichever option is selected; a digit `1`-`9`
+jumps to and confirms that option directly, skipping Enter; anything else is
+dropped, no typing ahead) and `resolve_decision` (the shared pop/record/send
+tail, keyed on which `DecisionOutcome` variant it got rather than needing to
+re-inspect the payload). Ctrl+C is deliberately *not* wired to "whatever the
+list's last option is" — a Tool prompt's last option is "always deny," a far
+more consequential, harder-to-reverse action than the one-time decline
+Ctrl+C has always meant (mjolnir-tui.md's 2026-08-29 live-run fix and the
+Pitfall below) — `decline_outcome()` maps it explicitly to the same low-stakes
+outcome as before, independent of list order.
+
+This is a deliberate, explicit *supersession* of this file's own Pitfall
+("Approval card dismissed by an accidental keypress — require an
+unambiguous labeled key ... not Enter"), not an oversight: the developer
+explicitly asked for Enter as a valid confirm action alongside arrow keys and
+digits. What made bare Enter unsafe before was that it looked identical to
+every other "just press Enter" action in the app with no visible indication
+of what it would do; a numbered list with a visible `▸` cursor showing
+exactly which option Enter will confirm removes that ambiguity — the
+underlying concern (no accidental, invisible resolution) is satisfied
+differently, not dropped. See the Pitfalls section below, updated to record
+this explicitly rather than leaving the old wording to read as still-current
+guidance it no longer is.
+
+`ui.rs`: new `render_decision_options` renders `"{n}. {label}"` per option,
+the selected row prefixed with `▸` and shown in `ACCENT`+bold, everything
+else `BRIGHT`. `render_approval_card`/`render_prompt_card`/`render_card`
+dropped their `keys: &str` parameter for `pending_tail: Vec<Line<'static>>` —
+the *entire* trailing block (numbered options, an optional "(+N more
+pending)" queue-count note, and the card's own closing padding), built once
+by `decision_panel_lines` and spliced in verbatim when `resolution: None`;
+a resolved historical entry still builds its own "resolved: …" line plus
+padding directly, ignoring `pending_tail` (callers pass `Vec::new()`).
+`clamp_panel` (the large-diff truncation guard from the same-day entry
+above) changed its `TAIL` from a hardcoded `2` to a `tail: usize` parameter
+sized to the *actual* rendered options-block length: a Tool prompt's full
+8-option tier list is a real, common case now (previously it was 1 hint
+line), and a fixed guess would either truncate real, selectable options away
+or over-protect rows that aren't the list at all.
+
+Verified: `mjolnir-tui` 109 tests pass (105 + 4 new — a numbered
+Approve/Deny list renders correctly, a Tool prompt's full 8-option list
+renders with correct numbering, the `▸` cursor marker moves when
+`decision_selected` changes, and the large-diff truncation guard still
+keeps the (now multi-row) options list visible) plus the five `app.rs` tests
+exercising the old letter-shortcut paths rewritten for digit/arrow/Enter
+input instead (`approval_card_enter_confirms_the_default_first_option`,
+`approval_card_digit_2_denies_directly_without_enter`,
+`approval_card_arrow_down_then_enter_denies`,
+`approval_card_arrow_navigation_clamps_at_the_list_ends`,
+`permission_prompt_resolves_on_a_numbered_selection_and_records_resolution`,
+plus the two queued-request regression tests updated to select by digit
+instead of by letter). Full workspace `cargo test` (316 tests) and `cargo
+clippy -p mjolnir-tui --all-targets -- -D warnings` both clean. Visually
+verified via the same disposable `TestBackend`-dump-to-`eprintln!` technique
+as the same-day entries above (not committed): both an Approve/Deny list and
+a full 8-option Tool-prompt list render with correct numbering and cursor
+placement before this was considered done.
+
+**Progress (2026-09-02, rust-skills audit finds and fixes a real
+tail-truncation bug in `clamp_panel`):** A 3-pass audit of this session's own
+diff, run explicitly against the m01-ownership/m03-mutability,
+m15-anti-pattern/coding-guidelines, and m09-domain/m10-performance skills,
+surfaced one confirmed, high-severity defect in the numbered-list work above:
+`clamp_panel`'s budget math (`keep = max - head - tail - 1`) assumed its own
+truncation marker always cost exactly one row. It doesn't — `card_line`
+wraps the marker exactly like any other card row once its ~70-column text is
+wider than the panel, which is common (any panel narrower than ~70-75
+columns), not exotic. The undercounted budget let the *tail* — the options
+list, the one thing `clamp_panel`'s own doc comment says must never be cut —
+get silently pushed past the panel's real row budget and clipped by the
+outer layout. Confirmed via real renders, not just arithmetic: an ordinary
+8-option Tool prompt (short title, nothing unusual) on a 50×14 terminal lost
+options 5-8 entirely with a nonsensical "0 more lines not shown" marker in
+their place (a companion bug — the degenerate case where head+tail alone
+already account for the whole panel, so nothing was actually hidden, still
+emitted a "hidden" marker it didn't need and couldn't afford); a
+long-permission-target Tool prompt at 30×20 lost options 7-8 with no
+indication anything was missing at all.
+
+Fixed by replacing the closed-form budget calculation with an iterative
+refit: shrink `keep` (how much of the body survives) one row at a time,
+re-measuring the marker's *actual* rendered row count (via the same
+`card_line` it's built with) on every attempt, until head + kept body +
+marker + tail genuinely fit within `max` — or `keep` reaches 0, at which
+point no marker is added at all if there was nothing left to hide. This
+mirrors the same discipline `log_row_count`/`panel_row_count` already
+established elsewhere in this file: measure the real wrapped cost, never
+assume it. A remaining, disclosed, much lower-severity gap: `clamp_panel`'s
+`HEAD` (the padding+title rows it protects from truncation) is still a fixed
+guess of `2`, so an extremely long single-value title (as in the 30×20 case
+above) gets abbreviated behind the generic "more lines" marker rather than
+receiving the same measured protection now given to the tail — a real
+imprecision, but one where the marker still accurately reports what
+happened and the options list survives intact either way, unlike the fixed
+bug above.
+
+New regression tests, each confirmed to fail against the pre-fix
+`clamp_panel` before confirming they pass against the iterative-refit fix:
+`a_long_prompt_title_can_be_abbreviated_but_the_full_options_list_must_survive`
+and `no_truncation_marker_appears_when_nothing_was_actually_hidden`. Also
+fixed in the same pass, lower severity: `card_padding_line`'s
+`.unwrap_or_default()` silently masked what its own doc comment already
+claims is a guaranteed invariant (empty content never wraps) — switched to
+`.expect(...)`, matching this file's own established convention for
+guaranteed-invariant unwraps (e.g. `PromptResponse always serialises` in
+`app.rs`), so a future regression in that invariant panics loudly with a
+clear cause instead of silently rendering an unfilled padding row (the same
+class of subtle visual defect this session already spent real effort
+tracking down once).
+
+Noted but not changed in this same pass, pending developer confirmation: the
+"approvals before prompts" priority predicate appeared independently in four
+places (`App::decision_options`, `App::decline_outcome`,
+`ui::decision_panel_lines` twice) rather than one shared accessor — a
+maintainability risk (the exact bug class already fixed once this session,
+in the other direction, at the status-line/`handle_key` boundary), not a
+live bug at the time since all four sites agreed.
+
+**Progress (2026-09-02, follow-up: priority check consolidated behind
+`App::pending_front`):** Developer confirmed the consolidation above should
+happen. New `app::PendingFront<'a>` enum (`Approval(&'a PendingApproval)` |
+`Prompt(&'a PendingPrompt)` | `None`) and `App::pending_front(&self) ->
+PendingFront<'_>` — the one place "front of `pending_approvals` if
+non-empty, else front of `pending_prompts`, else neither" is decided.
+`decision_options`/`decline_outcome` now match on it directly instead of
+each re-checking `pending_approvals.front().is_some()`;
+`ui::decision_panel_lines` does the same (imports `PendingFront` from
+`app`), keeping only what genuinely still differs per arm — which
+`VecDeque`'s `.len()` feeds the "(+N more pending)" note — inline in each
+match arm rather than factored out further, since that part isn't the
+duplicated invariant.
+
+New regression test `a_pending_approval_takes_priority_over_an_already_pending_prompt`
+(`app.rs`) queues a prompt first, then an approval, and asserts the
+approval resolves first through `handle_key` alone (public behavior — the
+resolved `Command` and which queue empties — not `pending_front()`'s own
+plumbing), so this stays a guarantee about what the developer actually
+experiences, not a test of the accessor's internals. `mjolnir-tui` 112 tests
+pass (111 + 1 new); full workspace `cargo test` (319 tests) and `cargo
+clippy -p mjolnir-tui --all-targets -- -D warnings` both clean.
+
+`mjolnir-tui` 111 tests pass (109 + 2 new); full workspace `cargo test` (318
+tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
+clean.
+
+- **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
+  panel): the body (full-width scrollable conversation log, or the log
+  beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress
+  entry), a 1-row status line, the decision panel (zero-height and invisible
+  whenever nothing is pending — see the Approval Card bullet below), and the
+  multi-line input area. The sidebar is optional, off by a narrow-terminal
+  width gate regardless of the developer's own Ctrl+T preference, and never
+  taken as license to shrink the log panel below 80 columns when shown —
+  ambient state, not a primary layout element competing with the
+  conversation.
 - **Conversation Log:** Rendered inside a bordered, rounded ratatui panel (see the 2026-08-31 visual-redesign Progress entry) with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome banner (see the 2026-08-29 Progress entry below) only shows when the log is empty — mutually exclusive with real entries, not prefixed above them, since the two used to always coexist and that's what made the banner eat real screen space mid-conversation. Each event type maps to a distinct entry shape, most with a leading glyph (● assistant, ▸/✓/✗ tool activity, ⟳ retry, ✗ error, ℹ notice — see the 2026-08-31 entry). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
-- **Approval Card:** ToolApprovalRequested renders as an inline card in the conversation log, visually distinct from all other entries via a full-width border (rounded corners as of 2026-08-31, matching the panel chrome around it — a pure reskin, not a behavior change) and the single accent color. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry. Approve/reject keybindings are labeled inside the card, and mirrored in the footer while the card is pending (`approval_key_hint`/`prompt_key_hint`, shared by both — see the 2026-08-31 entry) — the two can't drift apart since it's the same function. Input is blocked while a card is pending — the developer cannot queue new submissions until the gate is resolved.
+- **Approval Card / Decision Panel (2026-09-02, superseding "inline in the log" below):** ToolApprovalRequested/PromptRequested no longer render inline in the conversation log while pending — they render in a fixed decision panel directly above the input box (`ui::decision_panel_lines`, driven by `App::pending_approvals`/`pending_prompts`), visually distinct via the single accent color, same as before. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry; an unusually large diff is further truncated (`ui::clamp_panel`) to keep the options list on screen. The decision itself is a numbered, keyboard-navigable list (`App::decision_options`/`ui::render_decision_options` — same-day "numbered, arrow/digit-navigable list" entry), not raw letter shortcuts: Up/Down move a visible `▸` cursor, Enter confirms the selected option, a digit `1`-`9` jumps to and confirms an option directly, and Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending — the developer cannot queue new submissions until the gate is resolved. Once resolved, the full card (diff included) still renders inline in the log exactly as before, as a permanent historical record — only the *live* interaction moved out of the scrolling log, not the history.
 - **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
-- **Header / Footer / Sidebar (2026-08-31, superseding the single "Status Bar" below):** A 1-row header (always visible): model name, turn/step counter ("T3 S2"), permission summary for the three built-in surfaces (read / shell / edit — each shown as allowed or denied), a bare running-tool count. A 1-row footer (always visible): a context-sensitive keybinding legend — the card's own keys while one is pending, otherwise the general hints (send/newline/cancel/scroll/sidebar-toggle). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. None of the three participate in `ScrollState` — only the log panel scrolls.
+- **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/working/idle, with a spinner), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
 - **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
 ## Decisions
 
 - **Conversation-first layout — full-width log, status bar, input bar at bottom.** — Keeps the conversation as the primary surface; state lives in the status bar rather than consuming persistent screen space. Split-pane rejected for V0 — adds complexity without payoff until the conversation log is proven sufficient. *Refined, not reversed, 2026-08-31:* an optional, secondary, width-gated sidebar was added for ambient state (permissions/tools/turn/messages) the header/footer couldn't fit — it is not the primary split-pane this decision rejected: it auto-collapses on narrow terminals and never takes the log panel below 80 columns when shown, so the conversation stays the primary surface either way.
 
-- **Approval card is inline in the conversation log, not a full-screen overlay.** — Inline preserves conversational context during review. Visually distinguished via border + accent color so it cannot be mistaken for assistant output. Input blocked while pending — the developer cannot accidentally bypass the gate by typing ahead.
+- **Approval card is inline in the conversation log, not a full-screen overlay.** — Inline preserves conversational context during review. Visually distinguished via border + accent color so it cannot be mistaken for assistant output. Input blocked while pending — the developer cannot accidentally bypass the gate by typing ahead. *Refined, 2026-09-02:* per direct developer feedback that a pending card "in the chat" read as "ugly, not clear, disjointed," the *live* card moved out of the scrolling log into a fixed decision panel directly above the input — still not a full-screen overlay, and still visually distinct via the accent color, but no longer part of scrollback while pending (so it can no longer be scrolled out of view, which was the concrete complaint). A resolved decision still leaves the exact same full card inline in the log as a permanent record, unchanged from before — this refines where the *live* interaction happens, it doesn't reverse the "conversational context is preserved" rationale above, since the history is still right there in the log afterward.
 
 - **Multi-line input; Enter submits, Shift+Enter inserts newline.** — Discussion-first posture benefits from longer prompts. Standard convention for multi-line TUI inputs. Single-line-only rejected as too restrictive for the intended interaction mode.
 
@@ -835,7 +1149,7 @@ and needed the same field-name/queue update to keep compiling).
 ## Pitfalls
 
 - Blocking the ratatui draw loop on channel reads — use non-blocking poll or a short select timeout.
-- Approval card dismissed by an accidental keypress — require an unambiguous labeled key ('y'/'n' or similar), not Enter.
+- Approval card dismissed by an accidental keypress — require an unambiguous labeled key ('y'/'n' or similar), not Enter. *Superseded, 2026-09-02, by explicit developer request:* the decision panel is now a numbered list with a visible `▸` cursor (see the same-day "numbered, arrow/digit-navigable list" Progress entry) — Enter is a valid confirm action again, since the visible cursor removes the original ambiguity ("what would Enter even do here") this Pitfall was guarding against. The underlying concern (no silent, invisible resolution) still holds; the mechanism satisfying it changed.
 - Tool-activity entries flooding the log during parallel runs — group by step; collapse completed groups after a short delay.
 - Shift+Enter behavior is terminal-dependent — test under kitty, iTerm2, and plain xterm; have a fallback binding.
 

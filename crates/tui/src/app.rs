@@ -29,13 +29,57 @@ pub(crate) fn cursor_line_col(input: &str, cursor: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// `diff` rides along here (not just `call_id`) for the same reason
+/// `PendingPrompt` already carries its own `payload`: `ui::draw`'s decision
+/// panel needs the full content of whichever request is at the front of the
+/// queue on every frame, and re-deriving that by scanning `App::log` for a
+/// matching, still-unresolved `LogEntry::ApprovalCard` would make the panel
+/// depend on an invariant ("there's always exactly one such entry") the type
+/// system can't enforce, instead of just holding what it needs directly.
 pub struct PendingApproval {
     pub call_id: String,
+    pub diff:    String,
 }
 
 pub struct PendingPrompt {
     pub call_id: String,
     pub payload: PromptPayload,
+}
+
+/// Which queue is currently interactive: the front of `pending_approvals` if
+/// it holds anything, else the front of `pending_prompts`, else neither.
+/// This is the *single* place "approvals resolve before prompts" is decided
+/// — `App::decision_options`/`decline_outcome` and `ui::decision_panel_lines`
+/// all go through `App::pending_front` instead of independently re-checking
+/// `pending_approvals.front().is_some()` themselves. That used to be
+/// duplicated across four call sites; a rust-skills audit flagged it as a
+/// maintainability risk — the exact "priority checked one way here, another
+/// way there" bug already happened once this session, in the other
+/// direction, at the status-line/`handle_key` boundary — so it's
+/// consolidated here rather than left to drift.
+pub enum PendingFront<'a> {
+    Approval(&'a PendingApproval),
+    Prompt(&'a PendingPrompt),
+    None,
+}
+
+/// What resolving a `DecisionOption` actually does — one variant per pending
+/// gate, so `App::resolve_decision` knows which queue to pop from without
+/// re-inspecting the payload the option was built from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DecisionOutcome {
+    Approve(bool),
+    Prompt(PromptResponse),
+}
+
+/// One selectable, numbered choice in the decision panel's list — a human
+/// label (rendered as `"{n}. {label}"` by `ui.rs`) plus the concrete
+/// `Command` selecting it produces. Built fresh from whichever request is at
+/// the front of the queue (`App::decision_options`) on every draw/keypress,
+/// so rendering and resolution can never disagree about what option N means.
+pub struct DecisionOption {
+    pub label:   String,
+    pub outcome: DecisionOutcome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +179,15 @@ pub struct App {
     /// Same reasoning as `pending_approvals` — a generic permission prompt
     /// can equally arrive for more than one dispatched call at once.
     pub pending_prompts:   VecDeque<PendingPrompt>,
+    /// Index into whichever `App::decision_options()` list is current —
+    /// moved by Up/Down, confirmed by Enter, per explicit developer request
+    /// that the decision panel be a real navigable numbered list ("1. Yes
+    /// 2. Yes session 3. No") rather than raw keyboard-shortcut hints
+    /// ("[o]nce [s]ession..."). Reset to 0 whenever the front of either
+    /// queue changes — a fresh request's list always starts unselected at
+    /// its first (least consequential) option, never wherever the cursor
+    /// happened to sit for a previous, unrelated request.
+    pub decision_selected: usize,
     pub status:            StatusInfo,
     pub should_quit:       bool,
     /// True from `TurnStarted` until the matching `TurnEnded` — drives the
@@ -175,6 +228,7 @@ impl App {
             cursor: 0,
             pending_approvals: VecDeque::new(),
             pending_prompts: VecDeque::new(),
+            decision_selected: 0,
             status,
             should_quit: false,
             turn_active: false,
@@ -256,7 +310,17 @@ impl App {
                 }
             }
             Event::ToolApprovalRequested { call_id, diff, .. } => {
-                self.pending_approvals.push_back(PendingApproval { call_id: call_id.clone() });
+                // Approvals always take interactive priority over prompts
+                // (see `handle_key`/`decision_options`), so this becomes the
+                // new front-and-center list the moment `pending_approvals`
+                // itself was empty — regardless of whether a prompt was
+                // already showing. The cursor must start fresh on it, not
+                // wherever it happened to sit for whatever was showing
+                // before.
+                if self.pending_approvals.is_empty() {
+                    self.decision_selected = 0;
+                }
+                self.pending_approvals.push_back(PendingApproval { call_id: call_id.clone(), diff: diff.clone() });
                 self.push(LogEntry::ApprovalCard { call_id, diff, resolution: None });
             }
             Event::ToolCompleted { step_id, result, .. } => {
@@ -279,6 +343,12 @@ impl App {
                 let parsed: Result<PromptPayload, _> = serde_json::from_value(payload);
                 match parsed {
                     Ok(payload) => {
+                        // Only becomes interactive (and so only needs a
+                        // fresh cursor) when *both* queues were empty — a
+                        // prompt never preempts an already-pending approval.
+                        if self.pending_approvals.is_empty() && self.pending_prompts.is_empty() {
+                            self.decision_selected = 0;
+                        }
                         self.pending_prompts.push_back(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
                         self.push(LogEntry::PermissionPrompt { call_id, payload, resolution: None });
                     }
@@ -310,12 +380,8 @@ impl App {
             return;
         }
 
-        if !self.pending_approvals.is_empty() {
-            self.handle_approval_key(key);
-            return;
-        }
-        if !self.pending_prompts.is_empty() {
-            self.handle_prompt_key(key);
+        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() {
+            self.handle_decision_key(key);
             return;
         }
 
@@ -431,95 +497,172 @@ impl App {
         }
     }
 
-    fn handle_approval_key(&mut self, key: KeyEvent) {
-        let decision = match key.code {
-            KeyCode::Char('y') => true,
-            KeyCode::Char('n') => false,
-            // Ctrl+C must always be a way out, even mid-approval — denying
-            // is the safe default and matches 'n', rather than leaving the
-            // developer with no responsive key at all if they don't already
-            // know y/n.
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => false,
-            _ => return, // any other key is silently dropped — no typing ahead
-        };
-        // Only ever the front of the queue — see `pending_approvals`' own
-        // doc comment. Popping it is what makes the next queued approval
-        // (if any) interactive on the very next keystroke.
-        let Some(pending) = self.pending_approvals.pop_front() else { return };
-        for entry in self.log.iter_mut() {
-            if let LogEntry::ApprovalCard { call_id, resolution, .. } = entry {
-                if *call_id == pending.call_id {
-                    *resolution = Some(decision);
-                }
-            }
+    /// The decision panel's selectable options for whichever request is at
+    /// the front of the queue, in the order they're numbered/listed —
+    /// empty when nothing is pending. Mirrors `handle_key`'s own priority:
+    /// approvals before prompts (`ui::decision_panel_lines` must show
+    /// exactly this same list, in this same order, or a developer could
+    /// pick "option 2" expecting one outcome and get another).
+    pub fn decision_options(&self) -> Vec<DecisionOption> {
+        match self.pending_front() {
+            PendingFront::Approval(_) => vec![
+                DecisionOption { label: "Approve".into(), outcome: DecisionOutcome::Approve(true) },
+                DecisionOption { label: "Deny".into(), outcome: DecisionOutcome::Approve(false) },
+            ],
+            PendingFront::Prompt(pending) => match &pending.payload {
+                // Allow tiers before deny tiers, once→session→project→always
+                // within each — same tier ordering the old o/s/p/a shortcuts
+                // used, just spelled out as list labels instead of letters.
+                PromptPayload::Tool { .. } => [
+                    (Decision::Allow, ToolTier::Once, "Allow once"),
+                    (Decision::Allow, ToolTier::Session, "Allow for this session"),
+                    (Decision::Allow, ToolTier::Project, "Allow for this project"),
+                    (Decision::Allow, ToolTier::Always, "Always allow"),
+                    (Decision::Deny, ToolTier::Once, "Deny once"),
+                    (Decision::Deny, ToolTier::Session, "Deny for this session"),
+                    (Decision::Deny, ToolTier::Project, "Deny for this project"),
+                    (Decision::Deny, ToolTier::Always, "Always deny"),
+                ]
+                .into_iter()
+                .map(|(decision, tier, label)| DecisionOption { label: label.into(), outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier }) })
+                .collect(),
+                PromptPayload::ContextFile { .. } => vec![
+                    DecisionOption {
+                        label:   "Inject for this session".into(),
+                        outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Session) }),
+                    },
+                    DecisionOption {
+                        label:   "Inject for this project".into(),
+                        outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Project) }),
+                    },
+                    DecisionOption { label: "No".into(), outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None }) },
+                ],
+                // Never actually sent through this round trip in production —
+                // Edit uses the separate ToolApprovalRequested/ApprovalCard
+                // path instead — so there's no real option list to offer.
+                PromptPayload::Edit { .. } => Vec::new(),
+            },
+            PendingFront::None => Vec::new(),
         }
-        self.outbox.push(if decision { Command::ApproveTool { call_id: pending.call_id } } else { Command::DenyTool { call_id: pending.call_id } });
     }
 
-    /// Tool four-tier: o/s/p/a = allow once/session/project/always;
-    /// shift O/S/P/A = deny at the same tiers. Context-file two-tier: s/p =
-    /// approve session/project, n = decline. Labels are rendered in the
-    /// card itself (see `ui.rs`) — see mjolnir-tui.md's Pitfall on
-    /// requiring an unambiguous labeled key.
-    fn handle_prompt_key(&mut self, key: KeyEvent) {
-        // Only ever the front of the queue — see `pending_prompts`' own doc
-        // comment on `App`.
-        let Some(pending) = self.pending_prompts.front() else { return };
-        // Ctrl+C always declines, regardless of payload shape — same
-        // rationale as handle_approval_key: a stuck prompt with no
-        // recognized key otherwise has no escape hatch.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            let decline = match &pending.payload {
-                PromptPayload::Tool { .. } => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once }),
-                PromptPayload::ContextFile { .. } => Some(PromptResponse::ContextFile { approve: false, tier: None }),
+    /// The safe "decline" outcome for whichever request is at the front of
+    /// the queue, reachable via Ctrl+C regardless of where the list cursor
+    /// sits — always the least consequential choice (deny *once*), not
+    /// whatever happens to be the list's last entry: for a Tool prompt
+    /// that's "always deny," a far more consequential and harder-to-reverse
+    /// action than the one-time decline Ctrl+C has always meant (see
+    /// mjolnir-tui.md's 2026-08-29 live-run fix and its Pitfall on requiring
+    /// an unambiguous way out). Keeping this as its own dedicated mapping,
+    /// rather than deriving it from list order, means a developer who
+    /// doesn't know (or care about) the list at all still gets the same
+    /// low-stakes safety net Ctrl+C always provided.
+    fn decline_outcome(&self) -> Option<DecisionOutcome> {
+        match self.pending_front() {
+            PendingFront::Approval(_) => Some(DecisionOutcome::Approve(false)),
+            PendingFront::Prompt(pending) => match &pending.payload {
+                PromptPayload::Tool { .. } => Some(DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once })),
+                PromptPayload::ContextFile { .. } => Some(DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None })),
                 PromptPayload::Edit { .. } => None,
-            };
-            if let Some(response) = decline {
-                self.resolve_prompt(response);
+            },
+            PendingFront::None => None,
+        }
+    }
+
+    /// The single source of truth for "which pending request is currently
+    /// interactive" — see `PendingFront`'s own doc comment for why this
+    /// exists instead of each caller re-checking `pending_approvals.front()`
+    /// independently.
+    pub fn pending_front(&self) -> PendingFront<'_> {
+        if let Some(approval) = self.pending_approvals.front() {
+            PendingFront::Approval(approval)
+        } else if let Some(prompt) = self.pending_prompts.front() {
+            PendingFront::Prompt(prompt)
+        } else {
+            PendingFront::None
+        }
+    }
+
+    /// Navigates/resolves the decision panel's numbered list — replaces the
+    /// old per-payload letter-shortcut handling (`y`/`n`, `o`/`s`/`p`/`a` +
+    /// Shift variants) per explicit developer request: "make sure the
+    /// approval options appear as a list and not some weird keyboard
+    /// shortcuts... key bindings for 1-3 or selecting with arrow keys and
+    /// pressing enter are valid inputs." Up/Down move `decision_selected`
+    /// (clamped, not wrapping); Enter confirms whichever option is
+    /// currently selected; a digit key `1`-`9` jumps to and immediately
+    /// confirms that option directly, without needing Enter first; any
+    /// other key is silently dropped — no typing ahead, same as before.
+    fn handle_decision_key(&mut self, key: KeyEvent) {
+        let options = self.decision_options();
+        if options.is_empty() {
+            return;
+        }
+        // Ctrl+C always resolves as the safe decline, regardless of cursor
+        // position — see `decline_outcome`'s own doc comment.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(outcome) = self.decline_outcome() {
+                self.resolve_decision(outcome);
             }
             return;
         }
-        let response = match &pending.payload {
-            PromptPayload::Tool { .. } => match key.code {
-                KeyCode::Char('o') => Some(PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Once }),
-                KeyCode::Char('s') => Some(PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Session }),
-                KeyCode::Char('p') => Some(PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project }),
-                KeyCode::Char('a') => Some(PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Always }),
-                KeyCode::Char('O') => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once }),
-                KeyCode::Char('S') => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Session }),
-                KeyCode::Char('P') => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Project }),
-                KeyCode::Char('A') => Some(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Always }),
-                _ => None,
-            },
-            PromptPayload::ContextFile { .. } => match key.code {
-                KeyCode::Char('s') => Some(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Session) }),
-                KeyCode::Char('p') => Some(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Project) }),
-                KeyCode::Char('n') => Some(PromptResponse::ContextFile { approve: false, tier: None }),
-                _ => None,
-            },
-            // Never actually sent through this channel in production (Edit
-            // uses the separate ToolApprovalRequested round trip) — no key
-            // resolves it; it can only be dismissed by the round trip never
-            // arriving, which isn't reachable in practice.
-            PromptPayload::Edit { .. } => None,
-        };
-        let Some(response) = response else { return };
-        self.resolve_prompt(response);
-    }
-
-    fn resolve_prompt(&mut self, response: PromptResponse) {
-        let Some(pending) = self.pending_prompts.pop_front() else { return };
-        let call_id = pending.call_id;
-        let label = format!("{response:?}");
-        for entry in self.log.iter_mut() {
-            if let LogEntry::PermissionPrompt { call_id: entry_call_id, resolution, .. } = entry {
-                if *entry_call_id == call_id {
-                    *resolution = Some(label.clone());
+        match key.code {
+            KeyCode::Up => self.decision_selected = self.decision_selected.saturating_sub(1),
+            KeyCode::Down => self.decision_selected = (self.decision_selected + 1).min(options.len() - 1),
+            KeyCode::Enter => {
+                let idx = self.decision_selected.min(options.len() - 1);
+                self.resolve_decision(options.into_iter().nth(idx).expect("idx clamped to options.len() - 1 above").outcome);
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                let idx = (c as u8 - b'1') as usize;
+                if let Some(opt) = options.into_iter().nth(idx) {
+                    self.resolve_decision(opt.outcome);
                 }
             }
+            _ => {} // any other key is silently dropped — no typing ahead
         }
-        let payload = serde_json::to_value(&response).expect("PromptResponse always serialises");
-        self.outbox.push(Command::PromptResponse { call_id, payload });
+    }
+
+    /// Pops whichever queue `outcome` came from, records the resolution on
+    /// that call's own historical log entry, and sends the matching
+    /// `Command` — the shared tail both `handle_decision_key` (Enter/digit/
+    /// Ctrl+C) paths resolve through, so there's exactly one place that
+    /// does this bookkeeping. Resets `decision_selected` since whatever
+    /// becomes the new front (the next queued item, or nothing) needs its
+    /// own list to start unselected at the top — see the field's own doc
+    /// comment on `App`.
+    fn resolve_decision(&mut self, outcome: DecisionOutcome) {
+        self.decision_selected = 0;
+        match outcome {
+            DecisionOutcome::Approve(decision) => {
+                // Only ever the front of the queue — see `pending_approvals`'
+                // own doc comment. Popping it is what makes the next queued
+                // approval (if any) interactive on the very next keystroke.
+                let Some(pending) = self.pending_approvals.pop_front() else { return };
+                for entry in self.log.iter_mut() {
+                    if let LogEntry::ApprovalCard { call_id, resolution, .. } = entry {
+                        if *call_id == pending.call_id {
+                            *resolution = Some(decision);
+                        }
+                    }
+                }
+                self.outbox.push(if decision { Command::ApproveTool { call_id: pending.call_id } } else { Command::DenyTool { call_id: pending.call_id } });
+            }
+            DecisionOutcome::Prompt(response) => {
+                let Some(pending) = self.pending_prompts.pop_front() else { return };
+                let call_id = pending.call_id;
+                let label = format!("{response:?}");
+                for entry in self.log.iter_mut() {
+                    if let LogEntry::PermissionPrompt { call_id: entry_call_id, resolution, .. } = entry {
+                        if *entry_call_id == call_id {
+                            *resolution = Some(label.clone());
+                        }
+                    }
+                }
+                let payload = serde_json::to_value(&response).expect("PromptResponse always serialises");
+                self.outbox.push(Command::PromptResponse { call_id, payload });
+            }
+        }
     }
 }
 
@@ -680,23 +823,64 @@ mod tests {
         assert!(!app.pending_approvals.is_empty());
     }
 
+    /// The decision panel is a numbered list now (`App::decision_options`),
+    /// not raw letter shortcuts — per explicit developer request: "make sure
+    /// the approval options appear as a list... key bindings for 1-3 or
+    /// selecting with arrow keys and pressing enter are valid inputs."
+    /// Enter confirms whichever option is currently selected; the list
+    /// starts on its first (least consequential) option, "Approve," by
+    /// default.
     #[test]
-    fn approval_card_requires_y_or_n_not_enter() {
+    fn approval_card_enter_confirms_the_default_first_option() {
         let mut app = app();
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+        assert_eq!(app.decision_options().first().map(|o| o.label.as_str()), Some("Approve"));
         app.handle_key(press(KeyCode::Enter));
-        assert!(!app.pending_approvals.is_empty(), "Enter must not resolve the card");
-        app.handle_key(press(KeyCode::Char('y')));
         assert!(app.pending_approvals.is_empty());
         assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }]);
     }
 
     #[test]
-    fn approval_card_n_denies() {
+    fn approval_card_digit_2_denies_directly_without_enter() {
         let mut app = app();
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
-        app.handle_key(press(KeyCode::Char('n')));
+        app.handle_key(press(KeyCode::Char('2')));
         assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
+    }
+
+    #[test]
+    fn approval_card_arrow_down_then_enter_denies() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.decision_selected, 1);
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
+    }
+
+    /// Down at the list's last option (and Up at its first) must clamp, not
+    /// wrap — an accidental extra Down keypress shouldn't silently jump the
+    /// cursor back onto "Approve" for a two-option list.
+    #[test]
+    fn approval_card_arrow_navigation_clamps_at_the_list_ends() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+        app.handle_key(press(KeyCode::Down));
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.decision_selected, 1, "Down must clamp at the last option, not wrap");
+        app.handle_key(press(KeyCode::Up));
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.decision_selected, 0, "Up must clamp at the first option, not wrap");
+    }
+
+    #[test]
+    fn approval_card_ignores_unrecognized_keys_no_typing_ahead() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+        app.handle_key(press(KeyCode::Char('x')));
+        app.handle_key(press(KeyCode::Char('0'))); // the list is 1-indexed — no option 0
+        assert!(!app.pending_approvals.is_empty(), "an unrecognized key must not resolve the card");
+        assert!(app.outbox.is_empty());
     }
 
     /// Regression test: parallel tool use can dispatch several Edit calls in
@@ -715,11 +899,11 @@ mod tests {
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c2".into(), diff: "diff-2".into() });
         assert_eq!(app.pending_approvals.len(), 2, "the second request must be queued, not overwrite the first");
 
-        app.handle_key(press(KeyCode::Char('y')));
+        app.handle_key(press(KeyCode::Char('1'))); // option 1: Approve
         assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }], "the first (front of queue) call must resolve first");
         assert_eq!(app.pending_approvals.len(), 1, "the second request must still be pending and resolvable after the first");
 
-        app.handle_key(press(KeyCode::Char('n')));
+        app.handle_key(press(KeyCode::Char('2'))); // option 2: Deny
         assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }, Command::DenyTool { call_id: "c2".into() }]);
         assert!(app.pending_approvals.is_empty());
 
@@ -734,6 +918,42 @@ mod tests {
             })
             .collect();
         assert_eq!(resolutions, vec![("c1".to_string(), Some(true)), ("c2".to_string(), Some(false))]);
+    }
+
+    /// Regression/consolidation test for a rust-skills audit finding: an
+    /// approval must take interactive priority over an already-pending
+    /// prompt (the same "approvals before prompts" rule `handle_key`,
+    /// `decision_options`, `decline_outcome`, and `ui::decision_panel_lines`
+    /// all now read from the single `App::pending_front` accessor, instead
+    /// of each independently re-checking `pending_approvals.front()`).
+    /// Exercises the outcome through public behavior — the resolved
+    /// `Command` and which queue empties — rather than reaching into
+    /// `pending_front()` directly, so this stays a behavioral guarantee, not
+    /// a test of the accessor's own plumbing.
+    #[test]
+    fn a_pending_approval_takes_priority_over_an_already_pending_prompt() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
+
+        // The approval must be what the very next keypress resolves, even
+        // though the prompt arrived first.
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }], "the approval, not the earlier-queued prompt, must be front-of-line");
+        assert!(app.pending_approvals.is_empty());
+        assert_eq!(app.pending_prompts.len(), 1, "the prompt must still be queued behind it, untouched");
+
+        // Once the approval is out of the way, the prompt becomes current.
+        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
+        assert!(app.pending_prompts.is_empty());
+        match app.outbox.last() {
+            Some(Command::PromptResponse { payload, .. }) => {
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
     }
 
     #[test]
@@ -778,13 +998,14 @@ mod tests {
     }
 
     #[test]
-    fn permission_prompt_resolves_on_labeled_key_and_records_resolution() {
+    fn permission_prompt_resolves_on_a_numbered_selection_and_records_resolution() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         assert!(!app.pending_prompts.is_empty());
+        assert_eq!(app.decision_options()[2].label, "Allow for this project");
 
-        app.handle_key(press(KeyCode::Char('p'))); // allow, project tier
+        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
         assert!(app.pending_prompts.is_empty());
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
@@ -808,7 +1029,7 @@ mod tests {
         app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: payload_2 });
         assert_eq!(app.pending_prompts.len(), 2, "the second request must be queued, not overwrite the first");
 
-        app.handle_key(press(KeyCode::Char('p'))); // call-1: Tool, allow at project tier
+        app.handle_key(press(KeyCode::Char('3'))); // call-1: Tool, option 3 = allow at project tier
         assert_eq!(app.pending_prompts.len(), 1, "the second request must still be pending and resolvable after the first");
         match &app.outbox[0] {
             Command::PromptResponse { call_id, payload } => {
@@ -819,7 +1040,8 @@ mod tests {
             other => panic!("expected PromptResponse, got {other:?}"),
         }
 
-        app.handle_key(press(KeyCode::Char('n'))); // call-2: ContextFile, decline
+        assert_eq!(app.decision_options().last().map(|o| o.label.as_str()), Some("No"), "call-2 is a ContextFile prompt — option 3 is its decline");
+        app.handle_key(press(KeyCode::Char('3'))); // call-2: ContextFile, option 3 = decline
         assert!(app.pending_prompts.is_empty());
         match &app.outbox[1] {
             Command::PromptResponse { call_id, payload } => {

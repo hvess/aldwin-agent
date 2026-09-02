@@ -1277,6 +1277,51 @@ produces) before confirming it passes against the shared-helper fix.
 tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
 clean.
 
+**Progress (2026-09-02, DIM/BRIGHT were still terminal-remappable — the
+light-mode item above was only half fixed):** Direct developer pushback,
+correctly: "you're not testing with a light mode color scheme, so you cannot
+reproduce the issue." True — the earlier fix in this same batch (item 4,
+`highlight_command_tokens`'s missing `.fg(BRIGHT)`) was verified with an
+`xterm -bg white -fg black` session, which only overrides the terminal's
+*default* fg/bg (what `Color::Reset` resolves to). It never touched the
+ANSI 16-color palette, so it couldn't have exercised — or caught — the
+actual remaining bug: `palette::DIM`/`BRIGHT` were `Color::DarkGray`/
+`Color::White`, named ANSI indices (8/15), not fixed RGB — the one exception
+to this file's own stated rule (see `USER_FG`'s doc comment: "Fixed RGB
+rather than a named ANSI color so the tint doesn't get reinterpreted by
+whatever the terminal theme maps that ANSI slot to"). A real light-mode
+terminal theme remaps those slots for *its own* readability against a light
+background, independent of whatever this app tries to paint. Reproduced
+directly this time: an xterm session configured with Solarized Light's
+actual, published 16-color ANSI table (a widely-used real scheme, not a
+synthetic worst case) renders index 8 as `#002b36` — near-black navy. Every
+`DIM`-styled span (status-line metadata, timestamps, dim labels) came out
+dark-navy-on-this-app's-own-dark-navy-background, essentially unreadable.
+`BRIGHT` (index 15 → Solarized's `#fdf6e3`, a light cream) happened to
+survive in that specific palette, but was exposed to the identical failure
+mode by construction — not proof it was safe, just that this one example
+palette didn't happen to trip it.
+
+Fixed by giving `DIM`/`BRIGHT` fixed RGB values (`palette.rs`), same
+treatment as every other constant in that file, chosen to read clearly
+against the `BG_BASE`/`BG_ELEMENT`/`BG_INPUT` dark-navy family regardless of
+any terminal palette. Verified against the same reproducing Solarized Light
+xterm session (real 16-color `-xrm` overrides, not just `-bg`/`-fg`) before
+and after: the before capture shows the status-line metadata essentially
+invisible; the after capture, same palette, same scene, shows it clearly
+legible. `mjolnir-tui` 135 tests pass unmodified (no test hardcoded the old
+`Color::White`/`Color::DarkGray` values directly — all reference the `DIM`/
+`BRIGHT` constants, which is exactly why none needed touching); full
+workspace `cargo test` (348 tests) and `cargo clippy -p mjolnir-tui
+--all-targets -- -D warnings` both clean.
+
+Lesson recorded plainly since it's a real process gap, not just a code one:
+"tested in a light-mode terminal" needs a real remapped ANSI palette, not
+just a flipped default fg/bg — the two are different mechanisms, and this
+file's own established verification technique (a real terminal session,
+captured, not just `TestBackend`'s text-only dump) is what actually caught
+this the second time.
+
 - **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
   panel): the body (full-width scrollable conversation log, or the log
   beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress
@@ -1293,7 +1338,7 @@ clean.
 - **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/idle, with a spinner, plus a descriptive leading word for the rest of an active turn — a named tool in flight, "responding…" once assistant text is streaming, or "working…" while waiting on the first token/tool call of the step; see `ui::activity_label`, 2026-09-02), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
 - **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: *stale as of the 2026-08-31 visual-redesign entry above, corrected here 2026-09-02* — no longer terminal default throughout. That redesign's opaque-surfaces pass (`BG_BASE`/`BG_ELEMENT`/`BG_INPUT`/`CODE_BG`, `palette.rs`) fills the whole frame and every panel/bubble/box with its own fixed-RGB tier; this wording describing only a "subtle tint" on top of an otherwise-transparent terminal background was never updated to match and had drifted into being actively misleading — see the 2026-09-02 live-feedback batch's light-mode-contrast item, which traced a real bug to exactly this gap between the two (a span left without an explicit foreground, which reads fine against a *transparent* background inheriting the terminal's own contrast pairing, but not against the app's own always-dark fill).
 
-  Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
+  Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). `BRIGHT`/`DIM` are fixed RGB as of 2026-09-02 (see the same-day Progress entry) — they were the one exception to this file's "fixed RGB, not named ANSI" rule until a real light-mode terminal theme (Solarized Light) was shown to remap them into near-unreadable territory against this app's own always-dark surfaces. One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
 ## Decisions
 

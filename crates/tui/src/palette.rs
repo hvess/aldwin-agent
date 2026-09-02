@@ -16,8 +16,31 @@ use ratatui::style::Color;
 /// entirely. Reused verbatim from `TOOL_PALETTE`'s existing sky-blue entry
 /// rather than introduced as a fourth near-identical blue.
 pub(crate) const ACCENT: Color = Color::Rgb(125, 207, 255);
-pub(crate) const DIM: Color = Color::DarkGray;
-pub(crate) const BRIGHT: Color = Color::White;
+
+/// `DIM`/`BRIGHT` were the one exception to this file's own "fixed RGB, not
+/// a named ANSI color" rule (see `USER_FG`'s comment right below, which
+/// states the rule explicitly) — left as `Color::DarkGray`/`Color::White`
+/// since this file's text hierarchy predates the opaque-background redesign
+/// (`BG_BASE` etc.) that made the app paint its own always-dark surfaces
+/// regardless of the developer's terminal theme. That made the gap a live
+/// bug, not just an inconsistency: `Color::DarkGray`/`Color::White` are ANSI
+/// palette indices 8/15, which a real light-mode terminal theme remaps for
+/// *its own* readability against a light background — Solarized Light, a
+/// widely-used real scheme, maps index 8 to `#002b36` (near-black navy).
+/// Confirmed directly: an xterm session with Solarized Light's actual 16-
+/// color table rendered every `DIM` span (status-line metadata, timestamps,
+/// dim labels) as near-invisible dark-navy-on-this-app's-own-dark-navy —
+/// `BRIGHT` happened to survive in that specific scheme (Solarized's index
+/// 15 is a light cream) but was exposed to the identical failure mode by
+/// construction, just not tripped by that one example palette. Reported
+/// directly as "text is dark on light mode and it clashes with the dark
+/// background." Fixed by giving both fixed RGB values, same as every other
+/// constant in this file — chosen to read clearly against the `BG_BASE`/
+/// `BG_ELEMENT`/`BG_INPUT` dark-navy family regardless of any terminal
+/// palette, verified against the same reproducing Solarized Light xterm
+/// session before/after.
+pub(crate) const DIM: Color = Color::Rgb(140, 143, 163);
+pub(crate) const BRIGHT: Color = Color::Rgb(232, 232, 238);
 
 /// A dedicated LightGreen was tried first for user/assistant separation
 /// (see the git history) but read as too loud against real terminal color

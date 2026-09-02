@@ -719,6 +719,63 @@ _ => {} } }` idiom every other test in that file already uses, including
 clippy's pre-existing `single_match` note on that idiom, which this file
 already carries elsewhere and doesn't gate on.
 
+**Progress (2026-09-01, queued approvals/prompts):** Developer report: "when
+the LLM requests multiple diffs or permissions at once, it breaks the
+approval process and the user can only approve one thing." Root cause: both
+gates (`App::pending_approval`/`pending_prompt`, `crates/tui/src/app.rs`)
+were a single `Option<T>`, but the underlying round trip was never
+single-outstanding — `mjolnir-core`'s `Agent::dispatch_tools` drives every
+tool call in a step concurrently via `future::join_all`, and each
+Edit/permission-gated call independently calls `DispatchContext::
+request_approval`/`request_prompt`, keyed by its own `call_id` in a shared
+`PendingMap` (`crates/core/src/dispatcher.rs`) built for exactly this —
+core's side of the round trip was already correct per-call_id; only the
+TUI's single-slot tracking of "which one is currently interactive" wasn't.
+Parallel tool use (Anthropic's
+default) routinely produces more than one Edit or permission-gated call in
+one step, so a second `ToolApprovalRequested`/`PromptRequested` arriving
+while the first was still unresolved was a real, reachable case, not a
+hypothetical one — and the `Option` silently overwrote it. The first call's
+approval channel then hung forever with no key able to reach it: its
+`oneshot::Receiver` never received a decision, so its dispatch future never
+returned, `join_all` never completed, and the whole step (turn) stalled
+until Ctrl+C cancelled it — the developer only ever saw whichever card
+happened to win the overwrite, matching "can only approve one thing."
+
+Fixed by making both gates queues (`VecDeque<PendingApproval>`/
+`VecDeque<PendingPrompt>`, renamed `pending_approvals`/`pending_prompts`
+for the plural): `ToolApprovalRequested`/`PromptRequested` now push onto
+the back instead of overwriting; `handle_approval_key`/`handle_prompt_key`
+only ever act on the front (`.front()`/`.pop_front()`) — resolving it pops
+it and the next queued one becomes interactive automatically on the very
+next keystroke, no separate "advance" step needed. Input stays blocked
+(`draw_input`'s placeholder/cursor gating) exactly as before, just against
+"either queue non-empty" instead of "either `Option` is `Some`." Also added
+a `queue_hint` helper in `ui.rs`: the status line now appends "(+N more
+pending)" to the front card's own key hint when the queue holds more than
+one, so resolving the visible card doesn't silently surprise the developer
+with another one demanding input right after — kept separate from
+`approval_key_hint`/`prompt_key_hint` themselves since those are also what
+each card's own key row in the log renders with, where a queue-depth
+suffix would be wrong (a card only ever represents itself).
+
+New regression tests: `two_pending_approvals_are_queued_not_overwritten_
+and_resolve_in_order` and `two_pending_prompts_are_queued_not_overwritten_
+and_resolve_in_order` (`app.rs`) each dispatch two requests with different
+`call_id`s and assert both stay independently resolvable in FIFO order,
+with each card's own log resolution recorded correctly; confirmed to fail
+against a simulated pre-fix overwrite (`pending_approvals.clear()` before
+each push) before confirming they pass against the real fix.
+`footer_shows_a_count_of_additional_pending_approvals` and
+`footer_shows_no_queue_count_for_a_single_pending_approval` (`ui.rs`) cover
+the new hint.
+
+Verified: `mjolnir-tui` 98 tests pass (94 + 4 new), full workspace build/
+test (306 tests) and `cargo clippy -p mjolnir-tui --all-targets` clean on
+every touched file (`app.rs`, `ui.rs`, `examples/preview.rs` — the latter's
+design-iteration harness also constructed the old `Option` fields directly
+and needed the same field-name/queue update to keep compiling).
+
 - **Layout:** Four horizontal bands: a 1-row header (identity/status), the
   body (full-width scrollable conversation log, or the log beside a
   secondary sidebar — see the 2026-08-31 visual-redesign Progress entry), a

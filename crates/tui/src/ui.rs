@@ -1136,6 +1136,22 @@ fn approval_key_hint() -> &'static str {
     "[y] approve   [n] deny   [Ctrl+C] deny"
 }
 
+/// Appends a "+N more pending" suffix to a card's own key hint when its
+/// queue (`App::pending_approvals`/`pending_prompts`) holds more than the
+/// one currently interactive entry — see `draw_status_line`. Kept separate
+/// from `approval_key_hint`/`prompt_key_hint` themselves rather than
+/// threading a count through them: those two are also what each card's own
+/// key row in the log renders with (per `draw_status_line`'s doc comment,
+/// "the exact same functions"), and a per-card queue-depth suffix would be
+/// wrong there — a card only ever represents itself, not how many other
+/// cards are waiting behind it.
+fn queue_hint(hint: String, queue_len: usize) -> String {
+    match queue_len.saturating_sub(1) {
+        0 => hint,
+        n => format!("{hint}   (+{n} more pending)"),
+    }
+}
+
 /// One diff body line plus the line number(s) it carries in each side of the
 /// change — see `number_diff_lines`.
 struct DiffLine {
@@ -1268,12 +1284,20 @@ fn tool_color(name: &str) -> Color {
 /// once-per-session welcome hero (`intro_content`) and an actual
 /// permission prompt when one fires, not a line that repaints every frame.
 fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
-    if let Some(prompt) = &app.pending_prompt {
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(prompt_key_hint(&prompt.payload), Style::default().fg(DIM)))), area);
+    // Both queues (see `App::pending_approvals`/`pending_prompts`) can hold
+    // more than one entry when the model dispatched several approval- or
+    // prompt-gated calls in one step — only the front is ever interactive,
+    // so its hint is what's shown, with a "+N more pending" suffix instead
+    // of silently leaving the developer to discover the next one only after
+    // resolving this one.
+    if let Some(prompt) = app.pending_prompts.front() {
+        let hint = queue_hint(prompt_key_hint(&prompt.payload), app.pending_prompts.len());
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(DIM)))), area);
         return;
     }
-    if app.pending_approval.is_some() {
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(approval_key_hint(), Style::default().fg(DIM)))), area);
+    if !app.pending_approvals.is_empty() {
+        let hint = queue_hint(approval_key_hint().to_string(), app.pending_approvals.len());
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(DIM)))), area);
         return;
     }
 
@@ -1339,11 +1363,11 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // placeholder says so instead of inviting a keystroke it would silently
     // drop.
     if app.input.is_empty() {
-        let blocked = app.pending_approval.is_some() || app.pending_prompt.is_some();
+        let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
         let placeholder = Line::from(Span::styled(text, Style::default().fg(DIM)));
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
-        if app.pending_approval.is_none() && app.pending_prompt.is_none() {
+        if !blocked {
             frame.set_cursor_position((inner.x, inner.y));
         }
         return;
@@ -1371,7 +1395,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // terminal cursor past the visible text — clamped to `inner`'s last
     // column/row below so it never lands outside the box rather than fixing
     // the underlying wrap mismatch.
-    if app.pending_approval.is_none() && app.pending_prompt.is_none() {
+    if app.pending_approvals.is_empty() && app.pending_prompts.is_empty() {
         let (line, col) = cursor_line_col(&app.input, app.cursor);
         let inner_right = inner.x + inner.width.saturating_sub(1);
         let inner_bottom = inner.y + inner.height.saturating_sub(1);
@@ -1665,7 +1689,7 @@ mod tests {
     fn footer_and_approval_card_show_identical_key_labels() {
         let mut app = app();
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
-        app.pending_approval = Some(crate::app::PendingApproval { call_id: "c1".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
         let out = rendered(&mut app, 100, 20);
         let hint = approval_key_hint();
         // The hint text appears twice: once in the card itself, once in the footer.
@@ -1677,10 +1701,39 @@ mod tests {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
         app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload: payload.clone(), resolution: None });
-        app.pending_prompt = Some(crate::app::PendingPrompt { call_id: "c1".into(), payload: payload.clone() });
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload: payload.clone() });
         let out = rendered(&mut app, 100, 20);
         let hint = prompt_key_hint(&payload);
         assert_eq!(out.matches(hint.as_str()).count(), 2, "expected the prompt card and the footer to show the exact same key labels, got: {out:?}");
+    }
+
+    /// A single pending approval must not claim there's more behind it — a
+    /// bare "+0 more pending" or similar would be worse than no count at
+    /// all. Companion to `two_pending_approvals_are_queued_not_overwritten_
+    /// and_resolve_in_order` in `app.rs` (which covers that a second request
+    /// actually queues); this covers the queue depth becoming visible to the
+    /// developer once it does.
+    #[test]
+    fn footer_shows_no_queue_count_for_a_single_pending_approval() {
+        let mut app = app();
+        app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
+        let out = rendered(&mut app, 100, 20);
+        assert!(!out.contains("more pending"), "one pending approval must not claim there's another queued: {out:?}");
+    }
+
+    /// A second queued approval — the actual scenario the queueing fix
+    /// covers — must surface as a visible count in the footer, not just be
+    /// silently resolvable one at a time with no warning that another card
+    /// is about to demand input right after this one.
+    #[test]
+    fn footer_shows_a_count_of_additional_pending_approvals() {
+        let mut app = app();
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c2".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c3".into() });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("+2 more pending"), "expected the footer to show 2 more queued beyond the front card, got: {out:?}");
     }
 
     #[test]
@@ -1929,7 +1982,7 @@ mod tests {
     fn the_terminal_cursor_is_hidden_while_an_approval_card_is_pending() {
         let mut app = app();
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "diff".into(), resolution: None });
-        app.pending_approval = Some(crate::app::PendingApproval { call_id: "c1".into() });
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into() });
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();

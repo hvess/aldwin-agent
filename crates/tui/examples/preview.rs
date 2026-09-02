@@ -89,14 +89,14 @@ fn approval(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "fix the off-by-one in the pagination helper".into() });
     let diff = "--- a/src/page.rs\n+++ b/src/page.rs\n@@\n fn page(items: &[Item], size: usize, n: usize) -> &[Item] {\n     let start = n * size;\n-    let end = start + size;\n+    let end = (start + size).min(items.len());\n     &items[start..end]\n }\n";
     app.log.push(LogEntry::ApprovalCard { call_id: "call-1".into(), diff: diff.into(), resolution: None });
-    app.pending_approval = Some(mjolnir_tui::__PreviewPendingApproval { call_id: "call-1".into() });
+    app.pending_approvals.push_back(mjolnir_tui::__PreviewPendingApproval { call_id: "call-1".into() });
 }
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
     let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into() };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompt = Some(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
+    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
 
 fn long(app: &mut App) {

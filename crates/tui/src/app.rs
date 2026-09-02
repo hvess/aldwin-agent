@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use mjolnir_core::{Command, Event, StepId};
@@ -118,8 +118,23 @@ pub struct App {
     pub render_height:    u16,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
-    pub pending_approval:  Option<PendingApproval>,
-    pub pending_prompt:    Option<PendingPrompt>,
+    /// Queued, not a single slot — parallel tool use can dispatch several
+    /// Edit calls in one step, each requesting approval independently (see
+    /// `dispatch_tools`' `future::join_all` in mjolnir-core), so more than
+    /// one can be outstanding at once. A second `ToolApprovalRequested`
+    /// arriving while the first was still an `Option` silently overwrote
+    /// it — the first call's approval channel then hung forever with no
+    /// key able to reach it, which stalled that dispatch future (and, via
+    /// `join_all`, the whole step) until Ctrl+C cancelled the turn; the
+    /// developer only ever saw the one card that happened to win the
+    /// overwrite. The front of the queue is the one actually interactive
+    /// (`handle_approval_key`/`handle_prompt_key` only ever act on it);
+    /// resolving it pops the front and the next queued one becomes
+    /// interactive automatically. See `mjolnir-tui.md`'s Progress note.
+    pub pending_approvals: VecDeque<PendingApproval>,
+    /// Same reasoning as `pending_approvals` — a generic permission prompt
+    /// can equally arrive for more than one dispatched call at once.
+    pub pending_prompts:   VecDeque<PendingPrompt>,
     pub status:            StatusInfo,
     pub should_quit:       bool,
     /// True from `TurnStarted` until the matching `TurnEnded` — drives the
@@ -158,8 +173,8 @@ impl App {
             render_height: 24,
             input: String::new(),
             cursor: 0,
-            pending_approval: None,
-            pending_prompt: None,
+            pending_approvals: VecDeque::new(),
+            pending_prompts: VecDeque::new(),
             status,
             should_quit: false,
             turn_active: false,
@@ -241,7 +256,7 @@ impl App {
                 }
             }
             Event::ToolApprovalRequested { call_id, diff, .. } => {
-                self.pending_approval = Some(PendingApproval { call_id: call_id.clone() });
+                self.pending_approvals.push_back(PendingApproval { call_id: call_id.clone() });
                 self.push(LogEntry::ApprovalCard { call_id, diff, resolution: None });
             }
             Event::ToolCompleted { step_id, result, .. } => {
@@ -264,7 +279,7 @@ impl App {
                 let parsed: Result<PromptPayload, _> = serde_json::from_value(payload);
                 match parsed {
                     Ok(payload) => {
-                        self.pending_prompt = Some(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
+                        self.pending_prompts.push_back(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
                         self.push(LogEntry::PermissionPrompt { call_id, payload, resolution: None });
                     }
                     Err(e) => self.push(LogEntry::Error { message: format!("malformed permission prompt: {e}") }),
@@ -295,11 +310,11 @@ impl App {
             return;
         }
 
-        if self.pending_approval.is_some() {
+        if !self.pending_approvals.is_empty() {
             self.handle_approval_key(key);
             return;
         }
-        if self.pending_prompt.is_some() {
+        if !self.pending_prompts.is_empty() {
             self.handle_prompt_key(key);
             return;
         }
@@ -427,7 +442,10 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => false,
             _ => return, // any other key is silently dropped — no typing ahead
         };
-        let Some(pending) = self.pending_approval.take() else { return };
+        // Only ever the front of the queue — see `pending_approvals`' own
+        // doc comment. Popping it is what makes the next queued approval
+        // (if any) interactive on the very next keystroke.
+        let Some(pending) = self.pending_approvals.pop_front() else { return };
         for entry in self.log.iter_mut() {
             if let LogEntry::ApprovalCard { call_id, resolution, .. } = entry {
                 if *call_id == pending.call_id {
@@ -444,7 +462,9 @@ impl App {
     /// card itself (see `ui.rs`) — see mjolnir-tui.md's Pitfall on
     /// requiring an unambiguous labeled key.
     fn handle_prompt_key(&mut self, key: KeyEvent) {
-        let Some(pending) = &self.pending_prompt else { return };
+        // Only ever the front of the queue — see `pending_prompts`' own doc
+        // comment on `App`.
+        let Some(pending) = self.pending_prompts.front() else { return };
         // Ctrl+C always declines, regardless of payload shape — same
         // rationale as handle_approval_key: a stuck prompt with no
         // recognized key otherwise has no escape hatch.
@@ -488,7 +508,7 @@ impl App {
     }
 
     fn resolve_prompt(&mut self, response: PromptResponse) {
-        let Some(pending) = self.pending_prompt.take() else { return };
+        let Some(pending) = self.pending_prompts.pop_front() else { return };
         let call_id = pending.call_id;
         let label = format!("{response:?}");
         for entry in self.log.iter_mut() {
@@ -657,7 +677,7 @@ mod tests {
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "-a\n+b\n".into() });
         type_str(&mut app, "hello");
         assert_eq!(app.input, "", "keystrokes must not leak into the input buffer while a card is pending");
-        assert!(app.pending_approval.is_some());
+        assert!(!app.pending_approvals.is_empty());
     }
 
     #[test]
@@ -665,9 +685,9 @@ mod tests {
         let mut app = app();
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
         app.handle_key(press(KeyCode::Enter));
-        assert!(app.pending_approval.is_some(), "Enter must not resolve the card");
+        assert!(!app.pending_approvals.is_empty(), "Enter must not resolve the card");
         app.handle_key(press(KeyCode::Char('y')));
-        assert!(app.pending_approval.is_none());
+        assert!(app.pending_approvals.is_empty());
         assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }]);
     }
 
@@ -679,12 +699,49 @@ mod tests {
         assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
     }
 
+    /// Regression test: parallel tool use can dispatch several Edit calls in
+    /// one step (`Agent::dispatch_tools` drives them concurrently via
+    /// `future::join_all`), each independently requesting approval. A second
+    /// `ToolApprovalRequested` arriving while the first was still unresolved
+    /// used to silently overwrite `pending_approval` (a single `Option`),
+    /// leaving the first call's approval channel stuck forever with no key
+    /// able to reach it — reported live as "the LLM requests multiple diffs
+    /// ... and the user can only approve one thing". Both must stay
+    /// individually resolvable, front of the queue first.
+    #[test]
+    fn two_pending_approvals_are_queued_not_overwritten_and_resolve_in_order() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff-1".into() });
+        app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c2".into(), diff: "diff-2".into() });
+        assert_eq!(app.pending_approvals.len(), 2, "the second request must be queued, not overwrite the first");
+
+        app.handle_key(press(KeyCode::Char('y')));
+        assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }], "the first (front of queue) call must resolve first");
+        assert_eq!(app.pending_approvals.len(), 1, "the second request must still be pending and resolvable after the first");
+
+        app.handle_key(press(KeyCode::Char('n')));
+        assert_eq!(app.outbox, vec![Command::ApproveTool { call_id: "c1".into() }, Command::DenyTool { call_id: "c2".into() }]);
+        assert!(app.pending_approvals.is_empty());
+
+        // Both cards' own resolutions in the log must be independently
+        // recorded, not just whichever call_id happened to be tracked.
+        let resolutions: Vec<(String, Option<bool>)> = app
+            .log
+            .iter()
+            .filter_map(|e| match e {
+                LogEntry::ApprovalCard { call_id, resolution, .. } => Some((call_id.clone(), *resolution)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolutions, vec![("c1".to_string(), Some(true)), ("c2".to_string(), Some(false))]);
+    }
+
     #[test]
     fn ctrl_c_denies_a_pending_approval_card_instead_of_being_swallowed() {
         let mut app = app();
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(app.pending_approval.is_none(), "Ctrl+C must resolve a pending approval card, not get stuck");
+        assert!(app.pending_approvals.is_empty(), "Ctrl+C must resolve a pending approval card, not get stuck");
         assert_eq!(app.outbox, vec![Command::DenyTool { call_id: "c1".into() }]);
     }
 
@@ -694,7 +751,7 @@ mod tests {
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(app.pending_prompt.is_none(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
+        assert!(app.pending_prompts.is_empty(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
@@ -710,7 +767,7 @@ mod tests {
         let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(app.pending_prompt.is_none());
+        assert!(app.pending_prompts.is_empty());
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
@@ -725,14 +782,50 @@ mod tests {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
-        assert!(app.pending_prompt.is_some());
+        assert!(!app.pending_prompts.is_empty());
 
         app.handle_key(press(KeyCode::Char('p'))); // allow, project tier
-        assert!(app.pending_prompt.is_none());
+        assert!(app.pending_prompts.is_empty());
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
                 assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
+    }
+
+    /// Same regression as `two_pending_approvals_are_queued_not_overwritten_
+    /// and_resolve_in_order`, for the generic permission-prompt round trip —
+    /// a second `PromptRequested` used to overwrite `pending_prompt`
+    /// (a single `Option`) and strand the first request's channel forever.
+    #[test]
+    fn two_pending_prompts_are_queued_not_overwritten_and_resolve_in_order() {
+        let mut app = app();
+        let payload_1 = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
+        let payload_2 = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: payload_1 });
+        app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: payload_2 });
+        assert_eq!(app.pending_prompts.len(), 2, "the second request must be queued, not overwrite the first");
+
+        app.handle_key(press(KeyCode::Char('p'))); // call-1: Tool, allow at project tier
+        assert_eq!(app.pending_prompts.len(), 1, "the second request must still be pending and resolvable after the first");
+        match &app.outbox[0] {
+            Command::PromptResponse { call_id, payload } => {
+                assert_eq!(call_id, "call-1");
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
+
+        app.handle_key(press(KeyCode::Char('n'))); // call-2: ContextFile, decline
+        assert!(app.pending_prompts.is_empty());
+        match &app.outbox[1] {
+            Command::PromptResponse { call_id, payload } => {
+                assert_eq!(call_id, "call-2");
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(response, PromptResponse::ContextFile { approve: false, tier: None });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -842,6 +935,6 @@ mod tests {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: serde_json::json!({"shape": "unknown_shape"}) });
         assert!(matches!(app.log.last(), Some(LogEntry::Error { .. })));
-        assert!(app.pending_prompt.is_none());
+        assert!(app.pending_prompts.is_empty());
     }
 }

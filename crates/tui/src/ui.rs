@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientatio
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, ScopeHint, StatusInfo};
+use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, RunningTool, ScopeHint, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
@@ -1033,7 +1033,20 @@ fn highlight_command_tokens(line: &str) -> Line<'static> {
         }
         let word_len: usize = rest.chars().take_while(|c| !c.is_whitespace()).map(|c| c.len_utf8()).sum();
         let (word, tail) = rest.split_at(word_len);
-        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(DIM) } else { Style::default() };
+        // An ordinary word must carry an explicit `BRIGHT` fg, not bare
+        // `Style::default()` (terminal-default foreground) — this is the one
+        // place in the whole log/input rendering path that left a
+        // content-bearing span without one (every other span in this file
+        // sets an explicit palette color; see `palette::BG_BASE`'s doc
+        // comment on why the app paints its own opaque background
+        // everywhere). `draw_input`'s block always fills `BG_INPUT`, a fixed
+        // dark navy, regardless of the developer's own terminal theme — on a
+        // light-mode terminal profile, "terminal-default foreground" is
+        // typically dark (meant to sit on a light background), so an
+        // ordinary typed word rendered dark-on-our-own-dark-navy, unreadable
+        // while typing. Reported directly: "text is dark on light mode and
+        // it clashes with the dark background."
+        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(DIM) } else { Style::default().fg(BRIGHT) };
         spans.push(Span::styled(word.to_string(), style));
         rest = tail;
     }
@@ -1378,6 +1391,62 @@ fn humanize_tool_kind(kind: &str) -> String {
     }
 }
 
+/// A `RunningTool`'s display name — `App::apply_event`'s doc comment on
+/// `pending_tool_names` notes `name` comes from a `ToolUseRequested` looked
+/// up by `call_id` and falls back to an empty string
+/// (`unwrap_or_default()`) if that lookup ever misses; falling back to the
+/// `call_id` itself here (rather than showing nothing) is what the status
+/// line's trailing tools list already did — shared so `activity_label`'s
+/// leading word can't drift from it and show a blank/awkward name in a case
+/// the list already handles.
+fn running_tool_name(tool: &RunningTool) -> &str {
+    if tool.name.is_empty() {
+        &tool.call_id
+    } else {
+        &tool.name
+    }
+}
+
+/// Present-progressive fragment for the status line's leading activity word
+/// — a separate small table from `humanize_tool_kind` above rather than a
+/// shared one, since the two need different grammar ("Claude wants to
+/// read a file" vs "reading a file…") for what's otherwise the same handful
+/// of tool kinds; not worth a shared abstraction for three arms each.
+fn tool_gerund(kind: &str) -> String {
+    match kind {
+        "read" => "reading a file".into(),
+        "shell" => "running a shell command".into(),
+        "explain" => "inspecting code".into(),
+        other => format!("using {other}"),
+    }
+}
+
+/// What to say next to the spinner while `app.turn_active` and not
+/// `app.thinking` (thinking has its own, more specific "thinking…" text) —
+/// per direct developer feedback that a bare "working…" for the entire
+/// stretch of a turn gave no sense of what was actually happening. Built
+/// entirely from state `App` already tracks (no new event/data needed):
+/// a running tool's own name (via `tool_gerund`, the same humanization the
+/// permission prompt already applies to a tool kind), the count when more
+/// than one tool is running at once (parallel dispatch — see
+/// mjolnir-core's `dispatch_tools`), or, with no tool in flight, whether
+/// assistant text is already streaming for this step (the log's tail entry
+/// is a `LogEntry::AssistantText` for exactly that stretch) versus still
+/// waiting on the first token or tool call of the step.
+fn activity_label(app: &App) -> String {
+    match app.status.running_tools.as_slice() {
+        [] => {
+            if matches!(app.log.last(), Some(LogEntry::AssistantText { .. })) {
+                "responding…".into()
+            } else {
+                "working…".into()
+            }
+        }
+        [one] => format!("{}…", tool_gerund(running_tool_name(one))),
+        many => format!("running {} tools…", many.len()),
+    }
+}
+
 /// The literal `kind: target` the humanized sentence above is describing —
 /// unchanged in substance from the old title text, just demoted to a dim
 /// subtitle now that the title itself carries the explanation.
@@ -1576,7 +1645,7 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     let mut spans = if app.thinking {
         vec![Span::styled(format!("{spinner} thinking…  "), Style::default().fg(ACCENT))]
     } else if app.turn_active {
-        vec![Span::styled(format!("{spinner} working…  "), Style::default().fg(ACCENT))]
+        vec![Span::styled(format!("{spinner} {}  ", activity_label(app)), Style::default().fg(ACCENT))]
     } else {
         vec![Span::styled("idle  ", Style::default().fg(DIM))]
     };
@@ -1594,7 +1663,7 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
             if i > 0 {
                 spans.push(Span::raw(", "));
             }
-            let name = if tool.name.is_empty() { tool.call_id.as_str() } else { tool.name.as_str() };
+            let name = running_tool_name(tool);
             spans.push(Span::styled(name.to_string(), Style::default().fg(tool_color(name))));
         }
         spans.push(Span::raw("  "));
@@ -1877,7 +1946,15 @@ mod tests {
     /// The status line replaces the removed sidebar as the place activity
     /// (thinking/working), in-flight tools, and a running message count are
     /// surfaced — per explicit developer direction that this information
-    /// belongs "right above the input field," not in a separate panel.
+    /// belongs "right above the input field," not in a separate panel. The
+    /// leading activity word itself names the in-flight tool (see
+    /// `activity_label`) rather than a generic "working…" once one is
+    /// running — per a later developer request for more descriptive
+    /// progress feedback (`status_line_describes_the_running_tool_instead_
+    /// of_a_generic_working_label` below covers that specifically); the
+    /// tool's raw name still shows again in the trailing `tools:` list this
+    /// test also checks, since that list is the detailed record of exactly
+    /// what's running, not just the headline.
     #[test]
     fn status_line_shows_activity_running_tools_and_message_count() {
         let mut app = app();
@@ -1885,9 +1962,64 @@ mod tests {
         app.turn_active = true;
         app.status.running_tools = vec![crate::app::RunningTool { call_id: "c1".into(), name: "shell".into() }];
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("working"), "an active turn should show in the status line: {out:?}");
-        assert!(out.contains("shell"), "an in-flight tool's name should show in the status line: {out:?}");
+        assert!(out.contains("running a shell command"), "an in-flight tool should describe itself in the status line: {out:?}");
+        assert!(out.contains("shell"), "an in-flight tool's name should also show in the trailing tools list: {out:?}");
         assert!(out.contains("1 message"), "the status line should show a running message count: {out:?}");
+    }
+
+    /// Direct developer feedback: "the status shows working and thinking,
+    /// but I wonder if we can be more descriptive about what the model is
+    /// actually doing" — a bare "working…" for an entire turn gave no sense
+    /// of progress. `activity_label` now distinguishes three sub-phases of
+    /// an active, non-thinking turn: a named tool in flight, assistant text
+    /// already streaming for this step, or neither yet (still "working…",
+    /// the honest label for "waiting on the model's first token or tool
+    /// call of this step" — there's no more specific truthful thing to say
+    /// there).
+    #[test]
+    fn status_line_describes_the_running_tool_instead_of_a_generic_working_label() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.status.running_tools = vec![crate::app::RunningTool { call_id: "c1".into(), name: "read".into() }];
+        assert!(rendered(&mut app, 100, 20).contains("reading a file"));
+    }
+
+    #[test]
+    fn status_line_says_running_n_tools_when_more_than_one_is_in_flight() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.status.running_tools = vec![
+            crate::app::RunningTool { call_id: "c1".into(), name: "read".into() },
+            crate::app::RunningTool { call_id: "c2".into(), name: "shell".into() },
+        ];
+        assert!(rendered(&mut app, 100, 20).contains("running 2 tools…"));
+    }
+
+    #[test]
+    fn status_line_shows_responding_once_assistant_text_is_streaming() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.log.push(LogEntry::AssistantText { text: "partial".into() });
+        assert!(rendered(&mut app, 100, 20).contains("responding…"));
+    }
+
+    /// Regression test found during self-review of `activity_label`: a
+    /// `RunningTool` with an empty `name` (see `App::apply_event`'s doc
+    /// comment on `pending_tool_names` — the lookup this falls back from can
+    /// in principle miss) must fall back to its `call_id`, the same way the
+    /// trailing `tools:` list already did — not silently produce "using …"
+    /// with nothing after "using ". Both now share `running_tool_name`.
+    #[test]
+    fn status_line_falls_back_to_the_call_id_for_a_running_tool_with_no_name() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "hi".into() });
+        app.turn_active = true;
+        app.status.running_tools = vec![crate::app::RunningTool { call_id: "call-42".into(), name: String::new() }];
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("using call-42"), "activity label must not show a blank tool name: {out:?}");
     }
 
     /// Regression test for explicit developer feedback: "the first item in
@@ -2405,7 +2537,7 @@ mod tests {
     fn highlight_command_tokens_dims_a_leading_command_word() {
         let line = highlight_command_tokens("/clear now");
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
-        assert_eq!(styled, vec![("/clear", Some(DIM)), (" ", None), ("now", None)]);
+        assert_eq!(styled, vec![("/clear", Some(DIM)), (" ", None), ("now", Some(BRIGHT))]);
     }
 
     /// The bug report this responds to: dimming only checked the input's
@@ -2417,22 +2549,41 @@ mod tests {
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
         assert_eq!(
             styled,
-            vec![("please", None), (" ", None), ("run", None), (" ", None), ("/exit", Some(DIM)), (" ", None), ("for", None), (" ", None), ("me", None)]
+            vec![
+                ("please", Some(BRIGHT)),
+                (" ", None),
+                ("run", Some(BRIGHT)),
+                (" ", None),
+                ("/exit", Some(DIM)),
+                (" ", None),
+                ("for", Some(BRIGHT)),
+                (" ", None),
+                ("me", Some(BRIGHT)),
+            ]
         );
     }
 
+    /// Regression test: an ordinary (non-command) word must carry an
+    /// explicit `BRIGHT` foreground, not bare `Style::default()` — the
+    /// latter inherits the terminal's own default text color, which reads
+    /// fine on a dark-themed terminal by coincidence but renders dark-on-
+    /// dark against `draw_input`'s always-dark `BG_INPUT` fill on a
+    /// light-themed one. Reported directly: "text is dark on light mode and
+    /// it clashes with the dark background."
     #[test]
-    fn highlight_command_tokens_leaves_plain_text_unstyled() {
+    fn highlight_command_tokens_gives_plain_words_an_explicit_bright_fg() {
         let line = highlight_command_tokens("hello world");
-        assert!(line.spans.iter().all(|s| s.style.fg.is_none()));
+        let fgs: Vec<Option<Color>> = line.spans.iter().map(|s| s.style.fg).collect();
+        assert_eq!(fgs, vec![Some(BRIGHT), None, Some(BRIGHT)], "every word must set an explicit fg; only the whitespace between them may leave it unset");
     }
 
     #[test]
     fn highlight_command_tokens_requires_an_exact_word_match() {
         // "/exiting" isn't the recognized "/exit" word, and "cleared" isn't
-        // "/clear" — a substring match would false-positive on either.
+        // "/clear" — a substring match would false-positive on either, i.e.
+        // dim them like a real command word instead of leaving them BRIGHT.
         let line = highlight_command_tokens("/exiting cleared");
-        assert!(line.spans.iter().all(|s| s.style.fg.is_none()));
+        assert!(line.spans.iter().all(|s| s.style.fg != Some(DIM)));
     }
 
     /// Live counterpart to `a_slash_command_renders_differently_from_a_plain_user_message`

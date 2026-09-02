@@ -64,6 +64,30 @@ Exception and mjolnir's own non-negotiable "Edit is never allowlistable"
 constraint — no scope toggle, no directory grant, no tier list, ever, for
 Edit. See mjolnir-tools.md and mjolnir-tui.md's matching Progress notes.
 
+**Progress (2026-09-02, permissions.yaml lost its explanation on the first
+write):** Developer report: "the permissions model is not clear, and editing
+permissions.yaml doesn't really appear to make any sense." Root cause was
+entirely in mjolnir-config, not this engine — see that (archived) spec's
+matching 2026-09-02 post-archive fix for the full account. In short: the
+annotated, comment-explained `permissions.yaml` mjolnir-config writes on
+first launch lost every comment the moment any grant was persisted (which in
+ordinary use is almost immediately — the first "for this project"/"always"
+choice at a four-tier prompt), because the write path re-serializes the
+in-memory value from scratch with no way to carry a source file's original
+comments along. A developer opening their real, in-use `permissions.yaml`
+therefore found a bare `version`/`allow: [...]`/`deny: [...]` with no
+explanation of the `kind:pattern` grammar, the session/project/global scope
+model, or that a hand-added `edit:...` entry parses fine but has no effect
+(Edit is never allowlistable — see the Edit Exception below). Fixed by
+threading each domain's header through every write, not just the first one,
+and expanding what the permissions header actually explains — this spec's
+Model/Decisions/Grammar were already correct and needed no change; the gap
+was purely in how (and how much of the time) that model got explained to the
+developer looking at the file. Kept as one line here since this is the spec
+a developer investigating "permissions felt confusing" would open first —
+this file's own 2026-09-02 directory-scope entry above is the other half of
+the same live-session feedback batch.
+
 ## Why
 
 Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request runs through this engine. It owns scope precedence, pattern matching, the tiered prompt round-trip, and the in-memory shape of allowlists and denylists. Cross-cutting — any crate that gates an action calls into this one rather than reimplementing the policy.

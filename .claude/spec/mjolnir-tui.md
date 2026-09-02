@@ -1142,6 +1142,141 @@ clean. `examples/preview.rs` gained a `prompt_path` scene exercising the
 new hint, alongside the existing `prompt` scene (a `shell` target, which
 correctly shows no hint at all).
 
+**Progress (2026-09-02, live-feedback batch: descriptive activity, mouse
+wheel scroll, light-mode input contrast):** Another round of direct
+developer feedback, three items fixed together:
+
+1. **Status line gave no sense of what the model was actually doing.** "The
+   status line shows working and thinking, but I wonder if we can be more
+   descriptive... perhaps something like Working | Analyzing the project
+   structure." A bare "working…" covered the entire stretch of an active,
+   non-thinking turn regardless of what was actually happening underneath.
+   New `ui::activity_label` distinguishes what `App` already tracks but the
+   status line wasn't yet surfacing as the *leading* word: a named tool in
+   flight (`tool_gerund`, "reading a file…"/"running a shell command…"/
+   "inspecting code…" — present-progressive phrasing of the same handful of
+   kinds `humanize_tool_kind` already humanizes for the permission prompt,
+   kept as a separate small table rather than shared since the two need
+   different grammar), "running N tools…" when parallel dispatch has more
+   than one in flight at once, "responding…" once assistant text is
+   streaming for the current step (the log's tail entry is a
+   `LogEntry::AssistantText` for exactly that stretch — no new state needed),
+   or, with neither yet, the honest "working…" for "waiting on the model's
+   first token or tool call of this step" — there's no more specific true
+   thing to say there. `thinking…` is unchanged (still its own, more
+   specific branch, checked first). The trailing `tools:` list (raw tool
+   names, colored per name) still shows alongside this, unchanged — the
+   headline word is now descriptive, the detailed record is still there too.
+
+2. **"Cannot scroll when selecting text."** Root cause: `run.rs` never
+   enabled crossterm's mouse capture at all — every mouse event, wheel
+   included, was handled entirely by the terminal emulator, and most
+   terminals suppress or reinterpret wheel-scroll while a native selection
+   drag is in progress, so the app never even saw the notch to act on.
+   Fixed by enabling `EnableMouseCapture` (paired with `DisableMouseCapture`
+   in `TerminalGuard`/`restore_terminal`, alongside the existing raw-mode/
+   alt-screen restore steps — mouse capture must never leak past the
+   process exiting) and a new `App::handle_mouse`, wired into `run_loop`'s
+   `tokio::select!` alongside `handle_key`: `MouseEventKind::ScrollUp`/
+   `ScrollDown` call the same `ScrollState::line_up`/`line_down` the Up/Down
+   keys already use (a wheel notch is a nudge, not a page). Deliberately
+   *not* gated on a pending decision the way the keyboard scroll bindings
+   are (the decision list's own Up/Down repurposes those keys while
+   pending) — the wheel and the numbered decision list are independent
+   input channels with nothing to conflict over, so scrolling back through
+   history to re-read context while a decision is pending is just useful.
+   Every other mouse event kind (click/drag/move) reaches `handle_mouse`
+   too, once capture is on, but is a deliberate no-op.
+
+3. **"Selecting and copying text also copies UI elements like the
+   scrollbar/input field."** Same root cause and same fix as #2, not a
+   separate change: with mouse capture off, *every* click-drag was the
+   terminal's own native text selection, which is purely grid-based and has
+   no way to know a border/scrollbar/padding column isn't "real" content —
+   so even an accidental, casual drag (meant only to scroll or highlight
+   for reading) swept up whatever cells it crossed. With capture on, a
+   plain click/drag is now an app-level `MouseEvent` `handle_mouse` ignores,
+   not terminal selection — in effectively every mouse-capturing terminal
+   app (vim's `mouse=a`, htop, tmux panes, ...) the terminal's native
+   selection is still reachable, just behind its usual bypass modifier
+   (Shift-drag on most terminals, Option-drag on iTerm2), which stops
+   *accidental* chrome-capture without removing deliberate copying. This
+   is a real behavioral trade-off, not a full fix of "terminal selection
+   over a bordered TUI can grab a border character" in general (still true
+   of a deliberate Shift-drag, same as any other bordered terminal app,
+   and out of this crate's control) — documented here rather than silently
+   assumed away. See `mjolnir-tui.md`'s Out of Scope bullet below, narrowed
+   accordingly (mirrors how the 2026-08-31 sidebar entry narrowed the
+   split-pane rejection rather than reopening it outright).
+
+4. **"The colors ... do not work on light mode setups (text is dark on
+   light mode and it clashes with the dark background)."** Found by
+   auditing every `Style::default()` in `ui.rs` for a content-bearing span
+   with no explicit `.fg(...)` — every one of them already set one *except
+   exactly one*: `highlight_command_tokens`'s plain-word branch (an
+   ordinary, non-command word typed into the input box) fell through to
+   bare `Style::default()`, which resolves to the terminal's own default
+   foreground. `draw_input`'s box always fills `BG_INPUT`, a fixed dark
+   navy, regardless of the developer's terminal theme (see `palette::
+   BG_BASE`'s doc comment on why the app paints its own opaque background
+   everywhere) — on a dark-themed terminal, "default foreground" happens to
+   be light, so this read fine by coincidence; on a light-themed one it's
+   typically dark (tuned to sit on a light background), which is exactly
+   dark-text-on-the-app's-own-dark-navy: unreadable, for literally every
+   plain word the developer typed. Fixed with an explicit `.fg(BRIGHT)` on
+   that branch — the same discipline every other span in this file already
+   followed. This is a real, narrow, confirmed bug fix, not a light theme:
+   the app still paints one hardcoded dark palette regardless of the
+   developer's own terminal background (a standing, deliberate choice — see
+   the Palette Decisions entry, "Minimal monochrome palette... blocked on
+   the mascot palette question"), it just no longer depends on the
+   terminal's ambient default color anywhere, so it can't clash with it
+   either. `TuiConfig.theme: Option<String>` (mjolnir-config) already exists
+   in the schema for a future real second (light-tuned) palette, but every
+   past palette change in this file was screenshot-verified against a real
+   render before shipping (see the `examples/preview.rs` harness and its
+   tmux-capture pipeline, used throughout this file's history) — hand-
+   picking a second full set of RGB values with no way to visually verify
+   them in this session would risk trading one bad-contrast report for
+   another, so that's flagged here as real, separable follow-up work rather
+   than attempted blind.
+
+New tests: `status_line_describes_the_running_tool_instead_of_a_generic_
+working_label`, `status_line_says_running_n_tools_when_more_than_one_is_in_
+flight`, `status_line_shows_responding_once_assistant_text_is_streaming`
+(item 1); `mouse_wheel_scrolls_the_log_by_one_line`, `non_scroll_mouse_
+events_are_ignored`, `mouse_wheel_scrolls_the_log_even_while_a_decision_is_
+pending` (item 2, `app.rs`); `highlight_command_tokens_gives_plain_words_an_
+explicit_bright_fg` (item 4, replacing the old assertion that plain words
+were unstyled — that was the bug, not the spec). `status_line_shows_
+activity_running_tools_and_message_count` (pre-existing) updated: it
+asserted the old generic "working" text was still present once a tool
+started running, which is no longer true by design once item 1 landed.
+`mjolnir-tui` 134 tests pass (128 + 6 new: 3 in `app.rs` for item 2, 3 in
+`ui.rs` for item 1 — item 4's test replaced an existing one rather than
+adding a new one, since the old assertion was pinning down the bug); full
+workspace `cargo test` (347 tests) and `cargo clippy -p mjolnir-tui
+--all-targets -- -D warnings` both clean.
+
+**Progress (2026-09-02, self-review of the batch above finds a real gap in
+item 1):** A manual audit of this session's own diff (correctness pass over
+`activity_label`/`run.rs`/`handle_mouse`, plus the mjolnir-config side of
+the same batch) found one confirmed, low-severity defect: `activity_label`'s
+single-running-tool arm read `one.name` directly, not through the same
+empty-name→`call_id` fallback (`App::apply_event`'s doc comment on
+`pending_tool_names` notes the lookup this falls back from can in principle
+miss) the trailing `tools:` list already applied — so a `RunningTool` with
+an empty name would have shown the leading activity word as a bare "using …"
+with nothing after "using ", while the list right next to it correctly fell
+back to the call id. New `ui::running_tool_name`, shared by both sites, so
+the two can't drift apart on this again. Confirmed via a deliberate revert
+of just the fix: `status_line_falls_back_to_the_call_id_for_a_running_tool_
+with_no_name` fails (asserting on the literal "using …" the pre-fix code
+produces) before confirming it passes against the shared-helper fix.
+`mjolnir-tui` 135 tests pass (134 + 1); full workspace `cargo test` (348
+tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
+clean.
+
 - **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
   panel): the body (full-width scrollable conversation log, or the log
   beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress
@@ -1152,11 +1287,13 @@ correctly shows no hint at all).
   taken as license to shrink the log panel below 80 columns when shown —
   ambient state, not a primary layout element competing with the
   conversation.
-- **Conversation Log:** Rendered inside a bordered, rounded ratatui panel (see the 2026-08-31 visual-redesign Progress entry) with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome banner (see the 2026-08-29 Progress entry below) only shows when the log is empty — mutually exclusive with real entries, not prefixed above them, since the two used to always coexist and that's what made the banner eat real screen space mid-conversation. Each event type maps to a distinct entry shape, most with a leading glyph (● assistant, ▸/✓/✗ tool activity, ⟳ retry, ✗ error, ℹ notice — see the 2026-08-31 entry). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry); page scroll via PgUp / PgDn.
+- **Conversation Log:** Rendered inside a bordered, rounded ratatui panel (see the 2026-08-31 visual-redesign Progress entry) with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome banner (see the 2026-08-29 Progress entry below) only shows when the log is empty — mutually exclusive with real entries, not prefixed above them, since the two used to always coexist and that's what made the banner eat real screen space mid-conversation. Each event type maps to a distinct entry shape, most with a leading glyph (● assistant, ▸/✓/✗ tool activity, ⟳ retry, ✗ error, ℹ notice — see the 2026-08-31 entry). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry) or the mouse wheel (`App::handle_mouse`, 2026-09-02 — same one-line-per-notch behavior as the arrow keys, and, unlike them, not blocked while a decision is pending); page scroll via PgUp / PgDn.
 - **Approval Card / Decision Panel (2026-09-02, superseding "inline in the log" below):** ToolApprovalRequested/PromptRequested no longer render inline in the conversation log while pending — they render in a fixed decision panel directly above the input box (`ui::decision_panel_lines`, driven by `App::pending_approvals`/`pending_prompts`), visually distinct via the single accent color, same as before. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry; an unusually large diff is further truncated (`ui::clamp_panel`) to keep the options list on screen. The decision itself is a numbered, keyboard-navigable list (`App::decision_options`/`ui::render_decision_options` — same-day "numbered, arrow/digit-navigable list" entry), not raw letter shortcuts: Up/Down move a visible `▸` cursor, Enter confirms the selected option, a digit `1`-`9` jumps to and confirms an option directly, and Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending — the developer cannot queue new submissions until the gate is resolved. Once resolved, the full card (diff included) still renders inline in the log exactly as before, as a permanent historical record — only the *live* interaction moved out of the scrolling log, not the history.
 - **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
-- **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/working/idle, with a spinner), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: terminal default throughout, except the subtle fixed-RGB tint behind plain user chat messages (not slash commands) and the full-width added/removed-line tints inside an approval card's diff body (see the live-feedback Progress entry). Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
+- **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/idle, with a spinner, plus a descriptive leading word for the rest of an active turn — a named tool in flight, "responding…" once assistant text is streaming, or "working…" while waiting on the first token/tool call of the step; see `ui::activity_label`, 2026-09-02), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: *stale as of the 2026-08-31 visual-redesign entry above, corrected here 2026-09-02* — no longer terminal default throughout. That redesign's opaque-surfaces pass (`BG_BASE`/`BG_ELEMENT`/`BG_INPUT`/`CODE_BG`, `palette.rs`) fills the whole frame and every panel/bubble/box with its own fixed-RGB tier; this wording describing only a "subtle tint" on top of an otherwise-transparent terminal background was never updated to match and had drifted into being actively misleading — see the 2026-09-02 live-feedback batch's light-mode-contrast item, which traced a real bug to exactly this gap between the two (a span left without an explicit foreground, which reads fine against a *transparent* background inheriting the terminal's own contrast pairing, but not against the app's own always-dark fill).
+
+  Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
 ## Decisions
 
@@ -1209,7 +1346,7 @@ correctly shows no hint at all).
 
 ## Out of Scope
 
-- Mouse support — keyboard-only in V0.
+- Mouse support beyond wheel-scroll — keyboard-only otherwise. *Narrowed, not reopened, 2026-09-02:* mouse capture is now on and the wheel scrolls the log (`App::handle_mouse`, see the same-day "live-feedback batch" Progress entry) — a direct fix for a developer report that the wheel couldn't scroll at all while capture was off. Click/drag/move events reach the app too now that capture is on, but nothing is wired to them; the terminal's own native text selection is still reachable behind its usual bypass modifier (Shift-drag on most terminals) instead of on a plain drag. This is the same shape the 2026-08-31 sidebar entry used for the split-pane rejection: a scoped, deliberate carve-out of one specific interaction, not a reopening of "should this app be mouse-driven."
 - Color theming system — a small fixed semantic palette exists now (see the Palette bullet and its Decisions entry), but it's hardcoded, not user-configurable; rich/configurable theming is still blocked on the mascot palette decision.
 - Syntax highlighting in diff blocks — plain text diff in V0.
 - Conversation log search or filtering.

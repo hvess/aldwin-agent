@@ -66,9 +66,22 @@ pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Serialise `value` as YAML and write it via [`write_atomic_text`].
-pub fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError> {
-    let text = serde_yaml_ng::to_string(value)
+/// Serialise `value` as YAML and write it via [`write_atomic_text`], with
+/// `header` (a block of `#`-prefixed comment lines, already
+/// newline-terminated — see the `annotated` module, or `""` for a domain
+/// with no annotated tour) prepended to the serialised YAML.
+/// `serde_yaml_ng::to_string` has no concept of a source file's original
+/// comments — it serialises fresh from the in-memory value every time — so
+/// writing without a header permanently drops whatever explanatory comments
+/// a domain's first-launch file shipped with the moment anything is next
+/// written to it (e.g. persisting one permission grant). Every mutating
+/// write in `store.rs` for a domain that has an `annotated` constant passes
+/// its matching header here, specifically so it survives every write, not
+/// just the first one — the annotated text is a standing "tour of the
+/// format" (see `annotated.rs`'s module doc comment), not a one-time
+/// greeting.
+pub fn write_atomic_with_header<T: Serialize>(path: &Path, header: &str, value: &T) -> Result<(), ConfigError> {
+    let body = serde_yaml_ng::to_string(value)
         .map_err(|e| ConfigError::Serialize { path: path.to_path_buf(), source: e })?;
-    write_atomic_text(path, &text)
+    write_atomic_text(path, &format!("{header}{body}"))
 }

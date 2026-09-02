@@ -236,11 +236,18 @@ impl Config {
     /// `RwLock` and which on-disk path it targets — consolidated into one
     /// generic here so the shape can't drift between domains, and a future
     /// domain doesn't have to re-derive the locking argument above.
-    fn with_domain_mut<T: Clone + serde::Serialize>(&self, lock: &RwLock<T>, path: &Path, f: impl FnOnce(&mut T)) -> Result<(), ConfigError> {
+    ///
+    /// `header` (an `annotated::*_HEADER` constant, or `""` for a domain
+    /// with no annotated tour — currently only `context_files`) is
+    /// prepended on every write via `fsio::write_atomic_with_header`, not
+    /// just the first-launch one, so a domain's explanatory comments survive
+    /// every later grant/setting change instead of disappearing the moment
+    /// anything is next persisted — see that function's doc comment.
+    fn with_domain_mut<T: Clone + serde::Serialize>(&self, lock: &RwLock<T>, path: &Path, header: &str, f: impl FnOnce(&mut T)) -> Result<(), ConfigError> {
         let mut guard = lock.write().expect("lock poisoned");
         let mut next = guard.clone();
         f(&mut next);
-        fsio::write_atomic(path, &next)?;
+        fsio::write_atomic_with_header(path, header, &next)?;
         *guard = next;
         Ok(())
     }
@@ -253,7 +260,7 @@ impl Config {
     }
 
     fn with_permissions_mut(&self, scope: Scope, f: impl FnOnce(&mut PermissionsConfig)) -> Result<(), ConfigError> {
-        self.with_domain_mut(self.permissions_lock(scope), &self.domain_path(scope, "permissions"), f)
+        self.with_domain_mut(self.permissions_lock(scope), &self.domain_path(scope, "permissions"), annotated::PERMISSIONS_HEADER, f)
     }
 
     pub fn add_grant(
@@ -287,7 +294,7 @@ impl Config {
             Scope::Project => &self.inner.project_provider,
             Scope::Global  => &self.inner.global_provider,
         };
-        self.with_domain_mut(lock, &path, move |current| *current = Some(provider))
+        self.with_domain_mut(lock, &path, annotated::PROVIDER_HEADER, move |current| *current = Some(provider))
     }
 
     fn mcp_lock(&self, scope: Scope) -> &RwLock<McpConfig> {
@@ -298,7 +305,7 @@ impl Config {
     }
 
     fn with_mcp_mut(&self, scope: Scope, f: impl FnOnce(&mut McpConfig)) -> Result<(), ConfigError> {
-        self.with_domain_mut(self.mcp_lock(scope), &self.domain_path(scope, "mcp"), f)
+        self.with_domain_mut(self.mcp_lock(scope), &self.domain_path(scope, "mcp"), annotated::MCP_HEADER, f)
     }
 
     /// Upserts by server name — adding a server that already exists in this
@@ -317,11 +324,14 @@ impl Config {
 
     pub fn set_tui(&self, tui: TuiConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(Scope::Global, "tui");
-        self.with_domain_mut(&self.inner.global_tui, &path, move |current| *current = tui)
+        self.with_domain_mut(&self.inner.global_tui, &path, annotated::TUI_HEADER, move |current| *current = tui)
     }
 
     fn with_context_files_mut(&self, f: impl FnOnce(&mut ContextFilesConfig)) -> Result<(), ConfigError> {
-        self.with_domain_mut(&self.inner.project_context_files, &self.domain_path(Scope::Project, "context_files"), f)
+        // No `annotated` constant for this domain — it was never part of the
+        // first-launch "tour" (see `annotated.rs`'s module doc comment), so
+        // there's no header to keep in sync here.
+        self.with_domain_mut(&self.inner.project_context_files, &self.domain_path(Scope::Project, "context_files"), "", f)
     }
 
     pub fn add_context_file(&self, path: PathBuf) -> Result<(), ConfigError> {
@@ -641,6 +651,59 @@ mod tests {
         config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
         config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
         assert_eq!(config.global_permissions().allow, vec!["read:**".to_string()]);
+    }
+
+    /// Regression test for the bug reported directly as "editing
+    /// permissions.yaml doesn't really appear to make any sense": before
+    /// `with_domain_mut` threaded a header through, `add_grant`'s plain
+    /// `fsio::write_atomic` re-serialized the domain from scratch with no
+    /// comments at all — the annotated explanation only ever survived until
+    /// the *first* grant was persisted, at which point a developer opening
+    /// their real, in-use `permissions.yaml` found a bare `version`/`allow`/
+    /// `deny` with no indication of the format, the scope model, or that
+    /// `edit:` entries are inert. Confirmed to fail (the header line absent)
+    /// against a header-dropping `write_atomic_with_header` before
+    /// confirming it passes against the real fix.
+    #[test]
+    fn permissions_yaml_keeps_its_explanatory_header_after_a_grant_is_persisted() {
+        let (project, global, config) = fresh();
+        config.add_grant(Scope::Project, GrantList::Allow, "read:./src/**").unwrap();
+        config.add_grant(Scope::Global, GrantList::Deny, "shell:rm -rf*").unwrap();
+
+        let project_text = std::fs::read_to_string(project.path().join(".mjolnir").join("permissions.yaml")).unwrap();
+        let global_text = std::fs::read_to_string(global.path().join(".mjolnir").join("permissions.yaml")).unwrap();
+        for text in [&project_text, &global_text] {
+            assert!(text.starts_with("# Mjolnir permissions"), "grant persistence must not strip the annotated header: {text:?}");
+            assert!(text.contains("kind:pattern"), "header should still explain the entry grammar: {text:?}");
+        }
+        assert!(project_text.contains("read:./src/**"));
+        assert!(global_text.contains("shell:rm -rf*"));
+    }
+
+    /// Same bug, the other three annotated domains — `set_provider`,
+    /// `add_mcp_server`, `set_tui` all go through the same `with_domain_mut`
+    /// this fix touched, so each must keep its own header too.
+    #[test]
+    fn provider_mcp_and_tui_yaml_keep_their_headers_after_a_write() {
+        let (_project, global, config) = fresh();
+        let provider = ProviderConfig {
+            version: PROVIDER_VERSION,
+            provider: crate::domain::ProviderKind::Anthropic,
+            model: "claude-sonnet-5".into(),
+            base_url: None,
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            extended_thinking_budget: None,
+        };
+        config.set_provider(Scope::Global, provider).unwrap();
+        config.add_mcp_server(Scope::Global, McpServer { name: "fs".into(), transport: McpTransport::Stdio { command: "fs-server".into(), args: vec![] }, env: Default::default() }).unwrap();
+        config.set_tui(TuiConfig { theme: Some("dark".into()), ..TuiConfig::empty() }).unwrap();
+
+        let provider_text = std::fs::read_to_string(global.path().join(".mjolnir").join("provider.yaml")).unwrap();
+        let mcp_text = std::fs::read_to_string(global.path().join(".mjolnir").join("mcp.yaml")).unwrap();
+        let tui_text = std::fs::read_to_string(global.path().join(".mjolnir").join("tui.yaml")).unwrap();
+        assert!(provider_text.starts_with("# Mjolnir provider settings"), "{provider_text:?}");
+        assert!(mcp_text.starts_with("# Mjolnir MCP server registry"), "{mcp_text:?}");
+        assert!(tui_text.starts_with("# Mjolnir TUI preferences"), "{tui_text:?}");
     }
 
     #[test]

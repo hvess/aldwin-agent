@@ -6,7 +6,7 @@ use mjolnir_permissions::Engine;
 use crossterm::cursor::Show;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{Event as CtEvent, EventStream};
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event as CtEvent, EventStream};
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{execute, ExecutableCommand};
 use ratatui::Terminal;
@@ -20,10 +20,31 @@ use crate::ui;
 /// mjolnir-tui.md's Pitfall on not blocking the draw loop on either channel
 /// alone), and always restores the terminal on the way out — success,
 /// `Err`, or a panic unwinding through `run_loop` — via `TerminalGuard`.
+///
+/// Mouse capture is on (`EnableMouseCapture`), not off as V0's original
+/// keyboard-only design had it — a developer report that the wheel couldn't
+/// scroll the log while a native text-selection drag was in progress traced
+/// back to this: with capture off, every mouse event (wheel included) was
+/// handled entirely by the terminal emulator, which most terminals suppress
+/// or reinterpret during an active selection drag, so the app never even saw
+/// the notch. `app::App::handle_mouse` only reacts to the wheel; every other
+/// mouse event kind (click/drag/move) is ignored outright. The one real
+/// trade-off: once an app has mouse capture, a plain click/drag no longer
+/// performs the terminal's native text selection — that's a terminal-level
+/// behavior this app doesn't control, present in effectively every
+/// mouse-aware terminal app (vim's `mouse=a`, htop, tmux panes, ...) — the
+/// developer's terminal still supports deliberate selection via its usual
+/// bypass modifier (Shift-drag on most terminals; Option-drag on iTerm2).
+/// This is a net improvement for the *other* half of that same report — an
+/// accidental plain drag no longer sweeps up panel chrome (borders, the
+/// scrollbar, the input box) into the clipboard the way it did when every
+/// drag was native selection; a deliberate Shift-drag still can, same as any
+/// other bordered terminal app.
 pub async fn run(events: mpsc::Receiver<Event>, commands: mpsc::Sender<Command>, model_name: String, permissions: Arc<Engine>) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    stdout.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let guard = TerminalGuard::new();
@@ -67,9 +88,10 @@ impl Drop for TerminalGuard {
 
 fn restore_terminal() -> io::Result<()> {
     let raw = disable_raw_mode();
+    let mouse = execute!(io::stdout(), DisableMouseCapture);
     let alt = execute!(io::stdout(), LeaveAlternateScreen);
     let cursor = execute!(io::stdout(), Show);
-    raw.and(alt).and(cursor)
+    raw.and(mouse).and(alt).and(cursor)
 }
 
 async fn run_loop(
@@ -104,8 +126,9 @@ async fn run_loop(
             input_event = input.next() => {
                 match input_event {
                     Some(Ok(CtEvent::Key(key))) => app.handle_key(key),
-                    // Resize is picked up on the next draw naturally; mouse
-                    // and paste events aren't handled in V0 (keyboard-only).
+                    Some(Ok(CtEvent::Mouse(mouse))) => app.handle_mouse(mouse),
+                    // Resize is picked up on the next draw naturally; paste
+                    // events aren't handled in V0.
                     Some(Ok(_)) => {}
                     Some(Err(_)) | None => break,
                 }

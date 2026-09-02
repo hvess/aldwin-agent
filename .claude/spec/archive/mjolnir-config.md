@@ -11,6 +11,56 @@ Per-domain YAML at project and global scope; typed accessors; refuse-to-start on
 additive `extended_thinking_budget` field on `ProviderConfig` (`5c868ce`,
 needed by mjolnir-llm). No known gaps against this spec.
 
+**Post-archive fix (2026-09-02):** Developer report, surfaced against
+mjolnir-permissions.md ("editing permissions.yaml doesn't really appear to
+make any sense") but rooted entirely here: the Annotated Config vocabulary
+entry above frames annotation as a first-launch-only artifact ("The
+first-launch YAML written to `~/.mjolnir/` on a fresh install"), and that
+turned out to be true in a way nobody had intended — every mutating write
+(`add_grant`, `set_provider`, `add_mcp_server`, `set_tui`) went through
+`with_domain_mut`, which re-serializes the in-memory value from scratch via
+`serde_yaml_ng::to_string` and writes exactly that, with no comments at all.
+`serde_yaml_ng` has no concept of a source file's original comments to begin
+with, so the annotated header — the developer's one explanation of the
+`kind:pattern` grammar, the scope model, and that `edit:` entries are
+inert — silently disappeared the moment *any* grant was persisted, which in
+ordinary use is almost immediately (the very first "for this project" or
+"always" choice at a permission prompt). A developer who then opened their
+real, in-use `permissions.yaml` to understand or hand-edit it found a bare
+`version`/`allow`/`deny` with no explanation left at all — not a one-time
+first-launch gap, a standing one for the entire life of any file that had
+ever been written to.
+
+Fixed by `fsio::write_atomic_with_header` (replacing the old bare
+`write_atomic`), which every `with_domain_mut`-based mutator now calls with
+that domain's own `annotated::*_HEADER` constant (a new sibling to each full
+`annotated::PERMISSIONS`/`PROVIDER`/`MCP`/`TUI` constant, containing just its
+`#`-comment block) — so the header is prepended fresh on *every* write, not
+only the file `init_global_if_empty` originally created. `context_files.yaml`
+(no `annotated` constant, never part of the tour) passes `""` and is
+unaffected. The permissions header text was also expanded in the same pass —
+out of this spec's stated scope ("Textual content of the annotated YAML
+files ... is its own deliverable," still true, ownership/mechanism is what
+this fix is about) but worth recording here since it's what actually answers
+the developer's complaint: it now names the two files being merged and their
+precedence, spells out that `edit:` entries persisted here have no effect,
+and points at `/reload-config` for a hand-edit made while Mjolnir is
+running — see mjolnir-permissions.md's matching Progress note and
+`crates/config/src/annotated.rs`.
+
+Regression tests: `permissions_yaml_keeps_its_explanatory_header_after_a_
+grant_is_persisted` and `provider_mcp_and_tui_yaml_keep_their_headers_after_
+a_write` (`store.rs`) each write a real grant/setting through the public API
+and read the file back off disk, asserting the header survived — not just
+that a header constant exists somewhere. `mjolnir-config` 27 tests pass (23
++ 4 new — the two above plus two in `annotated.rs` guarding the `*_HEADER`/
+full-constant pair against drifting out of sync by hand and confirming
+`HEADER + a freshly serialized empty value` still parses, which is exactly
+what the fixed write path now produces). Full workspace `cargo test` (347
+tests) and `cargo clippy -p mjolnir-config --all-targets -- -D warnings`
+both clean. This crate stays archived — the fix corrects a real gap in "no
+known gaps" above but didn't reopen a design question this spec owns.
+
 ## Why
 
 Mjolnir's persistent state — permission grants, context-file decisions, provider settings, MCP server entries, TUI preferences — lives on disk in per-domain YAML across two scopes. This crate owns the format, the read/write surface, and first-launch init. It does not know what permissions mean, how the agent loop uses provider config, or how MCP servers are spawned. Keeping the persistence layer as a leaf crate (`depends_on: []`) means policy crates can test without real YAML and the format can evolve without touching typed consumers.
@@ -20,7 +70,7 @@ Mjolnir's persistent state — permission grants, context-file decisions, provid
 - **Domain:** A coherent group of config that has its own file. Five domains in V0: permissions, context_files, provider, mcp, tui.
 - **Scope:** Persistence tier on disk — project (`<project>/.mjolnir/`) or global (`~/.mjolnir/`). Not every domain exists at every scope: context_files is project-only, tui is global-only. First launch therefore writes four global files (permissions, provider, mcp, tui) — not five.
 - **Layer:** A (scope, domain) pair — one YAML file. Layers are exposed as raw per-layer snapshots; merging is the consumer's job.
-- **Annotated Config:** The first-launch YAML written to `~/.mjolnir/` on a fresh install. Empty allow/deny, commented placeholders, inline comments explaining each field — a tour of the format in the developer's editor.
+- **Annotated Config:** The YAML written to `~/.mjolnir/` on a fresh install — empty allow/deny, commented placeholders, inline comments explaining each field — a tour of the format in the developer's editor. Originally first-launch-only by construction, not by design intent; see the 2026-09-02 post-archive fix below — the header now survives every subsequent write of that domain's file, not just the one `init_global_if_empty` creates.
 
 ## Design
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use mjolnir_core::{Command, Event, StepId};
 use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::log::{summarise, LogEntry, ToolActivityEntry, ToolActivityStatus};
 use crate::scroll::ScrollState;
@@ -484,6 +484,40 @@ impl App {
         }
     }
 
+    /// The only mouse interaction handled in V0 (see mjolnir-tui.md's Out of
+    /// Scope note on mouse support) — a developer report that the wheel
+    /// couldn't scroll the log at all while a native text-selection drag was
+    /// in progress. Root cause was upstream of any app logic: `run.rs` never
+    /// enabled crossterm's mouse capture, so no `MouseEvent` ever reached the
+    /// app — every wheel notch and every click/drag was handled entirely by
+    /// the terminal emulator itself, including scroll, which most terminals
+    /// suppress or reinterpret during an active selection drag. Wiring mouse
+    /// capture on (`run.rs`) and reacting to the wheel here fixes that
+    /// directly: scrolling no longer depends on the terminal's own
+    /// selection-vs-scroll arbitration at all. A plain nudge, not a page —
+    /// a wheel notch should feel like one `Up`/`Down` press, not `PageUp`/
+    /// `PageDown`. Click/drag/move events reach here too once mouse capture
+    /// is on (crossterm reports every kind, not just scroll) but are
+    /// deliberately ignored: the developer's terminal still owns deliberate
+    /// text selection via its usual bypass modifier (Shift-drag on most
+    /// terminals) once the app isn't the one handling the click, which is
+    /// what stops an accidental plain drag from also sweeping up panel
+    /// chrome (borders, the scrollbar, the input box) the way it did before
+    /// mouse capture was enabled — see `run.rs`'s doc comment. Deliberately
+    /// not gated on `pending_approvals`/`pending_prompts` being empty (unlike
+    /// `handle_key`'s keyboard scroll bindings, which the decision list's own
+    /// Up/Down repurposes while pending): scrolling back through history to
+    /// re-read context while a decision is still pending is only useful, and
+    /// the wheel and the decision list are independent input channels with
+    /// nothing to conflict over.
+    pub fn handle_mouse(&mut self, event: MouseEvent) {
+        match event.kind {
+            MouseEventKind::ScrollUp => self.scroll.line_up(),
+            MouseEventKind::ScrollDown => self.scroll.line_down(self.total_lines()),
+            _ => {}
+        }
+    }
+
     /// Moves the cursor to the line `delta` rows away (by source line, not
     /// wrapped screen row — the input box is short enough that this rarely
     /// matters, and ratatui's own wrap point isn't available to this pure
@@ -890,6 +924,73 @@ mod tests {
         let before = app.scroll.offset;
         app.handle_key(press(KeyCode::Up));
         assert!(app.scroll.offset < before, "Up must scroll the log when there's no draft line to navigate to");
+    }
+
+    fn scroll_event(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }
+    }
+
+    /// The bug report this responds to: the wheel couldn't scroll the log at
+    /// all (regardless of whether a selection drag was in progress) because
+    /// no `MouseEvent` ever reached the app — see `handle_mouse`'s doc
+    /// comment for the root cause.
+    #[test]
+    fn mouse_wheel_scrolls_the_log_by_one_line() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        app.scroll.set_viewport_height(5, app.total_lines());
+        let bottom = app.scroll.offset;
+
+        app.handle_mouse(scroll_event(MouseEventKind::ScrollUp));
+        assert_eq!(app.scroll.offset, bottom - 1);
+        assert!(!app.scroll.following, "scrolling up must disengage auto-follow, same as the Up key");
+
+        app.handle_mouse(scroll_event(MouseEventKind::ScrollDown));
+        assert_eq!(app.scroll.offset, bottom);
+    }
+
+    /// Click/drag/move events reach `handle_mouse` too once mouse capture is
+    /// on (crossterm reports every kind), but only the wheel is wired to
+    /// anything — everything else is a deliberate no-op (see the doc
+    /// comment), left to the terminal's own selection handling.
+    #[test]
+    fn non_scroll_mouse_events_are_ignored() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        app.scroll.set_viewport_height(5, app.total_lines());
+        let before = app.scroll.offset;
+
+        app.handle_mouse(scroll_event(MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left)));
+        app.handle_mouse(scroll_event(MouseEventKind::Drag(ratatui::crossterm::event::MouseButton::Left)));
+        app.handle_mouse(scroll_event(MouseEventKind::Moved));
+
+        assert_eq!(app.scroll.offset, before);
+    }
+
+    /// Scrolling back through history to re-read context while a decision is
+    /// pending is only useful — the wheel and the decision list's own
+    /// Up/Down keys are independent input channels with nothing to conflict
+    /// over, unlike the keyboard scroll bindings the decision list repurposes
+    /// while pending (see `handle_mouse`'s doc comment).
+    #[test]
+    fn mouse_wheel_scrolls_the_log_even_while_a_decision_is_pending() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        app.scroll.set_viewport_height(5, app.total_lines());
+        let bottom = app.scroll.offset;
+        app.pending_approvals.push_back(PendingApproval { call_id: "c1".into(), diff: String::new() });
+
+        app.handle_mouse(scroll_event(MouseEventKind::ScrollUp));
+        assert_eq!(app.scroll.offset, bottom - 1);
     }
 
     #[test]

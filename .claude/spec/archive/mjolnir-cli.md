@@ -48,6 +48,28 @@ owns 100% of the `/`-prefix parsing and dispatch table, it's just that this
 one entry's action lives in core rather than in this crate. `HELP_TEXT`
 updated to include it.
 
+**Post-archive addition (2026-09-02, `/theme`):** Follow-up to mjolnir-tui's
+same-day light-theme addition (see its own spec) — the developer asked for
+a way to switch themes from inside the harness rather than hand-editing
+`tui.yaml`. `/theme light|dark` is closer to `/reload-config` than to
+`/clear`: it never touches core at all. `handle_theme` reads/writes
+`tui.yaml` directly (`Config::global_tui`/`set_tui`, already existed) and
+sends `Event::ThemeChanged { theme }` straight into the same channel the
+TUI reads from — this doesn't reopen "core has no slash-command semantics"
+below any more than `PermissionsChanged` did; it's a config write plus a
+UI-facing signal, not a core operation. `/theme` with no argument reports
+the current value rather than erroring (mirrors `/help`'s "tell the
+developer where they stand" instinct, since this process has no other way
+to see what a *running* TUI is currently showing than what's already on
+disk — the two should always agree, since this command is the only thing
+that changes either). An invalid value (anything but `light`/`dark`,
+case-insensitive) is rejected with a `Notice` and neither persists nor
+emits `ThemeChanged` — confirmed by test, not just by the validation read.
+`HELP_TEXT` updated to include it. See mjolnir-tui.md's matching Progress
+note for the `App`/`ui.rs` side (switches live, no restart, since `App::
+theme` is read fresh on every draw) and mjolnir-core.md's for the new
+`Event` variant.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

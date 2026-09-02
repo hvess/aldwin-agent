@@ -446,6 +446,16 @@ impl App {
                 self.thinking = false;
                 self.turn_active = false;
             }
+            // `/theme light|dark` — the interceptor already persisted this
+            // to `tui.yaml` (see `Event::ThemeChanged`'s own doc comment in
+            // mjolnir-core); reparsing here rather than trusting the raw
+            // string directly keeps the "anything unrecognized means dark"
+            // fallback in exactly one place (`Theme::from_config`), the same
+            // rule mjolnir-cli's bootstrap already applies at startup.
+            // Nothing else needs updating — `App::theme` is read fresh by
+            // `ui::draw` on every frame, so the very next redraw already
+            // reflects it.
+            Event::ThemeChanged { theme } => self.theme = crate::palette::Theme::from_config(Some(&theme)),
         }
     }
 
@@ -1375,6 +1385,33 @@ mod tests {
         assert!(app.log.is_empty(), "the visible log must be wiped in step with core's conversation history");
         assert!(!app.turn_active);
         assert_eq!(app.status.turn, None);
+    }
+
+    /// `/theme` round trip: the interceptor persists to `tui.yaml` and
+    /// sends this event directly (see `Event::ThemeChanged`'s own doc
+    /// comment in mjolnir-core) — `App` just needs to switch its own
+    /// `theme` field, since `ui::draw` reads it fresh on every frame with
+    /// no caching to invalidate.
+    #[test]
+    fn theme_changed_switches_the_active_theme() {
+        let mut app = app();
+        assert_eq!(app.theme, crate::palette::Theme::Dark, "Dark is the default until told otherwise");
+        app.apply_event(Event::ThemeChanged { theme: "light".into() });
+        assert_eq!(app.theme, crate::palette::Theme::Light);
+        app.apply_event(Event::ThemeChanged { theme: "dark".into() });
+        assert_eq!(app.theme, crate::palette::Theme::Dark);
+    }
+
+    /// Mirrors `Theme::from_config`'s own "unrecognized means dark"
+    /// fallback (see its doc comment) — an unexpected value reaching this
+    /// event must not panic or leave `App` in some third, unnamed state.
+    #[test]
+    fn theme_changed_with_an_unrecognized_value_falls_back_to_dark() {
+        let mut app = app();
+        app.apply_event(Event::ThemeChanged { theme: "light".into() });
+        assert_eq!(app.theme, crate::palette::Theme::Light);
+        app.apply_event(Event::ThemeChanged { theme: "neon".into() });
+        assert_eq!(app.theme, crate::palette::Theme::Dark);
     }
 
     #[test]

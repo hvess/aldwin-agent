@@ -69,6 +69,18 @@ pub enum Event {
     /// tells it to refresh the status bar rather than carrying the new
     /// state itself.
     HistoryCleared,
+
+    /// `/theme light|dark` — the raw config value, same "opaque to core"
+    /// shape as `PermissionsChanged`'s payload: core has no opinion on what
+    /// a theme is, mjolnir-tui parses it (`palette::Theme::from_config`).
+    /// Core itself never emits this; same reasoning as `Notice` — mjolnir-
+    /// cli's slash-command interceptor is a layer above core with no other
+    /// vehicle to reach the running TUI, since it and the interceptor share
+    /// one `Event` channel by construction (see mjolnir-cli's bootstrap).
+    /// The interceptor persists the choice to `tui.yaml` (`Config::
+    /// set_tui`) before emitting this, so a value the developer picked
+    /// mid-session survives their next launch too, not just this one.
+    ThemeChanged { theme: String },
 }
 
 // ── Commands (accepted downward) ─────────────────────────────────────────────

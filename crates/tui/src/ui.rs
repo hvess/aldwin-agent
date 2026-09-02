@@ -1007,12 +1007,17 @@ fn is_command(text: &str) -> bool {
 }
 
 /// Every word `cli::slash::intercept` actually dispatches on (see its
-/// `match rest.trim()` arms in `slash.rs`, `/`-prefixed here to match
-/// whole-word input tokens directly) — duplicated for the same reason as
-/// `is_command` above: tui can't depend on cli. Purely a hint for
+/// `match rest` arms in `slash.rs`, `/`-prefixed here to match whole-word
+/// input tokens directly) — duplicated for the same reason as `is_command`
+/// above: tui can't depend on cli. Purely a hint for
 /// `highlight_command_tokens` below; keep in sync by hand if slash.rs's
-/// arms change.
-const KNOWN_COMMAND_WORDS: [&str; 4] = ["/help", "/clear", "/exit", "/reload-config"];
+/// arms change — `/theme` added 2026-09-02 alongside that command, caught
+/// only by remembering this comment's own instruction, not by a compiler
+/// or test forcing the two files to agree (see
+/// `command_word_is_dimmed_live_even_mid_message`'s sibling test for
+/// `/theme` specifically, added the same day as a direct guard against
+/// this exact drift happening silently next time).
+const KNOWN_COMMAND_WORDS: [&str; 5] = ["/help", "/clear", "/exit", "/reload-config", "/theme"];
 
 /// Dims every word in `line` that exactly matches a known command, no
 /// matter where it falls — per explicit developer direction, this is a
@@ -2648,6 +2653,20 @@ mod tests {
         assert_eq!(trailing_cell.symbol(), "t");
         assert_ne!((leading_cell.fg, leading_cell.modifier), (slash_cell.fg, slash_cell.modifier), "a mid-message command word must still be dimmed");
         assert_ne!((trailing_cell.fg, trailing_cell.modifier), (slash_cell.fg, slash_cell.modifier), "text after a mid-message command word must not also be dimmed");
+    }
+
+    /// `KNOWN_COMMAND_WORDS` is a hand-kept duplicate of `cli::slash::
+    /// intercept`'s real dispatch table (see that constant's own doc
+    /// comment on why, and its warning that `/theme` was added there
+    /// without any compiler or test forcing the two files to agree) — this
+    /// guards specifically against that one entry silently going stale
+    /// again, the same way `command_word_is_dimmed_live_even_mid_message`
+    /// guards `/exit`.
+    #[test]
+    fn theme_command_word_is_dimmed_live_like_every_other_known_command() {
+        let line = highlight_command_tokens("/theme light", &DARK);
+        let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
+        assert_eq!(styled, vec![("/theme", Some(DARK.dim)), (" ", None), ("light", Some(DARK.bright))]);
     }
 
     /// Regression test: no visible cursor at all was a standing complaint —

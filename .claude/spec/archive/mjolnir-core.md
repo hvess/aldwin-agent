@@ -41,6 +41,21 @@ locally like `/help`, since core is what owns `ConversationLog`. Still no
 open design question — this is an additive command/event pair on the
 existing shapes, not a change to the turn/step/log model above.
 
+**Post-archive addition (2026-09-02, `Event::ThemeChanged`):** mjolnir-tui
+gained a light theme, then a `/theme` slash command to switch it from
+inside the harness (see both specs' own same-day Progress entries). Unlike
+`/clear`, this needed no `Command` at all — core is never involved in a
+theme change, since it's purely a mjolnir-cli config write plus a UI-facing
+signal. New `Event::ThemeChanged { theme: String }`, same "opaque to core"
+shape as `PermissionsChanged`'s payload and the same "core itself never
+emits this" reasoning as `Notice` — mjolnir-cli's slash-command
+interceptor sends it directly into the `Event` channel it already shares
+with the TUI (see mjolnir-cli's own bootstrap wiring), core's agent loop
+never touches it. No open design question here either — an additive event
+variant on the existing "layer above core needs a vehicle to reach the
+TUI" pattern `Notice`/`PermissionsChanged`/`HistoryCleared` already
+established, not a new mechanism.
+
 ## Why
 
 The narrow heart of Mjolnir — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.

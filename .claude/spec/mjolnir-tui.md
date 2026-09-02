@@ -1373,9 +1373,12 @@ made one test's theme choice leak into another's — this crate's `cargo
 test` runs many tests in parallel inside one process — so explicit
 threading keeps every test (and every real render) self-contained
 regardless of scheduling; see `palette.rs`'s own module doc comment for the
-full reasoning. Runtime theme-switching mid-session was never asked for and
-isn't supported — consistent with `tui.yaml`'s other settings already being
-read once at session start.
+full reasoning. *Superseded same-day, below:* "runtime theme-switching
+mid-session was never asked for and isn't supported" turned out to be true
+for about as long as it took to ask — `App::theme` living as a plain field
+(not the global this paragraph deliberately avoided) is exactly what made
+switching it live a small addition rather than a redesign once the
+developer did ask; see the `/theme` Progress entry below.
 
 Verified the same way every dark-theme change in this file's history was —
 not from the RGB values alone: a real xterm session (Xvfb, no tmux — this
@@ -1399,6 +1402,59 @@ sites, since `DARK`'s values are unchanged from what those tests already
 asserted against); full workspace `cargo test` (353 tests) and `cargo
 clippy -p mjolnir-tui -p mjolnir-cli --all-targets -- -D warnings` both
 clean.
+
+**Progress (2026-09-02, `/theme` — switching from inside the harness, live,
+no restart):** Direct developer follow-up to the light-theme entry above:
+"shouldn't we add a slash command for users to select the theme from
+inside the harness itself?" mjolnir-cli's interceptor gained `/theme
+light|dark` (see its own archived spec's post-archive addition for the
+command/config side) and mjolnir-core gained `Event::ThemeChanged { theme:
+String }` (see its own matching post-archive addition) as the vehicle to
+reach a *running* TUI — the interceptor has no other way in, since it and
+the TUI only share the one `Event` channel.
+
+`App::apply_event`'s new arm is one line: `self.theme = Theme::from_config
+(Some(&theme))` — reparsing the raw string through the same fallback
+`Theme::from_config` already applies at startup (anything but `"light"`
+means dark), rather than trusting the interceptor's own validation, so the
+"unrecognized means dark" rule lives in exactly one place. Nothing else
+needed changing: `App::theme` was already a plain field, not the global
+this same file's own Progress entry (immediately above) deliberately
+avoided — `ui::draw` reads it fresh via `app.theme.palette()` on *every*
+frame, no caching to invalidate — so live-switching, which the entry above
+called out of scope, turned out to already be supported by construction
+once the developer actually asked for a way to trigger it.
+
+Verified two ways, not just by reading the diff: `theme_changed_switches_
+the_active_theme` and `theme_changed_with_an_unrecognized_value_falls_
+back_to_dark` (`app.rs`) exercise `App::apply_event` directly; a scratch
+example (Xvfb + xterm, not committed, same technique as every other real-
+render check in this session) constructed one `App`, drew it once in Dark,
+called `app.apply_event(Event::ThemeChanged { theme: "light".into() })` on
+that *same* instance — exactly what the real event loop does, no
+reconstruction — and drew it again: the second frame showed the identical
+log content in Light with no restart, confirming the live-switch claim
+this entry makes rather than assuming it from the code alone. A third gap
+caught only by remembering to check, not by the compiler:
+`KNOWN_COMMAND_WORDS` (`ui.rs`) — the hand-kept duplicate of `cli::slash::
+intercept`'s dispatch table that drives the input box's live "dim a
+recognized command word as you type" hint — hadn't grown a `/theme` entry,
+so the new command would have typed as plain text with no visual cue it
+was headed for the harness rather than the model, unlike every other real
+command. Fixed, with a new regression test
+(`theme_command_word_is_dimmed_live_like_every_other_known_command`)
+guarding that one constant specifically, the same way
+`command_word_is_dimmed_live_even_mid_message` already guards `/exit`.
+`mjolnir-tui` 143 tests pass (140 + 3 new); `mjolnir-cli` 27 tests pass
+(22 + 5 new, covering the no-argument report, persist-and-emit for both
+directions, case-insensitivity, and invalid-value rejection neither
+persisting nor emitting `ThemeChanged`); full workspace `cargo test`
+(361 tests) and
+`cargo clippy -p mjolnir-tui -p mjolnir-cli --all-targets -- -D warnings`
+both clean (`cargo clippy -p mjolnir-core` — the lib itself, not its
+pre-existing test-module `single_match` finding disclosed in the
+2026-09-02 self-review Progress entry above and confirmed unrelated via a
+stash comparison — also clean).
 
 - **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
   panel): the body (full-width scrollable conversation log, or the log

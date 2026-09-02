@@ -27,6 +27,7 @@ mod ui;
 
 pub use app::App;
 pub use log::{LogEntry, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+pub use palette::Theme;
 pub use run::run;
 pub use scroll::ScrollState;
 

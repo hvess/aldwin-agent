@@ -1322,6 +1322,84 @@ file's own established verification technique (a real terminal session,
 captured, not just `TestBackend`'s text-only dump) is what actually caught
 this the second time.
 
+**Progress (2026-09-02, an actual light theme, not just a dark theme that
+survives a light terminal):** Direct developer follow-up once the item
+above shipped: "can't we provide a basic light color scheme? for users who
+went a light color scheme." A fair distinction from what the two entries
+above actually did — those made the one *hardcoded dark* palette immune to
+the terminal's own theme; neither gave a developer who wants the *app
+itself* to look light (matching a light terminal, not fighting it) any way
+to get that.
+
+`palette.rs` is now a `Palette` struct (every color as a field) with two
+fixed instances, `DARK` (`DARK`'s values are `mjolnir-tui`'s pre-existing
+palette verbatim — zero visual change for anyone not opting in) and `LIGHT`
+(new: a light lavender-white background family mirroring `DARK`'s indigo-
+slate hue rather than flat neutral white, and every foreground/accent/diff/
+tool color independently re-tuned for contrast against *that* scale, not
+just inverted). One deliberate exception: fenced code blocks (`code_bg`)
+stay the same dark value in *both* themes — a code block reading as its own
+distinct dark box is a common, expected pattern independent of the app's
+own theme (many light-themed editors keep code blocks dark), and it means
+`highlight.rs`'s syntect theme (`base16-ocean.dark`) never has to change
+per app theme either.
+
+Selected once at startup via a new `Theme` enum (`Dark`/`Light`) and
+`Theme::from_config`, which finally wires up `TuiConfig.theme: Option<
+String>` — present in mjolnir-config's schema since V0 but never read by
+anything until now. `App` gained a `theme: Theme` field (`App::with_theme`,
+a builder method rather than a new `App::new` parameter, so the many
+existing `App::new(model, permissions)` call sites — tests, `examples/
+preview.rs`, mjolnir-cli's bootstrap — didn't all need to thread a theme
+through just to keep their existing `Dark` default); `mjolnir-cli`'s
+bootstrap resolves `config.global_tui().theme` into a `Theme` and passes it
+into `mjolnir_tui::run`, which threads it into `App::new(...).with_theme
+(theme)` before the first draw. `tui.yaml`'s annotated header documents the
+field's two values.
+
+Deliberately *not* a global/`OnceLock` "current theme" — `ui.rs`'s ~20
+render functions that touch color either already take `app: &App` (five of
+them: `draw`, `draw_log`, `decision_panel_lines`, `draw_status_line`,
+`draw_input` — each does `let pal = app.theme.palette();` once and reads
+`pal.accent`/`pal.dim`/etc. from there) or now take an explicit `pal:
+&Palette` parameter threaded through the whole pure call graph beneath them
+(`render_entry` → `render_assistant_text` → `render_markdown_line` →
+`parse_inline`, `card_line`/`card_padding_line`/`filled_line`,
+`render_approval_card`/`render_prompt_card`/`render_card`,
+`render_decision_options`, `render_diff_line`/`diff_gutter`, `tool_color`,
+`clamp_panel`, `access_spans`/`intro_content`/`hero_lines`,
+`highlight_command_tokens`). A shared mutable "current theme" would have
+made one test's theme choice leak into another's — this crate's `cargo
+test` runs many tests in parallel inside one process — so explicit
+threading keeps every test (and every real render) self-contained
+regardless of scheduling; see `palette.rs`'s own module doc comment for the
+full reasoning. Runtime theme-switching mid-session was never asked for and
+isn't supported — consistent with `tui.yaml`'s other settings already being
+read once at session start.
+
+Verified the same way every dark-theme change in this file's history was —
+not from the RGB values alone: a real xterm session (Xvfb, no tmux — this
+session's own transcript explains why tmux specifically was avoided)
+running the actual built preview harness (`examples/preview.rs`, extended
+with an optional theme argv so a scene can be screenshotted in either
+theme), screenshotted across the `conversation` (prose + a fenced code
+block, confirming `code_bg` correctly stays dark), `approval` (the diff
+card — the highest-risk element for light-mode contrast), `tools` (parallel
+running-tool name colors), and `long` (retry/error rows, plus a same-scene
+dark-theme capture confirming zero visual regression there) scenes, in a
+plain default xterm with no color overrides at all — proving the palette is
+now fully self-contained and doesn't depend on the terminal's theme in
+either direction. New tests in `palette.rs`: `from_config` case-
+insensitivity and its default-to-`Dark` fallback (`None`, `"dark"`, garbage,
+empty string), `DARK != LIGHT`, and a cheap real-invariant check (`LIGHT`'s
+background is lighter and its primary text darker than `DARK`'s, by luma).
+`mjolnir-tui` 140 tests pass (135 + 5 new — no existing test needed touching
+beyond passing `&DARK`/`&palette::DARK` explicitly at pure-function call
+sites, since `DARK`'s values are unchanged from what those tests already
+asserted against); full workspace `cargo test` (353 tests) and `cargo
+clippy -p mjolnir-tui -p mjolnir-cli --all-targets -- -D warnings` both
+clean.
+
 - **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
   panel): the body (full-width scrollable conversation log, or the log
   beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress
@@ -1336,7 +1414,7 @@ this the second time.
 - **Approval Card / Decision Panel (2026-09-02, superseding "inline in the log" below):** ToolApprovalRequested/PromptRequested no longer render inline in the conversation log while pending — they render in a fixed decision panel directly above the input box (`ui::decision_panel_lines`, driven by `App::pending_approvals`/`pending_prompts`), visually distinct via the single accent color, same as before. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry; an unusually large diff is further truncated (`ui::clamp_panel`) to keep the options list on screen. The decision itself is a numbered, keyboard-navigable list (`App::decision_options`/`ui::render_decision_options` — same-day "numbered, arrow/digit-navigable list" entry), not raw letter shortcuts: Up/Down move a visible `▸` cursor, Enter confirms the selected option, a digit `1`-`9` jumps to and confirms an option directly, and Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending — the developer cannot queue new submissions until the gate is resolved. Once resolved, the full card (diff included) still renders inline in the log exactly as before, as a permanent historical record — only the *live* interaction moved out of the scrolling log, not the history.
 - **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
 - **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/idle, with a spinner, plus a descriptive leading word for the rest of an active turn — a named tool in flight, "responding…" once assistant text is streaming, or "working…" while waiting on the first token/tool call of the step; see `ui::activity_label`, 2026-09-02), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). Background: *stale as of the 2026-08-31 visual-redesign entry above, corrected here 2026-09-02* — no longer terminal default throughout. That redesign's opaque-surfaces pass (`BG_BASE`/`BG_ELEMENT`/`BG_INPUT`/`CODE_BG`, `palette.rs`) fills the whole frame and every panel/bubble/box with its own fixed-RGB tier; this wording describing only a "subtle tint" on top of an otherwise-transparent terminal background was never updated to match and had drifted into being actively misleading — see the 2026-09-02 live-feedback batch's light-mode-contrast item, which traced a real bug to exactly this gap between the two (a span left without an explicit foreground, which reads fine against a *transparent* background inheriting the terminal's own contrast pairing, but not against the app's own always-dark fill).
+- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). As of 2026-09-02, `palette.rs` holds two fixed instances of a `Palette` struct — `DARK` (the original, only-ever palette, unchanged) and `LIGHT` (new, independently re-tuned per color rather than a mechanical inversion) — selected once at startup via `Theme::from_config`/`TuiConfig.theme` and threaded explicitly through `ui.rs`'s render functions (`app.theme.palette()` where `&App` is already in scope, an explicit `pal: &Palette` parameter otherwise); see that same-day Progress entry for the full account, including why this is explicit threading and not a global. Background: *stale as of the 2026-08-31 visual-redesign entry above, corrected here 2026-09-02* — no longer terminal default throughout. That redesign's opaque-surfaces pass (`BG_BASE`/`BG_ELEMENT`/`BG_INPUT`/`CODE_BG`, `palette.rs`) fills the whole frame and every panel/bubble/box with its own fixed-RGB tier; this wording describing only a "subtle tint" on top of an otherwise-transparent terminal background was never updated to match and had drifted into being actively misleading — see the 2026-09-02 live-feedback batch's light-mode-contrast item, which traced a real bug to exactly this gap between the two (a span left without an explicit foreground, which reads fine against a *transparent* background inheriting the terminal's own contrast pairing, but not against the app's own always-dark fill).
 
   Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). `BRIGHT`/`DIM` are fixed RGB as of 2026-09-02 (see the same-day Progress entry) — they were the one exception to this file's "fixed RGB, not named ANSI" rule until a real light-mode terminal theme (Solarized Light) was shown to remap them into near-unreadable territory against this app's own always-dark surfaces. One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
 
@@ -1392,7 +1470,7 @@ this the second time.
 ## Out of Scope
 
 - Mouse support beyond wheel-scroll — keyboard-only otherwise. *Narrowed, not reopened, 2026-09-02:* mouse capture is now on and the wheel scrolls the log (`App::handle_mouse`, see the same-day "live-feedback batch" Progress entry) — a direct fix for a developer report that the wheel couldn't scroll at all while capture was off. Click/drag/move events reach the app too now that capture is on, but nothing is wired to them; the terminal's own native text selection is still reachable behind its usual bypass modifier (Shift-drag on most terminals) instead of on a plain drag. This is the same shape the 2026-08-31 sidebar entry used for the split-pane rejection: a scoped, deliberate carve-out of one specific interaction, not a reopening of "should this app be mouse-driven."
-- Color theming system — a small fixed semantic palette exists now (see the Palette bullet and its Decisions entry), but it's hardcoded, not user-configurable; rich/configurable theming is still blocked on the mascot palette decision.
+- Rich/configurable color theming — a two-way `Theme::{Dark,Light}` choice exists now (2026-09-02, `tui.yaml`'s `theme` field — see the Palette bullet and its same-day Progress entry), each a small fixed semantic palette, but that's a binary switch between two hand-tuned sets, not a user-configurable/custom theming system (arbitrary colors, N themes, per-element overrides); that remains out of scope, still blocked on the mascot palette decision for anything beyond these two fixed options.
 - Syntax highlighting in diff blocks — plain text diff in V0.
 - Conversation log search or filtering.
 - Split-pane layout as the *primary* layout element — still deferred. What exists as of 2026-08-31 is a secondary, optional, width-gated sidebar for ambient state, not a split-pane the developer's attention is meant to divide between — see the Conversation-first layout Decision entry above.

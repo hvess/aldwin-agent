@@ -98,7 +98,12 @@ pub async fn run() -> Result<(), StartupError> {
     let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), event_tx.clone()));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
-    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions).await;
+    // `theme` is global-only (see mjolnir-config's annotated tui.yaml) —
+    // resolved once here, before the TUI's first draw, and never revisited
+    // for the rest of the session (mjolnir_tui::palette's own doc comment
+    // explains why this is a one-time explicit choice, not a live setting).
+    let theme = mjolnir_tui::Theme::from_config(config.global_tui().theme.as_deref());
+    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme).await;
 
     // The TUI dropped its command sender on return, closing tui_cmd_rx;
     // the interceptor then drops agent_cmd_tx, closing the core's command

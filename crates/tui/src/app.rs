@@ -262,6 +262,14 @@ pub struct App {
     /// loop after each call, rather than this struct holding a live sender,
     /// so both can be exercised in tests without a channel.
     pub outbox: Vec<Command>,
+
+    /// Which fixed color `Palette` this session renders with — resolved
+    /// once from `tui.yaml`'s `theme` field (`Theme::from_config`) before
+    /// the first draw and never changed afterward (see `palette.rs`'s
+    /// module doc comment for why this lives on `App` rather than global
+    /// state). Defaults to `Theme::Dark` via `App::new`; `run.rs` overrides
+    /// it with `App::with_theme` once config is available.
+    pub theme: crate::palette::Theme,
 }
 
 impl App {
@@ -287,7 +295,19 @@ impl App {
             tick: 0,
             pending_tool_names: HashMap::new(),
             outbox: Vec::new(),
+            theme: crate::palette::Theme::default(),
         }
+    }
+
+    /// Builder-style override for `theme` — kept separate from `App::new`'s
+    /// own parameter list rather than adding a parameter there, so the
+    /// many existing `App::new(model_name, permissions)` call sites (tests,
+    /// `examples/preview.rs`, `mjolnir-cli`'s bootstrap) don't all need to
+    /// thread a theme through just to get the same `Dark` default they
+    /// already had. `run.rs` is the one real caller that overrides it.
+    pub fn with_theme(mut self, theme: crate::palette::Theme) -> Self {
+        self.theme = theme;
+        self
     }
 
     /// Advances the animation-frame counter — called by `run.rs` on a fixed

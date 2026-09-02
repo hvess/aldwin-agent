@@ -3,14 +3,18 @@
 //! draws it once to the real terminal so the rendered output can be
 //! captured (tmux `capture-pane` + a screenshot pipeline) for visual review
 //! while reworking `ui.rs`. Pass a scene name as argv[1]; see `scene()`
-//! below for the list. Exits immediately after drawing (no input loop) so a
-//! driving script can capture-pane right after launch.
+//! below for the list. Pass a theme name as argv[2] — `light` or `dark`
+//! (default) — added alongside `Palette`/`Theme` (2026-09-02) so a light-
+//! theme change can be screenshotted the same way every dark-theme one
+//! already was, rather than shipped on the RGB values alone. Exits
+//! immediately after drawing (no input loop) so a driving script can
+//! capture-pane right after launch.
 use std::io;
 use std::sync::Arc;
 
 use mjolnir_config::Config;
 use mjolnir_permissions::{Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use mjolnir_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{execute, ExecutableCommand};
@@ -18,11 +22,12 @@ use ratatui::Terminal;
 
 fn main() -> io::Result<()> {
     let scene_name = std::env::args().nth(1).unwrap_or_else(|| "empty".into());
+    let theme = Theme::from_config(std::env::args().nth(2).as_deref());
 
     let dir = tempfile::tempdir().unwrap();
     let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
     let engine = Arc::new(Engine::new(config));
-    let mut app = App::new("claude-sonnet-5".into(), engine);
+    let mut app = App::new("claude-sonnet-5".into(), engine).with_theme(theme);
 
     scene(&scene_name, &mut app);
 

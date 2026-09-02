@@ -136,12 +136,18 @@ pub const TUI_HEADER: &str = "\
 # Mjolnir TUI preferences (global only — there is no project-scope tui.yaml).
 # theme, layout, and keybinds are all optional; omit whatever you don't want
 # to override.
+#   theme:  dark (default) | light. Read once at session start; changing it
+#           takes effect on the next launch, not live. Anything other than
+#           \"light\" (including an unset/omitted field) means dark.
 ";
 
 pub const TUI: &str = "\
 # Mjolnir TUI preferences (global only — there is no project-scope tui.yaml).
 # theme, layout, and keybinds are all optional; omit whatever you don't want
 # to override.
+#   theme:  dark (default) | light. Read once at session start; changing it
+#           takes effect on the next launch, not live. Anything other than
+#           \"light\" (including an unset/omitted field) means dark.
 version: 1
 ";
 

@@ -9,7 +9,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, RunningTool, ScopeHint, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
+use crate::palette::Palette;
 
 /// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
 /// the hammer in, so the "ascii trick" loading indicator reads as part of
@@ -17,13 +17,14 @@ use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, COD
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let pal = app.theme.palette();
     let area = frame.area();
     // Opaque canvas, drawn first and under everything else — without this,
     // every gap between panels (margins, the status-line row) renders as
     // the terminal's own background, which is exactly the "transparent app"
-    // look the redesign is replacing. See `palette::BG_BASE`'s doc comment
+    // look the redesign is replacing. See `Palette::bg_base`'s doc comment
     // for the tier this belongs to.
-    frame.render_widget(Block::default().style(Style::default().bg(BG_BASE)), area);
+    frame.render_widget(Block::default().style(Style::default().bg(pal.bg_base)), area);
     let input_height = input_area_height(&app.input);
     // Five bands: the body (conversation log), a 1-row blank spacer, a
     // 1-row status line (identity/activity — see `draw_status_line`), the
@@ -63,7 +64,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // panel's own `Paragraph` below wraps rather than truncates, same as
     // the log panel's own render path.
     let (panel_body, panel_tail) = decision_panel_lines(app, area.width);
-    let panel_lines = clamp_panel(panel_body, panel_max_height(area.height), panel_tail, area.width);
+    let panel_lines = clamp_panel(panel_body, panel_max_height(area.height), panel_tail, pal, area.width);
     let panel_height = panel_row_count(&panel_lines, area.width) as u16;
 
     let [body_area, _spacer_area, status_area, panel_area, input_area] = Layout::vertical([
@@ -85,7 +86,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // meaningless noise in the corner of the screen — removed outright, not
     // replaced, so `log_block` is now a plain background fill with nothing
     // reserving a title row.
-    let log_block = Block::new().style(Style::default().bg(BG_BASE));
+    let log_block = Block::new().style(Style::default().bg(pal.bg_base));
     // `Block::inner` is a pure function of the block's border/title config
     // and the outer rect — computed exactly once here, and this same `Rect`
     // is what both `App::render_width`/`render_height` (cached for scroll
@@ -157,8 +158,9 @@ fn input_area_height(input: &str) -> u16 {
 /// mutually exclusive, so there's no longer a "separate the banner from the
 /// first real entry" case to special-case either.
 fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
+    let pal = app.theme.palette();
     if app.log.is_empty() {
-        return hero_lines(&app.status, height);
+        return hero_lines(&app.status, height, pal);
     }
     let mut lines: Vec<Line> = Vec::new();
     for entry in app.log.iter() {
@@ -168,7 +170,7 @@ fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
         // row), so the blank separator is keyed on whether anything has
         // actually been pushed yet, not on the entry's index — otherwise a
         // silent entry would still claim a blank row for itself.
-        let rendered = render_entry(entry, width);
+        let rendered = render_entry(entry, width, pal);
         if rendered.is_empty() {
             continue;
         }
@@ -191,6 +193,7 @@ fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
 /// `Scrollbar` on the inner-right edge when there's more content than the
 /// viewport can show and the log isn't showing the (never-scrollable) hero.
 fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, app: &App) {
+    let pal = app.theme.palette();
     let lines = build_log_lines(app, inner.width, inner.height);
     // `scroll.offset` is in *wrapped screen rows* (see `log_row_count`), so
     // it must go through `Paragraph::scroll`, which advances the same
@@ -206,7 +209,7 @@ fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, 
     frame.render_widget(paragraph, inner);
 
     if !app.log.is_empty() && total > inner.height as usize {
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(PANEL_BORDER));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(pal.panel_border));
         let mut state = ScrollbarState::new(total).position(offset as usize);
         // Renders into the block's own right-border column, inset by 1 row
         // top/bottom so it doesn't overwrite the panel's rounded corners —
@@ -351,16 +354,16 @@ const MJOLNIR_ART_WIDTH: usize = 21;
 /// permission summary was dropped from the always-visible status line
 /// per explicit developer request; this stays the one place the current
 /// directory's read/shell/edit grants are surfaced on screen.
-fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
+fn access_spans(label: &'static str, state: PermState, pal: &Palette) -> Vec<Span<'static>> {
     let (word, fg, bg) = match state {
-        PermState::Allowed => ("allow", BRIGHT, DIFF_ADD_BG),
-        PermState::Denied => ("deny", BRIGHT, DIFF_DEL_BG),
+        PermState::Allowed => ("allow", pal.bright, pal.diff_add_bg),
+        PermState::Denied => ("deny", pal.bright, pal.diff_del_bg),
     };
     // Right-padded only (no space before the word) so the flattened text
     // stays exactly `"{label}:{word} "` — preserves the `"read:deny"`-style
     // substring several tests and the hero/header both already key on —
     // while still giving the word itself a colored chip background.
-    vec![Span::styled(format!("{label}:"), Style::default().fg(DIM)), Span::styled(format!("{word} "), Style::default().fg(fg).bg(bg))]
+    vec![Span::styled(format!("{label}:"), Style::default().fg(pal.dim)), Span::styled(format!("{word} "), Style::default().fg(fg).bg(bg))]
 }
 
 /// The welcome hero's content — Mjolnir hammer art beside the wordmark/
@@ -373,15 +376,15 @@ fn access_spans(label: &'static str, state: PermState) -> Vec<Span<'static>> {
 /// border now that it's nested inside the log panel's border just double-
 /// boxed the same content (tried during the redesign, discarded after
 /// screenshotting both).
-fn intro_content(status: &StatusInfo) -> Vec<Line<'static>> {
+fn intro_content(status: &StatusInfo, pal: &Palette) -> Vec<Line<'static>> {
     debug_assert!(
         MJOLNIR_ART.iter().all(|row| row.chars().count() == MJOLNIR_ART_WIDTH),
         "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
     );
-    let wordmark_style = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let tagline_style = Style::default().fg(BRIGHT).add_modifier(Modifier::ITALIC);
-    let stat_label = Style::default().fg(DIM);
-    let stat_value = Style::default().fg(BRIGHT);
+    let wordmark_style = Style::default().fg(pal.accent).add_modifier(Modifier::BOLD);
+    let tagline_style = Style::default().fg(pal.bright).add_modifier(Modifier::ITALIC);
+    let stat_label = Style::default().fg(pal.dim);
+    let stat_value = Style::default().fg(pal.bright);
 
     // Beside the art, not above or below it — per the standing developer
     // rule (art left-aligned, text alongside it on the right). The
@@ -406,11 +409,11 @@ fn intro_content(status: &StatusInfo) -> Vec<Line<'static>> {
     info.push(vec![Span::styled("version  ", stat_label), Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), stat_value)]);
     info.push(vec![Span::styled("commit   ", stat_label), Span::styled(env!("MJOLNIR_GIT_HASH"), stat_value)]);
     let mut access = vec![Span::styled("access   ", stat_label)];
-    access.extend(access_spans("read", status.read));
+    access.extend(access_spans("read", status.read, pal));
     access.push(Span::raw("  "));
-    access.extend(access_spans("shell", status.shell));
+    access.extend(access_spans("shell", status.shell, pal));
     access.push(Span::raw("  "));
-    access.extend(access_spans("edit", status.edit));
+    access.extend(access_spans("edit", status.edit, pal));
     info.push(access);
     let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
 
@@ -447,8 +450,8 @@ fn intro_content(status: &StatusInfo) -> Vec<Line<'static>> {
 /// hero's own border was removed. On a terminal short enough that the
 /// content doesn't fit, `pad_top` saturates to 0 and the content simply
 /// starts at the top and scrolls like any other tall log content would.
-fn hero_lines(status: &StatusInfo, height: u16) -> Vec<Line<'static>> {
-    let content = intro_content(status);
+fn hero_lines(status: &StatusInfo, height: u16, pal: &Palette) -> Vec<Line<'static>> {
+    let content = intro_content(status, pal);
     let pad_top = (height as usize).saturating_sub(content.len()) / 2;
     let mut lines = Vec::with_capacity(pad_top + content.len());
     lines.extend(std::iter::repeat_with(Line::default).take(pad_top));
@@ -456,7 +459,7 @@ fn hero_lines(status: &StatusInfo, height: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
+fn render_entry(entry: &LogEntry, width: u16, pal: &Palette) -> Vec<Line<'static>> {
     match entry {
         // Palette per mjolnir-tui.md: bright = assistant, muted gray +
         // subtle background = user — these must not share a style, or the
@@ -471,7 +474,7 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // `is_command`'s own doc comment: directed at the harness, never
             // the model).
             if is_command(text) {
-                return text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(DIM)))).collect();
+                return text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(pal.dim)))).collect();
             }
             // Flat filled "bubble", no left accent bar — per explicit
             // developer feedback that the bar (mirroring OpenCode's own
@@ -492,13 +495,13 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // real render width, pushing the "single-row bubble" onto an
             // extra wrapped row (see mjolnir-tui.md's wide-char Progress
             // note).
-            let style = Style::default().fg(USER_FG).bg(BG_ELEMENT);
-            let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
-            lines.extend(text.lines().flat_map(|l| card_line(l, style, width)));
-            lines.push(card_padding_line(BG_ELEMENT, width));
+            let style = Style::default().fg(pal.user_fg).bg(pal.bg_element);
+            let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
+            lines.extend(text.lines().flat_map(|l| card_line(l, style, pal, width)));
+            lines.push(card_padding_line(pal.bg_element, pal, width));
             lines
         }
-        LogEntry::AssistantText { text } => render_assistant_text(text, width),
+        LogEntry::AssistantText { text } => render_assistant_text(text, width, pal),
         // A leading glyph per status — running/done/error — instead of a
         // bracketed text tag, so a scan of the log reads statuses at a
         // glance the same way the diff/access indicators already do
@@ -510,9 +513,9 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             .map(|c| {
                 let label = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
                 let (glyph, color, text) = match &c.status {
-                    ToolActivityStatus::Running => ("▸", DIM, label),
-                    ToolActivityStatus::Completed { is_error: false, summary } => ("✓", DIFF_ADD_FG, format!("{label}: {summary}")),
-                    ToolActivityStatus::Completed { is_error: true, summary } => ("✗", DIFF_DEL_FG, format!("{label}: {summary}")),
+                    ToolActivityStatus::Running => ("▸", pal.dim, label),
+                    ToolActivityStatus::Completed { is_error: false, summary } => ("✓", pal.diff_add_fg, format!("{label}: {summary}")),
+                    ToolActivityStatus::Completed { is_error: true, summary } => ("✗", pal.diff_del_fg, format!("{label}: {summary}")),
                 };
                 Line::from(Span::styled(format!("  {glyph} {text}"), Style::default().fg(color)))
             })
@@ -523,7 +526,7 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             let status = info.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
             vec![Line::from(Span::styled(
                 format!("  ⟳ [retry {}] {} {status}: {}", info.attempt, info.provider, info.message),
-                Style::default().fg(WARNING_FG),
+                Style::default().fg(pal.warning_fg),
             ))]
         }
         // While pending (`resolution: None`), this renders nothing at all
@@ -538,9 +541,9 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
         // renders here exactly as before — the log remains the permanent
         // record of what was approved/denied, only the *live* interaction
         // moved.
-        LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => render_approval_card(diff, Some(*approved), Vec::new(), width),
+        LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => render_approval_card(diff, Some(*approved), Vec::new(), pal, width),
         LogEntry::ApprovalCard { resolution: None, .. } => Vec::new(),
-        LogEntry::PermissionPrompt { payload, resolution: Some(r), .. } => render_prompt_card(payload, Some(r.as_str()), Vec::new(), width),
+        LogEntry::PermissionPrompt { payload, resolution: Some(r), .. } => render_prompt_card(payload, Some(r.as_str()), Vec::new(), pal, width),
         LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
@@ -554,17 +557,17 @@ fn render_entry(entry: &LogEntry, width: u16) -> Vec<Line<'static>> {
             // turn ends.
             match reason {
                 TurnEndReasonKind::EndTurn => vec![],
-                TurnEndReasonKind::Cancelled => vec![Line::from(Span::styled("— turn cancelled —", Style::default().fg(DIM)))],
+                TurnEndReasonKind::Cancelled => vec![Line::from(Span::styled("— turn cancelled —", Style::default().fg(pal.dim)))],
                 TurnEndReasonKind::Error(message) => {
-                    vec![Line::from(Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(DIM)))]
+                    vec![Line::from(Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim)))]
                 }
             }
         }
-        // `DIFF_DEL_FG` rather than a bare `Color::Red` — cohesion with the
+        // `diff_del_fg` rather than a bare `Color::Red` — cohesion with the
         // rest of the error/removed/deny semantic group instead of a color
         // that belongs to no other role in the palette.
-        LogEntry::Error { message } => vec![Line::from(Span::styled(format!("✗ error: {message}"), Style::default().fg(DIFF_DEL_FG)))],
-        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("ℹ {message}"), Style::default().fg(DIM)))],
+        LogEntry::Error { message } => vec![Line::from(Span::styled(format!("✗ error: {message}"), Style::default().fg(pal.diff_del_fg)))],
+        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("ℹ {message}"), Style::default().fg(pal.dim)))],
     }
 }
 
@@ -612,7 +615,7 @@ fn split_code_fences(text: &str) -> Vec<Segment> {
     segments
 }
 
-fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
+fn render_assistant_text(text: &str, width: u16, pal: &Palette) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     for segment in split_code_fences(text) {
         match segment {
@@ -633,7 +636,7 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
                 let inner_width = (width as usize).saturating_sub(BOX_PAD_H);
                 lines.extend(
                     s.lines()
-                        .flat_map(|l| wrap_prose_line(render_markdown_line(l), inner_width))
+                        .flat_map(|l| wrap_prose_line(render_markdown_line(l, pal), inner_width))
                         .map(indent_prose_line),
                 );
             }
@@ -649,7 +652,7 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             // second diff presentation.
             Segment::Code { lang, body } if lang.eq_ignore_ascii_case("diff") => {
                 let (_, diff_body) = parse_diff_body(&body);
-                lines.extend(number_diff_lines(diff_body).iter().flat_map(|line| render_diff_line(line, width)));
+                lines.extend(number_diff_lines(diff_body).iter().flat_map(|line| render_diff_line(line, pal, width)));
             }
             // A real filled code-block box — dark `CODE_BG`, a language
             // label instead of the fence's own literal ` ``` ` markers, no
@@ -664,13 +667,13 @@ fn render_assistant_text(text: &str, width: u16) -> Vec<Line<'static>> {
             // other filled box in the log.
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.extend(card_line(&label, Style::default().fg(DIM).bg(CODE_BG), width));
-                lines.push(card_padding_line(CODE_BG, width));
+                lines.extend(card_line(&label, Style::default().fg(pal.dim).bg(pal.code_bg), pal, width));
+                lines.push(card_padding_line(pal.code_bg, pal, width));
                 for code_line in highlight::highlight_lines(&lang, &body) {
-                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(CODE_BG))).collect();
-                    lines.extend(filled_line(spans, CODE_BG, width));
+                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.code_bg))).collect();
+                    lines.extend(filled_line(spans, pal.code_bg, width));
                 }
-                lines.push(card_padding_line(CODE_BG, width));
+                lines.push(card_padding_line(pal.code_bg, pal, width));
             }
         }
     }
@@ -849,42 +852,42 @@ fn indent_prose_line(mut line: Line<'static>) -> Line<'static> {
 /// modifiers only
 /// (bold/italic/underline/reversed/crossed-out) — mjolnir-tui.md reserves
 /// the one accent color for the approval card and focused input.
-fn render_markdown_line(line: &str) -> Line<'static> {
-    let base = Style::default().fg(BRIGHT);
+fn render_markdown_line(line: &str, pal: &Palette) -> Line<'static> {
+    let base = Style::default().fg(pal.bright);
     let trimmed_start = line.trim_start();
     let indent = &line[..line.len() - trimmed_start.len()];
 
     if is_hr(trimmed_start) {
-        return Line::from(Span::styled("─".repeat(20), Style::default().fg(DIM)));
+        return Line::from(Span::styled("─".repeat(20), Style::default().fg(pal.dim)));
     }
     if let Some((level, rest)) = parse_heading(trimmed_start) {
         let style = if level <= 2 { base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { base.add_modifier(Modifier::BOLD) };
-        return Line::from(parse_inline(rest, style));
+        return Line::from(parse_inline(rest, style, pal));
     }
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
-        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(DIM))];
-        spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC)));
+        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(pal.dim))];
+        spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC), pal));
         return Line::from(spans);
     }
     if let Some(rest) = parse_bullet(trimmed_start) {
         let mut spans = vec![Span::styled(format!("{indent}• "), base)];
-        spans.extend(parse_inline(rest, base));
+        spans.extend(parse_inline(rest, base, pal));
         return Line::from(spans);
     }
     if let Some((marker, rest)) = parse_ordered(trimmed_start) {
         let mut spans = vec![Span::styled(format!("{indent}{marker} "), base)];
-        spans.extend(parse_inline(rest, base));
+        spans.extend(parse_inline(rest, base, pal));
         return Line::from(spans);
     }
-    Line::from(parse_inline(line, base))
+    Line::from(parse_inline(line, base, pal))
 }
 
 /// Recursive-descent inline pass: `**bold**`, `*italic*`/`_italic_`,
 /// `` `code` ``, `~~strike~~`, `[text](url)`. Delimiters nest via recursion
 /// (e.g. `**bold *and italic***`) rather than a flat token stream, which
 /// keeps this a single small function instead of a tokenizer + AST.
-fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
+fn parse_inline(text: &str, base: Style, pal: &Palette) -> Vec<Span<'static>> {
     fn flush(buf: &mut String, style: Style, spans: &mut Vec<Span<'static>>) {
         if !buf.is_empty() {
             spans.push(Span::styled(std::mem::take(buf), style));
@@ -899,21 +902,21 @@ fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(CODE_FG)));
+                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(pal.code_fg)));
                 rest = &stripped[end + 1..];
                 continue;
             }
         } else if let Some(stripped) = rest.strip_prefix("**") {
             if let Some(end) = stripped.find("**") {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::BOLD)));
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::BOLD), pal));
                 rest = &stripped[end + 2..];
                 continue;
             }
         } else if let Some(stripped) = rest.strip_prefix("~~") {
             if let Some(end) = stripped.find("~~") {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::CROSSED_OUT)));
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::CROSSED_OUT), pal));
                 rest = &stripped[end + 2..];
                 continue;
             }
@@ -922,7 +925,7 @@ fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
             let stripped = &rest[1..];
             if let Some(end) = stripped.find(delim) {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::ITALIC)));
+                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::ITALIC), pal));
                 rest = &stripped[end + 1..];
                 continue;
             }
@@ -931,7 +934,7 @@ fn parse_inline(text: &str, base: Style) -> Vec<Span<'static>> {
                 flush(&mut buf, base, &mut spans);
                 spans.push(Span::styled(label.to_string(), base.add_modifier(Modifier::UNDERLINED)));
                 if !url.is_empty() && url != label {
-                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(DIM)));
+                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(pal.dim)));
                 }
                 rest = remainder;
                 continue;
@@ -1020,7 +1023,7 @@ const KNOWN_COMMAND_WORDS: [&str; 4] = ["/help", "/clear", "/exit", "/reload-con
 /// mid-sentence never actually gets intercepted — it's still worth
 /// flagging live so the developer notices they typed a recognized command
 /// word, wherever it landed.
-fn highlight_command_tokens(line: &str) -> Line<'static> {
+fn highlight_command_tokens(line: &str, pal: &Palette) -> Line<'static> {
     let mut spans = Vec::new();
     let mut rest = line;
     while !rest.is_empty() {
@@ -1046,7 +1049,7 @@ fn highlight_command_tokens(line: &str) -> Line<'static> {
         // ordinary typed word rendered dark-on-our-own-dark-navy, unreadable
         // while typing. Reported directly: "text is dark on light mode and
         // it clashes with the dark background."
-        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(DIM) } else { Style::default().fg(BRIGHT) };
+        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(pal.dim) } else { Style::default().fg(pal.bright) };
         spans.push(Span::styled(word.to_string(), style));
         rest = tail;
     }
@@ -1160,8 +1163,8 @@ fn filled_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'st
 /// or a semantic tint like `DIFF_ADD_BG` that should win over it) — this
 /// helper doesn't pick one, it just reads it back out to pad with the
 /// matching color.
-fn card_line(content: &str, content_style: Style, width: u16) -> Vec<Line<'static>> {
-    let bg = content_style.bg.unwrap_or(BG_BASE);
+fn card_line(content: &str, content_style: Style, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    let bg = content_style.bg.unwrap_or(pal.bg_base);
     filled_line(vec![Span::styled(content.to_string(), content_style)], bg, width)
 }
 
@@ -1179,17 +1182,17 @@ fn card_line(content: &str, content_style: Style, width: u16) -> Vec<Line<'stati
 /// entirely by the caller) and a resolved entry's permanent record inline in
 /// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused
 /// since the "resolved: …" line takes its place instead).
-fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<Line<'static>>, pal: &Palette, width: u16) -> Vec<Line<'static>> {
     let (path, body) = parse_diff_body(diff);
     let body = number_diff_lines(body);
     // A blank filled row top and bottom (see `card_padding_line`'s doc
     // comment) — plain terminal text sat flush against the card's edges,
     // which read as cramped next to the reference's generous interior
     // padding.
-    let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
-    lines.extend(card_line("Approve this edit?", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width));
+    let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
+    lines.extend(card_line("Approve this edit?", Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD), pal, width));
     if let Some(path) = path {
-        lines.extend(card_line(&path, Style::default().fg(DIM).bg(BG_ELEMENT), width));
+        lines.extend(card_line(&path, Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
     }
 
     let n = body.len();
@@ -1208,7 +1211,7 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
     while i < n {
         if keep[i] {
             let line = &body[i];
-            lines.extend(render_diff_line(line, width));
+            lines.extend(render_diff_line(line, pal, width));
             i += 1;
         } else {
             let elided_start = i;
@@ -1218,7 +1221,8 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
             let count = i - elided_start;
             lines.extend(card_line(
                 &format!("⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
-                Style::default().fg(DIM).bg(BG_ELEMENT),
+                Style::default().fg(pal.dim).bg(pal.bg_element),
+                pal,
                 width,
             ));
         }
@@ -1228,10 +1232,11 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
         Some(approved) => {
             lines.extend(card_line(
                 &format!("resolved: {}", if approved { "approved" } else { "denied" }),
-                Style::default().fg(ACCENT).bg(BG_ELEMENT),
+                Style::default().fg(pal.accent).bg(pal.bg_element),
+                pal,
                 width,
             ));
-            lines.push(card_padding_line(BG_ELEMENT, width));
+            lines.push(card_padding_line(pal.bg_element, pal, width));
         }
         None => lines.extend(pending_tail),
     }
@@ -1244,8 +1249,8 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
 /// exactly one row (empty content never wraps), so this stays single-`Line`
 /// for its many `.push` call sites rather than propagating `card_line`'s
 /// `Vec` return all the way through every padding site too.
-fn card_padding_line(bg: Color, width: u16) -> Line<'static> {
-    card_line("", Style::default().bg(bg), width).into_iter().next().expect("card_line(\"\", ..) never wraps empty content, so it always returns exactly one row")
+fn card_padding_line(bg: Color, pal: &Palette, width: u16) -> Line<'static> {
+    card_line("", Style::default().bg(bg), pal, width).into_iter().next().expect("card_line(\"\", ..) never wraps empty content, so it always returns exactly one row")
 }
 
 /// Renders the decision panel's numbered, keyboard-navigable list of
@@ -1258,17 +1263,17 @@ fn card_padding_line(bg: Color, width: u16) -> Line<'static> {
 /// marker plus the accent color/bold — Up/Down navigation needs something
 /// visible to track, a number alone doesn't show *where the cursor is*
 /// versus what a digit key would jump straight to.
-fn render_decision_options(options: &[DecisionOption], selected: usize, width: u16) -> Vec<Line<'static>> {
+fn render_decision_options(options: &[DecisionOption], selected: usize, pal: &Palette, width: u16) -> Vec<Line<'static>> {
     options
         .iter()
         .enumerate()
         .flat_map(|(i, opt)| {
             let (marker, style) = if i == selected {
-                ("▸ ", Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD))
+                ("▸ ", Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD))
             } else {
-                ("  ", Style::default().fg(BRIGHT).bg(BG_ELEMENT))
+                ("  ", Style::default().fg(pal.bright).bg(pal.bg_element))
             };
-            card_line(&format!("{marker}{}. {}", i + 1, opt.label), style, width)
+            card_line(&format!("{marker}{}. {}", i + 1, opt.label), style, pal, width)
         })
         .collect()
 }
@@ -1332,10 +1337,10 @@ fn number_diff_lines(body: Vec<(DiffLineKind, String)>) -> Vec<DiffLine> {
 /// line has no new-file number) — same shape as `card_line`'s own filled
 /// rows, just multi-span so the gutter can carry its own dim color
 /// independent of the marker/text's semantic fg.
-fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color) -> Span<'static> {
+fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color, pal: &Palette) -> Span<'static> {
     let o = old_no.map(|n| n.to_string()).unwrap_or_default();
     let n = new_no.map(|n| n.to_string()).unwrap_or_default();
-    Span::styled(format!("{o:>4} {n:>4} │ "), Style::default().fg(DIM).bg(bg))
+    Span::styled(format!("{o:>4} {n:>4} │ "), Style::default().fg(pal.dim).bg(bg))
 }
 
 /// Renders one kept diff line via `filled_line`, prefixed with its
@@ -1345,13 +1350,13 @@ fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color) -> Span<
 /// not just a leading +/- character; context lines get the plain
 /// `BG_ELEMENT` card fill, same as every other card line, since only the
 /// changed lines' brighter tint should compete for attention.
-fn render_diff_line(line: &DiffLine, width: u16) -> Vec<Line<'static>> {
+fn render_diff_line(line: &DiffLine, pal: &Palette, width: u16) -> Vec<Line<'static>> {
     let (marker, fg, bg) = match line.kind {
-        DiffLineKind::Added => ("+", DIFF_ADD_FG, DIFF_ADD_BG),
-        DiffLineKind::Removed => ("-", DIFF_DEL_FG, DIFF_DEL_BG),
-        DiffLineKind::Context => (" ", BRIGHT, BG_ELEMENT),
+        DiffLineKind::Added => ("+", pal.diff_add_fg, pal.diff_add_bg),
+        DiffLineKind::Removed => ("-", pal.diff_del_fg, pal.diff_del_bg),
+        DiffLineKind::Context => (" ", pal.bright, pal.bg_element),
     };
-    let spans = vec![diff_gutter(line.old_no, line.new_no, bg), Span::styled(format!("{marker}{}", line.text), Style::default().fg(fg).bg(bg))];
+    let spans = vec![diff_gutter(line.old_no, line.new_no, bg, pal), Span::styled(format!("{marker}{}", line.text), Style::default().fg(fg).bg(bg))];
     filled_line(spans, bg, width)
 }
 
@@ -1359,8 +1364,8 @@ fn render_diff_line(line: &DiffLine, width: u16) -> Vec<Line<'static>> {
 /// live numbered options list — see `render_approval_card`'s own doc
 /// comment on the same param) and a resolved prompt's permanent record in
 /// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused).
-fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending_tail: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
-    render_card(&humanize_prompt(payload), &raw_prompt_call(payload), pending_tail, resolution.map(str::to_string), width)
+fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending_tail: Vec<Line<'static>>, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    render_card(&humanize_prompt(payload), &raw_prompt_call(payload), pending_tail, resolution.map(str::to_string), pal, width)
 }
 
 /// A plain-English sentence naming what's actually being asked — the title
@@ -1458,16 +1463,16 @@ fn raw_prompt_call(payload: &PromptPayload) -> String {
     }
 }
 
-fn render_card(title: &str, raw: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
-    lines.extend(card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width));
+fn render_card(title: &str, raw: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
+    lines.extend(card_line(title, Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD), pal, width));
     for l in raw.lines() {
-        lines.extend(card_line(l, Style::default().fg(DIM).bg(BG_ELEMENT), width));
+        lines.extend(card_line(l, Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
     }
     match resolution {
         Some(r) => {
-            lines.extend(card_line(&format!("resolved: {r}"), Style::default().fg(ACCENT).bg(BG_ELEMENT), width));
-            lines.push(card_padding_line(BG_ELEMENT, width));
+            lines.extend(card_line(&format!("resolved: {r}"), Style::default().fg(pal.accent).bg(pal.bg_element), pal, width));
+            lines.push(card_padding_line(pal.bg_element, pal, width));
         }
         None => lines.extend(pending_tail),
     }
@@ -1480,9 +1485,9 @@ fn render_card(title: &str, raw: &str, pending_tail: Vec<Line<'static>>, resolut
 /// status line's tool list distinguishes categories by color the same way
 /// posting's per-HTTP-method colors do, without needing to track a
 /// name-to-color table anywhere in `App`.
-fn tool_color(name: &str) -> Color {
+fn tool_color(name: &str, pal: &Palette) -> Color {
     let hash = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    TOOL_PALETTE[hash as usize % TOOL_PALETTE.len()]
+    pal.tool_palette[hash as usize % pal.tool_palette.len()]
 }
 
 /// Builds the fixed decision panel's content: whichever pending
@@ -1506,6 +1511,7 @@ fn tool_color(name: &str) -> Color {
 /// options list is the one thing a developer absolutely still needs to see
 /// and select, however large the body above it gets.
 fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
+    let pal = app.theme.palette();
     let options = app.decision_options();
     if options.is_empty() {
         return (Vec::new(), 0);
@@ -1520,14 +1526,14 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
     // *which-queue-is-front* question is answered exactly once, here.
     match app.pending_front() {
         PendingFront::Approval(pending) => {
-            let mut tail = render_decision_options(&options, app.decision_selected, width);
+            let mut tail = render_decision_options(&options, app.decision_selected, pal, width);
             let queue_len = app.pending_approvals.len();
             if queue_len > 1 {
-                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(DIM).bg(BG_ELEMENT), width));
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
             }
-            tail.push(card_padding_line(BG_ELEMENT, width));
+            tail.push(card_padding_line(pal.bg_element, pal, width));
             let tail_len = tail.len();
-            (render_approval_card(&pending.diff, None, tail, width), tail_len)
+            (render_approval_card(&pending.diff, None, tail, pal, width), tail_len)
         }
         PendingFront::Prompt(pending) => {
             // Only present for a path-like Tool prompt whose target has an
@@ -1535,17 +1541,17 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
             // — absent for ContextFile prompts and non-path-like Tool
             // prompts, which have nothing to toggle.
             let mut tail = match app.decision_scope_hint() {
-                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(DIM).bg(BG_ELEMENT), width),
+                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width),
                 None => Vec::new(),
             };
-            tail.extend(render_decision_options(&options, app.decision_selected, width));
+            tail.extend(render_decision_options(&options, app.decision_selected, pal, width));
             let queue_len = app.pending_prompts.len();
             if queue_len > 1 {
-                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(DIM).bg(BG_ELEMENT), width));
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
             }
-            tail.push(card_padding_line(BG_ELEMENT, width));
+            tail.push(card_padding_line(pal.bg_element, pal, width));
             let tail_len = tail.len();
-            (render_prompt_card(&pending.payload, None, tail, width), tail_len)
+            (render_prompt_card(&pending.payload, None, tail, pal, width), tail_len)
         }
         PendingFront::None => (Vec::new(), 0),
     }
@@ -1568,7 +1574,7 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
 /// (Approve/Deny) to 8 (a Tool prompt's four tiers × allow/deny) — a fixed
 /// guess would either truncate real options away or protect rows that
 /// aren't actually the list.
-fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, width: u16) -> Vec<Line<'static>> {
+fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, pal: &Palette, width: u16) -> Vec<Line<'static>> {
     const HEAD: usize = 2;
     if lines.len() <= max {
         return lines;
@@ -1601,7 +1607,8 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, width: u16) -
         } else {
             card_line(
                 &format!("⋯ {hidden} more line{} not shown — deciding doesn't require scrolling them ⋯", if hidden == 1 { "" } else { "s" }),
-                Style::default().fg(DIM).bg(BG_ELEMENT),
+                Style::default().fg(pal.dim).bg(pal.bg_element),
+                pal,
                 width,
             )
         };
@@ -1637,17 +1644,18 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, width: u16) -
 /// (`intro_content`) and an actual permission prompt when one fires, not a
 /// line that repaints every frame.
 fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
+    let pal = app.theme.palette();
     let s = &app.status;
     // Activity leads the row — per explicit developer request that "what's
     // the LLM doing right now" is the single most useful thing this line
     // can say, so it shouldn't be buried after the model name/turn counter.
     let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
     let mut spans = if app.thinking {
-        vec![Span::styled(format!("{spinner} thinking…  "), Style::default().fg(ACCENT))]
+        vec![Span::styled(format!("{spinner} thinking…  "), Style::default().fg(pal.accent))]
     } else if app.turn_active {
-        vec![Span::styled(format!("{spinner} {}  ", activity_label(app)), Style::default().fg(ACCENT))]
+        vec![Span::styled(format!("{spinner} {}  ", activity_label(app)), Style::default().fg(pal.accent))]
     } else {
-        vec![Span::styled("idle  ", Style::default().fg(DIM))]
+        vec![Span::styled("idle  ", Style::default().fg(pal.dim))]
     };
 
     let turn_step = match (s.turn, s.step) {
@@ -1655,22 +1663,22 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
         (Some(t), None) => format!("T{t}"),
         _ => "-".to_string(),
     };
-    spans.push(Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(DIM)));
+    spans.push(Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(pal.dim)));
 
     if !s.running_tools.is_empty() {
-        spans.push(Span::styled("tools: ", Style::default().fg(DIM)));
+        spans.push(Span::styled("tools: ", Style::default().fg(pal.dim)));
         for (i, tool) in s.running_tools.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw(", "));
             }
             let name = running_tool_name(tool);
-            spans.push(Span::styled(name.to_string(), Style::default().fg(tool_color(name))));
+            spans.push(Span::styled(name.to_string(), Style::default().fg(tool_color(name, pal))));
         }
         spans.push(Span::raw("  "));
     }
 
     let messages = app.log.len();
-    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(DIM)));
+    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(pal.dim)));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -1687,11 +1695,12 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
 /// replaces was what made a short draft look like it had collapsed to the
 /// bottom of the box.
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
-    // `BG_INPUT`, not `BG_ELEMENT` — sampled as the lightest of the four
-    // background tiers (see its doc comment), one step past the fill
-    // message/card content uses, since the input is the one surface that's
-    // always active/focused rather than passive content.
-    let block = Block::new().style(Style::default().bg(BG_INPUT)).padding(Padding::new(2, 1, 1, 1));
+    let pal = app.theme.palette();
+    // `bg_input`, not `bg_element` — sampled as the lightest of the four
+    // background tiers (see `Palette::bg_base`'s doc comment), one step past
+    // the fill message/card content uses, since the input is the one
+    // surface that's always active/focused rather than passive content.
+    let block = Block::new().style(Style::default().bg(pal.bg_input)).padding(Padding::new(2, 1, 1, 1));
     let inner = block.inner(area);
     // Dim placeholder text when the draft is empty — an empty filled box
     // gave no hint at all that this was where a message goes, versus every
@@ -1701,7 +1710,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     if app.input.is_empty() {
         let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
-        let placeholder = Line::from(Span::styled(text, Style::default().fg(DIM)));
+        let placeholder = Line::from(Span::styled(text, Style::default().fg(pal.dim)));
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
         if !blocked {
             frame.set_cursor_position((inner.x, inner.y));
@@ -1716,7 +1725,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // `highlight_command_tokens`'s doc comment for why a mid-message
     // `/exit` still gets flagged even though it would never actually be
     // intercepted as a command.
-    let lines: Vec<Line> = app.input.split('\n').map(highlight_command_tokens).collect();
+    let lines: Vec<Line> = app.input.split('\n').map(|l| highlight_command_tokens(l, pal)).collect();
     let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 
@@ -1745,6 +1754,7 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::app::App;
+    use crate::palette::DARK;
     use mjolnir_config::Config;
     use mjolnir_permissions::Engine;
     use ratatui::backend::TestBackend;
@@ -2230,8 +2240,8 @@ mod tests {
         let title_row = find_row(&buffer, "Claude wants to run a shell command");
         let raw_row = find_row(&buffer, "shell: cargo test --workspace");
         assert_ne!(title_row, raw_row, "the title and the raw call must be on separate rows");
-        assert_eq!(buffer[(2, raw_row)].fg, DIM, "the raw call row must use the dim color");
-        assert_ne!(buffer[(2, title_row)].fg, DIM, "the humanized title must not itself be dim");
+        assert_eq!(buffer[(2, raw_row)].fg, DARK.dim, "the raw call row must use the dim color");
+        assert_ne!(buffer[(2, title_row)].fg, DARK.dim, "the humanized title must not itself be dim");
     }
 
     /// A path-like Tool prompt whose target has an enclosing directory must
@@ -2366,7 +2376,7 @@ mod tests {
     /// `filled_line` only ever padded/filled the *first* row it built. Checks
     /// the title's last wrapped row (identified by its trailing "?", which
     /// has real padding after it since the target doesn't land exactly on a
-    /// row boundary) still carries the card's own `BG_ELEMENT` fill all the
+    /// row boundary) still carries the card's own `DARK.bg_element` fill all the
     /// way to the panel's right edge.
     #[test]
     fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
@@ -2395,7 +2405,7 @@ mod tests {
         let last_col = buffer.area.width - 1;
         assert_eq!(
             buffer[(last_col, last_title_row)].bg,
-            BG_ELEMENT,
+            DARK.bg_element,
             "a wrapped card row's trailing padding must keep the card's own background fill, not fall back to the frame background"
         );
     }
@@ -2415,8 +2425,8 @@ mod tests {
         // panel border ahead of it any more — the card's fill starts at
         // column 0), so any column here works; picked to also land on real
         // text rather than the row's trailing padding.
-        assert_eq!(buffer[(3, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry the removed-line background across the row");
-        assert_eq!(buffer[(3, added_row)].bg, DIFF_ADD_BG, "an added line should carry the added-line background across the row");
+        assert_eq!(buffer[(3, removed_row)].bg, DARK.diff_del_bg, "a removed line should carry the removed-line background across the row");
+        assert_eq!(buffer[(3, added_row)].bg, DARK.diff_add_bg, "an added line should carry the added-line background across the row");
         assert_ne!(buffer[(3, removed_row)].bg, buffer[(3, added_row)].bg, "added and removed lines must be visually distinct");
     }
 
@@ -2535,9 +2545,9 @@ mod tests {
 
     #[test]
     fn highlight_command_tokens_dims_a_leading_command_word() {
-        let line = highlight_command_tokens("/clear now");
+        let line = highlight_command_tokens("/clear now", &DARK);
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
-        assert_eq!(styled, vec![("/clear", Some(DIM)), (" ", None), ("now", Some(BRIGHT))]);
+        assert_eq!(styled, vec![("/clear", Some(DARK.dim)), (" ", None), ("now", Some(DARK.bright))]);
     }
 
     /// The bug report this responds to: dimming only checked the input's
@@ -2545,45 +2555,45 @@ mod tests {
     /// past position 0 never got flagged even though it's the same word.
     #[test]
     fn highlight_command_tokens_dims_a_command_word_mid_message() {
-        let line = highlight_command_tokens("please run /exit for me");
+        let line = highlight_command_tokens("please run /exit for me", &DARK);
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
         assert_eq!(
             styled,
             vec![
-                ("please", Some(BRIGHT)),
+                ("please", Some(DARK.bright)),
                 (" ", None),
-                ("run", Some(BRIGHT)),
+                ("run", Some(DARK.bright)),
                 (" ", None),
-                ("/exit", Some(DIM)),
+                ("/exit", Some(DARK.dim)),
                 (" ", None),
-                ("for", Some(BRIGHT)),
+                ("for", Some(DARK.bright)),
                 (" ", None),
-                ("me", Some(BRIGHT)),
+                ("me", Some(DARK.bright)),
             ]
         );
     }
 
     /// Regression test: an ordinary (non-command) word must carry an
-    /// explicit `BRIGHT` foreground, not bare `Style::default()` — the
+    /// explicit `DARK.bright` foreground, not bare `Style::default()` — the
     /// latter inherits the terminal's own default text color, which reads
     /// fine on a dark-themed terminal by coincidence but renders dark-on-
-    /// dark against `draw_input`'s always-dark `BG_INPUT` fill on a
+    /// dark against `draw_input`'s always-dark `DARK.bg_input` fill on a
     /// light-themed one. Reported directly: "text is dark on light mode and
     /// it clashes with the dark background."
     #[test]
     fn highlight_command_tokens_gives_plain_words_an_explicit_bright_fg() {
-        let line = highlight_command_tokens("hello world");
+        let line = highlight_command_tokens("hello world", &DARK);
         let fgs: Vec<Option<Color>> = line.spans.iter().map(|s| s.style.fg).collect();
-        assert_eq!(fgs, vec![Some(BRIGHT), None, Some(BRIGHT)], "every word must set an explicit fg; only the whitespace between them may leave it unset");
+        assert_eq!(fgs, vec![Some(DARK.bright), None, Some(DARK.bright)], "every word must set an explicit fg; only the whitespace between them may leave it unset");
     }
 
     #[test]
     fn highlight_command_tokens_requires_an_exact_word_match() {
         // "/exiting" isn't the recognized "/exit" word, and "cleared" isn't
         // "/clear" — a substring match would false-positive on either, i.e.
-        // dim them like a real command word instead of leaving them BRIGHT.
-        let line = highlight_command_tokens("/exiting cleared");
-        assert!(line.spans.iter().all(|s| s.style.fg != Some(DIM)));
+        // dim them like a real command word instead of leaving them DARK.bright.
+        let line = highlight_command_tokens("/exiting cleared", &DARK);
+        assert!(line.spans.iter().all(|s| s.style.fg != Some(DARK.dim)));
     }
 
     /// Live counterpart to `a_slash_command_renders_differently_from_a_plain_user_message`
@@ -2693,7 +2703,7 @@ mod tests {
         let first_row = find_row(&buffer, "first");
         let second_row = find_row(&buffer, "second");
         assert!(second_row > first_row + 1, "the two entries must not land on adjacent rows: {first_row} vs {second_row}");
-        let unfilled_row_between = (first_row + 1..second_row).any(|y| buffer[(1, y)].bg != BG_ELEMENT);
+        let unfilled_row_between = (first_row + 1..second_row).any(|y| buffer[(1, y)].bg != DARK.bg_element);
         assert!(unfilled_row_between, "there must be a genuinely blank row between the two entries' own bubble fills");
     }
 
@@ -2730,14 +2740,14 @@ mod tests {
         assert!(out.contains("fn main"), "the code itself must still be shown");
 
         let label_row = find_row(&buffer, "rust");
-        assert_eq!(buffer[(0, label_row)].bg, CODE_BG, "the language label row should carry the code block's own dark background");
+        assert_eq!(buffer[(0, label_row)].bg, DARK.code_bg, "the language label row should carry the code block's own dark background");
 
         // At least two distinct foreground colors within the code line —
         // proof it went through the highlighter, not just plain dim text.
         // Restricted to a narrow column range so unstyled padding cells
         // past the printed text can't manufacture a spurious second color.
         let code_row = find_row(&buffer, "fn main");
-        assert_eq!(buffer[(0, code_row)].bg, CODE_BG, "the code line should carry the code block's own dark background, like a real code block in a document");
+        assert_eq!(buffer[(0, code_row)].bg, DARK.code_bg, "the code line should carry the code block's own dark background, like a real code block in a document");
         let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
     }
@@ -2764,8 +2774,8 @@ mod tests {
 
         let removed_row = find_row(&buffer, "old line");
         let added_row = find_row(&buffer, "new line");
-        assert_eq!(buffer[(0, removed_row)].bg, DIFF_DEL_BG, "a removed line should carry a full-width red background starting at column 0");
-        assert_eq!(buffer[(0, added_row)].bg, DIFF_ADD_BG, "an added line should carry a full-width green background starting at column 0");
+        assert_eq!(buffer[(0, removed_row)].bg, DARK.diff_del_bg, "a removed line should carry a full-width red background starting at column 0");
+        assert_eq!(buffer[(0, added_row)].bg, DARK.diff_add_bg, "an added line should carry a full-width green background starting at column 0");
     }
 
     /// Regression test for explicit developer feedback: a diff fence at the
@@ -2782,7 +2792,7 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let removed_row = find_row(&buffer, "old line");
-        assert_eq!(buffer[(0, removed_row)].bg, DIFF_DEL_BG, "the diff row's full-width fill must reach column 0 even with no leading prose to carry the assistant marker instead");
+        assert_eq!(buffer[(0, removed_row)].bg, DARK.diff_del_bg, "the diff row's full-width fill must reach column 0 even with no leading prose to carry the assistant marker instead");
     }
 
     /// Regression test for explicit developer feedback: an ordinary
@@ -2853,7 +2863,7 @@ mod tests {
             shell:         PermState::Denied,
             edit:          PermState::Denied,
         };
-        assert_eq!(intro_content(&status).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_content must stay in sync with log::INTRO_LINE_COUNT");
+        assert_eq!(intro_content(&status, &DARK).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_content must stay in sync with log::INTRO_LINE_COUNT");
         // Tall enough that the whole banner fits without auto-follow scroll
         // pushing its top rows out of view — see the sizing comment on
         // user_and_assistant_messages_are_visually_distinct.
@@ -2901,8 +2911,8 @@ mod tests {
         // is unchanged, so column 2 (its content) still applies there.
         let plain_cell = &buffer[(3, plain_row)]; // padding past "hi", same fill
         let command_cell = &buffer[(2, command_row)]; // "> /exit"
-        assert_eq!(plain_cell.bg, BG_ELEMENT, "a plain user message should carry the subtle background tint");
-        assert_ne!(command_cell.bg, BG_ELEMENT, "a slash command must not carry the chat-message background tint");
+        assert_eq!(plain_cell.bg, DARK.bg_element, "a plain user message should carry the subtle background tint");
+        assert_ne!(command_cell.bg, DARK.bg_element, "a slash command must not carry the chat-message background tint");
     }
 
     #[test]
@@ -2916,7 +2926,7 @@ mod tests {
 
         let row = content_base();
         let far_right_cell = &buffer[(99, row)]; // well past "> hi"
-        assert_eq!(far_right_cell.bg, BG_ELEMENT, "the background tint should fill the full row width, not just trail the text");
+        assert_eq!(far_right_cell.bg, DARK.bg_element, "the background tint should fill the full row width, not just trail the text");
     }
 
     /// Replaces the old `the_welcome_banner_is_framed_by_a_border_spanning_
@@ -2945,23 +2955,23 @@ mod tests {
         for &(x, y) in &[(0, top), (width - 1, top), (0, bottom), (width - 1, bottom)] {
             let cell = &buffer[(x, y)];
             assert_ne!(cell.symbol(), "╭", "the log panel must not draw a border corner");
-            assert_eq!(cell.bg, BG_BASE, "the log panel must still be opaque at its edges even without a drawn border");
+            assert_eq!(cell.bg, DARK.bg_base, "the log panel must still be opaque at its edges even without a drawn border");
         }
     }
 
     #[test]
     fn tool_color_is_stable_for_the_same_name_and_can_differ_for_different_names() {
-        assert_eq!(tool_color("shell"), tool_color("shell"), "the same tool name must always get the same color");
+        assert_eq!(tool_color("shell", &DARK), tool_color("shell", &DARK), "the same tool name must always get the same color");
         // Not a strict guarantee for every possible pair (a 6-color palette
         // can collide), but true for this project's actual builtin tool
         // names — a regression that flattened `tool_color` to a constant
         // would still be caught here.
-        assert_ne!(tool_color("read"), tool_color("shell"));
+        assert_ne!(tool_color("read", &DARK), tool_color("shell", &DARK));
     }
 
     #[test]
     fn bold_markdown_strips_asterisks_and_sets_the_bold_modifier() {
-        let spans = parse_inline("say **hello** now", Style::default().fg(BRIGHT));
+        let spans = parse_inline("say **hello** now", Style::default().fg(DARK.bright), &DARK);
         let bold = spans.iter().find(|s| s.content.as_ref() == "hello").expect("bold span present");
         assert!(bold.style.add_modifier.contains(Modifier::BOLD));
         assert!(spans.iter().all(|s| !s.content.contains('*')), "literal asterisks must not reach the screen");
@@ -2969,23 +2979,23 @@ mod tests {
 
     #[test]
     fn italic_markdown_sets_the_italic_modifier() {
-        let spans = parse_inline("that is *neat* stuff", Style::default().fg(BRIGHT));
+        let spans = parse_inline("that is *neat* stuff", Style::default().fg(DARK.bright), &DARK);
         let italic = spans.iter().find(|s| s.content.as_ref() == "neat").expect("italic span present");
         assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]
     fn inline_code_strips_backticks_and_uses_a_distinct_color() {
-        let spans = parse_inline("run `cargo test` first", Style::default().fg(BRIGHT));
+        let spans = parse_inline("run `cargo test` first", Style::default().fg(DARK.bright), &DARK);
         let code = spans.iter().find(|s| s.content.as_ref() == "cargo test").expect("code span present");
-        assert_eq!(code.style.fg, Some(CODE_FG), "inline code should read as a distinct color, not a reversed-video block");
+        assert_eq!(code.style.fg, Some(DARK.code_fg), "inline code should read as a distinct color, not a reversed-video block");
         assert!(!code.style.add_modifier.contains(Modifier::REVERSED), "inline code must not use reversed video");
         assert!(spans.iter().all(|s| !s.content.contains('`')), "literal backticks must not reach the screen");
     }
 
     #[test]
     fn a_heading_line_drops_the_hashes_and_renders_bold() {
-        let line = render_markdown_line("## Section Title");
+        let line = render_markdown_line("## Section Title", &DARK);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "Section Title");
         assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
@@ -2993,7 +3003,7 @@ mod tests {
 
     #[test]
     fn a_bullet_line_replaces_the_dash_with_a_bullet_marker() {
-        let line = render_markdown_line("- first item");
+        let line = render_markdown_line("- first item", &DARK);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "• first item");
     }

@@ -53,6 +53,10 @@ impl Tool for ReadTool {
         path_arg(input)
     }
 
+    fn permission_target_is_path(&self, _input: &Value) -> bool {
+        true
+    }
+
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let path_str = path_arg(&input)?;
         let path = crate::paths::resolve_in_project(&self.project_root, &path_str)?;

@@ -33,6 +33,37 @@ whole read → mutate → persist → swap sequence in every one of those
 helpers; see mjolnir-config's `store.rs` and its new
 `concurrent_grant_writes_do_not_lose_updates` regression test.
 
+**Progress (2026-09-02, directory-scope prompt option):** Developer report:
+permissions felt "aggressive" for ordinary reading — each new file under an
+already-trusted directory re-triggered its own prompt, since the tool
+four-tier prompt only ever persisted an exact-match grant of the literal
+target the check ran against, even though the Grammar (line 45,
+`read:./**`) already supports a path-glob pattern. The gap was pure
+wiring, not the engine: `record_tool_decision`'s `pattern` param was
+already caller-chosen (its own doc comment says so), but the one real
+caller (mjolnir-tools' dispatcher) always passed the original `target`
+verbatim, and nothing upstream ever offered the developer a coarser
+option. Fixed without changing the engine's Model/Decisions at all —
+`check_tool` gained a `path_like: bool` param (threaded from a new
+`Tool::permission_target_is_path` in mjolnir-tools), carried unchanged
+into `PromptPayload::Tool` for the TUI to act on; `PromptResponse::Tool`
+gained a `pattern: String` field so the developer's own chosen grant
+(exact target, or a `<dir>/**` glob when they toggled to it) is what
+actually gets persisted, not always the target `check_tool` was called
+with. mjolnir-tui's decision panel now shows a humanized "Claude wants to
+read a file" title with the literal `kind: target` dimmed underneath (a
+separate developer complaint that the raw title alone didn't say what was
+being asked), plus a Tab-toggle scope hint line for any path-like target
+with an enclosing directory — the four-tier options list itself is
+unchanged (still 8 labeled entries; the toggle picks which pattern they'd
+persist, not a ninth option, per this spec's own Pitfall on the tier list
+growing). Edit-class prompts are untouched: `check_tool`'s edit_class
+branch and `record_tool_decision`'s edit_class refusal both short-circuit
+before `path_like`/`pattern` ever come into play, per this spec's Edit
+Exception and mjolnir's own non-negotiable "Edit is never allowlistable"
+constraint — no scope toggle, no directory grant, no tier list, ever, for
+Edit. See mjolnir-tools.md and mjolnir-tui.md's matching Progress notes.
+
 ## Why
 
 Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request runs through this engine. It owns scope precedence, pattern matching, the tiered prompt round-trip, and the in-memory shape of allowlists and denylists. Cross-cutting — any crate that gates an action calls into this one rather than reimplementing the policy.

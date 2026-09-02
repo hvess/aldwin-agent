@@ -43,6 +43,18 @@ pub trait Tool: Send + Sync {
 
     fn permission_target(&self, input: &Value) -> Result<String, ToolError>;
 
+    /// Whether this call's `permission_target` is a project-relative file
+    /// path rather than an argv/JSON blob — carried into
+    /// `PromptPayload::Tool::path_like` so the TUI's decision panel can
+    /// offer a "this directory" scope alongside the exact-match pattern
+    /// (mjolnir-permissions.md's grammar already supports a path-glob grant
+    /// like `read:./**`; this is what lets the prompt reach for one).
+    /// Defaults to `false`, the conservative choice — only tools whose
+    /// target is genuinely a path need to opt in.
+    fn permission_target_is_path(&self, _input: &Value) -> bool {
+        false
+    }
+
     async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError>;
 }
 

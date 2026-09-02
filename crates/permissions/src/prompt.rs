@@ -39,10 +39,18 @@ pub enum ContextFileTier {
 /// callers use `DispatchContext::request_approval` (core's dedicated
 /// per-call binary gate) instead; `Engine::record_tool_decision` refuses to
 /// persist anything for an edit-class kind regardless.
+///
+/// `Tool`'s `path_like` says whether `target` is a project-relative file
+/// path (set by the caller from the tool's own `permission_target_is_path`,
+/// mjolnir-tools) rather than an argv/JSON blob — it drives the decision
+/// panel's optional "approve this whole directory" scope toggle
+/// (mjolnir-permissions.md's Pattern grammar already allows a path-glob
+/// grant like `read:./**`; this is what lets a developer reach for one from
+/// the prompt itself instead of hand-editing config).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum PromptPayload {
-    Tool { kind: String, target: String },
+    Tool { kind: String, target: String, path_like: bool },
     ContextFile { path: PathBuf },
     Edit { kind: String },
 }
@@ -50,10 +58,18 @@ pub enum PromptPayload {
 /// The developer's answer to a [`PromptPayload`], carried in
 /// `Command::PromptResponse`. `tier` on `ContextFile` is only meaningful
 /// when `approve` is `true` — decline persists nothing at any tier.
+///
+/// `Tool`'s `pattern` is what actually gets persisted by
+/// `Engine::record_tool_decision` — usually (but not necessarily) an
+/// exact-match glob of the originating `PromptPayload::Tool`'s `target`;
+/// when `path_like` offered a directory scope and the developer chose it,
+/// this is the broader `<dir>/**` glob instead. The engine itself is
+/// pattern-agnostic (see its own doc comment); the caller — here, the TUI —
+/// decides how coarse the grant should be.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum PromptResponse {
-    Tool { decision: Decision, tier: ToolTier },
+    Tool { decision: Decision, tier: ToolTier, pattern: String },
     ContextFile { approve: bool, #[serde(default, skip_serializing_if = "Option::is_none")] tier: Option<ContextFileTier> },
 }
 
@@ -63,7 +79,7 @@ mod tests {
 
     #[test]
     fn tool_payload_round_trips_through_json_value() {
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into() };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
         let value = serde_json::to_value(&payload).unwrap();
         assert_eq!(value["shape"], "tool");
         let back: PromptPayload = serde_json::from_value(value).unwrap();
@@ -80,7 +96,7 @@ mod tests {
 
     #[test]
     fn tool_response_round_trips() {
-        let response = PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Project };
+        let response = PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Project, pattern: "cargo test".into() };
         let value = serde_json::to_value(&response).unwrap();
         let back: PromptResponse = serde_json::from_value(value).unwrap();
         assert_eq!(back, response);

@@ -29,19 +29,19 @@ impl Dispatcher {
     async fn check(&self, descriptor: &ToolDescriptor, call: &ToolCall, ctx: &DispatchContext) -> Result<bool, ToolError> {
         let tool = self.registry.get(&call.name).expect("caller already resolved this name");
         let target = tool.permission_target(&call.input)?;
+        let path_like = tool.permission_target_is_path(&call.input);
         let kind = permission_kind(&descriptor.name);
 
-        match self.permissions.check_tool(&kind, &target, false) {
+        match self.permissions.check_tool(&kind, &target, false, path_like) {
             CheckOutcome::Allow => Ok(true),
             CheckOutcome::Deny => Ok(false),
-            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, &target, payload, &call.id, ctx).await,
+            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, payload, &call.id, ctx).await,
         }
     }
 
     async fn prompt_and_record(
         &self,
         kind:    &str,
-        target:  &str,
         payload: PromptPayload,
         call_id: &str,
         ctx:     &DispatchContext,
@@ -51,8 +51,11 @@ impl Dispatcher {
         let response: PromptResponse = serde_json::from_value(response_value).map_err(|_| ToolError::MalformedPromptResponse)?;
 
         match response {
-            PromptResponse::Tool { decision, tier } => {
-                self.permissions.record_tool_decision(kind, target, false, decision, tier)?;
+            // `pattern` is the developer's own choice of grant coarseness
+            // (exact target, or a broadened `<dir>/**` glob when the prompt
+            // offered one) — not necessarily `payload`'s original target.
+            PromptResponse::Tool { decision, tier, pattern } => {
+                self.permissions.record_tool_decision(kind, &pattern, false, decision, tier)?;
                 Ok(matches!(decision, Decision::Allow))
             }
             // `check_tool` with `edit_class: false` never yields an Edit or
@@ -210,9 +213,9 @@ mod tests {
             match events.recv().await.unwrap() {
                 Event::PromptRequested { call_id, payload } => {
                     let payload: PromptPayload = serde_json::from_value(payload).unwrap();
-                    assert_eq!(payload, PromptPayload::Tool { kind: "echo".into(), target: "hi".into() });
+                    assert_eq!(payload, PromptPayload::Tool { kind: "echo".into(), target: "hi".into(), path_like: false });
 
-                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project };
+                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "hi".into() };
                     let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
                         panic!("expected a pending Prompt entry for {call_id}");
                     };
@@ -227,7 +230,7 @@ mod tests {
         assert_eq!(result.content, "hi");
 
         // Project-tier response actually persisted.
-        assert_eq!(permissions.check_tool("echo", "hi", false), CheckOutcome::Allow);
+        assert_eq!(permissions.check_tool("echo", "hi", false, false), CheckOutcome::Allow);
     }
 
     #[tokio::test]
@@ -243,7 +246,7 @@ mod tests {
         let resolve = async {
             match events.recv().await.unwrap() {
                 Event::PromptRequested { call_id, .. } => {
-                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Always };
+                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Always, pattern: "hi".into() };
                     let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
                         panic!("expected a pending Prompt entry for {call_id}");
                     };

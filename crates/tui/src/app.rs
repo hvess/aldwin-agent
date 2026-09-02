@@ -82,6 +82,50 @@ pub struct DecisionOption {
     pub outcome: DecisionOutcome,
 }
 
+/// Which grant pattern a pending `PromptPayload::Tool` prompt's tier options
+/// currently target — `Exact` (the literal target, today's only behaviour)
+/// or `Directory` (the target's enclosing directory, glob-broadened to
+/// `<dir>/**`). Only ever offered when the payload says `path_like: true`
+/// and the target actually has an enclosing directory to broaden to (see
+/// `directory_glob`) — toggled by Tab in the decision panel, reset to
+/// `Exact` whenever the front of the queue changes, same as
+/// `decision_selected`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PatternScope {
+    #[default]
+    Exact,
+    Directory,
+}
+
+/// What `ui.rs` needs to render the decision panel's scope-toggle hint line
+/// for a pending Tool prompt — `None` when there's nothing to toggle (the
+/// front isn't a path-like Tool prompt, or its target has no enclosing
+/// directory to broaden to).
+pub struct ScopeHint {
+    pub scope:       PatternScope,
+    pub target:      String,
+    pub dir_pattern: String,
+}
+
+/// Derives the enclosing-directory glob for a path-shaped grant target —
+/// `"./crates/tui/src/ui.rs"` -> `Some("./crates/tui/src/**")`,
+/// `"main.rs"` (no directory component) -> `None`. Matches
+/// mjolnir-permissions.md's Pattern grammar (`*` matches any run of
+/// characters including path separators, so a single trailing `/**`
+/// covers the whole subtree) and its own worked example, `read:./**`, for
+/// the degenerate case of a top-level file (`"./main.rs"` -> `"./**"`,
+/// i.e. "the whole project"). Operates on the raw target string given by
+/// the model, not a resolved filesystem path — same convention
+/// `ReadTool::permission_target`'s own doc comment establishes.
+fn directory_glob(target: &str) -> Option<String> {
+    let idx = target.rfind('/')?;
+    let dir = &target[..idx];
+    if dir.is_empty() {
+        return None;
+    }
+    Some(format!("{dir}/**"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermState {
     Allowed,
@@ -126,7 +170,7 @@ impl StatusInfo {
 /// vocabulary; this is a glanceable summary against an empty target (the
 /// broadest possible grant), not a precise per-pattern oracle.
 fn perm_state(engine: &Engine, kind: &str, edit_class: bool) -> PermState {
-    match engine.check_tool(kind, "", edit_class) {
+    match engine.check_tool(kind, "", edit_class, false) {
         CheckOutcome::Allow => PermState::Allowed,
         CheckOutcome::Deny | CheckOutcome::PromptRequired(_) => PermState::Denied,
     }
@@ -188,6 +232,13 @@ pub struct App {
     /// its first (least consequential) option, never wherever the cursor
     /// happened to sit for a previous, unrelated request.
     pub decision_selected: usize,
+    /// Which grant pattern a pending Tool prompt's tier options currently
+    /// target — see `PatternScope`'s own doc comment. Reset to `Exact`
+    /// alongside `decision_selected`, at the same three points (a fresh
+    /// request becoming the new front, or `resolve_decision` popping to the
+    /// next one) — whatever scope the developer picked for one request must
+    /// never leak onto an unrelated one.
+    pub decision_pattern_scope: PatternScope,
     pub status:            StatusInfo,
     pub should_quit:       bool,
     /// True from `TurnStarted` until the matching `TurnEnded` — drives the
@@ -229,6 +280,7 @@ impl App {
             pending_approvals: VecDeque::new(),
             pending_prompts: VecDeque::new(),
             decision_selected: 0,
+            decision_pattern_scope: PatternScope::Exact,
             status,
             should_quit: false,
             turn_active: false,
@@ -319,6 +371,7 @@ impl App {
                 // before.
                 if self.pending_approvals.is_empty() {
                     self.decision_selected = 0;
+                    self.decision_pattern_scope = PatternScope::Exact;
                 }
                 self.pending_approvals.push_back(PendingApproval { call_id: call_id.clone(), diff: diff.clone() });
                 self.push(LogEntry::ApprovalCard { call_id, diff, resolution: None });
@@ -348,6 +401,7 @@ impl App {
                         // prompt never preempts an already-pending approval.
                         if self.pending_approvals.is_empty() && self.pending_prompts.is_empty() {
                             self.decision_selected = 0;
+                            self.decision_pattern_scope = PatternScope::Exact;
                         }
                         self.pending_prompts.push_back(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
                         self.push(LogEntry::PermissionPrompt { call_id, payload, resolution: None });
@@ -513,19 +567,36 @@ impl App {
                 // Allow tiers before deny tiers, once→session→project→always
                 // within each — same tier ordering the old o/s/p/a shortcuts
                 // used, just spelled out as list labels instead of letters.
-                PromptPayload::Tool { .. } => [
-                    (Decision::Allow, ToolTier::Once, "Allow once"),
-                    (Decision::Allow, ToolTier::Session, "Allow for this session"),
-                    (Decision::Allow, ToolTier::Project, "Allow for this project"),
-                    (Decision::Allow, ToolTier::Always, "Always allow"),
-                    (Decision::Deny, ToolTier::Once, "Deny once"),
-                    (Decision::Deny, ToolTier::Session, "Deny for this session"),
-                    (Decision::Deny, ToolTier::Project, "Deny for this project"),
-                    (Decision::Deny, ToolTier::Always, "Always deny"),
-                ]
-                .into_iter()
-                .map(|(decision, tier, label)| DecisionOption { label: label.into(), outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier }) })
-                .collect(),
+                // `pattern` is the same for every tier's option (the tier
+                // alone decides persistence — see `ToolTier`'s own doc
+                // comment — the pattern is an orthogonal choice, made once
+                // via the Tab scope toggle, not per-tier); labels stay
+                // untouched by the toggle so this list never grows or
+                // reflows — `ui::decision_panel_lines` renders the actual
+                // chosen pattern separately, in the scope hint line built
+                // from `decision_scope_hint`.
+                PromptPayload::Tool { target, path_like, .. } => {
+                    let pattern = match (self.decision_pattern_scope, path_like) {
+                        (PatternScope::Directory, true) => directory_glob(target).unwrap_or_else(|| target.clone()),
+                        _ => target.clone(),
+                    };
+                    [
+                        (Decision::Allow, ToolTier::Once, "Allow once"),
+                        (Decision::Allow, ToolTier::Session, "Allow for this session"),
+                        (Decision::Allow, ToolTier::Project, "Allow for this project"),
+                        (Decision::Allow, ToolTier::Always, "Always allow"),
+                        (Decision::Deny, ToolTier::Once, "Deny once"),
+                        (Decision::Deny, ToolTier::Session, "Deny for this session"),
+                        (Decision::Deny, ToolTier::Project, "Deny for this project"),
+                        (Decision::Deny, ToolTier::Always, "Always deny"),
+                    ]
+                    .into_iter()
+                    .map(|(decision, tier, label)| DecisionOption {
+                        label:   label.into(),
+                        outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier, pattern: pattern.clone() }),
+                    })
+                    .collect()
+                }
                 PromptPayload::ContextFile { .. } => vec![
                     DecisionOption {
                         label:   "Inject for this session".into(),
@@ -561,11 +632,41 @@ impl App {
         match self.pending_front() {
             PendingFront::Approval(_) => Some(DecisionOutcome::Approve(false)),
             PendingFront::Prompt(pending) => match &pending.payload {
-                PromptPayload::Tool { .. } => Some(DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once })),
+                // `Once` never persists a pattern (see `Engine::
+                // record_tool_decision`'s `Once` arm), so the exact target
+                // is passed here purely for a well-formed `PromptResponse`,
+                // not because it takes effect.
+                PromptPayload::Tool { target, .. } => {
+                    Some(DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: target.clone() }))
+                }
                 PromptPayload::ContextFile { .. } => Some(DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None })),
                 PromptPayload::Edit { .. } => None,
             },
             PendingFront::None => None,
+        }
+    }
+
+    /// Scope-toggle info for the decision panel's Tool-prompt hint line
+    /// (`ui::decision_panel_lines`) — `None` when there's nothing to toggle:
+    /// the front isn't a `PromptPayload::Tool`, its target isn't
+    /// `path_like`, or the target has no enclosing directory to broaden to
+    /// (see `directory_glob`). Kept as its own read, alongside
+    /// `decision_options`' own independent match on the same payload,
+    /// rather than threaded out of `decision_options` — the two answer
+    /// different questions (selectable tier options vs. "is a toggle even
+    /// available, and what would it do") and `decision_options` already
+    /// returns owned `DecisionOption`s with no room for this extra shape,
+    /// matching how `decline_outcome` also matches the payload
+    /// independently rather than deriving from `decision_options`' output.
+    pub fn decision_scope_hint(&self) -> Option<ScopeHint> {
+        match self.pending_front() {
+            PendingFront::Prompt(pending) => match &pending.payload {
+                PromptPayload::Tool { target, path_like: true, .. } => {
+                    directory_glob(target).map(|dir_pattern| ScopeHint { scope: self.decision_pattern_scope, target: target.clone(), dir_pattern })
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -591,8 +692,12 @@ impl App {
     /// pressing enter are valid inputs." Up/Down move `decision_selected`
     /// (clamped, not wrapping); Enter confirms whichever option is
     /// currently selected; a digit key `1`-`9` jumps to and immediately
-    /// confirms that option directly, without needing Enter first; any
-    /// other key is silently dropped — no typing ahead, same as before.
+    /// confirms that option directly, without needing Enter first; Tab
+    /// flips `decision_pattern_scope` between `Exact`/`Directory` when a
+    /// scope toggle is actually available (`decision_scope_hint`) — a no-op
+    /// otherwise, so a stray Tab on an Approve/Deny or ContextFile prompt
+    /// (neither has a scope to toggle) can't corrupt state; any other key
+    /// is silently dropped — no typing ahead, same as before.
     fn handle_decision_key(&mut self, key: KeyEvent) {
         let options = self.decision_options();
         if options.is_empty() {
@@ -607,6 +712,14 @@ impl App {
             return;
         }
         match key.code {
+            KeyCode::Tab => {
+                if self.decision_scope_hint().is_some() {
+                    self.decision_pattern_scope = match self.decision_pattern_scope {
+                        PatternScope::Exact => PatternScope::Directory,
+                        PatternScope::Directory => PatternScope::Exact,
+                    };
+                }
+            }
             KeyCode::Up => self.decision_selected = self.decision_selected.saturating_sub(1),
             KeyCode::Down => self.decision_selected = (self.decision_selected + 1).min(options.len() - 1),
             KeyCode::Enter => {
@@ -633,6 +746,7 @@ impl App {
     /// comment on `App`.
     fn resolve_decision(&mut self, outcome: DecisionOutcome) {
         self.decision_selected = 0;
+        self.decision_pattern_scope = PatternScope::Exact;
         match outcome {
             DecisionOutcome::Approve(decision) => {
                 // Only ever the front of the queue — see `pending_approvals`'
@@ -933,7 +1047,7 @@ mod tests {
     #[test]
     fn a_pending_approval_takes_priority_over_an_already_pending_prompt() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
 
@@ -950,7 +1064,7 @@ mod tests {
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git status".into() });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -968,14 +1082,14 @@ mod tests {
     #[test]
     fn ctrl_c_declines_a_pending_tool_prompt_instead_of_being_swallowed() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into() }).unwrap();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompts.is_empty(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once });
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "rm -rf /".into() });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1000,7 +1114,7 @@ mod tests {
     #[test]
     fn permission_prompt_resolves_on_a_numbered_selection_and_records_resolution() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         assert!(!app.pending_prompts.is_empty());
         assert_eq!(app.decision_options()[2].label, "Allow for this project");
@@ -1010,7 +1124,7 @@ mod tests {
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git status".into() });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1023,7 +1137,7 @@ mod tests {
     #[test]
     fn two_pending_prompts_are_queued_not_overwritten_and_resolve_in_order() {
         let mut app = app();
-        let payload_1 = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into() }).unwrap();
+        let payload_1 = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
         let payload_2 = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: payload_1 });
         app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: payload_2 });
@@ -1035,7 +1149,7 @@ mod tests {
             Command::PromptResponse { call_id, payload } => {
                 assert_eq!(call_id, "call-1");
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project });
+                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git status".into() });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1158,5 +1272,134 @@ mod tests {
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: serde_json::json!({"shape": "unknown_shape"}) });
         assert!(matches!(app.log.last(), Some(LogEntry::Error { .. })));
         assert!(app.pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn directory_glob_broadens_a_path_to_its_enclosing_directory() {
+        assert_eq!(directory_glob("./crates/tui/src/ui.rs"), Some("./crates/tui/src/**".into()));
+        assert_eq!(directory_glob("src/main.rs"), Some("src/**".into()));
+    }
+
+    #[test]
+    fn directory_glob_is_none_for_a_bare_filename() {
+        assert_eq!(directory_glob("main.rs"), None);
+    }
+
+    #[test]
+    fn directory_glob_of_a_top_level_file_is_the_whole_project() {
+        // No directory component beyond the leading "./" itself — matches
+        // mjolnir-permissions.md's own worked example for "grant everything
+        // under the project root": `read:./**`.
+        assert_eq!(directory_glob("./main.rs"), Some("./**".into()));
+    }
+
+    fn path_like_tool_prompt(target: &str) -> serde_json::Value {
+        serde_json::to_value(PromptPayload::Tool { kind: "read".into(), target: target.into(), path_like: true }).unwrap()
+    }
+
+    #[test]
+    fn a_path_like_prompts_scope_hint_offers_the_enclosing_directory() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        let hint = app.decision_scope_hint().expect("a path-like target with a directory component must offer a scope toggle");
+        assert_eq!(hint.scope, PatternScope::Exact, "must start on the exact-file scope, not pre-broadened");
+        assert_eq!(hint.target, "./crates/tui/src/ui.rs");
+        assert_eq!(hint.dir_pattern, "./crates/tui/src/**");
+    }
+
+    #[test]
+    fn a_non_path_like_prompt_offers_no_scope_hint() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+        assert!(app.decision_scope_hint().is_none(), "shell targets are argv, not paths — there's no directory to broaden to");
+    }
+
+    #[test]
+    fn a_path_like_target_with_no_directory_offers_no_scope_hint() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("main.rs") });
+        assert!(app.decision_scope_hint().is_none(), "a bare filename has no enclosing directory to broaden to");
+    }
+
+    #[test]
+    fn tab_toggles_pattern_scope_only_when_a_hint_is_available() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        assert_eq!(app.decision_pattern_scope, PatternScope::Exact);
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.decision_pattern_scope, PatternScope::Directory, "Tab must flip to the directory scope when a hint is offered");
+
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.decision_pattern_scope, PatternScope::Exact, "Tab must flip back");
+    }
+
+    #[test]
+    fn tab_is_a_no_op_when_theres_nothing_to_toggle() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.decision_pattern_scope, PatternScope::Exact, "no scope hint exists for a shell prompt, so Tab must not change anything");
+    }
+
+    /// The actual point of the toggle: selecting a tier option after
+    /// switching to the directory scope must persist the broadened
+    /// `<dir>/**` glob, not the exact file that triggered the prompt —
+    /// this is what lets a developer approve reading a whole directory
+    /// instead of re-approving every file in it one at a time.
+    #[test]
+    fn selecting_an_option_after_toggling_to_directory_scope_persists_the_broadened_pattern() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.handle_key(press(KeyCode::Tab)); // switch to directory scope
+        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
+
+        match app.outbox.last() {
+            Some(Command::PromptResponse { payload, .. }) => {
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(
+                    response,
+                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "./crates/tui/src/**".into() }
+                );
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
+    }
+
+    /// Without toggling, the pattern is still the exact target — the
+    /// toggle is opt-in, not a behavior change for the common case.
+    #[test]
+    fn selecting_an_option_without_toggling_persists_the_exact_target() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
+
+        match app.outbox.last() {
+            Some(Command::PromptResponse { payload, .. }) => {
+                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(
+                    response,
+                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "./crates/tui/src/ui.rs".into() }
+                );
+            }
+            other => panic!("expected PromptResponse, got {other:?}"),
+        }
+    }
+
+    /// The toggle must not leak from one request to the next — a developer
+    /// who broadened one grant must not have that silently carry over to an
+    /// unrelated file's prompt.
+    #[test]
+    fn pattern_scope_resets_when_the_next_prompt_becomes_the_front() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.decision_pattern_scope, PatternScope::Directory);
+
+        app.handle_key(press(KeyCode::Char('3'))); // resolves call-1
+        app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: path_like_tool_prompt("./crates/core/src/agent.rs") });
+        assert_eq!(app.decision_pattern_scope, PatternScope::Exact, "a fresh prompt must start unbroadened, regardless of the previous one's toggle");
     }
 }

@@ -46,6 +46,23 @@ already warms every configured server sequentially at startup, so the race
 needs two servers to both fail at boot and be retried concurrently later;
 not a practical defect.
 
+**Progress (2026-09-02, path-like permission targets):** Part of the
+directory-scope prompt option (see mjolnir-permissions.md's matching
+Progress note). `Tool` gained a defaulted `permission_target_is_path`
+method (default `false`, the conservative "no directory offer" choice) —
+`ReadTool` always returns `true`, `ExplainTool` returns `true` only for
+its position-based ops (a `path` arg present; `workspace_symbols`' search
+string is not a path). `shell`/MCP tools take the default. `Dispatcher::
+check` reads it alongside `permission_target` and threads it into
+`Engine::check_tool`'s new `path_like` param; `prompt_and_record` now
+persists whatever `pattern` came back on the developer's `PromptResponse::
+Tool` (the TUI's own choice — exact target or a broadened directory glob)
+instead of always re-using the original `target`. No change to Edit's
+approval gate (`gate.rs`) or its own future-driven path — `edit_class`
+tools never call `permission_target`/`permission_target_is_path` at all,
+so this is invisible to Edit by construction, matching mjolnir's
+non-negotiable Edit-is-never-allowlistable constraint.
+
 ## Why
 
 Owns every concrete tool Mjolnir can dispatch — the V0 built-ins (Read, Diff, Explain, Edit, shell) and the MCP bridge that maps remote tools onto the same dispatch surface. Implements core's ToolDispatcher trait. Hosts the Edit approval gate as structural friction the developer cannot configure away. Other crates supply policy and protocol; this crate supplies behaviour.

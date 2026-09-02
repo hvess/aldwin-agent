@@ -110,6 +110,13 @@ impl Tool for ExplainTool {
         }
     }
 
+    /// True only for the position-based ops (`path` present) — a
+    /// `workspace_symbols` call's target is a search string, not a path,
+    /// so it gets no directory-scope offer.
+    fn permission_target_is_path(&self, input: &Value) -> bool {
+        input.get("path").and_then(Value::as_str).is_some()
+    }
+
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let op_value = input.get("op").cloned().ok_or_else(|| invalid("missing \"op\" field"))?;
         let op: Op = serde_json::from_value(op_value).map_err(|e| invalid(format!("invalid \"op\": {e}")))?;

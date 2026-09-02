@@ -85,7 +85,11 @@ impl Engine {
     /// path for path-shaped ones. `edit_class` tools are never allowlistable:
     /// this always returns `PromptRequired(PromptPayload::Edit)` regardless
     /// of any persisted grant, without consulting allow/deny lists at all.
-    pub fn check_tool(&self, kind: &str, target: &str, edit_class: bool) -> CheckOutcome {
+    /// `path_like` is carried through into `PromptPayload::Tool` unchanged —
+    /// this crate doesn't interpret it, it's the caller's (mjolnir-tools')
+    /// judgement about whether `target` is a project-relative path, for the
+    /// TUI's directory-scope prompt toggle to act on.
+    pub fn check_tool(&self, kind: &str, target: &str, edit_class: bool, path_like: bool) -> CheckOutcome {
         if edit_class {
             return CheckOutcome::PromptRequired(PromptPayload::Edit { kind: kind.to_string() });
         }
@@ -107,7 +111,7 @@ impl Engine {
             return decision.into();
         }
 
-        CheckOutcome::PromptRequired(PromptPayload::Tool { kind: kind.to_string(), target: target.to_string() })
+        CheckOutcome::PromptRequired(PromptPayload::Tool { kind: kind.to_string(), target: target.to_string(), path_like })
     }
 
     /// Records the developer's answer to a tool four-tier prompt.
@@ -308,10 +312,24 @@ mod tests {
     fn unconfigured_tool_prompts_by_default() {
         let (_p, _g, engine) = fresh_engine();
         assert_eq!(
-            engine.check_tool("shell", "cargo test", false),
+            engine.check_tool("shell", "cargo test", false, false),
             CheckOutcome::PromptRequired(PromptPayload::Tool {
-                kind:   "shell".into(),
-                target: "cargo test".into(),
+                kind:      "shell".into(),
+                target:    "cargo test".into(),
+                path_like: false,
+            })
+        );
+    }
+
+    #[test]
+    fn path_like_flows_through_into_the_prompt_payload() {
+        let (_p, _g, engine) = fresh_engine();
+        assert_eq!(
+            engine.check_tool("read", "./src/main.rs", false, true),
+            CheckOutcome::PromptRequired(PromptPayload::Tool {
+                kind:      "read".into(),
+                target:    "./src/main.rs".into(),
+                path_like: true,
             })
         );
     }
@@ -320,9 +338,9 @@ mod tests {
     fn project_allow_grant_is_honoured() {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Allow, ToolTier::Project).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo test -- foo", false), CheckOutcome::Allow);
-        assert_eq!(engine.check_tool("shell", "cargo install foo", false), CheckOutcome::PromptRequired(PromptPayload::Tool {
-            kind: "shell".into(), target: "cargo install foo".into(),
+        assert_eq!(engine.check_tool("shell", "cargo test -- foo", false, false), CheckOutcome::Allow);
+        assert_eq!(engine.check_tool("shell", "cargo install foo", false, false), CheckOutcome::PromptRequired(PromptPayload::Tool {
+            kind: "shell".into(), target: "cargo install foo".into(), path_like: false,
         }));
     }
 
@@ -331,8 +349,8 @@ mod tests {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Allow, ToolTier::Once).unwrap();
         assert_eq!(
-            engine.check_tool("shell", "cargo test", false),
-            CheckOutcome::PromptRequired(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into() })
+            engine.check_tool("shell", "cargo test", false, false),
+            CheckOutcome::PromptRequired(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false })
         );
     }
 
@@ -340,10 +358,10 @@ mod tests {
     fn session_allow_overrides_global_deny() {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Deny, ToolTier::Always).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo test", false), CheckOutcome::Deny);
+        assert_eq!(engine.check_tool("shell", "cargo test", false, false), CheckOutcome::Deny);
 
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Allow, ToolTier::Session).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo test", false), CheckOutcome::Allow);
+        assert_eq!(engine.check_tool("shell", "cargo test", false, false), CheckOutcome::Allow);
     }
 
     #[test]
@@ -351,7 +369,7 @@ mod tests {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Allow, ToolTier::Always).unwrap();
         engine.record_tool_decision("shell", "cargo test*", false, Decision::Deny, ToolTier::Session).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo test", false), CheckOutcome::Deny);
+        assert_eq!(engine.check_tool("shell", "cargo test", false, false), CheckOutcome::Deny);
     }
 
     #[test]
@@ -359,8 +377,8 @@ mod tests {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo *", false, Decision::Allow, ToolTier::Project).unwrap();
         engine.record_tool_decision("shell", "cargo install*", false, Decision::Deny, ToolTier::Project).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo install foo", false), CheckOutcome::Deny);
-        assert_eq!(engine.check_tool("shell", "cargo test", false), CheckOutcome::Allow);
+        assert_eq!(engine.check_tool("shell", "cargo install foo", false, false), CheckOutcome::Deny);
+        assert_eq!(engine.check_tool("shell", "cargo test", false, false), CheckOutcome::Allow);
     }
 
     #[test]
@@ -368,7 +386,7 @@ mod tests {
         let (_p, _g, engine) = fresh_engine();
         engine.record_tool_decision("shell", "cargo *", false, Decision::Allow, ToolTier::Always).unwrap();
         engine.record_tool_decision("shell", "cargo *", false, Decision::Deny, ToolTier::Project).unwrap();
-        assert_eq!(engine.check_tool("shell", "cargo test", false), CheckOutcome::Deny);
+        assert_eq!(engine.check_tool("shell", "cargo test", false, false), CheckOutcome::Deny);
     }
 
     #[test]
@@ -378,7 +396,7 @@ mod tests {
         // Same kind, but this call is made as edit_class — must still prompt,
         // proving enforcement is keyed to the flag, not the tool name.
         assert_eq!(
-            engine.check_tool("edit", "./src/main.rs", true),
+            engine.check_tool("edit", "./src/main.rs", true, false),
             CheckOutcome::PromptRequired(PromptPayload::Edit { kind: "edit".into() })
         );
     }

@@ -50,6 +50,7 @@ fn scene(name: &str, app: &mut App) {
         "tools" => tools(app),
         "approval" => approval(app),
         "prompt" => prompt(app),
+        "prompt_path" => prompt_path(app),
         "long" => long(app),
         other => panic!("unknown scene {other:?}"),
     }
@@ -94,9 +95,20 @@ fn approval(app: &mut App) {
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into() };
+    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
     app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
+}
+
+/// A path-like Tool prompt (`read`) — shows the humanized title/dim raw-call
+/// split and the directory-scope hint (`ui::scope_hint_line`), neither of
+/// which the plain `"prompt"` scene above exercises (its `shell` target has
+/// no directory to broaden to).
+fn prompt_path(app: &mut App) {
+    app.log.push(LogEntry::UserMessage { text: "what does the dispatcher do on a deny-by-absence?".into() });
+    let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tools/src/dispatcher.rs".into(), path_like: true };
+    app.log.push(LogEntry::PermissionPrompt { call_id: "call-3".into(), payload: payload.clone(), resolution: None });
+    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
 }
 
 fn long(app: &mut App) {

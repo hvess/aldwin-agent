@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientatio
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{cursor_line_col, App, DecisionOption, PendingFront, PermState, StatusInfo};
+use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, ScopeHint, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 use crate::palette::{ACCENT, BG_BASE, BG_ELEMENT, BG_INPUT, BRIGHT, CODE_BG, CODE_FG, DIFF_ADD_BG, DIFF_ADD_FG, DIFF_DEL_BG, DIFF_DEL_FG, DIM, PANEL_BORDER, TOOL_PALETTE, USER_FG, WARNING_FG};
@@ -1260,6 +1260,20 @@ fn render_decision_options(options: &[DecisionOption], selected: usize, width: u
         .collect()
 }
 
+/// The decision panel's "Tab to broaden this grant" hint line for a
+/// path-like Tool prompt (`App::decision_scope_hint`) — shows which pattern
+/// the numbered tier options below would actually persist, and how to
+/// switch it, since `render_decision_options`' own labels ("Allow for this
+/// project") stay identical either way (see `App::decision_options`' doc
+/// comment on why) and would otherwise give no visible sign a broader grant
+/// is even on offer.
+fn scope_hint_line(hint: &ScopeHint) -> String {
+    match hint.scope {
+        PatternScope::Exact => format!("scope: this file ({})  ·  Tab for this directory ({})", hint.target, hint.dir_pattern),
+        PatternScope::Directory => format!("scope: this directory ({})  ·  Tab for this file ({})", hint.dir_pattern, hint.target),
+    }
+}
+
 /// One diff body line plus the line number(s) it carries in each side of the
 /// change — see `number_diff_lines`.
 struct DiffLine {
@@ -1333,19 +1347,53 @@ fn render_diff_line(line: &DiffLine, width: u16) -> Vec<Line<'static>> {
 /// comment on the same param) and a resolved prompt's permanent record in
 /// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused).
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending_tail: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
-    let title = match payload {
-        PromptPayload::Tool { kind, target } => format!("Allow {kind}: {target}?"),
-        PromptPayload::ContextFile { path } => format!("Inject context file {}?", path.display()),
-        PromptPayload::Edit { kind } => format!("Edit approval for {kind}"),
-    };
-    render_card(&title, "", pending_tail, resolution.map(str::to_string), width)
+    render_card(&humanize_prompt(payload), &raw_prompt_call(payload), pending_tail, resolution.map(str::to_string), width)
 }
 
-fn render_card(title: &str, body: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
+/// A plain-English sentence naming what's actually being asked — the title
+/// row a developer reads first to decide. Per explicit developer feedback
+/// that the old title ("Allow shell: cargo test --release?") *was* the raw
+/// tool call, with nothing telling a developer what that call actually
+/// does at a glance; `raw_prompt_call` below still renders the literal call
+/// underneath, dim, for whoever wants to verify the mechanism.
+fn humanize_prompt(payload: &PromptPayload) -> String {
+    match payload {
+        PromptPayload::Tool { kind, .. } => humanize_tool_kind(kind),
+        PromptPayload::ContextFile { path } => format!("Claude wants to load {} as context", path.display()),
+        // Never actually reaches this card in production — `App::
+        // decision_options`' Edit arm returns no options, since Edit uses
+        // the separate ToolApprovalRequested/ApprovalCard path instead
+        // (mjolnir-permissions.md's Edit Exception). Kept for a complete,
+        // non-panicking match, not a live UI path.
+        PromptPayload::Edit { .. } => "Claude wants to edit a file".into(),
+    }
+}
+
+fn humanize_tool_kind(kind: &str) -> String {
+    match kind {
+        "read" => "Claude wants to read a file".into(),
+        "shell" => "Claude wants to run a shell command".into(),
+        "explain" => "Claude wants to inspect code".into(),
+        other => format!("Claude wants to use \"{other}\""),
+    }
+}
+
+/// The literal `kind: target` the humanized sentence above is describing —
+/// unchanged in substance from the old title text, just demoted to a dim
+/// subtitle now that the title itself carries the explanation.
+fn raw_prompt_call(payload: &PromptPayload) -> String {
+    match payload {
+        PromptPayload::Tool { kind, target, .. } => format!("{kind}: {target}"),
+        PromptPayload::ContextFile { path } => format!("context_file: {}", path.display()),
+        PromptPayload::Edit { kind } => format!("edit: {kind}"),
+    }
+}
+
+fn render_card(title: &str, raw: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![card_padding_line(BG_ELEMENT, width)];
     lines.extend(card_line(title, Style::default().fg(ACCENT).bg(BG_ELEMENT).add_modifier(Modifier::BOLD), width));
-    for l in body.lines() {
-        lines.extend(card_line(l, Style::default().fg(BRIGHT).bg(BG_ELEMENT), width));
+    for l in raw.lines() {
+        lines.extend(card_line(l, Style::default().fg(DIM).bg(BG_ELEMENT), width));
     }
     match resolution {
         Some(r) => {
@@ -1413,7 +1461,15 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
             (render_approval_card(&pending.diff, None, tail, width), tail_len)
         }
         PendingFront::Prompt(pending) => {
-            let mut tail = render_decision_options(&options, app.decision_selected, width);
+            // Only present for a path-like Tool prompt whose target has an
+            // enclosing directory to broaden to (`App::decision_scope_hint`)
+            // — absent for ContextFile prompts and non-path-like Tool
+            // prompts, which have nothing to toggle.
+            let mut tail = match app.decision_scope_hint() {
+                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(DIM).bg(BG_ELEMENT), width),
+                None => Vec::new(),
+            };
+            tail.extend(render_decision_options(&options, app.decision_selected, width));
             let queue_len = app.pending_prompts.len();
             if queue_len > 1 {
                 tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(DIM).bg(BG_ELEMENT), width));
@@ -1651,7 +1707,7 @@ mod tests {
     #[test]
     fn a_long_prompt_title_can_be_abbreviated_but_the_full_options_list_must_survive() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "x".repeat(300) };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "x".repeat(300), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 30, 20);
         assert!(out.contains("Deny for this project") && out.contains("Always deny"), "all 8 tiers must stay visible even when the title itself needs to be abbreviated: {out:?}");
@@ -1664,7 +1720,7 @@ mod tests {
     #[test]
     fn no_truncation_marker_appears_when_nothing_was_actually_hidden() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into() };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 50, 14);
         assert!(!out.contains("0 more line"), "a degenerate all-head-and-tail panel must not claim to have hidden 0 lines: {out:?}");
@@ -1964,7 +2020,7 @@ mod tests {
     #[test]
     fn a_pending_permission_prompt_does_not_render_inline_in_the_conversation_log() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false };
         app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload, resolution: None });
         let out = rendered(&mut app, 100, 20);
         assert!(!out.contains("Allow shell: git status?"), "a pending prompt must not render inline in the log — see the decision panel instead: {out:?}");
@@ -2004,12 +2060,88 @@ mod tests {
     #[test]
     fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into() };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 100, 20);
         assert!(out.contains("▸ 1. Allow once"), "the first option must be numbered and show the selection cursor: {out:?}");
         assert!(out.contains("3. Allow for this project"), "later options must be numbered too: {out:?}");
         assert!(out.contains("8. Always deny"), "the full 8-option tier list must be shown, not a shortened set: {out:?}");
+    }
+
+    /// Per explicit developer feedback that it wasn't clear what a tool
+    /// prompt was actually asking for: the panel must lead with a
+    /// plain-English sentence, not just `kind: target`, while still showing
+    /// the literal wire call underneath for anyone who wants to verify it.
+    #[test]
+    fn a_tool_prompt_shows_a_humanized_title_and_the_raw_call_underneath() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("Claude wants to read a file"), "the title must be a human-readable explanation: {out:?}");
+        assert!(out.contains("read: ./crates/tui/src/ui.rs"), "the literal tool call must still be shown: {out:?}");
+    }
+
+    /// The raw call line must be visually secondary (dim) to the humanized
+    /// title (accent/bold) — the whole point of the split is that the
+    /// sentence is what a developer reads first.
+    #[test]
+    fn the_raw_call_line_is_dimmer_than_the_humanized_title() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let title_row = find_row(&buffer, "Claude wants to run a shell command");
+        let raw_row = find_row(&buffer, "shell: cargo test --workspace");
+        assert_ne!(title_row, raw_row, "the title and the raw call must be on separate rows");
+        assert_eq!(buffer[(2, raw_row)].fg, DIM, "the raw call row must use the dim color");
+        assert_ne!(buffer[(2, title_row)].fg, DIM, "the humanized title must not itself be dim");
+    }
+
+    /// A path-like Tool prompt whose target has an enclosing directory must
+    /// show the scope-toggle hint, naming both the current (exact-file)
+    /// scope and what Tab would broaden it to — this is the actual
+    /// discoverability path for the "approve this whole directory" feature.
+    #[test]
+    fn a_path_like_prompt_shows_the_directory_scope_hint() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("this file"), "must name the current exact-file scope: {out:?}");
+        assert!(out.contains("./crates/tui/src/**"), "must show the directory glob Tab would switch to: {out:?}");
+        assert!(out.contains("Tab"), "must tell the developer how to switch scope: {out:?}");
+    }
+
+    /// After toggling, the hint's wording flips to describe the *current*
+    /// scope as the directory and Tab as the way back to the exact file —
+    /// otherwise the hint would misdescribe which pattern is actually about
+    /// to be persisted.
+    #[test]
+    fn toggling_scope_flips_which_pattern_the_hint_calls_current() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        app.decision_pattern_scope = crate::app::PatternScope::Directory;
+        let out = rendered(&mut app, 100, 20);
+        assert!(out.contains("this directory"), "the current scope must now read as the directory: {out:?}");
+        assert!(out.contains("./crates/tui/src/ui.rs"), "the exact file must still be shown as what Tab switches back to: {out:?}");
+    }
+
+    /// A non-path-like prompt (shell, an MCP tool's JSON blob) has nothing
+    /// to broaden — the hint must not appear and invite a Tab press that
+    /// would be a no-op.
+    #[test]
+    fn a_non_path_like_prompt_shows_no_scope_hint() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 20);
+        assert!(!out.contains("scope:"), "a shell target has no directory to broaden to, so no hint should render: {out:?}");
     }
 
     /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
@@ -2083,7 +2215,7 @@ mod tests {
     fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
         let mut app = app();
         let long_target = "x".repeat(200);
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: long_target.clone() };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: long_target.clone(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 60, 30);
         // Not a single contiguous run: each wrapped row now gets its own
@@ -2107,13 +2239,27 @@ mod tests {
     #[test]
     fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "y".repeat(200) };
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "y".repeat(200), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let backend = TestBackend::new(60, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let last_title_row = find_row(&buffer, "?");
+        // A run of ten consecutive `y`s only ever occurs inside the wrapped
+        // `shell: yyy...` line (200 `y`s, hard-broken mid-run since it has
+        // no whitespace to wrap at) — unlike a single "y", which the input
+        // box's placeholder text ("Type a message...") also contains, so
+        // the *last* row matching this longer run is unambiguously that
+        // long line's final wrapped row, whose trailing padding is what
+        // this test actually checks.
+        let needle = "y".repeat(10);
+        let last_title_row = (0..buffer.area.height)
+            .rev()
+            .find(|&y| {
+                let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+                row.contains(&needle)
+            })
+            .expect("row containing a run of y's not found");
         let last_col = buffer.area.width - 1;
         assert_eq!(
             buffer[(last_col, last_title_row)].bg,

@@ -1088,6 +1088,60 @@ clippy -p mjolnir-tui --all-targets -- -D warnings` both clean.
 tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
 clean.
 
+**Progress (2026-09-02, directory-scope prompt option + humanized prompt
+title):** Developer report: permission prompts were "aggressive" for
+ordinary reading (each new file under an already-trusted directory
+re-prompted individually) and didn't make clear what was actually being
+asked ("a human readable explanation... and then underneath in small/
+greyed out text what the raw tool call actually is"). Two changes, both
+scoped to a pending `PromptPayload::Tool` in the decision panel — no
+change to the Approve/Deny binary shape a pending `ToolApprovalRequested`
+(Edit) uses, per mjolnir's non-negotiable "Edit is never allowlistable."
+
+(1) `render_prompt_card` now shows a per-kind humanized sentence
+("Claude wants to read a file") as the accent/bold title, with the
+literal `kind: target` demoted to a dim subtitle underneath
+(`humanize_prompt`/`raw_prompt_call`, `ui.rs`) — same information as the
+old title, just split by primary/secondary instead of concatenated into
+one string a developer had to parse.
+
+(2) A new Tab-toggleable scope for the tier options' persisted pattern
+(`App::decision_pattern_scope`, `PatternScope::{Exact,Directory}`) —
+available only when the payload says `path_like: true` (threaded from
+mjolnir-tools' new `Tool::permission_target_is_path`, through
+mjolnir-permissions' `check_tool`) and the target has an enclosing
+directory to broaden to (`App::directory_glob`: `"./crates/tui/src/
+ui.rs"` → `"./crates/tui/src/**"`; a bare filename with no `/` offers
+nothing). Deliberately *not* a 9th option or a doubled allow/deny×scope
+list — per this spec's own Pitfall-adjacent discipline (see mjolnir-
+permissions.md's "four-tier prompt growing a fifth option... each tier
+doubles cognitive load") the 8 tier labels stay exactly as they were;
+Tab flips which pattern they'd all persist, shown via a new dim hint
+line above the list (`ui::scope_hint_line`, `App::decision_scope_hint`)
+— "scope: this file (...) · Tab for this directory (...)" and its
+reverse once toggled. The chosen pattern rides in a new `pattern` field
+on `PromptResponse::Tool` (mjolnir-permissions), replacing the
+dispatcher's old behavior of always persisting the exact target
+verbatim — see mjolnir-permissions.md/mjolnir-tools.md's matching
+Progress notes for the wire-type and dispatcher side. Resets to `Exact`
+at the same three points `decision_selected` already resets (a fresh
+request becoming the new front, or `resolve_decision` popping to the
+next one) — a broadened scope must never leak from one prompt onto an
+unrelated one.
+
+New coverage: 11 `app.rs` tests (`directory_glob` unit tests, scope-hint
+availability/absence, Tab toggling and its no-op case, the actual
+persisted-pattern round trip with and without toggling, and the reset-
+on-next-prompt guarantee) and 5 `ui.rs` tests (humanized title + dim raw
+call, their relative styling, the hint line's presence/wording in both
+scope states, and its absence for a non-path-like target). `mjolnir-tui`
+128 tests pass (112 + 16 new); full workspace `cargo test` and `cargo
+clippy -p mjolnir-permissions -p mjolnir-tools -p mjolnir-tui
+--all-targets -- -D warnings` (this pass's actually-touched crates) both
+clean. `examples/preview.rs` gained a `prompt_path` scene exercising the
+new hint, alongside the existing `prompt` scene (a `shell` target, which
+correctly shows no hint at all).
+
 - **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
   panel): the body (full-width scrollable conversation log, or the log
   beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress

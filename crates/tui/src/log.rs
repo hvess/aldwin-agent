@@ -19,7 +19,7 @@ pub enum LogEntry {
     /// The permission engine's four-tier / two-tier prompt —
     /// `PromptRequested`/`PromptResponse`. Resolved in place once answered,
     /// matched by `call_id` (same identifier `ApprovalCard` uses).
-    PermissionPrompt { call_id: String, payload: PromptPayload, resolution: Option<String> },
+    PermissionPrompt { call_id: String, payload: PromptPayload, resolution: Option<PromptResolution> },
     TurnEnded { reason: TurnEndReasonKind },
     Error { message: String },
     /// From `Event::Notice` — a message from outside the turn/step
@@ -27,6 +27,22 @@ pub enum LogEntry {
     /// `/reload-config` result). Rendered dim, not red like `Error` — it
     /// isn't necessarily bad news (a successful reload is a Notice too).
     Notice { message: String },
+}
+
+/// How a `PermissionPrompt` was answered, in the two forms the log needs:
+/// `allowed` picks the row's glyph colour, `label` is the phrase shown
+/// flush-right on it.
+///
+/// The label is written for a developer reading back over the session
+/// ("allowed for this project"), not derived from the wire type. It used to
+/// be `format!("{response:?}")`, so a resolved prompt printed a line of
+/// Rust — `Tool { decision: Allow, tier: Once, pattern: "touch
+/// /Users/…/hello.html" }` — into the middle of the conversation. Built by
+/// `App::describe_response`, which is the one place the mapping lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptResolution {
+    pub allowed: bool,
+    pub label:   String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

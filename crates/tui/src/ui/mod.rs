@@ -109,14 +109,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // `border-top`, both `1px solid var(--tui-line)`) — *not* the more
     // muted `rule`, which is only ever a freestanding separator *within*
     // content (a turn break, the rule above the options list).
-    frame.render_widget(edge(pal.line, pal.ground, area.width), top_rule_area);
+    //
+    // A border row is painted in the background of the surface it *belongs
+    // to*, never the frame's `ground`. In CSS the border is a 1px slice of
+    // a 61px band, so it touches its own bar with nothing in between; a
+    // terminal has to spend a whole 20px row on it, and filling that row
+    // with `ground` puts a visible strip of frame background between the
+    // bar and its own edge. Reported directly, for both of them: "the input
+    // field top border is sitting above the input field with some
+    // margin/gap, the same is for the very top session bar."
+    frame.render_widget(edge(pal.line, pal.bar, area.width), top_rule_area);
     // While a decision is pending this row is the *panel's* own top border,
     // and the reference gives that one `modal_line`, not `line` — a heavier
     // edge for a surface that has taken the composer's place. Drawing it
     // here rather than inside the panel is what keeps it to a single rule:
     // the bottom bar's edge and the panel's border are the same row, not
-    // two stacked ones.
-    let (edge_fg, edge_bg) = if pending { (pal.modal_line, pal.bar) } else { (pal.line, pal.ground) };
+    // two stacked ones. Its field is `band`, since the panel's own first
+    // row is the title band this border runs along the top of.
+    let (edge_fg, edge_bg) = if pending { (pal.modal_line, pal.band) } else { (pal.line, pal.bar_bottom) };
     frame.render_widget(edge(edge_fg, edge_bg, area.width), bottom_rule_area);
 
     // No drawn border and no title — the reference shows no box anywhere
@@ -152,7 +162,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // it once here can't drift from the panel's own colours the way a
         // parallel palette would.
         fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
-        decision::draw_panel(frame, bottom_bar_area, panel_lines);
+        decision::draw_panel(frame, bottom_bar_area, panel_lines, pal);
     } else {
         // blank / composer / blank / status / blank — `BottomBar.jsx`'s own
         // five rows, on its own raised ground.

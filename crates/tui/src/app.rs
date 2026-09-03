@@ -5,7 +5,7 @@ use mjolnir_core::{Command, Event, StepId};
 use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::log::{summarise, LogEntry, ToolActivityEntry, ToolActivityStatus};
+use crate::log::{summarise, LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus};
 use crate::scroll::ScrollState;
 
 const SUMMARY_MAX_LEN: usize = 80;
@@ -134,6 +134,44 @@ pub struct GrantSummary {
     pub scope:     PatternScope,
     pub rule:      String,
     pub alternate: Option<String>,
+}
+
+/// The permanent record one answered prompt leaves in the log — what the
+/// developer chose, said the way they chose it rather than the way it goes
+/// over the wire.
+///
+/// Deliberately derived from the `PromptResponse` rather than copied off
+/// the `DecisionOption` the developer picked: Ctrl+C resolves through
+/// `decline_outcome`, which builds a response directly and has no option to
+/// copy a label from, so sourcing it from the option would have left that
+/// one path — the one a developer under time pressure is most likely to
+/// take — with nothing to record. Phrasing follows `readme.md`'s Content
+/// Fundamentals: lowercase, past tense, no trailing period, since this
+/// renders as a right-flush result summary beside a tool line.
+fn describe_response(response: &PromptResponse) -> PromptResolution {
+    match response {
+        PromptResponse::Tool { decision: Decision::Deny, .. } => PromptResolution { allowed: false, label: "denied".into() },
+        PromptResponse::Tool { tier, .. } => PromptResolution {
+            allowed: true,
+            label:   match tier {
+                ToolTier::Once => "allowed once",
+                ToolTier::Session => "allowed for this session",
+                ToolTier::Project => "allowed for this project",
+                ToolTier::Always => "always allowed",
+            }
+            .into(),
+        },
+        PromptResponse::ContextFile { approve: false, .. } => PromptResolution { allowed: false, label: "not injected".into() },
+        PromptResponse::ContextFile { tier, .. } => PromptResolution {
+            allowed: true,
+            label:   match tier {
+                Some(ContextFileTier::Session) => "injected for this session",
+                Some(ContextFileTier::Project) => "injected for this project",
+                None => "injected",
+            }
+            .into(),
+        },
+    }
 }
 
 /// Derives the enclosing-directory glob for a path-shaped grant target —
@@ -937,7 +975,7 @@ impl App {
             DecisionOutcome::Prompt(response) => {
                 let Some(pending) = self.pending_prompts.pop_front() else { return };
                 let call_id = pending.call_id;
-                let label = format!("{response:?}");
+                let label = describe_response(&response);
                 for entry in self.log.iter_mut() {
                     if let LogEntry::PermissionPrompt { call_id: entry_call_id, resolution, .. } = entry {
                         if *entry_call_id == call_id {

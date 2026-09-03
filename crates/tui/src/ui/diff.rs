@@ -90,6 +90,34 @@ pub(super) fn number_lines(body: Vec<(Kind, String)>) -> Vec<DiffLine> {
         .collect()
 }
 
+/// `+84` / `+11 -2` — a parsed diff's own stat, in the diff colours, for a
+/// tool line's right-flush summary slot. The reference shows exactly this
+/// beside a `write`/`edit` row (`Turn.jsx`), and omits the side that is
+/// zero rather than printing `-0`.
+pub(super) fn stat_spans(body: &[DiffLine], ctx: Ctx) -> Vec<Span<'static>> {
+    let added = body.iter().filter(|l| l.kind == Kind::Added).count();
+    let removed = body.iter().filter(|l| l.kind == Kind::Removed).count();
+    let mut spans = Vec::new();
+    if added > 0 {
+        spans.push(Span::styled(format!("+{added}"), Style::default().fg(ctx.pal.add)));
+    }
+    if removed > 0 {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(format!("-{removed}"), Style::default().fg(ctx.pal.del)));
+    }
+    spans
+}
+
+/// Drops a unified diff's `a/` or `b/` side marker from a path, so a header
+/// line's `--- a/src/page.rs` reads as the file the developer knows —
+/// `src/page.rs` — wherever the path is shown as a target rather than as
+/// part of the diff text.
+pub(super) fn strip_prefix(path: &str) -> String {
+    path.strip_prefix("a/").or_else(|| path.strip_prefix("b/")).unwrap_or(path).to_string()
+}
+
 /// What to draw for each body line: the line itself, or a marker standing
 /// in for a run of lines that were left out.
 enum Shown<'a> {
@@ -129,13 +157,34 @@ fn collapse_context(body: &[DiffLine]) -> Vec<Shown<'_>> {
     shown
 }
 
-/// Right-aligned `old │ new` line-number gutter, blank on whichever side a
-/// line doesn't exist on (an added line has no old-file number, a removed
-/// line has no new-file number).
+/// `--gutter-line-no-inline: 45px` — 5 cells, the width `tokens/cells.css`
+/// names for a diff gutter inside the transcript, laid out in the reference
+/// as a 4-cell right-aligned number plus one cell of separation
+/// (`flex: 0 0 45px; text-align: right; padding-right: 9px`).
+const GUTTER: usize = 5;
+
+/// The `+ ` / `- ` sign that follows the gutter, before the code itself.
+const SIGN: usize = 2;
+
+/// Cells from the box's inner edge to the first character of code — what an
+/// in-box note (`⋯ 3 unchanged lines ⋯`) indents to, so it starts in the
+/// code column rather than in the gutter. The reference does exactly this
+/// with its own `81 more lines` row: an empty gutter, then the text.
+pub(super) const CODE_COLUMN: usize = GUTTER + SIGN;
+
+/// One right-aligned line number in the reference's own 5-cell gutter.
+///
+/// One number, not two. An earlier pass showed old and new side by side
+/// with a `│` between them, which took 11 cells before the sign — more than
+/// twice the grid's allowance — and pushed every line of code past the
+/// column the design puts it in: "the diff doesn't match the designs well,
+/// it appears to be very misaligned." A unified diff row exists on exactly
+/// one side of the change, so the number that side carries is the only one
+/// there is to show; a context row exists on both and takes the new-file
+/// number, the side the developer is about to be looking at.
 fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Color, ctx: Ctx) -> Span<'static> {
-    let o = old_no.map(|n| n.to_string()).unwrap_or_default();
-    let n = new_no.map(|n| n.to_string()).unwrap_or_default();
-    Span::styled(format!("{o:>4} {n:>4} │ "), Style::default().fg(ctx.pal.dim).bg(bg))
+    let n = new_no.or(old_no).map(|n| n.to_string()).unwrap_or_default();
+    Span::styled(format!("{n:>width$} ", width = GUTTER - 1), Style::default().fg(ctx.pal.dim).bg(bg))
 }
 
 /// Renders one diff line, prefixed with its old/new line-number gutter.
@@ -189,7 +238,10 @@ pub(super) struct Budget {
 /// mid-way and left a `┌───┐` with no `└───┘` on screen.
 pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let shown = if budget.collapse_context { collapse_context(body) } else { body.iter().map(Shown::Line).collect() };
-    let marker = |text: String| row.build(vec![Span::styled(text, Style::default().fg(ctx.pal.dim).bg(row.fill()))], ctx);
+    // Indented to [`CODE_COLUMN`] so a note lines up with the code it
+    // stands in for, past an empty gutter — the reference's own `81 more
+    // lines` row.
+    let marker = |text: String| row.build(vec![Span::styled(format!("{}{text}", " ".repeat(CODE_COLUMN)), Style::default().fg(ctx.pal.dim).bg(row.fill()))], ctx);
 
     let mut rows: Vec<Line<'static>> = Vec::new();
     for item in &shown {

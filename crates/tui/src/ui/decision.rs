@@ -11,14 +11,15 @@ use mjolnir_permissions::PromptPayload;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::diff;
-use super::grid::{Ctx, MARGIN_X};
+use super::grid::{elide, Ctx, MARGIN_X};
 use super::row::{rule_row, Row};
 use crate::app::{App, DecisionOption, GrantSummary, PatternScope, PendingFront};
+use crate::palette::Palette;
 
 /// Maximum rows the panel is allowed to claim, derived from the frame's
 /// total height rather than fixed — reserves room for at least one row of
@@ -49,10 +50,18 @@ pub(super) fn row_count(lines: &[Line<'static>], width: u16) -> usize {
     Paragraph::new(Text::from(lines.to_vec())).wrap(Wrap { trim: false }).line_count(width)
 }
 
-pub(super) fn draw_panel(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+pub(super) fn draw_panel(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, pal: &Palette) {
     if area.height == 0 {
         return;
     }
+    // The panel's own surface, painted before its content. `Row` already
+    // fills every row it builds, so this changes no pixel a correct panel
+    // draws — it changes what a *hole* in one shows. Anything that ever
+    // fails to carry a fill now falls through to the panel's `bar` rather
+    // than to the frame's `ground`, which is what the canvas underneath
+    // this area actually holds, and which read as a near-black gap in the
+    // dark theme and a white one in the light.
+    frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     // `Wrap { trim: false }` — matches [`row_count`]'s own wrap mode, so
     // the precomputed panel height and what actually renders here can never
     // desync.
@@ -127,24 +136,17 @@ impl PromptView {
 /// quoted block inside this card," the same nesting the command block uses
 /// for a different payload kind.
 ///
-/// Shared by two very different call sites: the live panel (`resolution:
-/// None`, `tail` carries the numbered options list and footer, built and
-/// owned by the caller) and a resolved entry's permanent record inline in
-/// the log (`resolution: Some(_)`, `tail` unused since the "resolved: …"
-/// line takes its place).
+/// Only ever the live panel — a *resolved* Edit's record in the log is a
+/// tool line plus its diff box on the turn's own body column, not a second
+/// copy of this card (see `transcript::render_entry`).
 ///
 /// `card_rows` caps the whole card — [`panel_lines`] passes what's left of
 /// the panel's budget once the tail is known, and the diff box is sized
 /// against whatever the card's own (wrappable, so measured rather than
 /// assumed) head leaves of that. The card therefore always fits its budget,
 /// which is what keeps [`clamp_panel`] from ever cutting into the box and
-/// leaving it unclosed. `None` (the resolved-in-log path, where the log
-/// scrolls) shows the whole diff.
-pub(super) fn approval_card(diff_text: &str, resolution: Option<bool>, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
-    approval_card_bounded(diff_text, resolution, tail, None, ctx)
-}
-
-fn approval_card_bounded(diff_text: &str, resolution: Option<bool>, tail: Vec<Line<'static>>, card_rows: Option<usize>, ctx: Ctx) -> Vec<Line<'static>> {
+/// leaving it unclosed.
+fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<usize>, ctx: Ctx) -> Vec<Line<'static>> {
     /// Two borders, one diff row and one elision marker — below this a box
     /// can't say anything a plain note wouldn't say better.
     const MIN_BOX_ROWS: usize = 4;
@@ -162,7 +164,7 @@ fn approval_card_bounded(diff_text: &str, resolution: Option<bool>, tail: Vec<Li
     let mut lines = vec![card.blank(ctx)];
     lines.extend(card.text("The agent wants to edit this file.", pal.body, ctx));
     if let Some(path) = path {
-        lines.extend(card.text(&path, pal.label, ctx));
+        lines.extend(card.text(&diff::strip_prefix(&path), pal.label, ctx));
     }
     lines.push(card.blank(ctx));
 
@@ -181,21 +183,13 @@ fn approval_card_bounded(diff_text: &str, resolution: Option<bool>, tail: Vec<Li
         lines.extend(diff::boxed(&body, budget, Row::boxed(pal.diff_box).inset(MARGIN_X, pal.bar), ctx));
     }
 
-    match resolution {
-        Some(approved) => {
-            let (word, fg) = if approved { ("approved", pal.add) } else { ("denied", pal.del) };
-            lines.push(card.blank(ctx));
-            lines.extend(card.text(&format!("resolved: {word}"), fg, ctx));
-            lines.push(card.blank(ctx));
-        }
-        None => lines.extend(tail),
-    }
+    lines.extend(tail);
     lines
 }
 
-/// The permission-prompt card — same two call sites and the same `tail`
-/// contract as [`approval_card`].
-pub(super) fn prompt_card(payload: &PromptPayload, resolution: Option<&str>, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
+/// The permission-prompt card — the live panel's body for a `PromptPayload`,
+/// with the same `tail` contract as [`approval_card`].
+fn prompt_card(payload: &PromptPayload, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let card = Row::card(pal.bar);
     let view = PromptView::of(payload);
@@ -209,23 +203,24 @@ pub(super) fn prompt_card(payload: &PromptPayload, resolution: Option<&str>, tai
         }
         None => lines.extend(card.text(&view.call, pal.label, ctx)),
     }
-    match resolution {
-        Some(r) => {
-            lines.extend(card.text(&format!("resolved: {r}"), pal.accent_text, ctx));
-            lines.push(card.blank(ctx));
-        }
-        None => lines.extend(tail),
-    }
+    lines.extend(tail);
     lines
 }
 
-/// `CommandBlock.jsx`: a `ground`-coloured field (distinct from the card's
-/// own `bar` surface, so it reads as an inset quoted block — the same
-/// nesting the diff box uses for a different payload kind) with the command
-/// prefixed by an accent `$`.
+/// `CommandBlock.jsx`: a `ground`-coloured field, *inset* from the card's
+/// own edges, with the command prefixed by an accent `$`.
+///
+/// The inset is the whole point of the component and it was missing: the
+/// reference wraps the field in the card's `padding: 0 27px` and gives the
+/// field its own `padding-left: 18px` on top, so the block reads as a
+/// quoted object sitting inside the card with `bar` visible down both
+/// sides, and the `$` lands on cell 5. Built without the margin it instead
+/// ran the full width of the panel — "the command row is not a box like in
+/// the design but instead completely fills the entire dialog edge-to-edge
+/// with no margin."
 fn command_block(command: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
-    let row = Row::card(pal.ground);
+    let row = Row::card(pal.ground).inset(MARGIN_X, pal.bar).pad(COMMAND_BLOCK_PAD);
     let spans = vec![Span::styled("$ ", Style::default().fg(pal.speaker_you)), Span::styled(command.to_string(), Style::default().fg(pal.text))];
     let mut lines = vec![row.blank(ctx)];
     lines.extend(row.build(spans, ctx));
@@ -233,14 +228,24 @@ fn command_block(command: &str, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
+/// `CommandBlock.jsx`'s own `padding-left: 18px` — 2 cells inside the
+/// field, on top of the `MARGIN_X` the field itself is inset by.
+const COMMAND_BLOCK_PAD: usize = 2;
+
 /// `Modal.jsx`'s title row: a field of `band` carrying the plain-lowercase
 /// kind (`permission`) in `accent_text`, no glyph (per the design system's
 /// revision log: a `▌` pip "indicated nothing" here), and the payload's own
-/// kind right-aligned. No rule of its own: the panel's single `border-top`
-/// is drawn by `super::draw`, on the row the bottom bar's own edge would
-/// otherwise occupy.
+/// kind right-aligned in `hunk_header` — accent-600, the same step the
+/// reference's `7 of 22` count uses on the commands panel's header, not the
+/// neutral `dim` a shared right-hand style used to force on it. No rule of
+/// its own: the panel's single `border-top` is drawn by `super::draw`, on
+/// the row the bottom bar's own edge would otherwise occupy.
 fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
-    Row::card(ctx.pal.band).split(vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.accent_text))], badge, ctx)
+    Row::card(ctx.pal.band).split(
+        vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.accent_text))],
+        vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.hunk_header))],
+        ctx,
+    )
 }
 
 /// "↑↓ to move   1-N to pick   ⏎ to confirm" — `KeyHints.jsx`'s
@@ -392,7 +397,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             // is what keeps `clamp_panel` below from ever having to cut
             // into the box and leave it unclosed.
             let card_rows = budget.saturating_sub(tail.len());
-            (approval_card_bounded(&pending.diff, None, Vec::new(), Some(card_rows), ctx), "edit".to_string(), tail)
+            (approval_card(&pending.diff, Vec::new(), Some(card_rows), ctx), "edit".to_string(), tail)
         }
         PendingFront::Prompt(pending) => {
             // Present for every Tool prompt (its second line, the Tab
@@ -412,7 +417,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             tail.extend(option_rows(&options, app.decision_selected, ctx));
             tail.extend(queue_note(app.pending_prompts.len()));
             let view = PromptView::of(&pending.payload);
-            (prompt_card(&pending.payload, None, Vec::new(), ctx), view.badge, tail)
+            (prompt_card(&pending.payload, Vec::new(), ctx), view.badge, tail)
         }
         PendingFront::None => return Vec::new(),
     };
@@ -438,7 +443,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // session" save nothing at all, and "always allow" writes to the global
     // file instead. Where each answer lands is now stated per option, on
     // the option's own row (`DecisionOption::detail`).
-    lines.push(Row::card(pal.bar_bottom).split(footer_hint(options.len(), ctx), "", ctx));
+    lines.push(Row::card(pal.bar_bottom).split(footer_hint(options.len(), ctx), Vec::new(), ctx));
     lines
 }
 
@@ -497,12 +502,3 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, ctx: Ctx) -> 
     }
 }
 
-/// Truncates to `max` characters with a trailing `…` — the design system's
-/// own elision glyph.
-fn elide(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        format!("{}…", text.chars().take(max).collect::<String>())
-    }
-}

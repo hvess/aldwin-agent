@@ -503,16 +503,52 @@ fn a_pending_approval_does_not_render_inline_in_the_conversation_log() {
     assert!(!out.contains("The agent wants to edit this file."), "a pending card must not render inline in the log any more — see the decision panel instead: {out:?}");
 }
 
-/// Once resolved, the full card (diff included) still leaves a
-/// permanent record inline in the log, unchanged from before this
-/// panel existed — only the *live* interaction moved, not the history.
+/// Once resolved, the edit still leaves a permanent record inline in the
+/// log — only the *live* interaction moved, not the history. The record
+/// is `ToolLine.jsx`'s own shape (glyph, tool name, path, right-flush
+/// stat) over the diff box, not a second copy of the decision panel's
+/// card: a resolved decision is a tool call that happened, and the
+/// reference renders one of those as a line of turn content, on the same
+/// body column as everything else in the turn.
 #[test]
 fn a_resolved_approval_still_leaves_a_full_record_in_the_conversation_log() {
     let mut app = app();
-    app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: Some(true) });
+    app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "--- src/page.rs\n-old\n+new".into(), resolution: Some(true) });
     let out = rendered(&mut app, 100, 20);
-    assert!(out.contains("The agent wants to edit this file.") && out.contains("old") && out.contains("new"), "a resolved card should keep its full historical record: {out:?}");
-    assert!(out.contains("resolved: approved"));
+    assert!(out.contains("old") && out.contains("new"), "a resolved card should keep the diff it was answering: {out:?}");
+    assert!(out.contains("edit") && out.contains("src/page.rs"), "the record should name the tool and the file it touched: {out:?}");
+    assert!(out.contains("+1") && out.contains("-1"), "the record should carry the diff stat flush right, as ToolLine does: {out:?}");
+    assert!(!out.contains("The agent wants to"), "the panel's own prompting sentence has no place in the historical record: {out:?}");
+}
+
+/// A *denied* edit records the refusal rather than a `+n -m` stat that
+/// would describe a change which never happened, and shows no diff box:
+/// nothing was written, so there is nothing to quote.
+#[test]
+fn a_denied_approval_records_the_refusal_and_no_diff_box() {
+    let mut app = app();
+    app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "--- src/page.rs\n-old\n+new".into(), resolution: Some(false) });
+    let out = rendered(&mut app, 100, 20);
+    assert!(out.contains("denied"), "a denied edit should say so: {out:?}");
+    assert!(!out.contains('┌'), "a denied edit wrote nothing, so it should quote no diff: {out:?}");
+}
+
+/// A resolved permission prompt records what the developer chose in
+/// plain English. It used to record `format!("{response:?}")`, so the
+/// conversation log carried a line of Rust — reported directly as one of
+/// the "chat rows [that] do not match the designs at all".
+#[test]
+fn a_resolved_permission_prompt_records_a_human_phrase_not_a_debug_string() {
+    let mut app = app();
+    app.log.push(LogEntry::PermissionPrompt {
+        call_id:    "c1".into(),
+        payload:    PromptPayload::Tool { kind: "shell".into(), target: "touch hello.html".into(), path_like: false },
+        resolution: Some(crate::log::PromptResolution { allowed: true, label: "allowed once".into() }),
+    });
+    let out = rendered(&mut app, 100, 20);
+    assert!(out.contains("allowed once"), "the record should name the choice in the developer's own words: {out:?}");
+    assert!(out.contains("shell") && out.contains("touch hello.html"), "the record should name the call it answered: {out:?}");
+    assert!(!out.contains("decision:") && !out.contains("tier:"), "no wire-type debug formatting may reach the log: {out:?}");
 }
 
 #[test]
@@ -826,8 +862,11 @@ fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
     // count is the command block's own full 200 plus whatever of the
     // rule survives elision past its "shell:" prefix. Derived from the
     // constant rather than written out, so tuning the elision width
-    // can't silently turn this into a test of nothing.
-    let in_grant_line = GRANT_RULE_MAX - "shell:".len();
+    // can't silently turn this into a test of nothing. `- 1` for the `…`
+    // itself: `grid::elide` bounds the *whole* result to `max` cells,
+    // the trailing glyph included, since its callers are hand-composed
+    // rows that have exactly that many cells to spend.
+    let in_grant_line = GRANT_RULE_MAX - "shell:".len() - 1;
     assert_eq!(out.matches('q').count(), 200 + in_grant_line, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
 }
 
@@ -868,12 +907,18 @@ fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
             row.contains(&needle)
         })
         .expect("row containing a run of y's not found");
+    // The block is inset by `MARGIN_X` (`CommandBlock.jsx` sits inside
+    // the card's own `padding: 0 27px`), so the frame's last column is
+    // the card's `bar` and the block's own last column is three in from
+    // it. Both are checked: the fill has to reach the block's edge, and
+    // the strip beyond it has to read as card rather than as more block.
     let last_col = buffer.area.width - 1;
     assert_eq!(
-        buffer[(last_col, last_title_row)].bg,
+        buffer[(last_col - MARGIN_X as u16, last_title_row)].bg,
         DARK.ground,
         "a wrapped command block row's trailing padding must keep its own background fill, not fall back to the frame background"
     );
+    assert_eq!(buffer[(last_col, last_title_row)].bg, DARK.bar, "the command block is inset from the card's edge, so the card's own surface shows beside it");
 }
 
 #[test]
@@ -887,12 +932,16 @@ fn approval_card_colors_added_and_removed_lines_distinctly() {
 
     let removed_row = find_row(&buffer, "old");
     let added_row = find_row(&buffer, "new");
-    // Column 3 lands inside "-old"/"+new" itself (past the box's own
-    // left `│` border), so any column here works; picked to also land
-    // on real text rather than the row's trailing padding.
-    assert_eq!(buffer[(3, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background across the row");
-    assert_eq!(buffer[(3, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background across the row");
-    assert_ne!(buffer[(3, removed_row)].bg, buffer[(3, added_row)].bg, "added and removed lines must be visually distinct");
+    // Column 3 is the box's own left `│`, which stays on the box's
+    // surface — in the reference the tint is a background on the row
+    // *inside* a `border: 1px solid var(--tui-line)`, so the border
+    // never takes it. Column 4 is the first cell of the tinted field.
+    const BORDER: u16 = MARGIN_X as u16;
+    const FIELD: u16 = BORDER + 1;
+    assert_eq!(buffer[(BORDER, removed_row)].bg, DARK.diff_box, "the box's border must stay on the box's own surface, not take the row's tint");
+    assert_eq!(buffer[(FIELD, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background across the row");
+    assert_eq!(buffer[(FIELD, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background across the row");
+    assert_ne!(buffer[(FIELD, removed_row)].bg, buffer[(FIELD, added_row)].bg, "added and removed lines must be visually distinct");
 }
 
 #[test]
@@ -909,13 +958,19 @@ fn approval_card_collapses_unchanged_context_beyond_the_radius() {
 }
 
 /// Regression test for explicit developer feedback that diffs rendered
-/// with no line numbers at all. `number_diff_lines` numbers each side
-/// relative to the shown diff (no absolute file offset is available —
-/// see its own doc comment); a context line carries the same number on
-/// both sides, a removed line only its old-file number, an added line
-/// only its new-file number.
+/// with no line numbers at all, re-pinned to the grid: the number sits
+/// right-aligned in `--gutter-line-no-inline`'s 5 cells, then the sign,
+/// then the code.
+///
+/// One number per row, not two. A two-column `old │ new` gutter took 11
+/// cells before the sign, more than twice the grid's allowance, and
+/// pushed every line of code out of the column the design puts it in
+/// ("the diff ... appears to be very misaligned"). A unified-diff row
+/// exists on exactly one side of the change, so the number that side
+/// carries is the only one there is to show; a context row takes the
+/// new-file number.
 #[test]
-fn diff_lines_show_old_and_new_line_numbers() {
+fn diff_lines_show_their_line_number_in_the_grids_five_cell_gutter() {
     let diff = "--- f.rs\n+++ f.rs\n one\n-old\n+new\n three\n";
     let mut app = app();
     app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
@@ -933,9 +988,12 @@ fn diff_lines_show_old_and_new_line_numbers() {
     let added_row = row_text(find_row(&buffer, "new"));
     // One space after the sign — it belongs to the `add`/`del` sign
     // token, which the reference colors as `+ ` / `- `, not to the code.
-    assert!(context_row.contains("1    1 │   one"), "a context line should show the same line number on both sides: {context_row:?}");
-    assert!(removed_row.contains("2      │ - old"), "a removed line should show only its old-file line number: {removed_row:?}");
-    assert!(added_row.contains("2 │ + new"), "an added line should show only its new-file line number: {added_row:?}");
+    // Four cells of right-aligned number plus one of separation, then
+    // the two-cell sign: code lands on the 8th cell of the box either
+    // way, which is what makes added, removed and context rows line up.
+    assert!(context_row.contains("   1   one"), "a context line takes its new-file number, in the 5-cell gutter: {context_row:?}");
+    assert!(removed_row.contains("   2 - old"), "a removed line shows its old-file number: {removed_row:?}");
+    assert!(added_row.contains("   2 + new"), "an added line shows its new-file number: {added_row:?}");
 }
 
 /// Regression test for explicit developer feedback that posting a chat
@@ -1283,11 +1341,14 @@ fn a_diff_fenced_code_block_renders_a_bordered_box_with_no_language_label() {
     assert!(out.contains('┌') && out.contains('└'), "a diff fence should draw InlineDiff's own real box border: {out:?}");
 
     // `CONTENT_INDENT`, not column 0 — the turn's label column sits
-    // ahead of the box; the tint starts on the box's own left `│` edge.
+    // ahead of the box. That cell is the box's own left `│`, which keeps
+    // the box surface; the tint starts in the cell after it.
     let removed_row = find_row(&buffer, "old line");
     let added_row = find_row(&buffer, "new line");
-    assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background starting at its box's left edge");
-    assert_eq!(buffer[(CONTENT_INDENT as u16, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background starting at its box's left edge");
+    let field = CONTENT_INDENT as u16 + 1;
+    assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.diff_box, "the box's left border keeps the box's own surface rather than the row's tint");
+    assert_eq!(buffer[(field, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background from its box's inner edge");
+    assert_eq!(buffer[(field, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background from its box's inner edge");
 }
 
 /// A diff fence at the very start of an assistant message (no leading
@@ -1302,7 +1363,7 @@ fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_box() {
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let removed_row = find_row(&buffer, "old line");
-    assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.del_bg, "the diff row's background must reach its box's left edge even with no leading prose ahead of it");
+    assert_eq!(buffer[(CONTENT_INDENT as u16 + 1, removed_row)].bg, DARK.del_bg, "the diff row's background must reach its box's inner edge even with no leading prose ahead of it");
 }
 
 /// Regression test for explicit developer feedback: an ordinary

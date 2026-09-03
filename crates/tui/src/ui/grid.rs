@@ -106,6 +106,32 @@ pub(super) fn with_label_column(lines: Vec<Line<'static>>, label: Option<(&str, 
         .collect()
 }
 
+/// Truncates to `max` *display cells* with a trailing `…` — the design
+/// system's own elision glyph, and the one way a hand-composed row (which
+/// has no wrapper of its own) is allowed to handle content wider than its
+/// column. `max == 0` yields nothing at all rather than a bare `…`, which
+/// on a column that narrow is a character spent saying nothing.
+pub(super) fn elide(text: &str, max: usize) -> String {
+    if text.width() <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.to_string().width();
+        if used + w > max.saturating_sub(1) {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
 /// Right-flushes `right` against `left` within `width` columns —
 /// `ToolLine.jsx`'s own shape (glyph/name/target on the left, a result
 /// summary flush to the right edge). Falls back to a single-space gap

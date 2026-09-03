@@ -274,7 +274,7 @@ fn long(app: &mut App) {
     app.log.push(LogEntry::PermissionPrompt {
         call_id:    "done-2".into(),
         payload:    PromptPayload::Tool { kind: "shell".into(), target: "ls -la".into(), path_like: false },
-        resolution: Some("allow once".into()),
+        resolution: Some(mjolnir_tui::PromptResolution { allowed: true, label: "allowed once".into() }),
     });
     app.status.turn = Some(9);
     app.status.step = Some(3);

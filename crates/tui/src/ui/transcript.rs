@@ -7,12 +7,15 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use super::diff;
-use super::grid::{justified_line, with_label_column, Ctx};
+use super::grid::{elide, justified_line, with_label_column, Ctx};
 use super::markdown::{self, Segment};
 use super::row::Row;
 use super::wrap::wrap_line;
+use mjolnir_permissions::PromptPayload;
+
 use crate::app::{App, PermState, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
@@ -184,12 +187,38 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         // all here — the decision panel (`super::decision`, a fixed
         // full-width band above the input) is the only place an unresolved
         // request is interactive, per the design system's own "Permission
-        // prompt" screen. Once resolved it still renders here — the log
-        // remains the permanent record. Not laid out under the label
-        // column: a decision card is its own full-width panel-styled block,
-        // not conversational turn content.
-        LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => super::decision::approval_card(diff, Some(*approved), Vec::new(), ctx),
-        LogEntry::PermissionPrompt { payload, resolution: Some(r), .. } => super::decision::prompt_card(payload, Some(r.as_str()), Vec::new(), ctx),
+        // prompt" screen. Once resolved it still renders here: the log is
+        // the permanent record.
+        //
+        // As a *record* it is a tool call the developer let through (or
+        // stopped), and the reference already has a shape for that —
+        // `ToolLine.jsx`, on the turn's own body column. It used to reuse
+        // the panel's card instead, so an answered prompt left a full-width
+        // `bar`-filled block sitting in the middle of the conversation,
+        // aligned to nothing around it, with the raw `PromptResponse` debug
+        // string underneath: "the following chat rows do not match the
+        // designs at all and are all misaligned and wonky."
+        LogEntry::PermissionPrompt { payload, resolution: Some(resolved), .. } => {
+            let (kind, target) = payload_call(payload);
+            let summary = Span::styled(resolved.label.clone(), Style::default().fg(if resolved.allowed { pal.dim } else { pal.del }));
+            with_label_column(vec![tool_line(&kind, &target, resolved.allowed, vec![summary], ctx)], None)
+        }
+        // An answered Edit gets the same tool line, over the diff it was
+        // answering — `Turn.jsx`'s own `write src/gateway/limit.rs  +84`
+        // row followed by an `InlineDiff.jsx` box, which is exactly what
+        // this entry has to show. The right-flush summary is the diff stat
+        // for an approved edit and the refusal for a denied one, since a
+        // denied edit's `+n -m` would describe a change that never happened.
+        LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => {
+            let (path, body) = diff::parse_body(diff);
+            let body = diff::number_lines(body);
+            let summary = if *approved { diff::stat_spans(&body, ctx) } else { vec![Span::styled("denied", Style::default().fg(pal.del))] };
+            let mut content = vec![tool_line("edit", &path.map(|p| diff::strip_prefix(&p)).unwrap_or_default(), *approved, summary, ctx)];
+            if *approved {
+                content.extend(diff::boxed(&body, diff::Budget { collapse_context: true, max_rows: None }, Row::boxed(pal.diff_box), ctx.body()));
+            }
+            with_label_column(content, None)
+        }
         LogEntry::ApprovalCard { resolution: None, .. } | LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
@@ -211,6 +240,48 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             vec![Line::from(vec![Span::styled("notice: ", Style::default().fg(pal.quiet)), Span::styled(message.clone(), Style::default().fg(pal.dim))])],
             None,
         ),
+    }
+}
+
+/// `ToolLine.jsx`, exactly as the reference lays it out: the status glyph,
+/// two spaces, the tool name in a 6-cell column (`read  `, `write `,
+/// `edit  `, `bash  `), then the target, with `summary` flush to the body
+/// column's right edge.
+///
+/// The target is elided rather than wrapped. This row is composed by hand
+/// on a right-flush layout, so a target wider than the column left would
+/// wrap under `Paragraph`'s own wrapper — which knows nothing about the
+/// label column already applied — and strand its tail against the frame's
+/// left edge, the failure this module's own doc comment describes. A shell
+/// command is arbitrarily long and completely ordinary input, so this is
+/// the common case, not the exotic one.
+fn tool_line(kind: &str, target: &str, ok: bool, summary: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
+    /// `read  ` / `write ` / `edit  ` / `bash  ` — the reference pads every
+    /// tool name into the same column so the targets line up under one
+    /// another.
+    const NAME_COL: usize = 6;
+    let pal = ctx.pal;
+    let width = ctx.body().width as usize;
+    let summary_width: usize = summary.iter().map(|s| s.content.width()).sum();
+    // Two cells of gap between the target and the summary at minimum, so
+    // the two never read as one string.
+    let room = width.saturating_sub(2 + NAME_COL).saturating_sub(summary_width).saturating_sub(2);
+    let left = vec![
+        Span::styled("●  ", Style::default().fg(if ok { pal.glyph_done } else { pal.del })),
+        Span::styled(format!("{kind:<NAME_COL$}"), Style::default().fg(pal.label)),
+        Span::styled(elide(target, room), Style::default().fg(pal.text)),
+    ];
+    justified_line(left, summary, width)
+}
+
+/// The `kind` and `target` a `PromptPayload` was asking about — the same
+/// two facts the decision panel's own `PromptView` reads off it, in the
+/// shape a tool line wants them.
+fn payload_call(payload: &PromptPayload) -> (String, String) {
+    match payload {
+        PromptPayload::Tool { kind, target, .. } => (kind.clone(), target.clone()),
+        PromptPayload::ContextFile { path } => ("context".into(), path.display().to_string()),
+        PromptPayload::Edit { kind } => ("edit".into(), kind.clone()),
     }
 }
 
@@ -239,23 +310,32 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
                 let (_, parsed) = diff::parse_body(&diff_text);
                 lines.extend(diff::boxed(&diff::number_lines(parsed), diff::Budget::default(), Row::boxed(pal.diff_box), body));
             }
-            // A real filled code-block box, with a dim language label
-            // instead of the fence's own literal ` ``` ` markers, on
-            // `diff_box` — the design system's one nested-quote surface,
-            // already carrying the inline diff for the same reason (a
-            // quoted block inside prose). `highlight_lines` picks the
-            // matching half of the `base16-ocean` pair from the app theme,
-            // so the surface follows the palette like every other one.
+            // A real code-block box, with a dim language label instead of
+            // the fence's own literal ` ``` ` markers, on `diff_box` — the
+            // design system's one nested-quote surface, already carrying
+            // the inline diff for the same reason (a quoted block inside
+            // prose). `highlight_lines` picks the matching half of the
+            // `base16-ocean` pair from the app theme, so the surface
+            // follows the palette like every other one.
+            //
+            // Bordered, and by the same `Row::boxed` the diff uses. The two
+            // are the *same* component in the design system — one quoted
+            // block on one nested surface — but this one used to render as
+            // a borderless field, so a code fence and a diff fence sitting
+            // in the same reply read as two unrelated treatments: "the diff
+            // boxes in the chat ... are completely different from the diff
+            // box seen in the permissions dialog."
             Segment::Code { lang, body: code } => {
-                let row = Row::card(pal.diff_box);
+                let row = Row::boxed(pal.diff_box).pad(1);
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
+                lines.push(row.border(true, body));
                 lines.extend(row.text(&label, pal.label, body));
                 lines.push(row.blank(body));
                 for code_line in highlight::highlight_lines(&lang, &code, pal.theme) {
                     let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.diff_box))).collect();
                     lines.extend(row.build(spans, body));
                 }
-                lines.push(row.blank(body));
+                lines.push(row.border(false, body));
             }
         }
     }

@@ -1992,6 +1992,129 @@ machines and dirty trees. Confirmed by regenerating, then forcing a
 snapshot's only change was the 96 identity rows; every other row was
 untouched.
 
+**Progress (2026-09-03, fourth developer round — surfaces, the resolved-
+decision record, and a terminal-free screenshot loop):** seven reports, six
+of them defects with a single shared root cause and one a palette question
+left open at the bottom of this entry.
+
+New tooling first, because it is what found the rest. `examples/snapshot.rs`
+draws every scene into a `TestBackend` and writes each frame as a
+self-contained HTML page — one styled run per cell run on the design
+system's own 9×20px grid — which headless Chromium screenshots directly. No
+tmux session, no real terminal, no interactive step, so a frame can be
+rendered and *looked at* in one command. `examples/preview.rs` stays for
+driving a real terminal; this is the comparison loop. `Color::Reset` renders
+magenta on purpose: a cell the app never coloured is a hole in the palette,
+and the point is to see holes rather than plausible-looking output.
+
+The shared root cause: **a span with no explicit `bg` does not paint one**.
+It keeps whatever the buffer already held, which under the decision panel is
+the frame's `ground` — `ui::draw` fills the whole frame with it before
+anything else. `Row` filled every span it built, so the contract held
+wherever `Row` was in charge; three call sites handed spans in raw and
+silently opted out. Measured against a Chromium render of our own frame:
+the cell under the panel title was `#161826`, the frame ground, inside a
+`#202d39` band. Reported as "the title 'permission' has a dark background."
+In the light theme the same holes are white boxes around `permission` and
+around every footer key hint. Fixed at the primitive — `Row::on_field`
+paints the row's own fill onto any span that didn't ask for one, and a span
+that *did* (a diff row's tint) is untouched — and again as a backstop, with
+`decision::draw_panel` painting `bar` under the panel so a future leak lands
+on the panel rather than through it.
+
+The rest, each verified against the rendered reference frame rather than
+against its markup alone:
+
+- **Border rows floated in the frame background.** `edge()` painted its row
+  `ground`, so between the top bar and its own `border-bottom` sat a strip
+  of frame background, and likewise under the bottom bar's `border-top`: "the
+  input field top border is sitting above the input field with some
+  margin/gap, the same is for the very top session bar." In CSS the border is
+  1px of a 61px band and touches its own bar; a terminal spends a whole row
+  on it, so that row now carries the background of the surface it belongs to
+  — `bar` above, `bar_bottom` below, `band` when the panel has taken those
+  rows.
+- **`CommandBlock.jsx` had lost its inset.** The reference wraps the field in
+  the card's `padding: 0 27px` and gives the field its own `padding-left:
+  18px`, so it reads as a quoted object with `bar` down both sides and the
+  `$` on cell 5. Built on `Row::card` alone it ran the panel's full width:
+  "not a box like in the design but instead completely fills the entire
+  dialog edge-to-edge with no margin." `Row::pad` makes the second inset
+  expressible; the block is now `Row::card(ground).inset(MARGIN_X, bar).pad(2)`.
+- **The diff gutter was 11 cells against the grid's 5.** A two-column
+  `old │ new` gutter pushed every line of code out of its column
+  (`--gutter-line-no-inline: 45px`). A unified-diff row exists on exactly one
+  side of the change, so there is only ever one number to show; context rows
+  take the new-file number. In-box notes now indent to the code column past
+  an empty gutter, as the reference's own `81 more lines` row does.
+- **The diff box's borders took the row tint.** `with_fill` swapped the
+  field the `│` sides were drawn on, so they went green or red — "the borders
+  are not aligned with the background at all." `Row` now carries `field`
+  (the box) separately from `bg` (the row), and only `bg` is swapped.
+- **A resolved decision rendered as the panel's card, inline.** An answered
+  prompt or edit left a full-width `bar`-filled block in the middle of the
+  conversation, aligned to nothing around it — "misaligned and wonky" — with
+  `format!("{response:?}")` underneath, so the log carried a line of Rust:
+  `Tool { decision: Allow, tier: Once, pattern: "…" }`. A resolved decision
+  is a tool call that happened, and the reference already renders one of
+  those: `ToolLine.jsx` on the turn's own body column — glyph, tool name in a
+  6-cell column, target, right-flush summary — with the diff box under it for
+  an edit. `log::PromptResolution` replaces the debug string with
+  `allowed` + a phrase written for a developer reading back over the session,
+  built by `app::describe_response` from the `PromptResponse` rather than
+  from the `DecisionOption`: Ctrl+C resolves through `decline_outcome`, which
+  has no option to copy a label off, and that is the path a developer under
+  time pressure is likeliest to take.
+- **A code fence and a diff fence were different components.** Both are the
+  system's one nested-quote surface (`--tui-diff-box`), but only the diff
+  drew `InlineDiff.jsx`'s border, so the two read as unrelated treatments in
+  the same reply. The code block is bordered now, from the same `Row::boxed`.
+- Smaller, found while measuring: the panel badge was `dim` where the
+  reference gives it `hunk_header` (`Row::split` hardcoded one colour for a
+  right-hand slot with two different jobs); a diff header's `a/`/`b/` side
+  marker leaked into the path shown as a target; `grid::elide` bounds the
+  whole result to `max` cells, the `…` included, since every caller is a
+  hand-composed row with exactly that many to spend.
+
+Verified by re-rendering all six scenes in both themes and comparing against
+a Chromium render of `Agent TUI v2.dc.html`'s own `4a` and `5a` frames, not
+against the previous pass's output. `cargo test --workspace` green (155 in
+`mjolnir-tui`), `cargo clippy -p mjolnir-tui --all-targets -D warnings`
+clean. `render.snap` regenerated deliberately after eyeballing the frames.
+
+**Open, and deliberately not decided here — the palette itself.** The
+seventh report was "because the colors are wrong, everything is quite hard
+to read, we must solidify the color palette for both dark and light modes."
+Every hex in `palette.rs` was re-checked against `tokens/semantic.css` and
+`tokens/palette.css` this session and matches verbatim, so this is not
+drift — it is the imported values themselves. Measured (WCAG contrast, every
+text role against every surface it actually renders on):
+
+| | dark | light |
+|---|---|---|
+| `dim` (timestamps, tool summaries, option details, placeholder) | 2.3–2.7 | 3.5–4.0 |
+| `glyph_done` / `glyph_pending` (`●` `○`, the transcript's status marks) | 2.3–2.7 | 2.0–2.7 |
+| `label` / `context` | 3.3–4.1 | 3.5–4.0 |
+| `mark` (the accent `▌` and composer `▶`) | 6.0–7.6 | 2.9–3.9 |
+| `rule` on `bar` (the rule above the options list) | 1.07 | **1.00 — identical** |
+| `bar_bottom` vs `diff_box` vs `ground` | 1.01–1.05 | **1.00 — identical** |
+
+AA text is 4.5, AA large and non-text is 3.0. In the light theme
+`quiet`/`label`/`context`/`dim` are one value across four roles, and
+`bar`/`bar_bottom`/`diff_box` are one value across three, so the metadata
+hierarchy and three of the five planes do not exist. Both themes draw a rule
+on the panel that is invisible on it.
+
+The obstacle is that the fix cannot come from the documented ramp alone:
+four AA-passing metadata tiers on `#161826` would need steps between
+`#9397ab` and `#cfd3e5`, and the neutral ramp has one; separating
+`ground`/`bar_bottom`/`diff_box` needs values between `#161826` and
+`#232532`, and it has none. So closing this means new steps, which is
+inventing palette locally — the thing `.claude/CLAUDE.md`'s Design System
+section exists to forbid. Left for the developer to direct, with the
+measurements above as the case; whatever is chosen belongs in the design
+system first and in `palette.rs` second, or the two drift.
+
 
 ## References
 

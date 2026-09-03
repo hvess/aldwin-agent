@@ -8,7 +8,9 @@ use std::sync::OnceLock;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, Style as SynStyle, Theme, ThemeSet};
+use syntect::highlighting::{FontStyle, Style as SynStyle, Theme as SynTheme, ThemeSet};
+
+use crate::palette::Theme;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
@@ -17,13 +19,22 @@ fn syntax_set() -> &'static SyntaxSet {
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-/// `base16-ocean.dark` is one of syntect's bundled themes — picked as a
-/// reasonable default in the absence of any way to detect the terminal's
-/// actual background, same open question as mjolnir-tui.md's deferred
-/// accent color. Revisit together if/when that's settled.
-fn theme() -> &'static Theme {
-    static THEME: OnceLock<Theme> = OnceLock::new();
-    THEME.get_or_init(|| ThemeSet::load_defaults().themes["base16-ocean.dark"].clone())
+/// The `base16-ocean` pair, both bundled with syntect — matched siblings,
+/// so a code block's token colors keep the same relationships in either app
+/// theme instead of two unrelated schemes trading places. This used to be
+/// pinned to the dark half regardless, "in the absence of any way to detect
+/// the terminal's actual background"; `Theme` is that way — the developer
+/// states it outright in `tui.yaml` (see `palette::Theme::from_config`) —
+/// so the block no longer has to sit on a fixed-dark surface in a light
+/// session to keep dark-tuned syntax colors legible.
+fn theme(theme: Theme) -> &'static SynTheme {
+    static DARK: OnceLock<SynTheme> = OnceLock::new();
+    static LIGHT: OnceLock<SynTheme> = OnceLock::new();
+    let load = |name: &str| ThemeSet::load_defaults().themes[name].clone();
+    match theme {
+        Theme::Dark => DARK.get_or_init(|| load("base16-ocean.dark")),
+        Theme::Light => LIGHT.get_or_init(|| load("base16-ocean.light")),
+    }
 }
 
 /// Highlights `body` (a fenced code block's content, `lang` from the
@@ -32,10 +43,10 @@ fn theme() -> &'static Theme {
 /// theme's default foreground, just no per-token color) when `lang`
 /// doesn't match a known syntax — better than refusing to render the code
 /// at all over an unrecognized or missing language tag.
-pub fn highlight_lines(lang: &str, body: &str) -> Vec<Vec<Span<'static>>> {
+pub fn highlight_lines(lang: &str, body: &str, app_theme: Theme) -> Vec<Vec<Span<'static>>> {
     let set = syntax_set();
     let syntax = set.find_syntax_by_token(lang).unwrap_or_else(|| set.find_syntax_plain_text());
-    let mut highlighter = HighlightLines::new(syntax, theme());
+    let mut highlighter = HighlightLines::new(syntax, theme(app_theme));
 
     LinesWithEndings::from(body)
         .map(|line| {
@@ -66,21 +77,21 @@ mod tests {
 
     #[test]
     fn known_language_produces_more_than_one_color() {
-        let lines = highlight_lines("rust", "fn main() {\n    let x = 1;\n}\n");
+        let lines = highlight_lines("rust", "fn main() {\n    let x = 1;\n}\n", Theme::Dark);
         let colors: std::collections::HashSet<Color> = lines.iter().flatten().map(|span| span.style.fg.unwrap()).collect();
         assert!(colors.len() > 1, "expected keyword/identifier/etc. to use different colors, got {colors:?}");
     }
 
     #[test]
     fn unknown_language_falls_back_to_plain_text_without_panicking() {
-        let lines = highlight_lines("not-a-real-language", "hello\nworld\n");
+        let lines = highlight_lines("not-a-real-language", "hello\nworld\n", Theme::Dark);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].iter().map(|s| s.content.as_ref()).collect::<String>(), "hello");
     }
 
     #[test]
     fn output_preserves_line_count_and_strips_trailing_newlines_from_spans() {
-        let lines = highlight_lines("python", "a = 1\nb = 2\n");
+        let lines = highlight_lines("python", "a = 1\nb = 2\n", Theme::Dark);
         assert_eq!(lines.len(), 2);
         for line in &lines {
             for span in line {

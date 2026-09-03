@@ -9,12 +9,15 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, RunningTool, ScopeHint, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
-use crate::palette::Palette;
+use crate::palette::{self, Palette};
 
-/// Braille-dot spinner frames — the same glyph family `MJOLNIR_ART` traces
-/// the hammer in, so the "ascii trick" loading indicator reads as part of
-/// the same visual language rather than a mismatched borrowed spinner.
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// `--spinner-frames` from the Mjolnir Design System's `tokens/motion.css`
+/// — a quarter-block cycling at roughly 100ms per frame, replacing the
+/// earlier Braille-dot spinner that traced the (now-removed) hammer mark's
+/// own glyph family. `App::tick` still advances this every 120ms
+/// (`run.rs`) — close enough to the token's ~100ms that a redraw-driven
+/// tick (not a dedicated timer) reads as continuous motion.
+const SPINNER_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let pal = app.theme.palette();
@@ -22,9 +25,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Opaque canvas, drawn first and under everything else — without this,
     // every gap between panels (margins, the status-line row) renders as
     // the terminal's own background, which is exactly the "transparent app"
-    // look the redesign is replacing. See `Palette::bg_base`'s doc comment
+    // look the redesign is replacing. See `Palette::ground`'s doc comment
     // for the tier this belongs to.
-    frame.render_widget(Block::default().style(Style::default().bg(pal.bg_base)), area);
+    frame.render_widget(Block::default().style(Style::default().bg(pal.ground)), area);
     let input_height = input_area_height(&app.input);
     // Five bands: the body (conversation log), a 1-row blank spacer, a
     // 1-row status line (identity/activity — see `draw_status_line`), the
@@ -63,19 +66,60 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // shell command in `PromptPayload::Tool`'s `target`, say), and this
     // panel's own `Paragraph` below wraps rather than truncates, same as
     // the log panel's own render path.
-    let (panel_body, panel_tail) = decision_panel_lines(app, area.width);
-    let panel_lines = clamp_panel(panel_body, panel_max_height(area.height), panel_tail, pal, area.width);
+    let panel_lines = decision_panel_lines(app, area.width, area.height);
     let panel_height = panel_row_count(&panel_lines, area.width) as u16;
 
-    let [body_area, _spacer_area, status_area, panel_area, input_area] = Layout::vertical([
+    // Top bar reintroduced per the Mjolnir Design System's reference
+    // screens — every one of the five (session/permission/review/commands/
+    // first-run) opens with a persistent 3-row identity bar plus a 1-row
+    // rule below it (`tokens/cells.css`'s `--bar-top-h`, `TopBar.jsx`'s
+    // `borderBottom`). This is a structural addition, not a bare reskin —
+    // the prior visual-redesign pass had folded identity into a single
+    // status line right above the input; the source design puts identity
+    // back at the top and leaves that line for live turn activity only
+    // (see `draw_top_bar`/`draw_status_line`'s own doc comments for what
+    // each now owns).
+    // `BottomBar.jsx`, exactly as the reference lays it out: a `line` edge,
+    // then five rows — blank, composer, blank, status, blank. The status
+    // line sits *below* the composer, not above it; an earlier pass had the
+    // two swapped (reported directly: "the status line is above the text
+    // field input, but ... it is below in the designs").
+    //
+    // While a decision is pending the panel takes those rows instead —
+    // "The panel takes the composer's rows as well as its own, because
+    // input is disabled while a permission is pending: there is nothing to
+    // type into, so the prompt row is not drawn at all." mjolnir already
+    // blocks input then, so nothing is lost by not drawing it.
+    let pending = panel_height > 0;
+    let bottom_bar_height = if pending { panel_height } else { 1 + input_height + 1 + 1 + 1 };
+    let [top_bar_area, top_rule_area, body_area, bottom_rule_area, bottom_bar_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(panel_height),
-        Constraint::Length(input_height),
+        Constraint::Length(bottom_bar_height),
     ])
     .areas(area);
     let log_area = body_area;
+
+    // Both bars are separated from the body by a real structural border in
+    // `line` (`TopBar.jsx`'s `border-bottom` and `BottomBar.jsx`'s
+    // `border-top`, both `1px solid var(--tui-line)`) — *not* the more
+    // muted `rule`, which is only ever a freestanding separator *within*
+    // content (a turn break, the rule above the options list).
+    draw_top_bar(frame, top_bar_area, app);
+    let edge = |fg: Color, bg: Color| {
+        Paragraph::new(Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(fg)))).block(Block::new().style(Style::default().bg(bg)))
+    };
+    frame.render_widget(edge(pal.line, pal.ground), top_rule_area);
+    // While a decision is pending this row is the *panel's* own top border,
+    // and the reference gives that one `modal_line`, not `line` — a heavier
+    // edge for a surface that has taken the composer's place. Drawing it
+    // here rather than inside `panel_band` is what keeps it to a single
+    // rule: the bottom bar's edge and the panel's border are the same row,
+    // not two stacked ones.
+    let (edge_fg, edge_bg) = if pending { (pal.modal_line, pal.bar) } else { (pal.line, pal.ground) };
+    frame.render_widget(edge(edge_fg, edge_bg), bottom_rule_area);
 
     // No drawn border and no title — the reference screenshot that prompted
     // this pass shows no box anywhere around the conversation, just filled
@@ -86,7 +130,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // meaningless noise in the corner of the screen — removed outright, not
     // replaced, so `log_block` is now a plain background fill with nothing
     // reserving a title row.
-    let log_block = Block::new().style(Style::default().bg(pal.bg_base));
+    let log_block = Block::new().style(Style::default().bg(pal.ground));
     // `Block::inner` is a pure function of the block's border/title config
     // and the outer rect — computed exactly once here, and this same `Rect`
     // is what both `App::render_width`/`render_height` (cached for scroll
@@ -101,9 +145,103 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
 
     draw_log(frame, log_area, log_inner, log_block, app);
-    draw_status_line(frame, status_area, app);
-    draw_decision_panel(frame, panel_area, panel_lines);
-    draw_input(frame, input_area, app);
+
+    if pending {
+        // The transcript recedes while a decision is open — the reference
+        // puts the whole conversation column at `opacity:.35` in both of its
+        // panel scenes, so the panel reads as the one live surface rather
+        // than as another card competing with the history above it. Applied
+        // as a post-pass over the already-drawn cells rather than by
+        // threading a second faded palette through every `render_entry` arm:
+        // the effect is uniform over the region by definition, so
+        // compositing it once here can't drift from the panel's own colors
+        // the way a parallel palette would.
+        fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
+        draw_decision_panel(frame, bottom_bar_area, panel_lines);
+    } else {
+        // blank / composer / blank / status / blank — `BottomBar.jsx`'s own
+        // five rows, on its own raised ground.
+        frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_bar_area);
+        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(input_height),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(bottom_bar_area);
+        draw_input(frame, composer_area, app);
+        draw_status_line(frame, status_area, app);
+    }
+}
+
+/// Persistent 3-row identity bar — `TopBar.jsx`/`readme.md`'s "Session"
+/// screen section. Left: the harness name alone, primary text, no glyph —
+/// per the design system's own revision log ("the top bar carries no
+/// accent mark: the name is the brand, and a pip there indicated
+/// nothing"). Right: the model name and the running build version — the
+/// closest real facts Mjolnir has to the reference's `model · gauge ·
+/// cost` group; a context-window gauge and a per-session cost aren't
+/// tracked anywhere in `StatusInfo`, so neither is fabricated here (see
+/// this crate's `App::StatusInfo` — `model_name`/`turn`/`step`/
+/// `running_tools`/permission state only). Facts inside a group sit on the
+/// `·`-separated rhythm the revision log settled on, not the wider 6-cell
+/// gap that only ever separates *unrelated* groups.
+fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
+    let pal = app.theme.palette();
+    frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
+    let content_row = Rect { y: area.y + 1, height: 1, ..area };
+    let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
+
+    // "mjolnir      ~/src/gateway" — six cells part the name from the
+    // directory, the gap the reference reserves for two *unrelated* groups
+    // (facts within one group ride the tighter ` · ` rhythm instead — see
+    // the right group below). The working directory is real, always-
+    // available process state (`std::env::current_dir`), not fabricated;
+    // a git branch/dirty marker would need a new capability (shelling out
+    // to git at runtime) this pass doesn't add, so the identity group stops
+    // at cwd rather than showing a branch this crate has no way to know.
+    let mut left_spans = vec![Span::styled("mjolnir", Style::default().fg(pal.text))];
+    if let Some(cwd) = current_dir_display() {
+        left_spans.push(Span::raw("      "));
+        left_spans.push(Span::styled(cwd, Style::default().fg(pal.quiet)));
+    }
+    let left = Paragraph::new(Line::from(left_spans)).block(Block::new().padding(Padding::left(3)));
+    frame.render_widget(left, left_area);
+
+    // Three tokens, not one: the reference's right group is `quiet` for the
+    // model, `dim` for the `·` separators, and `text` for the last fact in
+    // the group (`$0.42` there, the build version here) — rendering the
+    // whole group in a single `label` flattened a deliberate three-step
+    // hierarchy into one tone. One space each side of the `·`, not two:
+    // these are facts *within* one group, and the wider six-cell gap is
+    // reserved for parting groups from each other.
+    let right = Paragraph::new(Line::from(vec![
+        Span::styled(app.status.model_name.clone(), Style::default().fg(pal.quiet)),
+        Span::styled(" · ", Style::default().fg(pal.dim)),
+        Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), Style::default().fg(pal.text)),
+    ]))
+    .alignment(ratatui::layout::Alignment::Right)
+    .block(Block::new().padding(Padding::right(3)));
+    frame.render_widget(right, right_area);
+}
+
+/// The session's working directory, `~`-shortened like a shell prompt —
+/// `TopBar.jsx`'s own left-group fact (`~/src/gateway`). `None` only if the
+/// process's cwd genuinely can't be read — not worth a placeholder for a
+/// case this rare.
+fn current_dir_display() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return Some(cwd.display().to_string());
+    };
+    if cwd == home {
+        return Some("~".to_string());
+    }
+    match cwd.strip_prefix(&home) {
+        Ok(rest) if !rest.as_os_str().is_empty() => Some(format!("~/{}", rest.display())),
+        _ => Some(cwd.display().to_string()),
+    }
 }
 
 /// Maximum rows the decision panel (see `decision_panel_lines`) is allowed
@@ -117,8 +255,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// even on a terminal too short to honor the reservation in full — a
 /// degenerate case, not one worth failing gracefully out of.
 fn panel_max_height(frame_height: u16) -> usize {
-    const RESERVED_FOR_REST_OF_UI: u16 = 1 /* one row of log */ + 1 /* spacer */ + 1 /* status line */ + 3 /* input, one line */;
-    (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI) as usize).max(6)
+    // While a decision is pending the panel *is* the bottom bar — it takes
+    // the composer's and status line's rows rather than stacking above them
+    // (see `draw`), so those aren't reserved here any more.
+    const RESERVED_FOR_REST_OF_UI: u16 = 3 /* top bar */ + 1 /* top bar rule */ + 1 /* one row of log */ + 1 /* bottom bar edge */;
+    // `decision_panel_lines` adds `panel_band`'s 2-row chrome and the
+    // footer's 3-row chrome (padding + rule + hint row) *outside* the
+    // budget this bounds (see that function's own doc comment on why) —
+    // reserved here too, so the combined total (band + clamped body +
+    // footer) still fits the same overall budget, not just the clamped
+    // body alone.
+    const PANEL_CHROME: u16 = 1 /* panel_band */ + 3 /* footer padding + rule + hint */;
+    (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI + PANEL_CHROME) as usize).max(6)
 }
 
 /// Wrapped-row count of `lines` at `width` — same `Paragraph::line_count`
@@ -127,6 +275,25 @@ fn panel_max_height(frame_height: u16) -> usize {
 /// wrapping line actually renders.
 fn panel_row_count(lines: &[Line<'static>], width: u16) -> usize {
     Paragraph::new(Text::from(lines.to_vec())).wrap(Wrap { trim: false }).line_count(width)
+}
+
+/// Composites every already-drawn cell in `area` toward its own background
+/// at `alpha`, the way CSS `opacity` would — see
+/// `palette::PANEL_TRANSCRIPT_OPACITY` for why the transcript needs it.
+/// Each cell fades toward *its own* `bg`, not one shared ground, so a cell
+/// sitting on a card or a diff band recedes against that surface rather than
+/// against the frame behind it. Backgrounds themselves are left alone: they
+/// are the surfaces being faded onto, and dissolving them too would erase
+/// the card edges the fade is supposed to preserve.
+fn fade_area(frame: &mut Frame, area: Rect, alpha: f32) {
+    let buf = frame.buffer_mut();
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            cell.fg = palette::fade(cell.fg, cell.bg, alpha);
+        }
+    }
 }
 
 fn draw_decision_panel(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
@@ -140,11 +307,11 @@ fn draw_decision_panel(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>)
 }
 
 fn input_area_height(input: &str) -> u16 {
-    // No border at all (see `draw_input`) — just top/bottom padding (1 row
-    // each, `Padding::new(2, 1, 1, 1)`) around the content, so a single-line
-    // draft sits centered in the box rather than glued to one edge of it.
-    let lines = input.matches('\n').count() as u16 + 1;
-    lines + 2
+    // Just the draft's own rows — the blank rows above and below it are the
+    // bottom bar's (`BottomBar.jsx`'s blank/composer/blank/status/blank),
+    // not the composer's own padding, so they're laid out once in `draw`
+    // rather than baked in here.
+    input.matches('\n').count() as u16 + 1
 }
 
 /// Builds every line the log panel's *inner* area can show, at `width` ×
@@ -175,7 +342,21 @@ fn build_log_lines(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
             continue;
         }
         if !lines.is_empty() {
-            lines.push(Line::default());
+            // A fresh `UserMessage`/`AssistantText` starts a new
+            // conversational turn and gets a real `rule` row between it and
+            // whatever came before — `readme.md`: "turns are parted by a
+            // flat rule one step more muted than the frame's borders," not
+            // just blank space. Tool activity/retry/error/notice entries
+            // continue the current turn rather than starting a new one, so
+            // they only get the plain blank row a turn's own internal
+            // groups get in the reference.
+            if matches!(entry, LogEntry::UserMessage { .. } | LogEntry::AssistantText { .. }) {
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled("─".repeat(width as usize), Style::default().fg(pal.rule))));
+                lines.push(Line::default());
+            } else {
+                lines.push(Line::default());
+            }
         }
         lines.extend(rendered);
     }
@@ -209,7 +390,7 @@ fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, 
     frame.render_widget(paragraph, inner);
 
     if !app.log.is_empty() && total > inner.height as usize {
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(pal.panel_border));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(pal.line));
         let mut state = ScrollbarState::new(total).position(offset as usize);
         // Renders into the block's own right-border column, inset by 1 row
         // top/bottom so it doesn't overwrite the panel's rounded corners —
@@ -233,223 +414,64 @@ pub(crate) fn log_row_count(app: &App, width: u16, height: u16) -> usize {
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).line_count(width)
 }
 
-/// The welcome banner shown above the conversation log on every draw: the
-/// "MJOLNIR" wordmark, then a Mjolnir (Thor's hammer) mark beside the
-/// tagline/version line — a mascot pivot away from mjolnir.md's
-/// originally-decided little owl, per explicit developer direction toward
-/// something more "aggressive/directive" (see mjolnir.md's Mascot section
-/// for the superseded rationale, and this function's own history for the
-/// several prior hammer designs: two procedural crosshatch-weave textures,
-/// then this literal photo trace rendered as Braille dots). `MJOLNIR_ART`
-/// is a literal trace of a real reference photo (thresholded, trimmed,
-/// resized preserving aspect, Gaussian-blurred before thresholding so fine
-/// knotwork linework survives as continuous strokes instead of fragmenting
-/// into speckle, read back one source pixel per Braille dot — 2×4 real
-/// sub-character dots per cell) rather than a hand-drawn or
-/// procedurally-generated shape — per explicit developer feedback that
-/// procedural attempts "weren't a true representation" of the reference
-/// images supplied. This is that original 21-row trace, restored after a
-/// detour: a later "fix trace quality, shrink it" pass replaced it with a
-/// smaller, differently-traced 16-row mark to fit beside the info block,
-/// and a further pass mirror-symmetrized *that* mark's head — but the
-/// smaller trace's head read as flat noise next to its own eye/loop, and
-/// no amount of further hand-tuning (restoring its pre-symmetry-fix
-/// linework, then a from-scratch symmetric double-loop) matched the
-/// detail of this original — per explicit developer feedback across that
-/// whole detour. Wider (35 vs. 27 chars) and taller (21 vs. 16 rows) than
-/// the mark it replaces; the info column beside it, the vertical-centering
-/// math, and `log::INTRO_LINE_COUNT` all derive from `MJOLNIR_ART.len()`/
-/// `MJOLNIR_ART_WIDTH` rather than hardcoding the row count, so they
-/// scale with it automatically. `WORDMARK_ART` is FIGlet's "ANSI Shadow" font — found
-/// after several earlier wordmark attempts (hand-drawn angular block
-/// letters; FIGlet's "Colossal"; FIGlet's "Whimsy", found by grepping the
-/// ~370-font xero/figlet-fonts collection for a fragment the developer had
-/// pasted; two further reference pastes that turned out not to be
-/// standard FIGlet fonts at all, most likely output from a gradient-shaded
-/// text-art generator rather than a monospace font file) — until the
-/// developer pasted a code snippet naming a `LOGO_ART` constant in this
-/// exact font rendering a different two-word product name, asking for the
-/// same treatment on "MJOLNIR"; the font itself (already fetched earlier
-/// in the session while chasing a different lead) needed no rediscovery,
-/// just re-rendering. See this crate's git history for the generating
-/// scripts; neither is kept in the repo since they're one-time art
-/// pipelines, not runtime code. Always exactly `log::INTRO_LINE_COUNT`
-/// lines — that constant is a plain `usize` (not derived from this
-/// function) so `ui.rs`'s own tests can compute banner-relative row
-/// offsets without duplicating this shape (see `INTRO_LINE_COUNT`'s doc
-/// comment); keep the two in sync by hand if either array or the border
-/// changes shape. Styled uniformly ACCENT+BOLD — a
-/// traced silhouette has no shading gradient to speak of, so per-glyph
-/// styling would be pointless; ACCENT is still the one deliberate
-/// expansion of accent beyond "card border and focused input only" (see
-/// the Palette Progress note in mjolnir-tui.md).
-const WORDMARK_ART: [&str; 6] = [
-    "███╗   ███╗     ██╗ ██████╗ ██╗     ███╗   ██╗██╗██████╗ ",
-    "████╗ ████║     ██║██╔═══██╗██║     ████╗  ██║██║██╔══██╗",
-    "██╔████╔██║     ██║██║   ██║██║     ██╔██╗ ██║██║██████╔╝",
-    "██║╚██╔╝██║██   ██║██║   ██║██║     ██║╚██╗██║██║██╔══██╗",
-    "██║ ╚═╝ ██║╚█████╔╝╚██████╔╝███████╗██║ ╚████║██║██║  ██║",
-    "╚═╝     ╚═╝ ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝",
-];
-
-/// Downscaled 2026-08-31 to 13×21 (from the 21×35 trace above/still in git
-/// history) per explicit developer feedback that the full-size mark read
-/// as "quite large" in the banner. Not a fresh trace or a hand edit: a
-/// script decoded every Braille cell of the original back into its 2×4 dot
-/// bitmap (84×70 dots), box-filtered that bitmap down by a uniform 0.6 in
-/// both dimensions (so the mark stays *proportionate* — same aspect ratio,
-/// not squashed on one axis), thresholded each output dot at ≥30% coverage,
-/// and re-encoded the result into Braille cells — same technique the
-/// original trace used going the other direction, just resampling
-/// pixel data instead of hand-placing it. The script isn't kept in the
-/// repo, same reasoning as the original trace/wordmark pipelines noted
-/// above.
-const MJOLNIR_ART: [&str; 13] = [
-    "⠀⠀⠀⠀⢀⣶⢛⣯⣿⣯⣿⣽⣿⣽⡛⣦⡀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⢸⣿⣿⢱⡒⣭⡟⣡⢒⡎⣷⣿⡇⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠘⢿⣘⠶⠵⣫⣾⡻⠮⠾⣃⡿⠃⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠘⡆⢠⡹⡿⢏⡄⢰⠃⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⡇⣸⡟⣧⢻⣇⢸⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⢀⡇⢿⠟⣵⢻⡿⢸⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⣼⢹⠫⠗⣋⠾⠝⡟⣇⠀⠀⠀⠀⠀⠀",
-    "⢀⣀⣀⣀⣀⣴⣣⡼⠷⠿⣿⡿⠾⢧⣼⣆⣀⣀⣀⣀⡀",
-    "⣸⢰⣶⡶⢒⣐⢶⡶⢛⣯⣝⡻⣿⡶⢢⣴⣶⢶⣶⡆⣷",
-    "⡟⣼⣿⣧⣛⡹⢸⢳⡟⣶⣦⣿⢸⣇⢿⣫⣭⢭⣍⠳⢹",
-    "⢧⣀⣒⡒⠶⢶⣿⣏⠳⣭⣛⣵⡿⣫⣶⣶⠶⢟⣛⣓⣸",
-    "⠀⠉⠈⠉⠉⠓⠮⣭⡛⢶⣭⡵⢞⣫⠵⠚⠋⠉⠉⠉⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠉⠳⣬⠞⠋⠀⠀⠀⠀⠀⠀⠀⠀",
-];
-
-/// Per-row color for `MJOLNIR_ART`: bright electric cyan-white at the top
-/// fading to a deep blue at the base, evoking current arcing down through
-/// the hammer — per explicit developer request for something "fancier"
-/// than a flat single color on the mascot art specifically. Interpolates
-/// linearly in RGB space; not a general loosening of the one-accent-color
-/// rule elsewhere (see the Palette Progress note in mjolnir-tui.md), just
-/// a further scoped expansion of it for this one mark, same as ACCENT
-/// itself already was.
-fn mjolnir_row_color(row: usize, total: usize) -> Color {
-    let t = row as f32 / (total.saturating_sub(1)).max(1) as f32;
-    let lerp = |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * t).round() as u8 };
-    Color::Rgb(lerp(210, 40), lerp(255, 90), lerp(255, 210))
-}
-
-/// Every `MJOLNIR_ART` row is exactly this many chars (not trimmed of
-/// trailing blank Braille cells), so the info column in `intro_lines`
-/// starts at the same screen column on every row regardless of how much
-/// art content that particular row has. `WORDMARK_ART` doesn't need this
-/// — nothing sits beside it — so its rows aren't held to a matching
-/// invariant.
-const MJOLNIR_ART_WIDTH: usize = 21;
-
-/// Reuses the diff-tint colors (`DIFF_ADD_FG`/`DIFF_DEL_FG`) rather than
-/// inventing new ones, since green-means-allowed/red-means-denied is the
-/// same "state at a glance" job those already do for added/removed diff
-/// lines. Rendered as a small padded chip (colored background, not just
-/// colored text) — per the posting-inspired UX pass: a categorical state
-/// word reads faster as a filled badge than as plain colored text sitting
-/// on the panel background, the same reasoning behind posting's
-/// `border-title-status`/method-color chips. Used only by the welcome hero
-/// (`intro_content`) as of the 2026-08-31 status-line correction — the
-/// permission summary was dropped from the always-visible status line
-/// per explicit developer request; this stays the one place the current
-/// directory's read/shell/edit grants are surfaced on screen.
+/// The welcome hero shown in place of the conversation log while it's empty
+/// — replaces the former hand-traced Braille hammer/FIGlet wordmark
+/// mascot outright, per the Mjolnir Design System's own explicit rule:
+/// "No logo. No mark was supplied and none was invented... every mark is a
+/// Unicode box-drawing or block character," and its Assets section is
+/// blunter still — "None. No images, no icons." A traced photo rendered as
+/// Braille dots is exactly the kind of image-as-logo the source rules out;
+/// this isn't a stylistic trim, it's bringing the one element that never
+/// matched the system's own stated identity model into line with it. The
+/// harness's identity now lives only in the top bar (`draw_top_bar`,
+/// plain "mjolnir" text, no glyph — the design system's revision log:
+/// "the top bar carries no accent mark: the name is the brand"); this hero
+/// is just the tagline plus the same stat facts the old banner's info
+/// column carried, laid out as `MetaRow`-style label/value pairs.
 fn access_spans(label: &'static str, state: PermState, pal: &Palette) -> Vec<Span<'static>> {
-    let (word, fg, bg) = match state {
-        PermState::Allowed => ("allow", pal.bright, pal.diff_add_bg),
-        PermState::Denied => ("deny", pal.bright, pal.diff_del_bg),
+    // No filled chip — the design system's own rule is that the accent is
+    // "a mark or a line, never a filled field," and none of its own
+    // components (`MetaRow`, `OptionRow`) use a background-filled badge for
+    // a state word; add/del (green/red) plain text already reads as
+    // allow/deny at a glance, the same "state at a glance" job the old chip
+    // did.
+    let (word, word_fg) = match state {
+        PermState::Allowed => ("allow", pal.add),
+        PermState::Denied => ("deny", pal.del),
     };
-    // Right-padded only (no space before the word) so the flattened text
-    // stays exactly `"{label}:{word} "` — preserves the `"read:deny"`-style
-    // substring several tests and the hero/header both already key on —
-    // while still giving the word itself a colored chip background.
-    vec![Span::styled(format!("{label}:"), Style::default().fg(pal.dim)), Span::styled(format!("{word} "), Style::default().fg(fg).bg(bg))]
+    vec![Span::styled(format!("{label}:"), Style::default().fg(pal.label)), Span::styled(format!("{word} "), Style::default().fg(word_fg))]
 }
 
-/// The welcome hero's content — Mjolnir hammer art beside the wordmark/
-/// tagline/stats column — unbordered. `hero_lines` (called only when the
-/// log is empty; see `build_log_lines`) centers this vertically within the
-/// log panel's own inner height and lets that panel's ratatui-drawn rounded
-/// border frame it. This used to end with a hand-drawn `┌─┐`/`└─┘` border of
-/// its own (`bordered()`, since removed) when the hero sat directly on the
-/// terminal background with no panel of its own — wrapping it in a second
-/// border now that it's nested inside the log panel's border just double-
-/// boxed the same content (tried during the redesign, discarded after
-/// screenshotting both).
+/// The welcome hero's content: a sentence of body prose, then `model` /
+/// `version` / `commit` / `access` facts on the transcript's own 12-cell
+/// label-column convention (`Turn.jsx`'s label gutter, echoed here since
+/// this hero has no art to sit beside any more).
 fn intro_content(status: &StatusInfo, pal: &Palette) -> Vec<Line<'static>> {
-    debug_assert!(
-        MJOLNIR_ART.iter().all(|row| row.chars().count() == MJOLNIR_ART_WIDTH),
-        "MJOLNIR_ART rows must stay fixed-width or the info column drifts off-alignment — see every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars"
-    );
-    let wordmark_style = Style::default().fg(pal.accent).add_modifier(Modifier::BOLD);
-    let tagline_style = Style::default().fg(pal.bright).add_modifier(Modifier::ITALIC);
-    let stat_label = Style::default().fg(pal.dim);
-    let stat_value = Style::default().fg(pal.bright);
+    let tagline_style = Style::default().fg(pal.body);
+    let stat_label = Style::default().fg(pal.label);
+    let stat_value = Style::default().fg(pal.value);
+    const LEFT_MARGIN: &str = "   ";
 
-    // Beside the art, not above or below it — per the standing developer
-    // rule (art left-aligned, text alongside it on the right). The
-    // wordmark block sits at the top of this column, tagline/stats below
-    // it, the whole column vertically centered against the art's height.
-    // Stats render as separate labeled lines (model/version/commit) —
-    // per explicit developer request, not packed onto one line. `access`
-    // is the fourth stat line, added 2026-08-31 per explicit developer
-    // request that the banner surface the current permission model (what's
-    // allowed/denied in this directory) rather than making the developer
-    // discover it only by triggering a prompt — the same merged
-    // session/project/global view (against an empty target, so it reads
-    // as "the broadest grant currently in force") already computed for the
-    // status bar's own read/shell/edit indicator (`App::refresh_permissions`
-    // / `perm_state`), just surfaced a second time where it's visible before
-    // the first turn even starts.
-    let mut info: Vec<Vec<Span<'static>>> = WORDMARK_ART.iter().map(|row| vec![Span::styled(*row, wordmark_style)]).collect();
-    info.push(vec![]);
-    info.push(vec![Span::styled("every strike is yours to call. nothing moves without you.", tagline_style)]);
-    info.push(vec![]);
-    info.push(vec![Span::styled("model    ", stat_label), Span::styled(status.model_name.clone(), stat_value)]);
-    info.push(vec![Span::styled("version  ", stat_label), Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), stat_value)]);
-    info.push(vec![Span::styled("commit   ", stat_label), Span::styled(env!("MJOLNIR_GIT_HASH"), stat_value)]);
-    let mut access = vec![Span::styled("access   ", stat_label)];
+    let mut content: Vec<Line<'static>> = Vec::with_capacity(8);
+    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("every strike is yours to call. nothing moves without you.", tagline_style)]));
+    content.push(Line::default());
+    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("model    ", stat_label), Span::styled(status.model_name.clone(), stat_value)]));
+    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("version  ", stat_label), Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), stat_value)]));
+    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("commit   ", stat_label), Span::styled(env!("MJOLNIR_GIT_HASH"), stat_value)]));
+    let mut access = vec![Span::raw(LEFT_MARGIN), Span::styled("access   ", stat_label)];
     access.extend(access_spans("read", status.read, pal));
     access.push(Span::raw("  "));
     access.extend(access_spans("shell", status.shell, pal));
     access.push(Span::raw("  "));
     access.extend(access_spans("edit", status.edit, pal));
-    info.push(access);
-    let info_offset = (MJOLNIR_ART.len().saturating_sub(info.len())) / 2;
-
-    // A small fixed left margin (matching the log panel's own left border +
-    // a little breathing room) rather than centering — per the standing
-    // developer rule that the banner should read left-to-right (art, then
-    // wordmark/info beside it), not sit centered in the middle of a wide
-    // terminal. A blank line above and below the art gives it vertical
-    // breathing room too, per the earlier explicit "padding all the way
-    // around" request — still honored, just no longer via a hand-drawn
-    // border's own margin math.
-    const LEFT_MARGIN: &str = "   ";
-    let mut content: Vec<Line<'static>> = Vec::with_capacity(MJOLNIR_ART.len() + 2);
-    content.push(Line::default());
-    content.extend(MJOLNIR_ART.iter().enumerate().map(|(i, art_row)| {
-        let art_style = Style::default().fg(mjolnir_row_color(i, MJOLNIR_ART.len())).add_modifier(Modifier::BOLD);
-        let mut spans = vec![Span::raw(LEFT_MARGIN), Span::styled(*art_row, art_style)];
-        if let Some(row_i) = i.checked_sub(info_offset) {
-            if let Some(line_spans) = info.get(row_i) {
-                spans.push(Span::raw("   "));
-                spans.extend(line_spans.iter().cloned());
-            }
-        }
-        Line::from(spans)
-    }));
-    content.push(Line::default());
+    content.push(Line::from(access));
     content
 }
 
 /// Vertically centers `intro_content` within the log panel's inner
-/// `height`; `height` is real render-time information, so this can only
-/// happen at draw time via `build_log_lines`, same as `MJOLNIR_ART`'s width
-/// used to be threaded through `bordered()`'s `width` parameter before the
-/// hero's own border was removed. On a terminal short enough that the
-/// content doesn't fit, `pad_top` saturates to 0 and the content simply
-/// starts at the top and scrolls like any other tall log content would.
+/// `height`. On a terminal short enough that the content doesn't fit,
+/// `pad_top` saturates to 0 and the content simply starts at the top and
+/// scrolls like any other tall log content would.
 fn hero_lines(status: &StatusInfo, height: u16, pal: &Palette) -> Vec<Line<'static>> {
     let content = intro_content(status, pal);
     let pad_top = (height as usize).saturating_sub(content.len()) / 2;
@@ -459,115 +481,194 @@ fn hero_lines(status: &StatusInfo, height: u16, pal: &Palette) -> Vec<Line<'stat
     lines
 }
 
+/// The design system's grid, in cells (`tokens/cells.css`, confirmed
+/// against every measurement in the reference frames themselves):
+///
+/// * `MARGIN_X` — `--margin-x: 27px` = 3 cells. *Every* content row in a
+///   frame carries this left/right margin: transcript turns, the top bar,
+///   the status line, the decision panel's own text rows, its footer. The
+///   one deliberate exception is a selectable option row, which the
+///   reference renders flush to the frame's left edge so its `▌` mark sits
+///   in cell 0 (see `render_decision_options`).
+/// * `LABEL_COL_WIDTH` — `--label-col: 108px` = 12 cells, the speaker /
+///   meta-label column.
+/// * `LABEL_GUTTER` — `--label-gutter: 18px` = 2 cells.
+/// * `CONTENT_INDENT` — `--body-col: 153px` = 17 cells from the frame
+///   edge, which is exactly `MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER`;
+///   body text in a turn always starts here.
+///
+/// An earlier pass used 10/2 with no margin at all, so every transcript row
+/// started 5 cells left of where the grid puts it — reported directly as
+/// "the chat rows themselves appear misaligned and do not follow the
+/// cell/grid system."
+const MARGIN_X: usize = 3;
+const LABEL_COL_WIDTH: usize = 12;
+const LABEL_GUTTER: usize = 2;
+const CONTENT_INDENT: usize = MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER;
+
+/// Cells a turn's body column actually has to work with at a given frame
+/// width: everything left of `CONTENT_INDENT` belongs to the margin and the
+/// label column, and `MARGIN_X` more is held back on the right — the
+/// reference's turn container is `padding: 0 27px`, a margin on *both*
+/// sides, so prose wraps and filled blocks (code fences, diff boxes) end
+/// one margin short of the frame's edge rather than running into it.
+fn body_column_width(width: u16) -> usize {
+    (width as usize).saturating_sub(CONTENT_INDENT).saturating_sub(MARGIN_X)
+}
+
+/// Lays `lines` out under `Turn.jsx`'s label column: `label` (if any) sits
+/// on the first row only, left-padded to `CONTENT_INDENT`; every other row
+/// — the first row too, when `label` is `None` — gets a blank
+/// `CONTENT_INDENT` prefix instead, so a tool-activity/retry/error/notice
+/// entry (which continues the previous turn rather than starting a new one;
+/// see `render_entry`) lines its content up under whichever speaker's turn
+/// it belongs to without repeating that speaker's name.
+fn with_label_column(lines: Vec<Line<'static>>, label: Option<(&str, Color)>) -> Vec<Line<'static>> {
+    let blank = " ".repeat(CONTENT_INDENT);
+    let margin = " ".repeat(MARGIN_X);
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let mut spans = Vec::with_capacity(line.spans.len() + 2);
+            match (i, label) {
+                // The label starts at the 3-cell margin — cell 3, not cell
+                // 0 — and the body column still lands on cell 17 regardless
+                // of how long the label itself is.
+                (0, Some((text, color))) => {
+                    let pad = (LABEL_COL_WIDTH + LABEL_GUTTER).saturating_sub(text.width());
+                    spans.push(Span::raw(margin.clone()));
+                    spans.push(Span::styled(text.to_string(), Style::default().fg(color)));
+                    spans.push(Span::raw(" ".repeat(pad)));
+                }
+                _ => spans.push(Span::raw(blank.clone())),
+            }
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Right-flushes `right` against `left` within `width` columns — `ToolLine.jsx`'s
+/// own shape (glyph/name/target on the left, a result summary flush to the
+/// right edge). Falls back to a single-space gap rather than clipping when
+/// the two sides don't leave room to space apart properly.
+fn justified_line(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+    let gap = width.saturating_sub(left_w).saturating_sub(right_w).max(1);
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.extend(right);
+    Line::from(spans)
+}
+
 fn render_entry(entry: &LogEntry, width: u16, pal: &Palette) -> Vec<Line<'static>> {
     match entry {
-        // Palette per mjolnir-tui.md: bright = assistant, muted gray +
-        // subtle background = user — these must not share a style, or the
-        // two speakers become indistinguishable in the log. A slash command
-        // is user input that never reaches the model (see mjolnir-cli's
-        // interceptor) — dim marks it as directed at the harness itself,
-        // not conversation, the same way tool metadata and notices are dim
-        // (and it skips the background tint, since it isn't a chat message).
+        // `Turn.jsx`: the `you` label in `speaker-you` (accent-toned), the
+        // `harness` label in `speaker-agent` (neutral) — content in `text`
+        // (primary) for a `you` turn, `body` for the agent's (see
+        // `render_assistant_text`). No filled background any more: the
+        // design system's own components never fill a chat message's
+        // background — flat colored text on the panel ground is the whole
+        // treatment; a slash command (directed at the harness, not the
+        // model — see `is_command`'s doc comment) skips the speaker label
+        // too, since it isn't conversational content.
         LogEntry::UserMessage { text } => {
-            // Slash-command lines skip the fill treatment entirely — dim,
-            // unfilled text — since they aren't a chat message (see
-            // `is_command`'s own doc comment: directed at the harness, never
-            // the model).
             if is_command(text) {
                 return text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(pal.dim)))).collect();
             }
-            // Flat filled "bubble", no left accent bar — per explicit
-            // developer feedback that the bar (mirroring OpenCode's own
-            // `border={["left"]}` treatment) was unwanted borrowed
-            // decoration; the background tint alone, padded to the full
-            // render width via `card_line` (which also gives every row its
-            // `BOX_PAD_H` left/right inset), already reads as a chat bubble
-            // even for a short message, not just a tinted prefix. A blank
-            // `BG_ELEMENT`-filled row above and below the text (see
-            // `card_padding_line`) gives the bubble the same top/bottom
-            // padding its own left/right inset already has — per explicit
-            // developer feedback that a chat message needs "padding on the
-            // top, the right, the left, and the bottom," equally on every
-            // side. Padding is sized in display columns
-            // (`UnicodeWidthStr::width`, inside `card_line`/`filled_line`),
-            // not `chars().count()` — a chat message can contain CJK/emoji
-            // double-width glyphs, and undercounting those overshoots the
-            // real render width, pushing the "single-row bubble" onto an
-            // extra wrapped row (see mjolnir-tui.md's wide-char Progress
-            // note).
-            let style = Style::default().fg(pal.user_fg).bg(pal.bg_element);
-            let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
-            lines.extend(text.lines().flat_map(|l| card_line(l, style, pal, width)));
-            lines.push(card_padding_line(pal.bg_element, pal, width));
-            lines
+            let inner_width = body_column_width(width);
+            let style = Style::default().fg(pal.text);
+            let content: Vec<Line<'static>> =
+                text.lines().flat_map(|l| wrap_prose_line(Line::from(Span::styled(l.to_string(), style)), inner_width)).collect();
+            with_label_column(content, Some(("you", pal.speaker_you)))
         }
-        LogEntry::AssistantText { text } => render_assistant_text(text, width, pal),
-        // A leading glyph per status — running/done/error — instead of a
-        // bracketed text tag, so a scan of the log reads statuses at a
-        // glance the same way the diff/access indicators already do
-        // elsewhere. Done/error reuse the diff-tint colors (green/red) —
-        // the same "state at a glance" job those already do — rather than
-        // introducing new ones.
-        LogEntry::ToolActivity { calls, .. } => calls
-            .iter()
-            .map(|c| {
-                let label = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
-                let (glyph, color, text) = match &c.status {
-                    ToolActivityStatus::Running => ("▸", pal.dim, label),
-                    ToolActivityStatus::Completed { is_error: false, summary } => ("✓", pal.diff_add_fg, format!("{label}: {summary}")),
-                    ToolActivityStatus::Completed { is_error: true, summary } => ("✗", pal.diff_del_fg, format!("{label}: {summary}")),
-                };
-                Line::from(Span::styled(format!("  {glyph} {text}"), Style::default().fg(color)))
-            })
-            .collect(),
-        // Amber — the one new color the redesign adds (`WARNING_FG`) — so a
-        // retry reads as worth noticing, not just more dim tool metadata.
+        LogEntry::AssistantText { text } => with_label_column(render_assistant_text(text, width, pal), Some(("harness", pal.speaker_agent))),
+        // `ToolLine.jsx`: a status glyph, the tool name, a right-flush
+        // result summary. mjolnir's `ToolActivityEntry` carries no separate
+        // target path distinct from the tool's own name (unlike the
+        // reference's `read src/gateway/mod.rs`), so the call id stands in
+        // for it, parenthesized, the same information this crate showed
+        // before this pass. The design system's glyph table has no distinct
+        // "failed" mark (`readme.md`'s Iconography table: only `●` done /
+        // `◐` running / `○` pending / `✔` accepted — "if a mark is needed
+        // and it is not in that table, do not draw one") — an error keeps
+        // the `●` done glyph but in `del` (red) instead of `add`, the same
+        // "colour carries the meaning" rule the rest of this system leans
+        // on throughout. No label of its own — a tool-activity group
+        // continues whichever turn's content column it renders under
+        // (`build_log_lines` never puts one between a turn and its own
+        // tool calls).
+        LogEntry::ToolActivity { calls, .. } => {
+            let inner_width = body_column_width(width);
+            let content: Vec<Line<'static>> = calls
+                .iter()
+                .map(|c| {
+                    let target = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
+                    // A *running* call's name is `accent_text` in the
+                    // reference ("`◐  bash  cargo test…`" — the live row is
+                    // the one the eye should land on), a finished one's is
+                    // ordinary `body`.
+                    let (glyph, text_color, summary) = match &c.status {
+                        ToolActivityStatus::Running => (Span::styled("◐ ", Style::default().fg(pal.glyph_running)), pal.accent_text, None),
+                        ToolActivityStatus::Completed { is_error: false, summary } => (Span::styled("● ", Style::default().fg(pal.glyph_done)), pal.body, Some(summary.clone())),
+                        ToolActivityStatus::Completed { is_error: true, summary } => (Span::styled("● ", Style::default().fg(pal.del)), pal.body, Some(summary.clone())),
+                    };
+                    let left = vec![glyph, Span::styled(target, Style::default().fg(text_color))];
+                    let right = match summary {
+                        Some(s) => vec![Span::styled(s, Style::default().fg(pal.dim))],
+                        None => vec![],
+                    };
+                    justified_line(left, right, inner_width)
+                })
+                .collect();
+            with_label_column(content, None)
+        }
+        // No glyph and no dedicated "warning" color — the design system has
+        // neither (its palette is ground/bar/text/body/code/context/value/
+        // label/dim/quiet/mark/band/accent-text/speaker/gauge/glyph/hunk/
+        // modal/diff, nothing named for a transient retry). `label` keeps it
+        // a quiet, informational fact rather than inventing a color outside
+        // that fixed vocabulary.
         LogEntry::RetryAttempt { info } => {
             let status = info.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
-            vec![Line::from(Span::styled(
-                format!("  ⟳ [retry {}] {} {status}: {}", info.attempt, info.provider, info.message),
-                Style::default().fg(pal.warning_fg),
-            ))]
+            let line = Line::from(vec![
+                Span::styled("retry ", Style::default().fg(pal.label).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} · attempt {} · {status}: {}", info.provider, info.attempt, info.message), Style::default().fg(pal.dim)),
+            ]);
+            with_label_column(vec![line], None)
         }
         // While pending (`resolution: None`), this renders nothing at all
-        // here — the decision panel (`decision_panel_lines`, a fixed band
-        // above the input, driven by `App::pending_approvals`/
-        // `pending_prompts`) is now the only place an unresolved request is
-        // interactive. Per explicit developer feedback: a card that
-        // appeared as "a temporary row in the chat" was "ugly, not clear,
-        // disjointed" — it could scroll out of view with the rest of the
-        // log, and there was no one consistent place to look for "what does
-        // the harness want from me right now." Once resolved, it still
-        // renders here exactly as before — the log remains the permanent
-        // record of what was approved/denied, only the *live* interaction
-        // moved.
+        // here — the decision panel (`decision_panel_lines`, a fixed
+        // full-width band above the input, driven by `App::
+        // pending_approvals`/`pending_prompts`) is the only place an
+        // unresolved request is interactive, per the design system's own
+        // "Permission prompt" screen. Once resolved, it still renders here
+        // as before — the log remains the permanent record. Not laid out
+        // under the label column — a decision card is its own full-width
+        // panel-styled block, not conversational turn content.
         LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => render_approval_card(diff, Some(*approved), Vec::new(), pal, width),
         LogEntry::ApprovalCard { resolution: None, .. } => Vec::new(),
         LogEntry::PermissionPrompt { payload, resolution: Some(r), .. } => render_prompt_card(payload, Some(r.as_str()), Vec::new(), pal, width),
         LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
-            // The ordinary case renders nothing at all — per explicit
-            // developer feedback that a "— answered —" row was redundant
-            // the moment the status line started showing live
-            // idle/thinking/working activity (`draw_status_line`); saying
-            // the turn ended is no longer new information by the time this
-            // entry appears. Cancelled/error keep their own inline text
-            // since neither outcome is otherwise visible anywhere once the
-            // turn ends.
-            match reason {
-                TurnEndReasonKind::EndTurn => vec![],
-                TurnEndReasonKind::Cancelled => vec![Line::from(Span::styled("— turn cancelled —", Style::default().fg(pal.dim)))],
-                TurnEndReasonKind::Error(message) => {
-                    vec![Line::from(Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim)))]
-                }
-            }
+            let line = match reason {
+                TurnEndReasonKind::EndTurn => return vec![],
+                TurnEndReasonKind::Cancelled => Line::from(Span::styled("— turn cancelled —", Style::default().fg(pal.dim))),
+                TurnEndReasonKind::Error(message) => Line::from(Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim))),
+            };
+            with_label_column(vec![line], None)
         }
-        // `diff_del_fg` rather than a bare `Color::Red` — cohesion with the
-        // rest of the error/removed/deny semantic group instead of a color
-        // that belongs to no other role in the palette.
-        LogEntry::Error { message } => vec![Line::from(Span::styled(format!("✗ error: {message}"), Style::default().fg(pal.diff_del_fg)))],
-        LogEntry::Notice { message } => vec![Line::from(Span::styled(format!("ℹ {message}"), Style::default().fg(pal.dim)))],
+        LogEntry::Error { message } => with_label_column(vec![Line::from(vec![
+            Span::styled("error: ", Style::default().fg(pal.del).add_modifier(Modifier::BOLD)),
+            Span::styled(message.clone(), Style::default().fg(pal.del)),
+        ])], None),
+        LogEntry::Notice { message } => with_label_column(vec![Line::from(vec![
+            Span::styled("notice: ", Style::default().fg(pal.quiet)),
+            Span::styled(message.clone(), Style::default().fg(pal.dim)),
+        ])], None),
     }
 }
 
@@ -615,82 +716,61 @@ fn split_code_fences(text: &str) -> Vec<Segment> {
     segments
 }
 
+/// Builds the `harness` turn's content — never indented itself; the caller
+/// (`render_entry`) lays the whole result out under the label column via
+/// `with_label_column`, so every box built here (diff, code block) sizes
+/// itself against `width - CONTENT_INDENT`, not the full panel width, or it
+/// would overflow past the right edge once that column is added back.
 fn render_assistant_text(text: &str, width: u16, pal: &Palette) -> Vec<Line<'static>> {
+    let inner_width = body_column_width(width) as u16;
     let mut lines: Vec<Line<'static>> = Vec::new();
     for segment in split_code_fences(text) {
         match segment {
-            // Left-inset by `BOX_PAD_H` (`indent_prose_line`) — no fill of
-            // its own (assistant prose deliberately stays unfilled; see
-            // mjolnir-tui.md's Palette section), but per explicit developer
-            // feedback every chat component should carry the same amount of
-            // padding, so plain prose still starts at the same column a
-            // filled chat bubble's own text does, via `filled_line`'s
-            // identical `BOX_PAD_H` inset.
+            // No fill of its own — `Prose.jsx` is plain colored text on the
+            // panel ground, no background.
             Segment::Prose(s) => {
-                // Pre-wrapped here (rather than left to the log paragraph's
-                // own `Wrap`) and indented per resulting row — see
-                // `wrap_prose_line`'s doc comment for why: `Wrap` has no
-                // concept of this line's left padding, so a wrapped
-                // continuation row it produced came out flush against the
-                // panel edge instead of under the inset every other row gets.
-                let inner_width = (width as usize).saturating_sub(BOX_PAD_H);
-                lines.extend(
-                    s.lines()
-                        .flat_map(|l| wrap_prose_line(render_markdown_line(l, pal), inner_width))
-                        .map(indent_prose_line),
-                );
+                lines.extend(s.lines().flat_map(|l| wrap_prose_line(render_markdown_line(l, pal), inner_width as usize)));
             }
             // A fenced ```diff block gets the same full-width red/green
-            // per-line treatment (now with a line-number gutter — see
+            // per-line treatment (with a line-number gutter — see
             // `number_diff_lines`) as the Edit approval card
             // (`render_diff_line`/`parse_diff_body`) instead of the generic
-            // code-block box below — per explicit developer feedback that a
-            // proposed diff inside assistant prose showing a box labeled
-            // "diff" around plain unhighlighted +/- text was the wrong
-            // treatment: the card mechanism already exists precisely for
-            // "show a diff," so this reuses it rather than inventing a
-            // second diff presentation.
+            // code-block box below — the card mechanism already exists
+            // precisely for "show a diff" (`InlineDiff.jsx`'s own job), so
+            // this reuses it rather than inventing a second diff
+            // presentation.
             Segment::Code { lang, body } if lang.eq_ignore_ascii_case("diff") => {
                 let (_, diff_body) = parse_diff_body(&body);
-                lines.extend(number_diff_lines(diff_body).iter().flat_map(|line| render_diff_line(line, pal, width)));
+                lines.extend(boxed_diff_lines(&number_diff_lines(diff_body), Inset::FLUSH, pal, inner_width));
             }
-            // A real filled code-block box — dark `CODE_BG`, a language
-            // label instead of the fence's own literal ` ``` ` markers, no
-            // hand-drawn `╭─`/`│ `/`╰─` ASCII border — per explicit
-            // developer feedback that the border read as "ugly ASCII art"
-            // and a code block should look like "a real code block in a
-            // document," the same "colored box, not a hand-drawn frame"
-            // treatment the diff/approval cards already got. `filled_line`
-            // gives every row (label included) the box's own left/right
-            // padding and a `card_padding_line` spacer under the label and
-            // at the bottom gives it top/bottom padding too, same as every
-            // other filled box in the log.
+            // A real filled code-block box, with a dim language label
+            // instead of the fence's own literal ` ``` ` markers, on
+            // `diff_box` — the design system's one nested-quote surface,
+            // already carrying the inline diff for the same reason (a
+            // quoted block inside prose), and re-tinted light by its own
+            // `.tui-light` scope. This used to be a fixed-dark constant
+            // because `highlight::highlight_lines` was pinned to syntect's
+            // `base16-ocean.dark` in both app themes, which would have been
+            // illegible on a light field; it now picks the matching half of
+            // the `base16-ocean` pair from the app theme, so the surface is
+            // free to follow the palette like every other one.
+            // `filled_line` gives
+            // every row (label included) the box's own left/right padding
+            // and a `card_padding_line` spacer under the label and at the
+            // bottom gives it top/bottom padding too, same as every other
+            // filled box in the log.
             Segment::Code { lang, body } => {
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.extend(card_line(&label, Style::default().fg(pal.dim).bg(pal.code_bg), pal, width));
-                lines.push(card_padding_line(pal.code_bg, pal, width));
-                for code_line in highlight::highlight_lines(&lang, &body) {
-                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.code_bg))).collect();
-                    lines.extend(filled_line(spans, pal.code_bg, width));
+                lines.extend(card_line(&label, Style::default().fg(pal.label).bg(pal.diff_box), pal, inner_width));
+                lines.push(card_padding_line(pal.diff_box, pal, inner_width));
+                for code_line in highlight::highlight_lines(&lang, &body, pal.theme) {
+                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.diff_box))).collect();
+                    lines.extend(filled_line(spans, pal.diff_box, inner_width));
                 }
-                lines.push(card_padding_line(pal.code_bg, pal, width));
+                lines.push(card_padding_line(pal.diff_box, pal, inner_width));
             }
         }
     }
-    // No extra leading/trailing blank rows of its own any more — per
-    // explicit developer feedback that assistant messages read with
-    // noticeably more top/bottom padding than the user's own input. The
-    // reason: `build_log_lines` already inserts one blank separator row
-    // between every pair of rendered entries. A filled bubble (user
-    // messages, code blocks, diff/approval cards) pads with its own
-    // `card_padding_line`, which is visually distinct from that blank
-    // separator (colored fill vs. plain gap), so the two don't read as
-    // doubled. Assistant prose has no fill to pad with, so it used to add
-    // its own *blank* row on top of the separator's blank row — two
-    // indistinguishable blank rows stacking into a gap twice the size of
-    // every other component's. Leaving padding to the separator alone
-    // matches assistant messages to the same single-row gap everything
-    // else gets.
     lines
 }
 
@@ -699,22 +779,21 @@ fn render_assistant_text(text: &str, width: u16, pal: &Palette) -> Vec<Line<'sta
 /// break, into however many `Line`s it takes.
 ///
 /// This exists instead of leaning on the log paragraph's own
-/// `Wrap { trim: false }` (`draw_log`) because `Wrap` has no concept of a
-/// per-row left inset: it treats one logical `Line`'s spans as a single
-/// continuous run of styled graphemes and only ever emits `indent_prose_line`'s
-/// inserted padding span wherever it happens to land in the first wrapped
-/// row — a real paragraph longer than one screen row came out with its
-/// first row correctly inset and every wrapped continuation row flush
-/// against the log panel's left edge (reported as: "the first line of text
-/// is correctly in line, but when the text wraps onto a second line, it
-/// doesn't respect the padding"). Doing the wrap here means every row this
-/// returns is already ≤ `max_width` columns before the caller insets it, so
-/// `Wrap` never has to touch it — the wrapping happens once, not twice.
+/// `Wrap { trim: false }` (`draw_log`) because `Wrap` has no concept of the
+/// label-column inset `with_label_column` applies afterward: it treats one
+/// logical `Line`'s spans as a single continuous run of styled graphemes,
+/// so a wrapped continuation row it produced would come out flush against
+/// the panel edge instead of under the rest of the turn's content (reported
+/// as: "the first line of text is correctly in line, but when the text
+/// wraps onto a second line, it doesn't respect the padding"). Doing the
+/// wrap here means every row this returns is already ≤ `max_width` columns
+/// before `with_label_column` insets it, so `Wrap` never has to touch it —
+/// the wrapping happens once, not twice.
 ///
 /// Doesn't hang-indent list/blockquote markers under wrapped continuation
 /// text (a wrapped `• ` bullet's second row starts at the same column every
 /// other prose row does, not under the first row's text) — only the flat
-/// inset every prose row gets from `indent_prose_line` regardless of what
+/// inset every prose row gets from `with_label_column` regardless of what
 /// produced it.
 fn wrap_prose_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
     #[derive(Clone)]
@@ -834,14 +913,6 @@ fn wrap_prose_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> 
         .collect()
 }
 
-/// Left-insets an unfilled line by `BOX_PAD_H` columns — a plain raw space,
-/// not a styled span, since there's no background to carry; see
-/// `render_assistant_text`'s `Prose` arm for why this exists.
-fn indent_prose_line(mut line: Line<'static>) -> Line<'static> {
-    line.spans.insert(0, Span::raw(" ".repeat(BOX_PAD_H)));
-    line
-}
-
 /// Renders one prose line (never a fenced-code line — those are already
 /// pulled out by `split_code_fences`) of LLM-authored markdown. Hand-rolled
 /// rather than pulling in a CommonMark crate — a real block-level parser
@@ -853,7 +924,7 @@ fn indent_prose_line(mut line: Line<'static>) -> Line<'static> {
 /// (bold/italic/underline/reversed/crossed-out) — mjolnir-tui.md reserves
 /// the one accent color for the approval card and focused input.
 fn render_markdown_line(line: &str, pal: &Palette) -> Line<'static> {
-    let base = Style::default().fg(pal.bright);
+    let base = Style::default().fg(pal.body);
     let trimmed_start = line.trim_start();
     let indent = &line[..line.len() - trimmed_start.len()];
 
@@ -902,7 +973,7 @@ fn parse_inline(text: &str, base: Style, pal: &Palette) -> Vec<Span<'static>> {
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(pal.code_fg)));
+                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(pal.code)));
                 rest = &stripped[end + 1..];
                 continue;
             }
@@ -1054,7 +1125,7 @@ fn highlight_command_tokens(line: &str, pal: &Palette) -> Line<'static> {
         // ordinary typed word rendered dark-on-our-own-dark-navy, unreadable
         // while typing. Reported directly: "text is dark on light mode and
         // it clashes with the dark background."
-        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(pal.dim) } else { Style::default().fg(pal.bright) };
+        let style = if KNOWN_COMMAND_WORDS.contains(&word) { Style::default().fg(pal.dim) } else { Style::default().fg(pal.text) };
         spans.push(Span::styled(word.to_string(), style));
         rest = tail;
     }
@@ -1105,15 +1176,12 @@ fn parse_diff_body(diff: &str) -> (Option<String>, Vec<(DiffLineKind, String)>) 
     (path, body)
 }
 
-/// Horizontal inset applied inside every filled box in the log — chat
-/// bubbles, code blocks, and diff/approval-card rows — so text doesn't sit
-/// flush against the box's own left/right edge. Per explicit developer
-/// feedback that chat messages need "padding on the top, the right, the
-/// left, and the bottom," and that every chat component should carry the
-/// same amount of it: one shared constant, applied by the one shared
-/// primitive below (`filled_line`), keeps every box's padding identical by
-/// construction instead of separately hand-tuned per call site.
-const BOX_PAD_H: usize = 1;
+/// Horizontal inset for a filled panel/card content row — the grid's own
+/// `MARGIN_X` (3 cells, `--margin-x: 27px`), which is what every
+/// `padding: 0 27px` row in the reference frames resolves to. Was 1 cell
+/// before the grid audit, which left every decision-panel row two cells
+/// left of where the design puts it.
+const BOX_PAD_H: usize = MARGIN_X;
 
 /// The shared padding primitive every filled box in the log builds its rows
 /// from: `BOX_PAD_H` columns of `bg`, then `spans`, then `bg`-filled columns
@@ -1140,7 +1208,10 @@ const BOX_PAD_H: usize = 1;
 /// anything this function produces, the same discipline `wrap_prose_line`
 /// itself already established for prose.
 fn filled_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'static>> {
-    let avail = (width as usize).saturating_sub(BOX_PAD_H);
+    // `padding: 0 27px` in the reference is a margin on *both* sides, so
+    // content wraps at `width - 2 * BOX_PAD_H` even though the filled row
+    // itself still runs the full width (it's the card's own surface).
+    let avail = (width as usize).saturating_sub(2 * BOX_PAD_H);
     wrap_prose_line(Line::from(spans), avail)
         .into_iter()
         .map(|row| {
@@ -1150,6 +1221,89 @@ fn filled_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'st
             out.push(Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg)));
             out.extend(row.spans);
             out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+            Line::from(out)
+        })
+        .collect()
+}
+
+/// `filled_line` without the `MARGIN_X` inset — content starts in cell 0.
+/// Only for a selectable option row (`render_decision_options`), the one
+/// row type the reference deliberately runs flush to the frame's own left
+/// edge so its `▌` selection mark lands in cell 0.
+fn flush_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'static>> {
+    wrap_prose_line(Line::from(spans), width as usize)
+        .into_iter()
+        .map(|row| {
+            let content_width: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            let pad = (width as usize).saturating_sub(content_width);
+            let mut out = row.spans;
+            out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+            Line::from(out)
+        })
+        .collect()
+}
+
+/// A real drawn one-cell border (`InlineDiff.jsx`: `border: 1px solid
+/// var(--tui-line)`) around a quoted diff, matching the design system's
+/// square-cornered, one-cell-thick box convention exactly — not a flat
+/// rule standing in for it. `diff_box_border(true, ...)` is the top edge
+/// (`┌─…─┐`), `diff_box_border(false, ...)` the bottom (`└─…─┘`); the
+/// vertical `│` sides come from `boxed_line` on every row in between.
+/// How far a bordered box is held off the edge of the surface it sits on,
+/// and what that held-off strip paints. The reference nests a diff box two
+/// different ways: inside the permission card it rides the card's own
+/// `padding: 0 27px` margin (`Inset::card`), while inside a turn's body
+/// column it sits flush against the column's left edge with no second
+/// margin of its own (`Inset::FLUSH`) — the body column's `CONTENT_INDENT`
+/// is already the only offset it needs.
+#[derive(Clone, Copy)]
+struct Inset {
+    cells: usize,
+    surround: Color,
+}
+
+impl Inset {
+    /// Flush against whatever column already positions the box — no margin,
+    /// so `surround` is never painted and its value doesn't matter.
+    const FLUSH: Inset = Inset { cells: 0, surround: Color::Reset };
+
+    /// The permission card's own `MARGIN_X` margin, painted in the card's
+    /// `bar` surface so the strip reads as card, not as diff.
+    fn card(pal: &Palette) -> Inset {
+        Inset { cells: MARGIN_X, surround: pal.bar }
+    }
+}
+
+fn diff_box_border(top: bool, pal: &Palette, bg: Color, inset: Inset, width: u16) -> Line<'static> {
+    let (left, right) = if top { ('┌', '┐') } else { ('└', '┘') };
+    let inner = (width as usize).saturating_sub(2 * inset.cells).saturating_sub(2);
+    let margin = || Span::styled(" ".repeat(inset.cells), Style::default().bg(inset.surround));
+    Line::from(vec![
+        margin(),
+        Span::styled(format!("{left}{}{right}", "─".repeat(inner)), Style::default().fg(pal.line).bg(bg)),
+        margin(),
+    ])
+}
+
+/// Like `filled_line`, but the left/right edge columns are a drawn `│`
+/// border (styled `line`, on `bg`) instead of blank fill — the vertical
+/// sides of `diff_box_border`'s box. `avail` reserves exactly one column on
+/// each side for the border itself, so wrapped content can never encroach
+/// on it.
+fn boxed_line(spans: Vec<Span<'static>>, bg: Color, inset: Inset, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    let avail = (width as usize).saturating_sub(2 * inset.cells).saturating_sub(2);
+    wrap_prose_line(Line::from(spans), avail)
+        .into_iter()
+        .map(|row| {
+            let content_width: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            let pad = avail.saturating_sub(content_width);
+            let mut out = Vec::with_capacity(row.spans.len() + 4);
+            out.push(Span::styled(" ".repeat(inset.cells), Style::default().bg(inset.surround)));
+            out.push(Span::styled("│", Style::default().fg(pal.line).bg(bg)));
+            out.extend(row.spans);
+            out.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+            out.push(Span::styled("│", Style::default().fg(pal.line).bg(bg)));
+            out.push(Span::styled(" ".repeat(inset.cells), Style::default().bg(inset.surround)));
             Line::from(out)
         })
         .collect()
@@ -1169,8 +1323,89 @@ fn filled_line(spans: Vec<Span<'static>>, bg: Color, width: u16) -> Vec<Line<'st
 /// helper doesn't pick one, it just reads it back out to pad with the
 /// matching color.
 fn card_line(content: &str, content_style: Style, pal: &Palette, width: u16) -> Vec<Line<'static>> {
-    let bg = content_style.bg.unwrap_or(pal.bg_base);
+    let bg = content_style.bg.unwrap_or(pal.ground);
     filled_line(vec![Span::styled(content.to_string(), content_style)], bg, width)
+}
+
+/// A full-width flat rule inside a card/panel — the design system's own
+/// revision log settled every freestanding rule as flat and single-color,
+/// not a fading gradient (see `Palette::rule`'s doc comment) — used above
+/// the decision panel's options list (`FadingRule`'s job in `readme.md`'s
+/// Permission screen) and, with `accent_fg: true`, as the panel's own
+/// one-cell top edge (`--tui-modal-line`).
+fn card_rule(fg: Color, bg: Color, width: u16) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width as usize), Style::default().fg(fg).bg(bg)))
+}
+
+/// A single-row footer inside a card/panel: `left` spans flush to the
+/// content's own left inset, `right` text flush to the right inset — the
+/// same left/right split `KeyHints.jsx`/`Modal.jsx`'s footer row uses
+/// (key hints on the left, a where-state-lives fact on the right). Assumes
+/// `left` plus `right` fit on one row (true for every real call site: a
+/// handful of short key hints, and a config path) rather than routing
+/// through `filled_line`'s wrap machinery for what's always short, fixed
+/// chrome text.
+fn card_footer_line(left: Vec<Span<'static>>, right: &str, bg: Color, pal: &Palette, width: u16) -> Line<'static> {
+    let left_width: usize = left.iter().map(|s| s.content.width()).sum();
+    let avail = (width as usize).saturating_sub(BOX_PAD_H * 2);
+    // On a terminal too narrow for both halves the right-hand token is
+    // dropped outright, not wrapped: this line is laid out by hand rather
+    // than by `Paragraph`'s wrapper, so an overlong row would spill onto a
+    // row *outside* the panel — the frame's own ground showing through
+    // under a fragment of provenance text. The keys on the left are what a
+    // developer actually needs to answer the prompt; the note on the right
+    // is the half that can go.
+    // `<`, not `<=`: at least one cell of gap has to survive between the two
+    // halves, or they'd read as one run-on string.
+    let right = if left_width + right.width() < avail { right } else { "" };
+    let right_width = right.width();
+    let gap = avail.saturating_sub(left_width.min(avail)).saturating_sub(right_width);
+    let mut spans = vec![Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg))];
+    spans.extend(left);
+    spans.push(Span::styled(" ".repeat(gap.max(1)), Style::default().bg(bg)));
+    if !right.is_empty() {
+        spans.push(Span::styled(right.to_string(), Style::default().fg(pal.dim).bg(bg)));
+    }
+    spans.push(Span::styled(" ".repeat(BOX_PAD_H), Style::default().bg(bg)));
+    Line::from(spans)
+}
+
+/// The decision panel's title band — `Modal.jsx`'s title row: a field of
+/// `band` (accent-900) carrying the plain-lowercase kind (`permission`) in
+/// `accent_text`, no glyph (per the design system's revision log: a `▌`
+/// pip "indicated nothing" here), and the payload's own kind right-aligned
+/// in `gauge_fill` (accent-600) — the same role `Modal`'s `badge` prop
+/// plays for `bash` in the reference. Prepended above whatever
+/// `render_approval_card`/`render_prompt_card` returns, and — together with
+/// `card_rule`'s accent top edge — kept outside `clamp_panel`'s budget
+/// entirely (see `decision_panel_lines`), so it can never be the thing that
+/// gets truncated away.
+fn panel_band(title: &str, badge: &str, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    // No rule of its own: the panel's single `border-top` is drawn by
+    // `draw`, on the row the bottom bar's own edge would otherwise occupy —
+    // see there for why the two can't both draw one.
+    vec![
+        card_footer_line(vec![Span::styled(title.to_string(), Style::default().fg(pal.accent_text))], badge, pal.band, pal, width),
+    ]
+}
+
+/// "↑↓ to move   1-N to pick   ⏎ to confirm" — `KeyHints.jsx`'s key-colored/
+/// verb-muted pair convention, groups apart the same way `BarGroup`'s 6-cell
+/// gap separates unrelated facts. Replaces the per-row shortcut column the
+/// panel used to need (`render_decision_options` now numbers every option
+/// instead), per the design system's own revision log on the permission
+/// screen: "the keys that were on the rows moved into the footer."
+fn decision_footer_hint(option_count: usize, pal: &Palette) -> Vec<Span<'static>> {
+    let key = Style::default().fg(pal.mark);
+    let verb = Style::default().fg(pal.quiet);
+    vec![
+        Span::styled("↑↓", key),
+        Span::styled(" to move      ", verb),
+        Span::styled(format!("1-{option_count}"), key),
+        Span::styled(" to pick      ", verb),
+        Span::styled("⏎", key),
+        Span::styled(" to confirm", verb),
+    ]
 }
 
 /// The Edit approval card: filled title and options list (same shape as
@@ -1193,11 +1428,18 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
     // A blank filled row top and bottom (see `card_padding_line`'s doc
     // comment) — plain terminal text sat flush against the card's edges,
     // which read as cramped next to the reference's generous interior
-    // padding.
-    let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
-    lines.extend(card_line("Approve this edit?", Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD), pal, width));
+    // padding. `bar` — the panel/card surface, per the design system's own
+    // "ground the chrome-bar colour" spec for the permission panel.
+    // Plain sentence, `body` color — not bold, not accent — matching the
+    // reference's own permission-body sentence ("The agent wants to run a
+    // shell command."): the title *band* above this (see `panel_band`)
+    // already carries the accent weight this row doesn't need to repeat.
+    // "The agent," not "Claude" — `readme.md`'s Content Fundamentals: third
+    // person for the model when the harness is speaking about it.
+    let mut lines = vec![card_padding_line(pal.bar, pal, width)];
+    lines.extend(card_line("The agent wants to edit this file.", Style::default().fg(pal.body).bg(pal.bar), pal, width));
     if let Some(path) = path {
-        lines.extend(card_line(&path, Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
+        lines.extend(card_line(&path, Style::default().fg(pal.label).bg(pal.bar), pal, width));
     }
 
     let n = body.len();
@@ -1212,11 +1454,19 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
         }
     }
 
+    // The diff quote is a real bordered box (`InlineDiff.jsx`: `border: 1px
+    // solid var(--tui-line)`) on `diff_box` — one step darker/lighter than
+    // the card's `bar` field, so it reads as "a quoted block inside this
+    // card," the same nesting `CommandBlock.jsx` (a `ground`-colored field
+    // inside the `bar`-colored permission panel) uses for a different
+    // payload kind.
+    lines.push(card_padding_line(pal.bar, pal, width));
+    lines.push(diff_box_border(true, pal, pal.diff_box, Inset::card(pal), width));
     let mut i = 0;
     while i < n {
         if keep[i] {
             let line = &body[i];
-            lines.extend(render_diff_line(line, pal, width));
+            lines.extend(render_diff_line(line, Inset::card(pal), pal, width));
             i += 1;
         } else {
             let elided_start = i;
@@ -1224,24 +1474,18 @@ fn render_approval_card(diff: &str, resolution: Option<bool>, pending_tail: Vec<
                 i += 1;
             }
             let count = i - elided_start;
-            lines.extend(card_line(
-                &format!("⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }),
-                Style::default().fg(pal.dim).bg(pal.bg_element),
-                pal,
-                width,
-            ));
+            let spans = vec![Span::styled(format!("⋯ {count} unchanged line{} ⋯", if count == 1 { "" } else { "s" }), Style::default().fg(pal.dim))];
+            lines.extend(boxed_line(spans, pal.diff_box, Inset::card(pal), pal, width));
         }
     }
+    lines.push(diff_box_border(false, pal, pal.diff_box, Inset::card(pal), width));
 
     match resolution {
         Some(approved) => {
-            lines.extend(card_line(
-                &format!("resolved: {}", if approved { "approved" } else { "denied" }),
-                Style::default().fg(pal.accent).bg(pal.bg_element),
-                pal,
-                width,
-            ));
-            lines.push(card_padding_line(pal.bg_element, pal, width));
+            let (word, fg) = if approved { ("approved", pal.add) } else { ("denied", pal.del) };
+            lines.push(card_padding_line(pal.bar, pal, width));
+            lines.extend(card_line(&format!("resolved: {word}"), Style::default().fg(fg).bg(pal.bar), pal, width));
+            lines.push(card_padding_line(pal.bar, pal, width));
         }
         None => lines.extend(pending_tail),
     }
@@ -1259,26 +1503,38 @@ fn card_padding_line(bg: Color, pal: &Palette, width: u16) -> Line<'static> {
 }
 
 /// Renders the decision panel's numbered, keyboard-navigable list of
-/// choices — one row per `DecisionOption`, `"{n}. {label}"` — replacing the
-/// old flat `"[y] approve   [n] deny"`-style keybinding hint entirely, per
-/// explicit developer request: "make sure the approval options appear as a
-/// list and not some weird keyboard shortcuts... key bindings for 1-3 or
-/// selecting with arrow keys and pressing enter are valid inputs." The
-/// currently selected row (`App::decision_selected`) gets a leading `▸`
-/// marker plus the accent color/bold — Up/Down navigation needs something
-/// visible to track, a number alone doesn't show *where the cursor is*
-/// versus what a digit key would jump straight to.
+/// choices — one row per `DecisionOption` — matching `OptionRow.jsx`'s own
+/// selection convention: the accent `▌` mark plus the `band` field
+/// together (never the mark alone), the number in `accent_text` on the
+/// selected row and `label` otherwise, per the design system's revision
+/// log on the permission screen ("options are numbered 1–4... the number is
+/// accent-300 on the selected row and neutral-600 on the rest") — no
+/// trailing per-row shortcut column any more; that moved into the panel's
+/// own footer (`decision_footer_hint`).
 fn render_decision_options(options: &[DecisionOption], selected: usize, pal: &Palette, width: u16) -> Vec<Line<'static>> {
     options
         .iter()
         .enumerate()
         .flat_map(|(i, opt)| {
-            let (marker, style) = if i == selected {
-                ("▸ ", Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD))
-            } else {
-                ("  ", Style::default().fg(pal.bright).bg(pal.bg_element))
-            };
-            card_line(&format!("{marker}{}. {}", i + 1, opt.label), style, pal, width)
+            let is_selected = i == selected;
+            let bg = if is_selected { pal.band } else { pal.bar };
+            let mark_fg = if is_selected { pal.mark } else { pal.mark_idle };
+            let number_fg = if is_selected { pal.accent_text } else { pal.label };
+            let label_fg = if is_selected { pal.text } else { pal.body };
+            // Flush to the frame's left edge — the one row type in the
+            // system that skips `MARGIN_X` ("Four option rows, flush to the
+            // frame's left edge like the command rows in 5c"). The exact
+            // cell positions the reference lays out: `▌` in cell 0, two
+            // spaces, the number in cell 3, two more spaces, then the label
+            // starting in cell 6 ("the number is a direct-pick accelerator,
+            // one cell after the mark and two cells before the label"). No
+            // period after the number.
+            let spans = vec![
+                Span::styled("▌  ", Style::default().fg(mark_fg).bg(bg)),
+                Span::styled(format!("{}  ", i + 1), Style::default().fg(number_fg).bg(bg)),
+                Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg)),
+            ];
+            flush_line(spans, bg, width)
         })
         .collect()
 }
@@ -1350,27 +1606,82 @@ fn diff_gutter(old_no: Option<usize>, new_no: Option<usize>, bg: Color, pal: &Pa
 
 /// Renders one kept diff line via `filled_line`, prefixed with its
 /// old/new line-number gutter (see `diff_gutter`). Added/removed lines get
-/// their semantic `DIFF_ADD_BG`/`DIFF_DEL_BG` tint (which wins over the
-/// card's own neutral fill) so a change reads as a colored row at a glance,
-/// not just a leading +/- character; context lines get the plain
-/// `BG_ELEMENT` card fill, same as every other card line, since only the
-/// changed lines' brighter tint should compete for attention.
-fn render_diff_line(line: &DiffLine, pal: &Palette, width: u16) -> Vec<Line<'static>> {
-    let (marker, fg, bg) = match line.kind {
-        DiffLineKind::Added => ("+", pal.diff_add_fg, pal.diff_add_bg),
-        DiffLineKind::Removed => ("-", pal.diff_del_fg, pal.diff_del_bg),
-        DiffLineKind::Context => (" ", pal.bright, pal.bg_element),
+/// their semantic `add_bg`/`del_bg` tint (which wins over `diff_box`, the
+/// surface the quoted diff sits on) so a change reads as a colored row at a
+/// glance, not just a leading +/- character — `InlineDiff.jsx`'s own row
+/// treatment; context lines get the plain `diff_box` fill and `context`
+/// text color, since only the changed lines' brighter tint should compete
+/// for attention.
+fn render_diff_line(line: &DiffLine, inset: Inset, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    // Sign and code text are two different tokens in the source
+    // (`--tui-add`/`--tui-del` for the `+`/`-` sign, `--tui-add-code`/
+    // `--tui-del-code` for the code text itself) — kept as separate spans
+    // rather than one combined color so both read exactly as `InlineDiff.jsx`
+    // does.
+    let (marker, sign_fg, code_fg, bg) = match line.kind {
+        DiffLineKind::Added => ("+ ", pal.add, pal.add_code, pal.add_bg),
+        DiffLineKind::Removed => ("- ", pal.del, pal.del_code, pal.del_bg),
+        DiffLineKind::Context => ("  ", pal.diff_box, pal.context, pal.diff_box),
     };
-    let spans = vec![diff_gutter(line.old_no, line.new_no, bg, pal), Span::styled(format!("{marker}{}", line.text), Style::default().fg(fg).bg(bg))];
-    filled_line(spans, bg, width)
+    let spans = vec![
+        diff_gutter(line.old_no, line.new_no, bg, pal),
+        Span::styled(marker.to_string(), Style::default().fg(sign_fg).bg(bg)),
+        Span::styled(line.text.clone(), Style::default().fg(code_fg).bg(bg)),
+    ];
+    boxed_line(spans, bg, inset, pal, width)
+}
+
+/// A quoted diff as `InlineDiff.jsx`'s own real bordered box — top edge,
+/// one `boxed_line` row per kept diff line, bottom edge. `width` is the
+/// box's own outer width (border columns included).
+fn boxed_diff_lines(lines: &[DiffLine], inset: Inset, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    let mut out = vec![diff_box_border(true, pal, pal.diff_box, inset, width)];
+    out.extend(lines.iter().flat_map(|line| render_diff_line(line, inset, pal, width)));
+    out.push(diff_box_border(false, pal, pal.diff_box, inset, width));
+    out
 }
 
 /// Shared by the decision panel (`resolution: None`, `pending_tail` is the
 /// live numbered options list — see `render_approval_card`'s own doc
 /// comment on the same param) and a resolved prompt's permanent record in
 /// the log (`render_entry`, `resolution: Some(_)`, `pending_tail` unused).
+/// `CommandBlock.jsx`: a `ground`-colored field (distinct from the card's
+/// own `bar` surface, so it reads as an inset quoted block, the same
+/// nesting `InlineDiff`'s `diff_box` uses for a different payload kind)
+/// with the command prefixed by an accent `$`.
+fn command_block_lines(command: &str, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![card_padding_line(pal.ground, pal, width)];
+    let spans = vec![Span::styled("$ ", Style::default().fg(pal.speaker_you)), Span::styled(command.to_string(), Style::default().fg(pal.text))];
+    lines.extend(filled_line(spans, pal.ground, width));
+    lines.push(card_padding_line(pal.ground, pal, width));
+    lines
+}
+
 fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending_tail: Vec<Line<'static>>, pal: &Palette, width: u16) -> Vec<Line<'static>> {
-    render_card(&humanize_prompt(payload), &raw_prompt_call(payload), pending_tail, resolution.map(str::to_string), pal, width)
+    // Plain sentence, `body` — matches the reference's own permission-body
+    // styling ("The agent wants to run a shell command."); the title band
+    // above this (`panel_band`) already carries the accent weight.
+    let mut lines = vec![card_padding_line(pal.bar, pal, width)];
+    lines.extend(card_line(&humanize_prompt(payload), Style::default().fg(pal.body).bg(pal.bar), pal, width));
+    // A shell command gets `CommandBlock.jsx`'s own treatment — other kinds
+    // (a file path, a context-file load) show their exact target as plain
+    // label text instead (`readme.md`'s "Targets are exact" rule); a `$`
+    // prompt only means something for an actual shell command.
+    match payload {
+        PromptPayload::Tool { kind, target, .. } if kind == "shell" => {
+            lines.push(card_padding_line(pal.bar, pal, width));
+            lines.extend(command_block_lines(target, pal, width));
+        }
+        _ => lines.extend(card_line(&raw_prompt_call(payload), Style::default().fg(pal.label).bg(pal.bar), pal, width)),
+    }
+    match resolution {
+        Some(r) => {
+            lines.extend(card_line(&format!("resolved: {r}"), Style::default().fg(pal.accent_text).bg(pal.bar), pal, width));
+            lines.push(card_padding_line(pal.bar, pal, width));
+        }
+        None => lines.extend(pending_tail),
+    }
+    lines
 }
 
 /// A plain-English sentence naming what's actually being asked — the title
@@ -1382,22 +1693,22 @@ fn render_prompt_card(payload: &PromptPayload, resolution: Option<&str>, pending
 fn humanize_prompt(payload: &PromptPayload) -> String {
     match payload {
         PromptPayload::Tool { kind, .. } => humanize_tool_kind(kind),
-        PromptPayload::ContextFile { path } => format!("Claude wants to load {} as context", path.display()),
+        PromptPayload::ContextFile { path } => format!("The agent wants to load {} as context", path.display()),
         // Never actually reaches this card in production — `App::
         // decision_options`' Edit arm returns no options, since Edit uses
         // the separate ToolApprovalRequested/ApprovalCard path instead
         // (mjolnir-permissions.md's Edit Exception). Kept for a complete,
         // non-panicking match, not a live UI path.
-        PromptPayload::Edit { .. } => "Claude wants to edit a file".into(),
+        PromptPayload::Edit { .. } => "The agent wants to edit a file".into(),
     }
 }
 
 fn humanize_tool_kind(kind: &str) -> String {
     match kind {
-        "read" => "Claude wants to read a file".into(),
-        "shell" => "Claude wants to run a shell command".into(),
-        "explain" => "Claude wants to inspect code".into(),
-        other => format!("Claude wants to use \"{other}\""),
+        "read" => "The agent wants to read a file".into(),
+        "shell" => "The agent wants to run a shell command".into(),
+        "explain" => "The agent wants to inspect code".into(),
+        other => format!("The agent wants to use \"{other}\""),
     }
 }
 
@@ -1419,7 +1730,7 @@ fn running_tool_name(tool: &RunningTool) -> &str {
 
 /// Present-progressive fragment for the status line's leading activity word
 /// — a separate small table from `humanize_tool_kind` above rather than a
-/// shared one, since the two need different grammar ("Claude wants to
+/// shared one, since the two need different grammar ("The agent wants to
 /// read a file" vs "reading a file…") for what's otherwise the same handful
 /// of tool kinds; not worth a shared abstraction for three arms each.
 fn tool_gerund(kind: &str) -> String {
@@ -1468,58 +1779,39 @@ fn raw_prompt_call(payload: &PromptPayload) -> String {
     }
 }
 
-fn render_card(title: &str, raw: &str, pending_tail: Vec<Line<'static>>, resolution: Option<String>, pal: &Palette, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![card_padding_line(pal.bg_element, pal, width)];
-    lines.extend(card_line(title, Style::default().fg(pal.accent).bg(pal.bg_element).add_modifier(Modifier::BOLD), pal, width));
-    for l in raw.lines() {
-        lines.extend(card_line(l, Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
-    }
-    match resolution {
-        Some(r) => {
-            lines.extend(card_line(&format!("resolved: {r}"), Style::default().fg(pal.accent).bg(pal.bg_element), pal, width));
-            lines.push(card_padding_line(pal.bg_element, pal, width));
-        }
-        None => lines.extend(pending_tail),
-    }
-    lines
-}
-
-/// Deterministic per-tool-name color from `TOOL_PALETTE` — the same tool
-/// name always lands on the same color (a stable hash, not an assignment
-/// order that could shift between draws or sessions), so a scan of the
-/// status line's tool list distinguishes categories by color the same way
-/// posting's per-HTTP-method colors do, without needing to track a
-/// name-to-color table anywhere in `App`.
-fn tool_color(name: &str, pal: &Palette) -> Color {
-    let hash = name.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    pal.tool_palette[hash as usize % pal.tool_palette.len()]
-}
-
 /// Builds the fixed decision panel's content: whichever pending
-/// approval/prompt is at the front of its queue, styled exactly like the
-/// card that used to render inline (same `render_approval_card`/
-/// `render_prompt_card`), or nothing at all when both queues are empty (the
-/// panel band then collapses to zero height — see `draw`). Checks
-/// `pending_approvals` before `pending_prompts`, mirroring `App::handle_key`'s
-/// own priority (approvals resolve first when both queues hold an entry) —
-/// what's shown here must always be exactly what the next keypress actually
-/// resolves. This is a real correctness fix, not just cosmetic ordering: the
-/// old status-line key-hint checked prompts first, which was already
-/// latently backwards on the rare step where both queues held an entry at
-/// once — invisible before since it only cost a one-line hint mismatch, but
-/// would have shown an entirely wrong request front-and-center in a full
-/// panel, so it's corrected here rather than carried forward.
+/// approval/prompt is at the front of its queue, wrapped in `Modal.jsx`'s
+/// own chrome — an accent-700 top rule and a title band (`panel_band`) —
+/// then a footer (`decision_footer_hint`/the persisted-permissions path)
+/// appended to the tail alongside the numbered options, matching the
+/// design system's Permission screen structure exactly. Returns nothing at
+/// all when both queues are empty (the panel band then collapses to zero
+/// height — see `draw`). Checks `pending_approvals` before
+/// `pending_prompts`, mirroring `App::handle_key`'s own priority (approvals
+/// resolve first when both queues hold an entry) — what's shown here must
+/// always be exactly what the next keypress actually resolves.
 ///
 /// Returns the lines alongside how many trailing rows are the numbered
-/// options list (plus any queue-count note and the card's own closing
-/// padding) — `clamp_panel` must never truncate into that tail, since the
-/// options list is the one thing a developer absolutely still needs to see
-/// and select, however large the body above it gets.
-fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
+/// options list plus the footer (any queue-count note, the card's own
+/// closing padding, the footer rule and hint row) — `clamp_panel` must
+/// never truncate into that tail, since the options list and the footer
+/// that explains how to use it are what a developer absolutely still needs
+/// to see, however large the body above it gets.
+/// `frame_height` sizes the `clamp_panel` budget (`panel_max_height`) for
+/// whatever's actually rendered inside `render_approval_card`/`render_card`
+/// — the panel's own chrome (`panel_band`'s top rule + title band, and the
+/// footer's rule + hint row) is deliberately assembled *outside* that
+/// budget, appended after clamping, so neither can ever be the thing a
+/// large diff or a small terminal squeezes out: the footer explains how to
+/// use the options list, so it needs the same "never truncated" guarantee
+/// clamp_panel already gives the list itself, not just a best-effort
+/// inclusion in the same protected-but-still-counted tail the options list
+/// used to share it with.
+fn decision_panel_lines(app: &App, width: u16, frame_height: u16) -> Vec<Line<'static>> {
     let pal = app.theme.palette();
     let options = app.decision_options();
     if options.is_empty() {
-        return (Vec::new(), 0);
+        return Vec::new();
     }
     // `App::pending_front` is the single source of truth for "approvals
     // before prompts" — consolidated here (a rust-skills audit flagged this
@@ -1529,16 +1821,20 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
     // still each build their own "(+N more pending)" note, since that part
     // genuinely differs — it reads a different `VecDeque`'s length — but the
     // *which-queue-is-front* question is answered exactly once, here.
-    match app.pending_front() {
+    // The flat `rule` above the options list — `readme.md`: freestanding
+    // rules are "one step more muted than the structural borders they sit
+    // beside." Shared by both arms below, since every payload kind's
+    // options list gets the same rule ahead of it.
+    let options_rule = || vec![card_padding_line(pal.bar, pal, width), card_rule(pal.rule, pal.bar, width), card_padding_line(pal.bar, pal, width)];
+    let (body, badge, tail) = match app.pending_front() {
         PendingFront::Approval(pending) => {
-            let mut tail = render_decision_options(&options, app.decision_selected, pal, width);
+            let mut tail = options_rule();
+            tail.extend(render_decision_options(&options, app.decision_selected, pal, width));
             let queue_len = app.pending_approvals.len();
             if queue_len > 1 {
-                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bar), pal, width));
             }
-            tail.push(card_padding_line(pal.bg_element, pal, width));
-            let tail_len = tail.len();
-            (render_approval_card(&pending.diff, None, tail, pal, width), tail_len)
+            (render_approval_card(&pending.diff, None, Vec::new(), pal, width), "edit".to_string(), tail)
         }
         PendingFront::Prompt(pending) => {
             // Only present for a path-like Tool prompt whose target has an
@@ -1546,20 +1842,46 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
             // — absent for ContextFile prompts and non-path-like Tool
             // prompts, which have nothing to toggle.
             let mut tail = match app.decision_scope_hint() {
-                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width),
+                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(pal.dim).bg(pal.bar), pal, width),
                 None => Vec::new(),
             };
+            tail.extend(options_rule());
             tail.extend(render_decision_options(&options, app.decision_selected, pal, width));
             let queue_len = app.pending_prompts.len();
             if queue_len > 1 {
-                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bg_element), pal, width));
+                tail.extend(card_line(&format!("(+{} more pending)", queue_len - 1), Style::default().fg(pal.dim).bg(pal.bar), pal, width));
             }
-            tail.push(card_padding_line(pal.bg_element, pal, width));
-            let tail_len = tail.len();
-            (render_prompt_card(&pending.payload, None, tail, pal, width), tail_len)
+            let badge = match &pending.payload {
+                PromptPayload::Tool { kind, .. } => kind.clone(),
+                PromptPayload::ContextFile { .. } => "context".to_string(),
+                PromptPayload::Edit { .. } => "edit".to_string(),
+            };
+            (render_prompt_card(&pending.payload, None, Vec::new(), pal, width), badge, tail)
         }
-        PendingFront::None => (Vec::new(), 0),
-    }
+        PendingFront::None => return Vec::new(),
+    };
+    // `body` as returned above ends with an empty `pending_tail` (`None` ==
+    // "nothing pending" was never true here, so this is really `Vec::new()`
+    // standing in for "the caller appends the tail itself" — see
+    // `render_approval_card`'s own `pending_tail` doc comment) — `tail` is
+    // appended here instead, then clamped as one unit so `clamp_panel` still
+    // protects the whole options list, not just whatever `render_approval_card`
+    // happened to leave unclamped.
+    let mut clampable = body;
+    let tail_len = tail.len();
+    clampable.extend(tail);
+    let clamped = clamp_panel(clampable, panel_max_height(frame_height), tail_len, pal, width);
+
+    let mut lines = panel_band("permission", &badge, pal, width);
+    lines.extend(clamped);
+    lines.push(card_padding_line(pal.bar, pal, width));
+    // `line`, not the more muted `rule` — matches the reference's real
+    // `border-top: 1px solid var(--tui-line)` on this footer row (the rule
+    // above the *options* list, inside `render_decision_options`'
+    // surrounding chrome, is the one place `rule` is actually correct).
+    lines.push(card_rule(pal.line, pal.bar_bottom, width));
+    lines.push(card_footer_line(decision_footer_hint(options.len(), pal), "saved to .mjolnir/permissions.yaml", pal.bar_bottom, pal, width));
+    lines
 }
 
 /// Caps the decision panel to `max` rows so an unusually large diff can
@@ -1580,6 +1902,12 @@ fn decision_panel_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
 /// guess would either truncate real options away or protect rows that
 /// aren't actually the list.
 fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    // `render_approval_card`/`render_card`'s own leading padding+title
+    // rows — `decision_panel_lines` now applies `panel_band`'s chrome (the
+    // accent top rule + the title band) and the footer (rule + hint row)
+    // outside this function entirely, appended/prepended after clamping, so
+    // they can never be at risk of truncation in the first place and don't
+    // need to be counted here.
     const HEAD: usize = 2;
     if lines.len() <= max {
         return lines;
@@ -1612,7 +1940,7 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, pal: &Palette
         } else {
             card_line(
                 &format!("⋯ {hidden} more line{} not shown — deciding doesn't require scrolling them ⋯", if hidden == 1 { "" } else { "s" }),
-                Style::default().fg(pal.dim).bg(pal.bg_element),
+                Style::default().fg(pal.dim).bg(pal.bar),
                 pal,
                 width,
             )
@@ -1628,39 +1956,41 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, pal: &Palette
     }
 }
 
-/// Persistent identity/activity strip, one row, positioned directly above
-/// the input box rather than at the top of the frame — replaces the old
-/// separate 1-row header (model/turn/permission chips), 1-row footer
-/// (keybinding legend), and the sidebar panel entirely, per explicit
-/// developer feedback against a real screenshot: three separate ambient-state
-/// surfaces (top bar, bottom bar, right column) read as noisy and too close
-/// to OpenCode's own layout rather than something distinctly Mjolnir's.
-/// Always shows normal turn/activity content, even while a decision is
-/// pending — the fixed decision panel directly below it (`decision_panel_lines`)
-/// is now the one place pending keys show; this used to short-circuit into
-/// just the pending card's own key hint, which is no longer needed now that
-/// the panel has a permanent, unambiguous home of its own. Shows what's
-/// actually happening with the model — turn/step, live activity
-/// (thinking/working/idle, with the same spinner the log uses), any tools
-/// currently in flight (colored per name via `tool_color`, the same job the
-/// removed sidebar did), and a running message count. Permission state
-/// (read/shell/edit) is deliberately absent here — per explicit developer
-/// request, that belongs to the once-per-session welcome hero
-/// (`intro_content`) and an actual permission prompt when one fires, not a
-/// line that repaints every frame.
+/// Live activity strip, one row, positioned directly above the decision
+/// panel/input — `StatusLine.jsx`'s own job, distinct from `draw_top_bar`'s
+/// static identity row (model/version) above the log. Always shows normal
+/// turn/activity content, even while a decision is pending — the fixed
+/// decision panel directly below it (`decision_panel_lines`) is the one
+/// place pending keys show. Shows what's actually happening with the
+/// model — turn/step, live activity (thinking/working/idle, with the same
+/// spinner the log uses), any tools currently in flight by name (in
+/// `value`, uniformly — the reference's `ToolLine` doesn't hash a color per
+/// tool name the way this crate's earlier posting-inspired pass did; a
+/// tool's *state* carries color here, not its identity), a running message
+/// count, and a right-aligned Ctrl+C hint (`StatusLine.jsx`'s own `right`
+/// prop, "esc to stop" in the reference — adapted to Mjolnir's real
+/// binding). Permission state (read/shell/edit) is deliberately absent
+/// here — it belongs to the once-per-session welcome hero (`intro_content`)
+/// and an actual permission prompt when one fires, not a line that
+/// repaints every frame.
 fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
     let s = &app.status;
+    // Raised ground — `StatusLine.jsx` sits inside `BottomBar.jsx`'s own
+    // `bar-bottom` field, not the plain frame `ground` the log panel uses.
+    frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), area);
     // Activity leads the row — per explicit developer request that "what's
     // the LLM doing right now" is the single most useful thing this line
     // can say, so it shouldn't be buried after the model name/turn counter.
+    // Glyph in `glyph_running` (`◐`, matching `StatusLine.jsx`'s
+    // `state="working"` case), the words themselves in `label`.
     let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
     let mut spans = if app.thinking {
-        vec![Span::styled(format!("{spinner} thinking…  "), Style::default().fg(pal.accent))]
+        vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled("thinking…  ", Style::default().fg(pal.label))]
     } else if app.turn_active {
-        vec![Span::styled(format!("{spinner} {}  ", activity_label(app)), Style::default().fg(pal.accent))]
+        vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled(format!("{}  ", activity_label(app)), Style::default().fg(pal.label))]
     } else {
-        vec![Span::styled("idle  ", Style::default().fg(pal.dim))]
+        vec![Span::styled("idle  ", Style::default().fg(pal.label))]
     };
 
     let turn_step = match (s.turn, s.step) {
@@ -1668,24 +1998,36 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
         (Some(t), None) => format!("T{t}"),
         _ => "-".to_string(),
     };
-    spans.push(Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(pal.dim)));
+    spans.push(Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(pal.label)));
 
     if !s.running_tools.is_empty() {
-        spans.push(Span::styled("tools: ", Style::default().fg(pal.dim)));
+        spans.push(Span::styled("tools: ", Style::default().fg(pal.label)));
         for (i, tool) in s.running_tools.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw(", "));
             }
-            let name = running_tool_name(tool);
-            spans.push(Span::styled(name.to_string(), Style::default().fg(tool_color(name, pal))));
+            spans.push(Span::styled(running_tool_name(tool).to_string(), Style::default().fg(pal.value)));
         }
         spans.push(Span::raw("  "));
     }
 
     let messages = app.log.len();
-    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(pal.dim)));
+    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(pal.label)));
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    // Right-aligned key hint — `StatusLine.jsx`'s own `right` prop (`esc to
+    // stop`), adapted to Mjolnir's real binding: Ctrl+C, not Esc, is what
+    // actually cancels a turn or exits an idle session (`App::handle_key`).
+    // Both halves sit inside the grid's own 3-cell margin, like every other
+    // content row in a frame (`padding: 0 27px`).
+    let hint = if app.turn_active { "^c to cancel" } else { "^c to exit" };
+    let [left_area, right_area] = Layout::horizontal([Constraint::Min(1), Constraint::Length(hint.width() as u16 + MARGIN_X as u16)]).areas(area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(pal.dim))))
+            .alignment(ratatui::layout::Alignment::Right)
+            .block(Block::new().padding(Padding::right(MARGIN_X as u16))),
+        right_area,
+    );
 }
 
 /// Solid filled "card" with no drawn border at all — per explicit developer
@@ -1701,24 +2043,40 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
 /// bottom of the box.
 fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
-    // `bg_input`, not `bg_element` — sampled as the lightest of the four
-    // background tiers (see `Palette::bg_base`'s doc comment), one step past
-    // the fill message/card content uses, since the input is the one
-    // surface that's always active/focused rather than passive content.
-    let block = Block::new().style(Style::default().bg(pal.bg_input)).padding(Padding::new(2, 1, 1, 1));
+    // `bar_bottom` — `Composer.jsx` has no surface of its own beyond
+    // `BottomBar.jsx`'s own raised ground; the composer prompt `▶` and
+    // caret carry the accent, not a distinct input-only background tier.
+    // `MARGIN_X` horizontally (the grid's `padding: 0 27px`), no vertical
+    // padding — the blank rows around the composer belong to the bottom bar
+    // itself (see `draw`), not to this widget.
+    let block = Block::new().style(Style::default().bg(pal.bar_bottom)).padding(Padding::horizontal(MARGIN_X as u16));
     let inner = block.inner(area);
     // Dim placeholder text when the draft is empty — an empty filled box
     // gave no hint at all that this was where a message goes, versus every
     // other panel now carrying a title/label of its own. While blocked, the
     // placeholder says so instead of inviting a keystroke it would silently
     // drop.
+    // `Composer.jsx`: accent `▶`, two spaces, the draft — only on the
+    // textarea's first line (mjolnir's multi-line draft is its own
+    // extension beyond the reference's single-line composer; continuation
+    // rows aren't part of what the prompt glyph marks). `PROMPT_PREFIX_LEN`
+    // is the fixed column offset every cursor placement below must add back
+    // for line 0, since neither `cursor_line_col` nor ratatui's `Wrap` has
+    // any notion of this prefix — see `moving_the_composer_cursor_accounts_
+    // for_the_prompt_glyph_on_the_first_line` for the regression this
+    // exists to prevent (the cursor landing 2 columns short of the real
+    // caret position once the glyph pushed the actual text over).
+    // `▶` plus two spaces — the reference's own composer row is
+    // `<span>▶</span><span>  </span>`, putting the draft's first character
+    // in cell 6 (the grid's 3-cell `MARGIN_X`, the glyph, then the two).
+    const PROMPT_PREFIX_LEN: u16 = 3;
     if app.input.is_empty() {
         let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
-        let placeholder = Line::from(Span::styled(text, Style::default().fg(pal.dim)));
+        let placeholder = Line::from(vec![Span::styled("▶  ", Style::default().fg(pal.mark)), Span::styled(text, Style::default().fg(pal.dim))]);
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
         if !blocked {
-            frame.set_cursor_position((inner.x, inner.y));
+            frame.set_cursor_position((inner.x + PROMPT_PREFIX_LEN, inner.y));
         }
         return;
     }
@@ -1730,7 +2088,18 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // `highlight_command_tokens`'s doc comment for why a mid-message
     // `/exit` still gets flagged even though it would never actually be
     // intercepted as a command.
-    let lines: Vec<Line> = app.input.split('\n').map(|l| highlight_command_tokens(l, pal)).collect();
+    let lines: Vec<Line> = app
+        .input
+        .split('\n')
+        .enumerate()
+        .map(|(i, l)| {
+            let mut line = highlight_command_tokens(l, pal);
+            if i == 0 {
+                line.spans.insert(0, Span::styled("▶  ", Style::default().fg(pal.mark)));
+            }
+            line
+        })
+        .collect();
     let paragraph = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 
@@ -1747,9 +2116,10 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     // the underlying wrap mismatch.
     if app.pending_approvals.is_empty() && app.pending_prompts.is_empty() {
         let (line, col) = cursor_line_col(&app.input, app.cursor);
+        let prefix = if line == 0 { PROMPT_PREFIX_LEN } else { 0 };
         let inner_right = inner.x + inner.width.saturating_sub(1);
         let inner_bottom = inner.y + inner.height.saturating_sub(1);
-        let x = (inner.x + col as u16).min(inner_right);
+        let x = (inner.x + prefix + col as u16).min(inner_right);
         let y = (inner.y + line as u16).min(inner_bottom);
         frame.set_cursor_position((x, y));
     }
@@ -1758,6 +2128,10 @@ fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+
+
     use crate::app::App;
     use crate::palette::DARK;
     use mjolnir_config::Config;
@@ -1793,7 +2167,12 @@ mod tests {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "x".repeat(300), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let out = rendered(&mut app, 30, 20);
+        // Narrow (30 cols, so the target still wraps across many rows and
+        // forces real abbreviation) but tall enough (34 rows) that the
+        // panel's own chrome doesn't get compressed by the outer layout
+        // before `clamp_panel`'s own "the tail always survives" guarantee
+        // — which this test actually exercises — can be observed.
+        let out = rendered(&mut app, 30, 34);
         assert!(out.contains("Deny for this project") && out.contains("Always deny"), "all 8 tiers must stay visible even when the title itself needs to be abbreviated: {out:?}");
     }
 
@@ -1837,14 +2216,94 @@ mod tests {
         panic!("row containing {needle:?} not found");
     }
 
-    /// Screen row the first real log entry starts on once the log is
-    /// non-empty: row 0, the very top of the frame — no header, no border,
-    /// and (as of the "live"/"scrolled" badge's removal) no reserved title
-    /// row either. Fixed, unlike the old always-on-banner layout — the
-    /// welcome hero and real log entries are mutually exclusive now (see
-    /// `build_log_lines`), so there's no banner/separator height to add.
-    fn content_base() -> u16 {
-        0
+    /// Per explicit developer feedback — "the status line is above the text
+    /// field input, but if I remember correctly it is below in the designs"
+    /// — and it is: `BottomBar.jsx` reads blank / composer / blank / status /
+    /// blank, and the design system's own prose calls the composer "a
+    /// three-row field with one quiet status line under it." This pins the
+    /// order itself, not either row's absolute coordinate, so a future
+    /// change to the bar's height can't quietly flip the two back.
+    #[test]
+    fn the_status_line_sits_below_the_composer_not_above_it() {
+        let mut app = app();
+        app.input = "drafting".into();
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let composer_row = find_row(&buffer, "drafting");
+        // "messages", not the model name — the model is named in the top
+        // bar too, and `find_row` scans downward, so it would match there.
+        let status_row = find_row(&buffer, "messages");
+        assert!(
+            status_row > composer_row,
+            "the status line ({status_row}) must render below the composer ({composer_row}), not above it"
+        );
+        assert_eq!(status_row, composer_row + 2, "exactly one blank row parts them (BottomBar.jsx's blank/composer/blank/status/blank)");
+    }
+
+    /// The grid, straight off `tokens/cells.css`: every content row starts at
+    /// `--margin-x` (27px = 3 cells), the speaker label occupies
+    /// `--label-col` (108px = 12 cells) from there, and `--label-gutter`
+    /// (18px = 2 cells) parts it from the body column at `--body-col`
+    /// (153px = cell 17). Raised after developer feedback that "the chat
+    /// rows themselves appear misaligned and do not follow the cell/grid
+    /// system" — they now do, and this is what holds them there.
+    #[test]
+    fn speaker_rows_sit_on_the_grids_label_and_body_columns() {
+        let mut app = app();
+        app.log.push(LogEntry::UserMessage { text: "question".into() });
+        app.log.push(LogEntry::AssistantText { text: "answer".into() });
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let row_text = |y: u16| -> String { (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
+        for (label, body) in [("you", "question"), ("harness", "answer")] {
+            let y = find_row(&buffer, body);
+            let row = row_text(y);
+            assert!(
+                row[..MARGIN_X].chars().all(|c| c == ' '),
+                "row {y:?} must start with the grid's {MARGIN_X}-cell left margin: {row:?}"
+            );
+            assert!(row[MARGIN_X..].starts_with(label), "the {label:?} label must start in cell {MARGIN_X}: {row:?}");
+            assert!(row[CONTENT_INDENT..].starts_with(body), "{body:?} must start in the body column, cell {CONTENT_INDENT}: {row:?}");
+        }
+    }
+
+    /// The transcript recedes to 35% while a decision is open — the
+    /// reference puts the whole conversation column at `opacity:.35` in both
+    /// of its panel scenes, so the panel is the one live surface. See
+    /// `fade_area`/`palette::PANEL_TRANSCRIPT_OPACITY`.
+    #[test]
+    fn the_transcript_dims_while_a_decision_panel_is_open() {
+        let text = "an earlier answer";
+        let mut app = app();
+        app.log.push(LogEntry::AssistantText { text: text.into() });
+
+        let undimmed = {
+            let backend = TestBackend::new(100, 28);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| draw(f, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            buffer[(CONTENT_INDENT as u16, find_row(&buffer, text))].fg
+        };
+
+        app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
+        let backend = TestBackend::new(100, 28);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let dimmed = buffer[(CONTENT_INDENT as u16, find_row(&buffer, text))].fg;
+
+        assert_ne!(dimmed, undimmed, "the transcript must recede while a decision panel is open");
+        assert_eq!(
+            dimmed,
+            palette::fade(undimmed, DARK.ground, palette::PANEL_TRANSCRIPT_OPACITY),
+            "it must recede by exactly the reference's 35%, composited onto the ground it sits on"
+        );
     }
 
     /// Regression test for the bug the user actually hit: scroll math
@@ -1865,10 +2324,12 @@ mod tests {
             app.log.push(LogEntry::AssistantText { text: format!("entry-{i}\nline2\nline3\nline4\nline5") });
         }
 
-        // Log area gets roughly height-2 rows (status bar + input box eat
-        // the rest) — nowhere near the ~59 rows ten 5-line entries plus
-        // nine separators need.
-        let out = rendered(&mut app, 100, 12);
+        // Log area gets a modest double-digit row count — the persistent
+        // top bar, decision-panel band (zero-height here, nothing pending),
+        // status line and input box eat the rest — nowhere near the ~80
+        // rows ten 5-line entries (each now also carrying its own
+        // `harness` speaker-label row) plus nine separators need.
+        let out = rendered(&mut app, 100, 20);
 
         assert!(out.contains("entry-9"), "the latest entry must be visible under auto-follow");
         assert!(!out.contains("entry-0"), "the earliest entry must have scrolled out of view");
@@ -2049,11 +2510,11 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        // Anchored on "claude-sonnet-5", not "working" — an active turn also
-        // shows its own "working" spinner at the bottom of the conversation
-        // log itself (see `build_log_lines`), a different row than the
-        // status line; the model name is unique to the status line.
-        let row = find_row(&buffer, "claude-sonnet-5");
+        // Anchored on "working", not "claude-sonnet-5" — the model name now
+        // also appears in the persistent top bar (`draw_top_bar`), so
+        // `find_row` would otherwise land on that row instead of the status
+        // line; "working" only ever appears on the status line.
+        let row = find_row(&buffer, "working");
         let row_text: String = (0..100).map(|x| buffer[(x, row)].symbol().to_string()).collect();
         let working_pos = row_text.find("working").expect("activity label present");
         let model_pos = row_text.find("claude-sonnet-5").expect("model name present");
@@ -2128,7 +2589,9 @@ mod tests {
     fn decision_panel_shows_labeled_keys_and_the_diff() {
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-        let out = rendered(&mut app, 100, 20);
+        // Tall enough for the panel's full chrome (top bar, title band,
+        // footer) alongside the diff body without clamping it away.
+        let out = rendered(&mut app, 100, 28);
         assert!(out.contains("Approve"));
         assert!(out.contains("Deny"));
         assert!(out.contains("old"));
@@ -2149,7 +2612,7 @@ mod tests {
         // only `render_entry`'s own handling of an unresolved log entry.
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: None });
         let out = rendered(&mut app, 100, 20);
-        assert!(!out.contains("Approve this edit?"), "a pending card must not render inline in the log any more — see the decision panel instead: {out:?}");
+        assert!(!out.contains("The agent wants to edit this file."), "a pending card must not render inline in the log any more — see the decision panel instead: {out:?}");
     }
 
     /// Once resolved, the full card (diff included) still leaves a
@@ -2160,7 +2623,7 @@ mod tests {
         let mut app = app();
         app.log.push(LogEntry::ApprovalCard { call_id: "c1".into(), diff: "-old\n+new".into(), resolution: Some(true) });
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("Approve this edit?") && out.contains("old") && out.contains("new"), "a resolved card should keep its full historical record: {out:?}");
+        assert!(out.contains("The agent wants to edit this file.") && out.contains("old") && out.contains("new"), "a resolved card should keep its full historical record: {out:?}");
         assert!(out.contains("resolved: approved"));
     }
 
@@ -2186,22 +2649,39 @@ mod tests {
         }
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
         app.scroll.line_up(); // disengage auto-follow, away from the bottom
-        let out = rendered(&mut app, 100, 12);
-        assert!(out.contains("Approve this edit?"), "the pending decision must stay visible in its own fixed panel regardless of log scroll position: {out:?}");
+        // Tall enough for the panel's full chrome (top bar, title band,
+        // footer) alongside a real (if short) log viewport.
+        let out = rendered(&mut app, 100, 28);
+        assert!(out.contains("The agent wants to edit this file."), "the pending decision must stay visible in its own fixed panel regardless of log scroll position: {out:?}");
     }
 
     /// The decision panel shows a real numbered list, not keybinding hints —
     /// per explicit developer request: "make sure the approval options
     /// appear as a list and not some weird keyboard shortcuts." "Approve"/
-    /// "Deny" must each appear as a distinctly numbered row, and the first
-    /// (default-selected) option carries the `▸` cursor marker.
+    /// "Deny" must each appear as a distinctly numbered row; selection is
+    /// now color-only (`OptionRow.jsx`: the accent `▌` mark plus the `band`
+    /// field together, never a distinct cursor glyph — see
+    /// `render_decision_options`), so the first (default-selected) option's
+    /// own `▌` must render in `mark`, not `mark_idle`. Option rows are the
+    /// one deliberate exception to the grid's 3-cell `MARGIN_X`: the mark is
+    /// flush to the frame edge in cell 0 (number in cell 3, label in cell
+    /// 6), which is why these probes read column 0 and not `MARGIN_X`.
     #[test]
     fn the_decision_panel_shows_a_numbered_approve_deny_list() {
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-        let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("▸ 1. Approve"), "the first option must be numbered and show the selection cursor: {out:?}");
-        assert!(out.contains("2. Deny"), "the second option must be numbered: {out:?}");
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let out: String = buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("");
+        assert!(out.contains("1  Approve"), "the first option must be numbered: {out:?}");
+        assert!(out.contains("2  Deny"), "the second option must be numbered: {out:?}");
+
+        let approve_row = find_row(&buffer, "1  Approve");
+        let deny_row = find_row(&buffer, "2  Deny");
+        assert_eq!(buffer[(0, approve_row)].fg, DARK.mark, "the selected (first) option's mark must be the accent color: {out:?}");
+        assert_eq!(buffer[(0, deny_row)].fg, DARK.mark_idle, "an unselected option's mark must not be the accent color: {out:?}");
     }
 
     #[test]
@@ -2209,10 +2689,13 @@ mod tests {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("▸ 1. Allow once"), "the first option must be numbered and show the selection cursor: {out:?}");
-        assert!(out.contains("3. Allow for this project"), "later options must be numbered too: {out:?}");
-        assert!(out.contains("8. Always deny"), "the full 8-option tier list must be shown, not a shortened set: {out:?}");
+        // Tall enough for the panel's chrome (top bar, title band, footer)
+        // plus a full 8-tier options list without the outer layout
+        // squeezing any of it off-screen.
+        let out = rendered(&mut app, 100, 34);
+        assert!(out.contains("1  Allow once"), "the first option must be numbered: {out:?}");
+        assert!(out.contains("3  Allow for this project"), "later options must be numbered too: {out:?}");
+        assert!(out.contains("8  Always deny"), "the full 8-option tier list must be shown, not a shortened set: {out:?}");
     }
 
     /// Per explicit developer feedback that it wasn't clear what a tool
@@ -2224,29 +2707,45 @@ mod tests {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("Claude wants to read a file"), "the title must be a human-readable explanation: {out:?}");
+        let out = rendered(&mut app, 100, 34);
+        assert!(out.contains("The agent wants to read a file"), "the title must be a human-readable explanation: {out:?}");
         assert!(out.contains("read: ./crates/tui/src/ui.rs"), "the literal tool call must still be shown: {out:?}");
     }
 
     /// The raw call line must be visually secondary (dim) to the humanized
     /// title (accent/bold) — the whole point of the split is that the
-    /// sentence is what a developer reads first.
+    /// sentence is what a developer reads first. Uses a non-shell kind —
+    /// `command_block_lines` gives an actual shell command
+    /// `CommandBlock.jsx`'s own treatment instead (see
+    /// `a_shell_prompt_shows_a_command_block_instead_of_a_raw_line` below).
     #[test]
     fn the_raw_call_line_is_dimmer_than_the_humanized_title() {
         let mut app = app();
-        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+        let payload = PromptPayload::Tool { kind: "explain".into(), target: "src/gateway/router.rs".into(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let backend = TestBackend::new(100, 20);
+        let backend = TestBackend::new(100, 34);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let title_row = find_row(&buffer, "Claude wants to run a shell command");
-        let raw_row = find_row(&buffer, "shell: cargo test --workspace");
+        let title_row = find_row(&buffer, "The agent wants to inspect code");
+        let raw_row = find_row(&buffer, "explain: src/gateway/router.rs");
         assert_ne!(title_row, raw_row, "the title and the raw call must be on separate rows");
-        assert_eq!(buffer[(2, raw_row)].fg, DARK.dim, "the raw call row must use the dim color");
-        assert_ne!(buffer[(2, title_row)].fg, DARK.dim, "the humanized title must not itself be dim");
+        assert_eq!(buffer[(BOX_PAD_H as u16, raw_row)].fg, DARK.label, "the raw call row must use the muted label color");
+        assert_ne!(buffer[(BOX_PAD_H as u16, title_row)].fg, DARK.label, "the humanized title must not itself be the muted label color");
+    }
+
+    /// `CommandBlock.jsx`: a shell command gets a `ground`-colored field
+    /// with an accent `$` prompt, not the plain dim `shell: {command}` line
+    /// every other prompt kind still uses (see `command_block_lines`).
+    #[test]
+    fn a_shell_prompt_shows_a_command_block_instead_of_a_raw_line() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 34);
+        assert!(!out.contains("shell: cargo test --workspace"), "a shell command must not show the old raw `kind: target` line: {out:?}");
+        assert!(out.contains("$ cargo test --workspace"), "a shell command should render as a `$ ` command block: {out:?}");
     }
 
     /// A path-like Tool prompt whose target has an enclosing directory must
@@ -2294,16 +2793,25 @@ mod tests {
     /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
     /// — exercised directly here since `ui.rs`'s own tests only touch
     /// render-relevant state, not key handling, which `app.rs`'s tests
-    /// already cover) must move the `▸` marker in the rendered list, not
-    /// just the underlying index silently.
+    /// already cover) must move the accent-colored `▌` mark in the rendered
+    /// list, not just the underlying index silently — selection is
+    /// color-only now (`OptionRow.jsx`), not a distinct cursor glyph.
     #[test]
     fn moving_the_decision_cursor_moves_the_selection_marker_in_the_rendered_list() {
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
         app.decision_selected = 1;
-        let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("  1. Approve"), "the cursor must have left the first option: {out:?}");
-        assert!(out.contains("▸ 2. Deny"), "the cursor must now be on the second option: {out:?}");
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let out: String = buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("");
+        assert!(out.contains("1  Approve") && out.contains("2  Deny"), "both options must still render: {out:?}");
+
+        let approve_row = find_row(&buffer, "1  Approve");
+        let deny_row = find_row(&buffer, "2  Deny");
+        assert_eq!(buffer[(0, approve_row)].fg, DARK.mark_idle, "the cursor must have left the first option: {out:?}");
+        assert_eq!(buffer[(0, deny_row)].fg, DARK.mark, "the cursor must now be on the second option: {out:?}");
     }
 
     /// A single pending approval must not claim there's more behind it — a
@@ -2330,7 +2838,7 @@ mod tests {
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "".into() });
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c2".into(), diff: "".into() });
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c3".into(), diff: "".into() });
-        let out = rendered(&mut app, 100, 20);
+        let out = rendered(&mut app, 100, 24);
         assert!(out.contains("+2 more pending"), "expected the decision panel to show 2 more queued beyond the front card, got: {out:?}");
     }
 
@@ -2345,7 +2853,7 @@ mod tests {
         let big_diff: String = (0..200).map(|i| format!("+line-{i}\n")).collect();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: big_diff });
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("1. Approve") && out.contains("2. Deny"), "the numbered options must still be visible even when the diff is too large to show in full: {out:?}");
+        assert!(out.contains("1  Approve") && out.contains("2  Deny"), "the numbered options must still be visible even when the diff is too large to show in full: {out:?}");
         assert!(out.contains("more line"), "a truncated panel should say how much was hidden: {out:?}");
     }
 
@@ -2361,17 +2869,21 @@ mod tests {
     #[test]
     fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
         let mut app = app();
-        let long_target = "x".repeat(200);
+        // 'q' rather than 'x': the status line's own "^c to exit"/
+        // "^c to cancel" hint (`draw_status_line`) contains an 'x', which
+        // would otherwise inflate this count by one independent of the
+        // panel content this test actually cares about.
+        let long_target = "q".repeat(200);
         let payload = PromptPayload::Tool { kind: "shell".into(), target: long_target.clone(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let out = rendered(&mut app, 60, 30);
+        let out = rendered(&mut app, 60, 44);
         // Not a single contiguous run: each wrapped row now gets its own
         // fresh `BOX_PAD_H` left inset (the fix for the follow-up "known
-        // limitation" complaint below), which breaks up the run of 'x's with
+        // limitation" complaint below), which breaks up the run of 'q's with
         // one inset space per wrapped row — counting characters, not
         // matching a literal substring, is what actually proves nothing was
         // dropped.
-        assert_eq!(out.matches('x').count(), 200, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+        assert_eq!(out.matches('q').count(), 200, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
     }
 
     /// Regression test for the actual reported defect, not just the
@@ -2379,26 +2891,27 @@ mod tests {
     /// card/diff line used to fall back to the frame's plain background past
     /// whatever content ratatui's own `Wrap` happened to draw on it, since
     /// `filled_line` only ever padded/filled the *first* row it built. Checks
-    /// the title's last wrapped row (identified by its trailing "?", which
-    /// has real padding after it since the target doesn't land exactly on a
-    /// row boundary) still carries the card's own `DARK.bg_element` fill all the
-    /// way to the panel's right edge.
+    /// the command's last wrapped row still carries `CommandBlock.jsx`'s own
+    /// `ground` fill all the way to the panel's right edge — not the older
+    /// dim raw-line row (a shell target now gets the real `$ command` block
+    /// treatment; see `command_block_lines`).
     #[test]
     fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "y".repeat(200), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-        let backend = TestBackend::new(60, 30);
+        // Tall enough that the wrapped command block survives `clamp_panel`
+        // alongside the panel's own chrome (band, options rule, footer).
+        let backend = TestBackend::new(60, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         // A run of ten consecutive `y`s only ever occurs inside the wrapped
-        // `shell: yyy...` line (200 `y`s, hard-broken mid-run since it has
-        // no whitespace to wrap at) — unlike a single "y", which the input
-        // box's placeholder text ("Type a message...") also contains, so
-        // the *last* row matching this longer run is unambiguously that
-        // long line's final wrapped row, whose trailing padding is what
-        // this test actually checks.
+        // `$ yyy...` command line (200 `y`s, hard-broken mid-run since it
+        // has no whitespace to wrap at) — unlike a single "y", which the
+        // input box's placeholder text also contains, so the *last* row
+        // matching this longer run is unambiguously that long line's final
+        // wrapped row, whose trailing padding is what this test checks.
         let needle = "y".repeat(10);
         let last_title_row = (0..buffer.area.height)
             .rev()
@@ -2410,8 +2923,8 @@ mod tests {
         let last_col = buffer.area.width - 1;
         assert_eq!(
             buffer[(last_col, last_title_row)].bg,
-            DARK.bg_element,
-            "a wrapped card row's trailing padding must keep the card's own background fill, not fall back to the frame background"
+            DARK.ground,
+            "a wrapped command block row's trailing padding must keep its own background fill, not fall back to the frame background"
         );
     }
 
@@ -2419,19 +2932,18 @@ mod tests {
     fn approval_card_colors_added_and_removed_lines_distinctly() {
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-        let backend = TestBackend::new(100, 20);
+        let backend = TestBackend::new(100, 28);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let removed_row = find_row(&buffer, "old");
         let added_row = find_row(&buffer, "new");
-        // Column 3 lands inside "-old"/"+new" itself (no left accent bar or
-        // panel border ahead of it any more — the card's fill starts at
-        // column 0), so any column here works; picked to also land on real
-        // text rather than the row's trailing padding.
-        assert_eq!(buffer[(3, removed_row)].bg, DARK.diff_del_bg, "a removed line should carry the removed-line background across the row");
-        assert_eq!(buffer[(3, added_row)].bg, DARK.diff_add_bg, "an added line should carry the added-line background across the row");
+        // Column 3 lands inside "-old"/"+new" itself (past the box's own
+        // left `│` border), so any column here works; picked to also land
+        // on real text rather than the row's trailing padding.
+        assert_eq!(buffer[(3, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background across the row");
+        assert_eq!(buffer[(3, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background across the row");
         assert_ne!(buffer[(3, removed_row)].bg, buffer[(3, added_row)].bg, "added and removed lines must be visually distinct");
     }
 
@@ -2440,7 +2952,7 @@ mod tests {
         let diff = "--- f.rs\n+++ f.rs\n far\n context\n a\n b\n-old\n+new\n c\n d\n near\n";
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
-        let out = rendered(&mut app, 100, 30);
+        let out = rendered(&mut app, 100, 34);
         assert!(out.contains("unchanged line"), "a long run of unmodified context should collapse to an elision marker: {out:?}");
         assert!(!out.contains("far"), "context far from any change should be elided");
         assert!(out.contains("old") && out.contains("new"), "the change itself must still be shown");
@@ -2459,7 +2971,10 @@ mod tests {
         let diff = "--- f.rs\n+++ f.rs\n one\n-old\n+new\n three\n";
         let mut app = app();
         app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
-        let backend = TestBackend::new(100, 20);
+        // This diff carries a path line too (the "--- f.rs" header), one
+        // more row of chrome than a bare hunk — tall enough that all 4 body
+        // lines (context/removed/added/context) survive unclamped.
+        let backend = TestBackend::new(100, 34);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -2468,9 +2983,11 @@ mod tests {
         let context_row = row_text(find_row(&buffer, "one"));
         let removed_row = row_text(find_row(&buffer, "old"));
         let added_row = row_text(find_row(&buffer, "new"));
-        assert!(context_row.contains("1    1 │  one"), "a context line should show the same line number on both sides: {context_row:?}");
-        assert!(removed_row.contains("2      │ -old"), "a removed line should show only its old-file line number: {removed_row:?}");
-        assert!(added_row.contains("2 │ +new"), "an added line should show only its new-file line number: {added_row:?}");
+        // One space after the sign — it belongs to the `add`/`del` sign
+        // token, which the reference colors as `+ ` / `- `, not to the code.
+        assert!(context_row.contains("1    1 │   one"), "a context line should show the same line number on both sides: {context_row:?}");
+        assert!(removed_row.contains("2      │ - old"), "a removed line should show only its old-file line number: {removed_row:?}");
+        assert!(added_row.contains("2 │ + new"), "an added line should show only its new-file line number: {added_row:?}");
     }
 
     /// Regression test for explicit developer feedback that posting a chat
@@ -2505,8 +3022,11 @@ mod tests {
 
         let user_row = find_row(&buffer, "user-hi");
         let assistant_row = find_row(&buffer, "assistant-hi");
-        let user_cell = &buffer[(2, user_row)];
-        let assistant_cell = &buffer[(2, assistant_row)];
+        // Both speakers' prose starts in the grid's body column
+        // (`CONTENT_INDENT`), past the `MARGIN_X` margin and the label
+        // column — see `with_label_column`.
+        let user_cell = &buffer[(CONTENT_INDENT as u16, user_row)];
+        let assistant_cell = &buffer[(CONTENT_INDENT as u16, assistant_row)];
         assert_ne!(
             (user_cell.fg, user_cell.modifier),
             (assistant_cell.fg, assistant_cell.modifier),
@@ -2552,7 +3072,7 @@ mod tests {
     fn highlight_command_tokens_dims_a_leading_command_word() {
         let line = highlight_command_tokens("/clear now", &DARK);
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
-        assert_eq!(styled, vec![("/clear", Some(DARK.dim)), (" ", None), ("now", Some(DARK.bright))]);
+        assert_eq!(styled, vec![("/clear", Some(DARK.dim)), (" ", None), ("now", Some(DARK.text))]);
     }
 
     /// The bug report this responds to: dimming only checked the input's
@@ -2565,38 +3085,38 @@ mod tests {
         assert_eq!(
             styled,
             vec![
-                ("please", Some(DARK.bright)),
+                ("please", Some(DARK.text)),
                 (" ", None),
-                ("run", Some(DARK.bright)),
+                ("run", Some(DARK.text)),
                 (" ", None),
                 ("/exit", Some(DARK.dim)),
                 (" ", None),
-                ("for", Some(DARK.bright)),
+                ("for", Some(DARK.text)),
                 (" ", None),
-                ("me", Some(DARK.bright)),
+                ("me", Some(DARK.text)),
             ]
         );
     }
 
     /// Regression test: an ordinary (non-command) word must carry an
-    /// explicit `DARK.bright` foreground, not bare `Style::default()` — the
+    /// explicit `DARK.text` foreground, not bare `Style::default()` — the
     /// latter inherits the terminal's own default text color, which reads
     /// fine on a dark-themed terminal by coincidence but renders dark-on-
-    /// dark against `draw_input`'s always-dark `DARK.bg_input` fill on a
+    /// dark against `draw_input`'s always-dark `DARK.bar_bottom` fill on a
     /// light-themed one. Reported directly: "text is dark on light mode and
     /// it clashes with the dark background."
     #[test]
     fn highlight_command_tokens_gives_plain_words_an_explicit_bright_fg() {
         let line = highlight_command_tokens("hello world", &DARK);
         let fgs: Vec<Option<Color>> = line.spans.iter().map(|s| s.style.fg).collect();
-        assert_eq!(fgs, vec![Some(DARK.bright), None, Some(DARK.bright)], "every word must set an explicit fg; only the whitespace between them may leave it unset");
+        assert_eq!(fgs, vec![Some(DARK.text), None, Some(DARK.text)], "every word must set an explicit fg; only the whitespace between them may leave it unset");
     }
 
     #[test]
     fn highlight_command_tokens_requires_an_exact_word_match() {
         // "/exiting" isn't the recognized "/exit" word, and "cleared" isn't
         // "/clear" — a substring match would false-positive on either, i.e.
-        // dim them like a real command word instead of leaving them DARK.bright.
+        // dim them like a real command word instead of leaving them DARK.text.
         let line = highlight_command_tokens("/exiting cleared", &DARK);
         assert!(line.spans.iter().all(|s| s.style.fg != Some(DARK.dim)));
     }
@@ -2615,14 +3135,13 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // Single-line draft -> 3-row input card (see `input_area_height`:
-        // 1 padding-top row + 1 content row + 1 padding-bottom row, no
-        // border at all) at the very bottom of a 20-row frame; content sits
-        // on the middle row (y=18), 2 cells in from the card's left edge
-        // (the card's own left padding — see `draw_input`; there's no
-        // border to add to it any more).
-        let slash_cell = &buffer[(2, 18)]; // '/'
-        let arg_cell = &buffer[(9, 18)]; // 'n' of "now"
+        // `BottomBar.jsx`'s five rows at the bottom of a 20-row frame —
+        // blank(15) / composer(16) / blank(17) / status(18) / blank(19) —
+        // so a single-line draft sits on row 16. Its content starts at the
+        // grid's 3-cell `MARGIN_X`, plus 3 more for the accent `▶  ` prompt
+        // prefix (the glyph and the two spaces after it): `/` lands in cell 6.
+        let slash_cell = &buffer[(6, 16)]; // '/'
+        let arg_cell = &buffer[(13, 16)]; // 'n' of "now"
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(arg_cell.symbol(), "n");
         assert_ne!(
@@ -2645,9 +3164,12 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let leading_cell = &buffer[(2, 18)]; // 'h' of "hi"
-        let slash_cell = &buffer[(5, 18)]; // '/' of "/exit"
-        let trailing_cell = &buffer[(11, 18)]; // 't' of "there"
+        // Composer row 16, content from cell 6 (3-cell `MARGIN_X` + the
+        // 3-cell `▶  ` prompt prefix) — see
+        // `command_token_is_dimmed_live_in_the_input_box` above.
+        let leading_cell = &buffer[(6, 16)]; // 'h' of "hi"
+        let slash_cell = &buffer[(9, 16)]; // '/' of "/exit"
+        let trailing_cell = &buffer[(15, 16)]; // 't' of "there"
         assert_eq!(leading_cell.symbol(), "h");
         assert_eq!(slash_cell.symbol(), "/");
         assert_eq!(trailing_cell.symbol(), "t");
@@ -2666,7 +3188,7 @@ mod tests {
     fn theme_command_word_is_dimmed_live_like_every_other_known_command() {
         let line = highlight_command_tokens("/theme light", &DARK);
         let styled: Vec<(&str, Option<Color>)> = line.spans.iter().map(|s| (s.content.as_ref(), s.style.fg)).collect();
-        assert_eq!(styled, vec![("/theme", Some(DARK.dim)), (" ", None), ("light", Some(DARK.bright))]);
+        assert_eq!(styled, vec![("/theme", Some(DARK.dim)), (" ", None), ("light", Some(DARK.text))]);
     }
 
     /// Regression test: no visible cursor at all was a standing complaint —
@@ -2683,11 +3205,34 @@ mod tests {
 
         assert!(terminal.backend().cursor_visible(), "the terminal cursor must be shown while the input is focused");
         let pos = terminal.backend().cursor_position();
-        // Input card is the last Length(3) row of the layout (see
-        // `input_area_height`): padding-top row at height-3, content row at
-        // height-2, padding-bottom row at height-1.
-        assert_eq!(pos.y, 20 - 2, "cursor should sit on the input box's one content row");
-        assert_eq!(pos.x, 2 + 2, "cursor should sit right after \"hi\" (2 for the card's own left padding — no border any more, 2 for the two typed chars)");
+        // `BottomBar.jsx` is five rows deep for a single-line draft —
+        // blank / composer / blank / status / blank — so the composer's one
+        // content row is the 4th row up from the bottom of the frame.
+        assert_eq!(pos.y, 20 - 4, "cursor should sit on the composer's one content row");
+        assert_eq!(
+            pos.x,
+            MARGIN_X as u16 + 3 + 2,
+            "cursor should sit right after \"hi\" (3 for the grid's left margin, 3 for the accent `▶  ` prompt prefix on the first line, 2 for the two typed chars)"
+        );
+    }
+
+    /// Regression test for the composer's `▶` prompt glyph (added to match
+    /// `Composer.jsx`): it only ever renders on the input's first source
+    /// line, so the cursor's own placement math must add its 2-column width
+    /// back in for line 0 specifically, not for every line — otherwise
+    /// either the first line's cursor lands 2 columns short of the real
+    /// caret, or every other line's cursor drifts 2 columns too far right
+    /// chasing a glyph that was never drawn there.
+    #[test]
+    fn moving_the_composer_cursor_accounts_for_the_prompt_glyph_on_the_first_line() {
+        let mut app = app();
+        app.input = "hi\nbye".into();
+        app.cursor = app.input.len(); // end of "bye", on the second line
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let pos = terminal.backend().cursor_position();
+        assert_eq!(pos.x, MARGIN_X as u16 + 3, "the second line carries no prompt glyph, so its cursor should sit right after \"bye\" with only the grid's left margin ahead of it");
     }
 
     #[test]
@@ -2700,14 +3245,9 @@ mod tests {
         assert!(!terminal.backend().cursor_visible(), "input is blocked while a card is pending — no cursor should show");
     }
 
-    /// Each entry now carries its own padding (a chat bubble's top/bottom
-    /// blank fill rows — see `render_entry`'s `UserMessage` arm — or
-    /// `render_assistant_text`'s own leading/trailing blank rows), so a
-    /// hand-derived "the row right after entry one is the separator" offset
-    /// no longer holds the way it used to; this checks the same underlying
-    /// property (there's a genuinely blank, unfilled row between the two
-    /// entries' own bubbles, not just their own padding) via `find_row`
-    /// instead.
+    /// `build_log_lines` inserts one blank separator row between every pair
+    /// of rendered entries — checked via `find_row` (not a hand-derived
+    /// offset) since each entry's own speaker label adds rows too.
     #[test]
     fn a_blank_line_separates_consecutive_log_entries() {
         let mut app = app();
@@ -2722,8 +3262,8 @@ mod tests {
         let first_row = find_row(&buffer, "first");
         let second_row = find_row(&buffer, "second");
         assert!(second_row > first_row + 1, "the two entries must not land on adjacent rows: {first_row} vs {second_row}");
-        let unfilled_row_between = (first_row + 1..second_row).any(|y| buffer[(1, y)].bg != DARK.bg_element);
-        assert!(unfilled_row_between, "there must be a genuinely blank row between the two entries' own bubble fills");
+        let blank_row_between = (first_row + 1..second_row).any(|y| (0..buffer.area.width).all(|x| buffer[(x, y)].symbol() == " "));
+        assert!(blank_row_between, "there must be a genuinely blank row between the two entries");
     }
 
     /// Regression guard for the removed assistant-speaker marker — per
@@ -2758,27 +3298,30 @@ mod tests {
         assert!(out.contains("rust"), "the language tag should appear in the block's header");
         assert!(out.contains("fn main"), "the code itself must still be shown");
 
+        // `CONTENT_INDENT`, not column 0 — the turn's label column
+        // (`with_label_column`) sits ahead of every row's real content now.
         let label_row = find_row(&buffer, "rust");
-        assert_eq!(buffer[(0, label_row)].bg, DARK.code_bg, "the language label row should carry the code block's own dark background");
+        assert_eq!(buffer[(CONTENT_INDENT as u16, label_row)].bg, DARK.diff_box, "the language label row should sit on `diff_box`, the design system's nested-quote surface");
 
         // At least two distinct foreground colors within the code line —
         // proof it went through the highlighter, not just plain dim text.
         // Restricted to a narrow column range so unstyled padding cells
         // past the printed text can't manufacture a spurious second color.
         let code_row = find_row(&buffer, "fn main");
-        assert_eq!(buffer[(0, code_row)].bg, DARK.code_bg, "the code line should carry the code block's own dark background, like a real code block in a document");
-        let colors: std::collections::HashSet<Color> = (0..20).map(|x| buffer[(x, code_row)].fg).collect();
+        assert_eq!(buffer[(CONTENT_INDENT as u16, code_row)].bg, DARK.diff_box, "the code line should sit on `diff_box` too, so the block reads as one filled field — a real code block in a document");
+        let colors: std::collections::HashSet<Color> = (CONTENT_INDENT as u16..CONTENT_INDENT as u16 + 20).map(|x| buffer[(x, code_row)].fg).collect();
         assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
     }
 
-    /// Regression test for explicit developer feedback: a ```diff fence
-    /// used to get the same generic hand-drawn `╭─ diff`/`╰─` box as any
-    /// other language — the ask was to drop that box and the "diff" label
-    /// entirely and show a full-width red/green background per line
-    /// instead, reusing the same mechanism the Edit approval card already
-    /// uses for exactly this.
+    /// A ```diff fence gets `InlineDiff.jsx`'s own real bordered box
+    /// (`boxed_diff_lines`/`diff_box_border`) — a deliberate return to a
+    /// drawn box, per the design system's own spec for a quoted diff,
+    /// superseding the older "no box, no label, full-width color only"
+    /// rule this test used to check for (the hand-drawn `╭─ diff`/`╰─`
+    /// generic code-block box that rule was reacting to is still gone —
+    /// this is `InlineDiff`'s own square, one-cell-thick border, not that).
     #[test]
-    fn a_diff_fenced_code_block_renders_full_width_colored_rows_with_no_box_or_label() {
+    fn a_diff_fenced_code_block_renders_a_bordered_box_with_no_language_label() {
         let mut app = app();
         app.log.push(LogEntry::AssistantText { text: "here's the change:\n```diff\n-old line\n+new line\n```".into() });
         let backend = TestBackend::new(100, 20);
@@ -2787,23 +3330,23 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
         let out: String = buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("");
 
-        assert!(!out.contains('╭') && !out.contains('╰'), "a diff fence must not draw the generic code-block box: {out:?}");
         assert!(!out.contains("diff"), "a diff fence must not label itself \"diff\": {out:?}");
         assert!(out.contains("old line") && out.contains("new line"), "the diff content itself must still be shown: {out:?}");
+        assert!(out.contains('┌') && out.contains('└'), "a diff fence should draw InlineDiff's own real box border: {out:?}");
 
+        // `CONTENT_INDENT`, not column 0 — the turn's label column sits
+        // ahead of the box; the tint starts on the box's own left `│` edge.
         let removed_row = find_row(&buffer, "old line");
         let added_row = find_row(&buffer, "new line");
-        assert_eq!(buffer[(0, removed_row)].bg, DARK.diff_del_bg, "a removed line should carry a full-width red background starting at column 0");
-        assert_eq!(buffer[(0, added_row)].bg, DARK.diff_add_bg, "an added line should carry a full-width green background starting at column 0");
+        assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background starting at its box's left edge");
+        assert_eq!(buffer[(CONTENT_INDENT as u16, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background starting at its box's left edge");
     }
 
-    /// Regression test for explicit developer feedback: a diff fence at the
-    /// very start of an assistant message (no leading prose) must not lose
-    /// its full-width fill to the assistant-speaker marker (`● `) punching
-    /// an unstyled gap at column 0 — see `render_assistant_text`'s
-    /// `starts_with_diff` guard.
+    /// A diff fence at the very start of an assistant message (no leading
+    /// prose) must still render its full box, indented under the `harness`
+    /// label column the same as any other content.
     #[test]
-    fn a_diff_fence_as_the_very_first_thing_in_a_message_still_fills_column_zero() {
+    fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_box() {
         let mut app = app();
         app.log.push(LogEntry::AssistantText { text: "```diff\n-old line\n```".into() });
         let backend = TestBackend::new(100, 20);
@@ -2811,7 +3354,7 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let removed_row = find_row(&buffer, "old line");
-        assert_eq!(buffer[(0, removed_row)].bg, DARK.diff_del_bg, "the diff row's full-width fill must reach column 0 even with no leading prose to carry the assistant marker instead");
+        assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.del_bg, "the diff row's background must reach its box's left edge even with no leading prose ahead of it");
     }
 
     /// Regression test for explicit developer feedback: an ordinary
@@ -2831,46 +3374,9 @@ mod tests {
         assert!(rendered(&mut cancelled_app, 100, 20).contains("cancelled"), "a cancelled turn must still render inline");
     }
 
-    #[test]
-    fn every_mjolnir_art_row_is_exactly_mjolnir_art_width_chars() {
-        for (i, row) in MJOLNIR_ART.iter().enumerate() {
-            assert_eq!(row.chars().count(), MJOLNIR_ART_WIDTH, "row {i} isn't fixed-width — the info column beside the art would drift off-alignment");
-        }
-    }
-
-    #[test]
-    fn mjolnir_row_color_sweeps_from_light_at_the_top_to_dark_at_the_base() {
-        let top = mjolnir_row_color(0, MJOLNIR_ART.len());
-        let bottom = mjolnir_row_color(MJOLNIR_ART.len() - 1, MJOLNIR_ART.len());
-        assert_ne!(top, bottom, "the hammer should read as a gradient, not a flat single color");
-        let Color::Rgb(tr, tg, tb) = top else { panic!("expected an Rgb color") };
-        let Color::Rgb(br, bg, bb) = bottom else { panic!("expected an Rgb color") };
-        let brightness = |r: u8, g: u8, b: u8| r as u32 + g as u32 + b as u32;
-        assert!(brightness(tr, tg, tb) > brightness(br, bg, bb), "the top of the hammer should be brighter than the base");
-    }
-
-    #[test]
-    fn the_wordmark_and_tagline_render_beside_the_hammer_art() {
-        let mut app = app();
-        // Tall enough that the whole banner fits without auto-follow scroll
-        // pushing its top rows out of view.
-        let backend = TestBackend::new(110, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| draw(f, &mut app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-
-        // find_row rather than hand-derived coordinates — the hero is now
-        // vertically centered within the log panel's inner height (a
-        // render-time value), so its exact screen row isn't worth
-        // recomputing by hand here; what matters is the relative shape.
-        let wordmark_row = find_row(&buffer, WORDMARK_ART[0].trim());
-        let wordmark_row_text: String = (0..110).map(|x| buffer[(x, wordmark_row)].symbol().to_string()).collect();
-        assert!(wordmark_row_text.contains('⣿') || wordmark_row_text.contains('⠀'), "the wordmark's row should still carry hammer art content to its left, not just the wordmark alone");
-
-        let tagline_row = find_row(&buffer, "every strike is yours to call.");
-        assert!(tagline_row > wordmark_row, "the tagline should render below the wordmark's first row");
-    }
-
+    /// Replaces the removed mascot-art tests — the hero no longer has any
+    /// art to check the shape/gradient of; see `intro_content`'s doc
+    /// comment on why (the Mjolnir Design System's explicit "no logo" rule).
     #[test]
     fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
         let status = StatusInfo {
@@ -2888,9 +3394,8 @@ mod tests {
         // user_and_assistant_messages_are_visually_distinct.
         let out = rendered(&mut app(), 110, 40);
         assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
-        assert!(out.contains(WORDMARK_ART[3].trim()), "the wordmark should appear in the welcome banner");
+        assert!(out.contains("every strike is yours to call."), "the tagline should appear in the welcome banner");
         assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
-        assert!(out.contains(MJOLNIR_ART[0]), "the traced Mjolnir art should appear in the welcome banner");
         assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "the banner should surface the current directory's permission model");
     }
 
@@ -2898,54 +3403,33 @@ mod tests {
     fn a_fresh_session_shows_the_banner_before_any_log_entries() {
         let mut app = app();
         assert!(app.log.is_empty());
-        // Tall enough that the whole banner fits without auto-follow scroll
-        // pushing the wordmark (near the top) out of view.
         let out = rendered(&mut app, 110, 40);
-        assert!(out.contains(WORDMARK_ART[3].trim()));
+        assert!(out.contains("every strike is yours to call."));
     }
 
+    /// Replaces the old `plain_user_messages_get_a_muted_background_but_
+    /// slash_commands_do_not` — the design system's `Prose`/`Turn`
+    /// components carry no filled background for chat content at all (see
+    /// `render_entry`'s `UserMessage` arm doc comment), so a plain message
+    /// is now distinguished from a slash command by its `you` speaker label
+    /// (absent for a command, which is directed at the harness, not
+    /// conversation) rather than a background tint.
     #[test]
-    fn plain_user_messages_get_a_muted_background_but_slash_commands_do_not() {
+    fn plain_user_messages_get_a_speaker_label_but_slash_commands_do_not() {
         let mut app = app();
         app.log.push(LogEntry::UserMessage { text: "hi".into() });
         app.log.push(LogEntry::UserMessage { text: "/exit".into() });
 
-        // See the sizing comment on user_and_assistant_messages_are_visually_distinct above.
         let backend = TestBackend::new(110, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        // `find_row`, not a hand-derived offset — the plain message is now
-        // a multi-row padded bubble (see `render_entry`'s `UserMessage`
-        // arm), so "the command lands 2 rows after the plain message"
-        // no longer holds.
-        let plain_row = find_row(&buffer, "hi");
+        let you_row = find_row(&buffer, "you");
         let command_row = find_row(&buffer, "/exit");
-        // Column 3 for the plain message: no accent bar or panel border
-        // ahead of it any more (the fill starts at column 0), but "hi"'s
-        // own padding fill is one uniformly-styled span covering the whole
-        // row width, so any column here still reads the fill's background.
-        // The slash command's unbarred "> {l}" shape (see `render_entry`)
-        // is unchanged, so column 2 (its content) still applies there.
-        let plain_cell = &buffer[(3, plain_row)]; // padding past "hi", same fill
+        assert!(you_row < command_row, "the plain message's own \"you\" speaker label must appear before the slash command");
         let command_cell = &buffer[(2, command_row)]; // "> /exit"
-        assert_eq!(plain_cell.bg, DARK.bg_element, "a plain user message should carry the subtle background tint");
-        assert_ne!(command_cell.bg, DARK.bg_element, "a slash command must not carry the chat-message background tint");
-    }
-
-    #[test]
-    fn a_short_user_message_gets_the_background_tint_all_the_way_to_the_right_edge() {
-        let mut app = app();
-        app.log.push(LogEntry::UserMessage { text: "hi".into() });
-        let backend = TestBackend::new(110, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| draw(f, &mut app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-
-        let row = content_base();
-        let far_right_cell = &buffer[(99, row)]; // well past "> hi"
-        assert_eq!(far_right_cell.bg, DARK.bg_element, "the background tint should fill the full row width, not just trail the text");
+        assert_ne!(command_cell.fg, DARK.speaker_you, "a slash command must not be styled as a speaker-labeled chat message");
     }
 
     /// Replaces the old `the_welcome_banner_is_framed_by_a_border_spanning_
@@ -2969,28 +3453,21 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let top = 0; // the very top of the frame — no header above it any more
-        let bottom = height - 1 - input_area_height("") - 1; // above the status line + input box
+        let top = 4; // below the 3-row top bar + its 1-row rule
+        // `BottomBar.jsx` is 5 rows for an empty draft (blank / composer /
+        // blank / status / blank), with its own 1-row rule above it, so the
+        // log's last row is 6 up from the frame's last row.
+        let bottom = height - 1 - (1 + input_area_height("") + 1 + 1 + 1) - 1;
         for &(x, y) in &[(0, top), (width - 1, top), (0, bottom), (width - 1, bottom)] {
             let cell = &buffer[(x, y)];
             assert_ne!(cell.symbol(), "╭", "the log panel must not draw a border corner");
-            assert_eq!(cell.bg, DARK.bg_base, "the log panel must still be opaque at its edges even without a drawn border");
+            assert_eq!(cell.bg, DARK.ground, "the log panel must still be opaque at its edges even without a drawn border");
         }
     }
 
     #[test]
-    fn tool_color_is_stable_for_the_same_name_and_can_differ_for_different_names() {
-        assert_eq!(tool_color("shell", &DARK), tool_color("shell", &DARK), "the same tool name must always get the same color");
-        // Not a strict guarantee for every possible pair (a 6-color palette
-        // can collide), but true for this project's actual builtin tool
-        // names — a regression that flattened `tool_color` to a constant
-        // would still be caught here.
-        assert_ne!(tool_color("read", &DARK), tool_color("shell", &DARK));
-    }
-
-    #[test]
     fn bold_markdown_strips_asterisks_and_sets_the_bold_modifier() {
-        let spans = parse_inline("say **hello** now", Style::default().fg(DARK.bright), &DARK);
+        let spans = parse_inline("say **hello** now", Style::default().fg(DARK.body), &DARK);
         let bold = spans.iter().find(|s| s.content.as_ref() == "hello").expect("bold span present");
         assert!(bold.style.add_modifier.contains(Modifier::BOLD));
         assert!(spans.iter().all(|s| !s.content.contains('*')), "literal asterisks must not reach the screen");
@@ -2998,16 +3475,16 @@ mod tests {
 
     #[test]
     fn italic_markdown_sets_the_italic_modifier() {
-        let spans = parse_inline("that is *neat* stuff", Style::default().fg(DARK.bright), &DARK);
+        let spans = parse_inline("that is *neat* stuff", Style::default().fg(DARK.body), &DARK);
         let italic = spans.iter().find(|s| s.content.as_ref() == "neat").expect("italic span present");
         assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]
     fn inline_code_strips_backticks_and_uses_a_distinct_color() {
-        let spans = parse_inline("run `cargo test` first", Style::default().fg(DARK.bright), &DARK);
+        let spans = parse_inline("run `cargo test` first", Style::default().fg(DARK.body), &DARK);
         let code = spans.iter().find(|s| s.content.as_ref() == "cargo test").expect("code span present");
-        assert_eq!(code.style.fg, Some(DARK.code_fg), "inline code should read as a distinct color, not a reversed-video block");
+        assert_eq!(code.style.fg, Some(DARK.code), "inline code should read as a distinct color, not a reversed-video block");
         assert!(!code.style.add_modifier.contains(Modifier::REVERSED), "inline code must not use reversed video");
         assert!(spans.iter().all(|s| !s.content.contains('`')), "literal backticks must not reach the screen");
     }
@@ -3064,7 +3541,12 @@ mod tests {
         let mut insets = Vec::new();
         for y in 0..buffer.area.height {
             let row: Vec<char> = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' ')).collect();
-            if let Some(inset) = row.iter().position(|&c| c == 'x') {
+            // At least 2 consecutive/any 'x's, not just one — the status
+            // line's own "^c to exit"/"^c to cancel" hint (`draw_status_line`)
+            // contains a lone 'x' too, which isn't part of the wrapped prose
+            // this test cares about.
+            if row.iter().filter(|&&c| c == 'x').count() > 1 {
+                let inset = row.iter().position(|&c| c == 'x').unwrap();
                 insets.push(inset);
             }
         }

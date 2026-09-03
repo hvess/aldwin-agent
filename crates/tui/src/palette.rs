@@ -1,196 +1,214 @@
-//! Themeable color palette for `ui.rs`. Two fixed instances — `DARK` (the
-//! only palette that existed before 2026-09-02, and still the default) and
-//! `LIGHT` — selected once at startup via `Theme::from_config` and carried
+//! Themeable color palette for `ui.rs` — ported from the Mjolnir Design
+//! System (`claude.ai/design`, project "Mjolnir Design System", synced
+//! 2026-09-02) rather than hand-picked. Field names mirror the design
+//! system's own `--tui-*` semantic tokens (`tokens/semantic.css`), so a
+//! value here can be checked directly against that source instead of
+//! against another layer of local naming. Two fixed instances — `DARK`
+//! (the system's default theme) and `LIGHT` (the system's `.tui-light`
+//! scope) — selected once at startup via `Theme::from_config` and carried
 //! explicitly from there: `App::theme` for the handful of render functions
 //! that already take `&App`, an explicit `pal: &Palette` parameter for the
-//! rest (see `ui.rs`'s own module doc comment). Deliberately *not* a global/
-//! `OnceLock` — this crate's `cargo test` runs many tests in parallel inside
-//! one process, and a shared mutable "current theme" would make one test's
-//! theme choice leak into another's; explicit threading keeps every test
-//! (and every real render) fully self-contained no matter how it's
-//! scheduled. Runtime theme-switching mid-session was never asked for and
-//! isn't supported — `tui.yaml`'s `theme` field is read once at session
-//! start (mjolnir-config's own "TUI preferences" are already documented as
-//! that kind of setting).
+//! rest (see `ui.rs`'s own module doc comment). Deliberately *not* a
+//! global/`OnceLock` — this crate's `cargo test` runs many tests in
+//! parallel inside one process, and a shared mutable "current theme" would
+//! make one test's theme choice leak into another's; explicit threading
+//! keeps every test (and every real render) fully self-contained no matter
+//! how it's scheduled. Runtime theme-switching mid-session is supported
+//! (`/theme`, see `App::apply_event`'s `ThemeChanged` arm) since `App::theme`
+//! is a plain field and `ui::draw` reads it fresh every frame.
 //!
-//! `DARK`'s values are extracted verbatim (including field-level doc
-//! comments — they encode real developer-decision history, not filler)
-//! from `ui.rs`'s former top-of-file `const` block; no `DARK` value changed
-//! in this module's introduction except `DIM`/`BRIGHT`, already fixed
-//! straight to RGB in the 2026-09-02 Solarized-Light incident (see
-//! mjolnir-tui.md's Progress notes of the same name) before `LIGHT` existed
-//! at all.
-//!
-//! `LIGHT` is new, added directly at developer request once that same
-//! incident's fix (fixed-RGB `DIM`/`BRIGHT`, immune to terminal-palette
-//! remapping) was shipped and the developer asked for an actual light
-//! *theme*, not just a dark theme that no longer breaks under a light
-//! terminal profile. Verified the same way every prior palette change in
-//! this file was — a real xterm session (via Xvfb, no tmux — see this
-//! session's own transcript) rendering the real built app, screenshotted
-//! before/after — not hand-waved from the RGB values alone.
+//! Colors here are the design system's resolved hex values verbatim
+//! (`tokens/palette.css`, `tokens/semantic.css`, and the project's own
+//! `readme.md` token table) — a terminal needs explicit RGB, so this reads
+//! the same values a browser would resolve from the CSS custom properties.
+//! The two `_bg` diff-row tints are the one exception: the source uses CSS
+//! `rgba(...)` alpha over the diff box background, which ratatui's `Color`
+//! has no runtime alpha-blend for — each is pre-blended by hand over
+//! `diff_box` (the surface a diff row actually renders on) and documented
+//! with the source rgba + the blend base, so the arithmetic can be checked
+//! independently of trusting the hardcoded result.
 
 use ratatui::style::Color;
 
-/// One themeable surface. Field names mirror the old flat `const` names
-/// (lowercased) so `ui.rs`'s call sites read the same as before, just as
-/// `pal.dim` / `pal.bright` instead of bare `DIM` / `BRIGHT`.
+/// One themeable surface, matching the design system's `--tui-*` roles
+/// one-to-one (see this module's doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Palette {
-    /// Bright sky-blue in `DARK` rather than named ANSI `Cyan` — sampled
-    /// directly (via ImageMagick pixel-sampling, not eyeballed) from a real
-    /// OpenCode screenshot the developer pointed at as the actual reference
-    /// after the first pass at the visual redesign (fixed-RGB values
-    /// guessed from OpenCode's theme *source* rather than measured from a
-    /// rendered screenshot) came back rejected as "horrific." Applied to the
-    /// approval card border, focused-input highlight, the log panel's live/
-    /// scrolled status badge, and the welcome banner's mascot art/wordmark —
-    /// deliberately *not* widened to ordinary panel borders (`panel_border`
-    /// carries those), keeping accent meaning "this needs your attention"
-    /// rather than "this is a panel."
-    pub accent: Color,
-    /// Secondary text tier: tool metadata, header/footer text, a slash
-    /// command as user input. Fixed RGB, not a named ANSI color — see this
-    /// module's own doc comment on why that was a live bug, not just an
-    /// inconsistency.
+    /// Which half of the system this palette is — carried on the palette
+    /// itself so anything already holding one (`ui::render_assistant_text`
+    /// and the syntax highlighter it calls) can ask, without a second
+    /// `Theme` threaded down beside it purely to answer the same question.
+    pub theme: Theme,
+    /// `--tui-ground` — the frame background every panel ultimately sits on.
+    pub ground: Color,
+    /// `--tui-bar` — chrome surfaces: the top bar and the decision panel
+    /// body.
+    pub bar: Color,
+    /// `--tui-bar-bottom` — the bottom bar (composer + status line).
+    pub bar_bottom: Color,
+    /// `--tui-line` — structural one-cell borders/rules between panels.
+    pub line: Color,
+    /// A flat separator rule, one step more muted than `line` — the design
+    /// system's revision log ("Rules") settled freestanding rules (turn
+    /// breaks, the rule above permission options, first-run step
+    /// separators) as flat single-color rows, one step dimmer than a real
+    /// border, not Nocturne's fading-gradient treatment the token layer
+    /// still ships (`--rule-fade`) — the revision log states that token is
+    /// unused by the five reference screens. A single dim row is also the
+    /// natural terminal-cell rendering anyway: "in a terminal that is one
+    /// row of the dimmest available colour, so nothing here needs
+    /// approximating."
+    pub rule: Color,
+    /// `--tui-text` — primary text: paths that change, the current row,
+    /// the composer draft, the "you" turn's content.
+    pub text: Color,
+    /// `--tui-body` — agent prose, ordinary secondary content.
+    pub body: Color,
+    /// `--tui-code` — code text (fenced blocks, inline `` `code` ``).
+    pub code: Color,
+    /// `--tui-context` — a running tool's stdout.
+    pub context: Color,
+    /// `--tui-value` — right-flush facts and permission "off" values.
+    pub value: Color,
+    /// `--tui-label` — muted labels: tool names, `in`/`writes`/`network`,
+    /// the label column when not the active row.
+    pub label: Color,
+    /// `--tui-dim` — the dimmest metadata tier: timestamps, tool result
+    /// summaries.
     pub dim: Color,
-    /// Primary text tier: assistant output (bold earned via markdown, not
-    /// blanket-applied), headings, ordinary prose. Fixed RGB for the same
-    /// reason as `dim`.
-    pub bright: Color,
-    /// Plain user chat-bubble text. A dedicated LightGreen was tried first
-    /// for user/assistant separation but read as too loud against real
-    /// terminal color schemes — swapped for a muted tone plus a subtle
-    /// background tint (`bg_element`), which separates user input from both
-    /// assistant text (`bright`, no bg) and dim metadata without fighting
-    /// the terminal's own palette.
-    pub user_fg: Color,
-    /// Background scale for the opaque-surfaces redesign, one step lighter
-    /// each: `bg_base` fills the whole frame and is what the log panel's own
-    /// scrollback content sits directly on; `bg_element` fills message-
-    /// bubble and approval/prompt cards; `bg_input` fills the chat input —
-    /// the *lightest* of the tiers in `DARK`, since the input is the one
-    /// surface that's always active/focused rather than passive content.
-    /// `DARK`'s values are pixel-sampled (not guessed) from a real rendered
-    /// OpenCode reference screenshot, confirming an indigo-slate family
-    /// (blue-shifted, not neutral gray) rather than the flat neutral scale
-    /// tried first and rejected as "horrific" (imperceptible steps).
-    pub bg_base: Color,
-    pub bg_element: Color,
-    pub bg_input: Color,
-    /// Inline `` `code` `` in assistant prose. Used `Modifier::REVERSED`
-    /// originally, which read as a jarring bright-white block against most
-    /// terminal themes — swapped for a plain distinguishing color instead.
-    pub code_fg: Color,
-    /// Background for a fenced fixed-width code block. Deliberately the
-    /// *same dark* value in both `DARK` and `LIGHT` — a code block reading
-    /// as "a real code block in a document" (its own distinct dark box with
-    /// a language label, per the redesign that introduced it) is a common,
-    /// expected pattern independent of the surrounding app's own theme (many
-    /// light-themed editors and renderers keep code blocks dark), and it
-    /// means the syntax-highlighted text inside it (`highlight.rs`'s
-    /// `base16-ocean.dark` syntect theme) never has to change per app theme
-    /// either — one less thing to keep in sync, not a limitation.
-    pub code_bg: Color,
-    /// Approval-card diff coloring: a full-width background tint behind
-    /// added/removed lines so a diff reads at a glance instead of every line
-    /// rendering in the same plain `bright`.
-    pub diff_add_bg: Color,
-    pub diff_add_fg: Color,
-    pub diff_del_bg: Color,
-    pub diff_del_fg: Color,
-    /// Retry/warning entries — previously shared plain `dim`, giving them no
-    /// more visual weight than routine tool-activity metadata even though a
-    /// retry is worth noticing.
-    pub warning_fg: Color,
-    /// A muted, desaturated tint of `accent`'s own hue — not `dim` gray —
-    /// for chrome that shouldn't outrank `accent` itself: a card's left
-    /// accent bar at rest, diff context lines, and the log panel's own
-    /// scrollbar. Not a *border* color in the literal 4-sided sense — the
-    /// log panel and former sidebar dropped their drawn borders in the same
-    /// pass that introduced the `bg_*` opaque-surface scale.
-    pub panel_border: Color,
-    /// A small fixed set of hues for giving each distinct tool *name* a
-    /// stable, repeatable color in the status line's running-tools list —
-    /// modeled on posting's per-HTTP-method color coding. `ui::tool_color`
-    /// picks one of these deterministically from the tool's name (a stable
-    /// hash, not an incrementing counter). Deliberately excludes `accent`/
-    /// `warning_fg`/the diff colors — those already carry specific meaning
-    /// elsewhere, and reusing them here would blur that meaning.
-    pub tool_palette: [Color; 6],
+    /// `--tui-quiet` — quieter than `dim`, used for key-hint verbs and
+    /// unmatched permission-pattern text.
+    pub quiet: Color,
+    /// `--tui-mark` — the accent `▌`/`▶`/caret: session identity is *not*
+    /// marked with this per the design system's revision log ("the top bar
+    /// carries no accent mark... a pip there indicated nothing") — reserved
+    /// for selection, the caret, and the composer prompt.
+    pub mark: Color,
+    /// `--tui-mark-idle` — an unselected row's `▌`.
+    pub mark_idle: Color,
+    /// `--tui-band` — the selection band, always paired with `mark` (never
+    /// one without the other — see the design system's States section).
+    pub band: Color,
+    /// `--tui-accent-text` — accent-toned text: a panel title, a filtered
+    /// command's highlighted name.
+    pub accent_text: Color,
+    /// `--tui-speaker-you` — the `you` turn label.
+    pub speaker_you: Color,
+    /// `--tui-speaker-agent` — the `harness` turn label.
+    pub speaker_agent: Color,
+    pub gauge_fill: Color,
+    pub gauge_track: Color,
+    /// `--tui-glyph-done` — a finished tool call (`●`).
+    pub glyph_done: Color,
+    /// `--tui-glyph-running` — a running tool call / spinner (`◐◓◑◒`).
+    pub glyph_running: Color,
+    /// `--tui-glyph-pending` — a pending hunk/step (`○`).
+    pub glyph_pending: Color,
+    pub hunk_header: Color,
+    /// `--tui-modal-line` — the decision panel's own top rule.
+    pub modal_line: Color,
+    /// `--tui-diff-box` — the surface a quoted diff renders on.
+    pub diff_box: Color,
+    pub add: Color,
+    /// `--tui-add-bg` pre-blended over `diff_box` — see this module's doc
+    /// comment.
+    pub add_bg: Color,
+    pub add_code: Color,
+    pub del: Color,
+    /// `--tui-del-bg` pre-blended over `diff_box` — see this module's doc
+    /// comment.
+    pub del_bg: Color,
+    pub del_code: Color,
 }
 
 pub(crate) const DARK: Palette = Palette {
-    accent: Color::Rgb(125, 207, 255),
-    // Fixed RGB since 2026-09-02 (previously `Color::DarkGray`/`Color::White`
-    // — named ANSI indices 8/15, remapped by a real light-mode terminal
-    // theme for *its own* readability; confirmed directly with Solarized
-    // Light's published 16-color table, which renders index 8 as near-black
-    // navy. See mjolnir-tui.md's matching Progress note for the full
-    // incident — reported as "text is dark on light mode and it clashes
-    // with the dark background.")
-    dim: Color::Rgb(140, 143, 163),
-    bright: Color::Rgb(232, 232, 238),
-    user_fg: Color::Rgb(190, 190, 195),
-    bg_base: Color::Rgb(34, 36, 53),
-    bg_element: Color::Rgb(47, 49, 72),
-    bg_input: Color::Rgb(54, 56, 83),
-    code_fg: Color::Rgb(224, 175, 104),
-    code_bg: Color::Rgb(22, 23, 35),
-    diff_add_bg: Color::Rgb(28, 46, 30),
-    diff_add_fg: Color::Rgb(150, 210, 160),
-    diff_del_bg: Color::Rgb(48, 28, 28),
-    diff_del_fg: Color::Rgb(220, 150, 150),
-    warning_fg: Color::Rgb(212, 163, 60),
-    panel_border: Color::Rgb(45, 82, 87),
-    tool_palette: [
-        Color::Rgb(122, 162, 247),
-        Color::Rgb(158, 206, 106),
-        Color::Rgb(224, 138, 90),
-        Color::Rgb(187, 154, 247),
-        Color::Rgb(125, 207, 255),
-        Color::Rgb(247, 118, 142),
-    ],
+    theme: Theme::Dark,
+    ground: Color::Rgb(0x16, 0x18, 0x26),
+    bar: Color::Rgb(0x23, 0x25, 0x32),
+    bar_bottom: Color::Rgb(0x1b, 0x1d, 0x2b),
+    line: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
+    rule: Color::Rgb(0x29, 0x2b, 0x31),  // neutral-900
+    text: Color::Rgb(0xe9, 0xe9, 0xed),
+    body: Color::Rgb(0xcf, 0xd3, 0xe5),  // neutral-300
+    code: Color::Rgb(0xe4, 0xe7, 0xf5),  // neutral-200
+    context: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
+    value: Color::Rgb(0xb2, 0xb6, 0xca), // neutral-400
+    label: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
+    dim: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
+    quiet: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
+    mark: Color::Rgb(0x84, 0xae, 0xd9),  // accent
+    mark_idle: Color::Rgb(0x3f, 0x42, 0x4d), // neutral-800
+    band: Color::Rgb(0x20, 0x2d, 0x39),  // accent-900
+    accent_text: Color::Rgb(0xc1, 0xd7, 0xee), // accent-300
+    speaker_you: Color::Rgb(0x95, 0xbc, 0xe4),  // accent-400
+    speaker_agent: Color::Rgb(0xb2, 0xb6, 0xca), // neutral-400
+    gauge_fill: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
+    gauge_track: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
+    glyph_done: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
+    glyph_running: Color::Rgb(0x84, 0xae, 0xd9), // accent
+    glyph_pending: Color::Rgb(0x59, 0x5d, 0x6c), // neutral-700
+    hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
+    modal_line: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
+    diff_box: Color::Rgb(0x1a, 0x1c, 0x29),
+    add: Color::Rgb(0x70, 0xcf, 0x75),
+    // rgba(112,207,117,.13) over diff_box #1a1c29 -> #243332. Not hand-
+    // computed: rendered in a real browser and pixel-sampled, after a
+    // hand calculation came out a channel off in two of these four.
+    add_bg: Color::Rgb(0x24, 0x33, 0x32),
+    add_code: Color::Rgb(0xa0, 0xe8, 0xa1),
+    del: Color::Rgb(0xe8, 0x6c, 0x68),
+    // rgba(232,108,104,.14) over diff_box #1a1c29 -> #372732
+    del_bg: Color::Rgb(0x37, 0x27, 0x32),
+    del_code: Color::Rgb(0xff, 0x9d, 0x96),
 };
 
-// Light-tinted mirror of `DARK`'s indigo-slate background scale — a light
-// lavender-white family (still blue-shifted, not neutral gray, keeping the
-// same hue identity `DARK`'s own doc comment describes) rather than flat
-// white, and every foreground/accent color re-tuned for contrast against
-// *that* scale specifically, not just "the opposite of dark." `code_bg`
-// stays `DARK`'s own dark value on purpose — see the field's own doc
-// comment above. Verified via a real xterm render (Xvfb, not `TestBackend`
-// alone) before shipping, same discipline as every other palette change in
-// this file's history.
+/// The design system's `.tui-light` scope — same layout, ramps flipped;
+/// selection band darker than the page, not lighter (per the source's own
+/// note: "on a light ground the selection band must be darker than the
+/// page, not lighter").
 pub(crate) const LIGHT: Palette = Palette {
-    accent: Color::Rgb(15, 111, 178),
-    dim: Color::Rgb(117, 120, 138),
-    bright: Color::Rgb(28, 30, 44),
-    user_fg: Color::Rgb(70, 73, 92),
-    bg_base: Color::Rgb(246, 247, 250),
-    bg_element: Color::Rgb(233, 235, 243),
-    bg_input: Color::Rgb(255, 255, 255),
-    code_fg: Color::Rgb(146, 97, 18),
-    code_bg: Color::Rgb(22, 23, 35),
-    diff_add_bg: Color::Rgb(222, 242, 226),
-    diff_add_fg: Color::Rgb(24, 107, 42),
-    diff_del_bg: Color::Rgb(250, 226, 226),
-    diff_del_fg: Color::Rgb(153, 32, 32),
-    warning_fg: Color::Rgb(158, 106, 8),
-    panel_border: Color::Rgb(188, 210, 227),
-    tool_palette: [
-        Color::Rgb(36, 92, 199),
-        Color::Rgb(56, 126, 33),
-        Color::Rgb(175, 89, 15),
-        Color::Rgb(112, 65, 191),
-        Color::Rgb(15, 130, 168),
-        Color::Rgb(191, 40, 90),
-    ],
+    theme: Theme::Light,
+    ground: Color::Rgb(0xf3, 0xf5, 0xfe),  // neutral-100
+    bar: Color::Rgb(0xe4, 0xe7, 0xf5),     // neutral-200
+    bar_bottom: Color::Rgb(0xe4, 0xe7, 0xf5),
+    line: Color::Rgb(0xcf, 0xd3, 0xe5),    // neutral-300
+    rule: Color::Rgb(0xe4, 0xe7, 0xf5),    // neutral-200
+    text: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
+    body: Color::Rgb(0x3f, 0x42, 0x4d),    // neutral-800
+    code: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
+    context: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
+    value: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
+    label: Color::Rgb(0x75, 0x79, 0x8c),   // neutral-600
+    dim: Color::Rgb(0x75, 0x79, 0x8c),     // neutral-600
+    quiet: Color::Rgb(0x75, 0x79, 0x8c),   // neutral-600
+    mark: Color::Rgb(0x56, 0x7e, 0xa7),    // accent-600
+    mark_idle: Color::Rgb(0xcf, 0xd3, 0xe5), // neutral-300
+    band: Color::Rgb(0xc1, 0xd7, 0xee),    // accent-300
+    accent_text: Color::Rgb(0x40, 0x61, 0x81), // accent-700
+    speaker_you: Color::Rgb(0x40, 0x61, 0x81),  // accent-700
+    speaker_agent: Color::Rgb(0x59, 0x5d, 0x6c), // neutral-700
+    gauge_fill: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
+    gauge_track: Color::Rgb(0x93, 0x97, 0xab),  // neutral-500
+    glyph_done: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
+    glyph_running: Color::Rgb(0x56, 0x7e, 0xa7), // accent-600
+    glyph_pending: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
+    hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
+    modal_line: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
+    diff_box: Color::Rgb(0xe4, 0xe7, 0xf5),     // neutral-200
+    add: Color::Rgb(0x0a, 0x75, 0x20),
+    // rgba(10,117,32,.16) over diff_box #e4e7f5 -> #c1d5d2 (browser-sampled,
+    // see `DARK.add_bg`)
+    add_bg: Color::Rgb(0xc1, 0xd5, 0xd2),
+    add_code: Color::Rgb(0x09, 0x41, 0x12),
+    del: Color::Rgb(0xb3, 0x11, 0x24),
+    // rgba(179,17,36,.14) over diff_box #e4e7f5 -> #dcc8d7
+    del_bg: Color::Rgb(0xdc, 0xc8, 0xd7),
+    del_code: Color::Rgb(0x62, 0x14, 0x17),
 };
 
 /// Which fixed `Palette` a session renders with — selected once at startup
-/// (`Theme::from_config`, `App::theme`) and never afterward; see this
-/// module's own doc comment for why this isn't a runtime-global.
+/// (`Theme::from_config`, `App::theme`), switchable live via `/theme`; see
+/// this module's doc comment for why this isn't a runtime-global.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
     #[default]
@@ -220,6 +238,25 @@ impl Theme {
             _ => Theme::Dark,
         }
     }
+}
+
+/// How much of its own color the transcript keeps while a decision panel is
+/// open — the reference's `opacity:.35` on the conversation column in both
+/// panel scenes of `Agent TUI v2.dc.html`. A terminal cell has no alpha
+/// channel, so the effect is composited here instead (see `fade`): the same
+/// arithmetic the browser does, done ahead of time.
+pub(crate) const PANEL_TRANSCRIPT_OPACITY: f32 = 0.35;
+
+/// `fg` composited over `onto` at `alpha` — CSS `opacity` for a medium with
+/// no alpha channel. Only `Color::Rgb` blends; anything else (notably
+/// `Color::Reset`, which is whatever the terminal itself paints and so has
+/// no value to mix) is returned untouched rather than guessed at.
+pub(crate) fn fade(fg: Color, onto: Color, alpha: f32) -> Color {
+    let (Color::Rgb(fr, fg_, fb), Color::Rgb(br, bg_, bb)) = (fg, onto) else {
+        return fg;
+    };
+    let mix = |f: u8, b: u8| (f as f32 * alpha + b as f32 * (1.0 - alpha)).round() as u8;
+    Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
 }
 
 #[cfg(test)]
@@ -263,7 +300,7 @@ mod tests {
                 other => panic!("expected an Rgb color, got {other:?}"),
             }
         }
-        assert!(luma(LIGHT.bg_base) > luma(DARK.bg_base));
-        assert!(luma(LIGHT.bright) < luma(DARK.bright));
+        assert!(luma(LIGHT.ground) > luma(DARK.ground));
+        assert!(luma(LIGHT.text) < luma(DARK.text));
     }
 }

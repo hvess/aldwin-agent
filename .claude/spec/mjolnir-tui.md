@@ -1456,23 +1456,322 @@ pre-existing test-module `single_match` finding disclosed in the
 2026-09-02 self-review Progress entry above and confirmed unrelated via a
 stash comparison — also clean).
 
-- **Layout:** Five horizontal bands (was four before the 2026-09-02 decision
-  panel): the body (full-width scrollable conversation log, or the log
-  beside a secondary sidebar — see the 2026-08-31 visual-redesign Progress
-  entry), a 1-row status line, the decision panel (zero-height and invisible
-  whenever nothing is pending — see the Approval Card bullet below), and the
-  multi-line input area. The sidebar is optional, off by a narrow-terminal
-  width gate regardless of the developer's own Ctrl+T preference, and never
-  taken as license to shrink the log panel below 80 columns when shown —
-  ambient state, not a primary layout element competing with the
-  conversation.
-- **Conversation Log:** Rendered inside a bordered, rounded ratatui panel (see the 2026-08-31 visual-redesign Progress entry) with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome banner (see the 2026-08-29 Progress entry below) only shows when the log is empty — mutually exclusive with real entries, not prefixed above them, since the two used to always coexist and that's what made the banner eat real screen space mid-conversation. Each event type maps to a distinct entry shape, most with a leading glyph (● assistant, ▸/✓/✗ tool activity, ⟳ retry, ✗ error, ℹ notice — see the 2026-08-31 entry). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner ("thinking…"/"working…" — see the 2026-08-29 live-feedback Progress entry); ThinkingEnd removes it — no content shown (dropped at source per mjolnir-core). RetryAttempt renders as a visible inline entry with provider, status code, and message. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys (Up/Down fall through to scroll only once there's no more input-line to navigate to — see the live-feedback Progress entry) or the mouse wheel (`App::handle_mouse`, 2026-09-02 — same one-line-per-notch behavior as the arrow keys, and, unlike them, not blocked while a decision is pending); page scroll via PgUp / PgDn.
-- **Approval Card / Decision Panel (2026-09-02, superseding "inline in the log" below):** ToolApprovalRequested/PromptRequested no longer render inline in the conversation log while pending — they render in a fixed decision panel directly above the input box (`ui::decision_panel_lines`, driven by `App::pending_approvals`/`pending_prompts`), visually distinct via the single accent color, same as before. The diff body is colorized (full-width tint on added/removed lines) and collapses unmodified context beyond a small radius around each change — see the 2026-08-29 live-feedback Progress entry; an unusually large diff is further truncated (`ui::clamp_panel`) to keep the options list on screen. The decision itself is a numbered, keyboard-navigable list (`App::decision_options`/`ui::render_decision_options` — same-day "numbered, arrow/digit-navigable list" entry), not raw letter shortcuts: Up/Down move a visible `▸` cursor, Enter confirms the selected option, a digit `1`-`9` jumps to and confirms an option directly, and Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending — the developer cannot queue new submissions until the gate is resolved. Once resolved, the full card (diff included) still renders inline in the log exactly as before, as a permanent historical record — only the *live* interaction moved out of the scrolling log, not the history.
-- **Input Area:** Multi-line textarea, rounded border (2026-08-31), with a visible terminal cursor, dim placeholder text when empty, and Up/Down line navigation within the draft (see the 2026-08-29 live-feedback Progress entry). Any word matching a known slash command dims live, anywhere it's typed on any line, as a cosmetic hint — independent of whether it would actually be intercepted as a command (only a real leading `/` on the whole message is; see item 8 of that same Progress entry). Enter submits (sends Submit command); Shift+Enter inserts a newline. Ctrl+C cancels the active turn (sends Cancel); Ctrl+C with no active turn exits. Ctrl+T toggles the sidebar (2026-08-31). Input is blocked while an approval card is pending.
-- **Status Line / Sidebar (2026-08-31, superseding the separate header/footer/sidebar trio and the single "Status Bar" further below — see `draw_status_line`'s own doc comment):** A single 1-row status line, positioned directly above the decision panel/input rather than a separate top header and bottom footer: live activity (thinking/idle, with a spinner, plus a descriptive leading word for the rest of an active turn — a named tool in flight, "responding…" once assistant text is streaming, or "working…" while waiting on the first token/tool call of the step; see `ui::activity_label`, 2026-09-02), model name, turn/step counter, any tools currently in flight (colored per name), and a running message count — always this content, even while a decision is pending (2026-09-02: the decision panel is now the one place pending keys show; the status line no longer special-cases them). An optional sidebar (secondary, width-gated — see the Layout bullet above): permission detail, active tools by name with a spinner, turn/step, message count. Neither participates in `ScrollState` — only the log panel scrolls.
-- **Palette:** No longer strictly monochrome as of 2026-08-29 — see the same-day Progress notes below for why, extended further in the 2026-08-31 visual-redesign Progress entry (all color constants now live in `palette.rs`). As of 2026-09-02, `palette.rs` holds two fixed instances of a `Palette` struct — `DARK` (the original, only-ever palette, unchanged) and `LIGHT` (new, independently re-tuned per color rather than a mechanical inversion) — selected once at startup via `Theme::from_config`/`TuiConfig.theme` and threaded explicitly through `ui.rs`'s render functions (`app.theme.palette()` where `&App` is already in scope, an explicit `pal: &Palette` parameter otherwise); see that same-day Progress entry for the full account, including why this is explicit threading and not a global. Background: *stale as of the 2026-08-31 visual-redesign entry above, corrected here 2026-09-02* — no longer terminal default throughout. That redesign's opaque-surfaces pass (`BG_BASE`/`BG_ELEMENT`/`BG_INPUT`/`CODE_BG`, `palette.rs`) fills the whole frame and every panel/bubble/box with its own fixed-RGB tier; this wording describing only a "subtle tint" on top of an otherwise-transparent terminal background was never updated to match and had drifted into being actively misleading — see the 2026-09-02 live-feedback batch's light-mode-contrast item, which traced a real bug to exactly this gap between the two (a span left without an explicit foreground, which reads fine against a *transparent* background inheriting the terminal's own contrast pairing, but not against the app's own always-dark fill).
+- **Layout (rewritten 2026-09-02 onto the Mjolnir Design System — see that Progress entry for the full account):** Seven bands top to bottom: a persistent 3-row top bar (`draw_top_bar` — `mjolnir` identity left, model/version right) and its 1-row rule; the body (full-width scrollable conversation log — no sidebar; the 2026-08-31/09-02 sidebar was already fully removed from the code before this pass, this corrects prose that had drifted stale); a 1-row spacer; a 1-row status line (live activity — `draw_status_line`); the decision panel (zero-height and invisible whenever nothing is pending); and the multi-line input area. `panel_max_height` reserves the top bar's and the decision panel's own chrome (title band + footer, applied outside `clamp_panel`'s budget) explicitly, so the two never silently exceed the frame between them.
+- **Conversation Log:** Rendered inside a borderless, opaque `ground`-filled ratatui panel with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome hero (see the 2026-09-02 Progress entry) only shows when the log is empty. Each `UserMessage`/`AssistantText` entry leads with a one-line `you`/`harness` speaker label (`speaker_you`/`speaker_agent`) — no filled chat-bubble background any more (2026-09-02; the design system's own `Prose`/`Turn` components carry none). Tool-activity entries lead with `●` (done, `glyph_done` or `del` on error) / `◐` (running, `glyph_running`) — no bracketed text tag, no `▸`/`✓`/`✗`. `RetryAttempt`/`Error`/`Notice` lead with a colored lowercase label word instead of a glyph (the design system's fixed glyph table has no roles for any of the three). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner (`◐◓◑◒`, 2026-09-02, replacing the earlier Braille cycle) in the status line only. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys or the mouse wheel; page scroll via PgUp/PgDn.
+- **Decision Panel (chrome rewritten 2026-09-02 onto the design system's Permission screen — behavior unchanged):** ToolApprovalRequested/PromptRequested render in a fixed full-width panel above the input (`ui::decision_panel_lines`), never inline while pending. Chrome: an accent-700 top rule, a title band (`permission`, no glyph, the payload's own kind badge right-aligned in `gauge_fill`), the body (humanized title, diff or raw call), the numbered options list (`▌` mark colored `mark`/`mark_idle` by selection, paired with a `band` background — no separate cursor glyph, no per-row shortcut letters), and a footer (`↑↓ to move   1-N to pick   ⏎ to confirm` left, `saved to .mjolnir/permissions.yaml` right). Enter confirms the selected option, a digit `1`-`9` jumps to and confirms one directly, Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending. Once resolved, the full card (diff included) still renders inline in the log as a permanent historical record.
+- **Input Area:** Multi-line textarea with a visible terminal cursor, an accent `▶` prompt glyph on its first line only (2026-09-02, `Composer.jsx`), dim placeholder text when empty, and Up/Down line navigation within the draft. Any word matching a known slash command dims live, anywhere it's typed on any line. Enter submits; Shift+Enter inserts a newline. Ctrl+C cancels the active turn or exits when idle. Input is blocked while a decision is pending.
+- **Status Line / Top Bar (2026-09-02, restructured onto the design system — see that Progress entry):** `draw_top_bar` is the static identity row (harness name, model, version) at the very top of the frame; `draw_status_line`, one row directly above the decision panel/input, is the live-activity row: a spinner plus activity label, model name, turn/step counter, any tools currently in flight (in `value`, uniformly — not hashed per name any more, since the design system's own `ToolLine` doesn't color by tool identity), a running message count, and a right-aligned Ctrl+C hint. There is no sidebar. Neither band participates in `ScrollState` — only the log panel scrolls.
+- **Palette (rebuilt 2026-09-02 onto the Mjolnir Design System — see that Progress entry for the full field-by-field account):** `palette.rs`'s `Palette` struct now mirrors the design system's own `--tui-*` semantic tokens (31 fields — `ground`/`bar`/`bar_bottom`/`line`/`rule`/`text`/`body`/`code`/`context`/`value`/`label`/`dim`/`quiet`/`mark`/`mark_idle`/`band`/`accent_text`/`speaker_you`/`speaker_agent`/`gauge_fill`/`gauge_track`/`glyph_done`/`glyph_running`/`glyph_pending`/`hunk_header`/`modal_line`/`diff_box`/`add`+`add_bg`+`add_code`/`del`+`del_bg`+`del_code`), not the old flat `dim`/`bright`/`user_fg`/`bg_*`/`code_*`/`diff_*_fg`/`diff_*_bg`/`warning_fg`/`panel_border`/`tool_palette` set — every value is the design system's own resolved hex (dark ground `#161826`, accent dusty azure `#84aed9`), not hand-picked. `DARK`/`LIGHT` selected once at startup via `Theme::from_config`/`TuiConfig.theme`, switchable live via `/theme`, threaded explicitly through `ui.rs`'s render functions — unchanged mechanism, only the field set changed. Text hierarchy is now `text` (primary, the "you" turn's content) / `body` (agent prose) / `code` / `context` (stdout) / `value` (right-flush facts) / `label` (muted labels) / `dim` (dimmest metadata) / `quiet` (quietest tier) — replacing the old two-tier `bright`/`dim` split. Rules are flat, single-color (`rule`, one step more muted than `line`) — not Nocturne's fading-gradient signature the design system's own token layer still ships but whose revision log marks unused by the actual reference screens. No per-tool-name color hashing any more (`tool_color`/`TOOL_PALETTE` removed outright — the reference `ToolLine` doesn't do this). Permission allow/deny states (`access_spans`) render as plain colored text (`add`/`del`), not a filled chip — the design system's own rule is that the accent is "a mark or a line, never a filled field," and none of its components use a background-filled badge for a state word. Fenced code blocks sit on `diff_box`, the system's one nested-quote surface, in both themes. *(Corrected 2026-09-03 — see that Progress entry: this was a fixed theme-invariant `CODE_SYNTAX_BG` while `highlight.rs` was pinned to a dark `syntect` theme; the highlighter now picks the matching half of the `base16-ocean` pair from `Palette::theme`, so the surface no longer has to stay dark in a light session.)*
 
-  Text hierarchy: bright with a leading `●` marker (assistant output; bold is earned via markdown, not blanket-applied — see the markdown-support Progress entry), a muted gray with a subtle background tint (plain user input), dim (tool metadata, header/footer/sidebar text, and a slash command as user input, since it's directed at the harness rather than the model). `BRIGHT`/`DIM` are fixed RGB as of 2026-09-02 (see the same-day Progress entry) — they were the one exception to this file's "fixed RGB, not named ANSI" rule until a real light-mode terminal theme (Solarized Light) was shown to remap them into near-unreadable territory against this app's own always-dark surfaces. One accent color applied to the approval card border, focused-input highlight, the log panel's live/scrolled status badge, and the welcome banner's mascot art/wordmark (see the welcome-banner Progress entry — a deliberate scoped exception, not a general opening-up of accent usage) — explicitly *not* widened to ordinary panel borders (log/sidebar/dimmed-input), which use `PANEL_BORDER` instead, keeping accent meaning "this needs your attention" rather than "this is a panel." As of 2026-08-31, `PANEL_BORDER` is a muted tint of `ACCENT`'s own hue (not a `DIM`-gray alias) — a posting-inspired refinement of this same discipline, not an exception to it; see that Progress entry. Specific accent hue itself still deferred pending mascot palette decision. Two genuinely new colors: `WARNING_FG` (amber, retry entries) and the 6-hue `TOOL_PALETTE` (per-tool-name sidebar chips, 2026-08-31). Permission allow/deny states (`access_spans`, shared by header/hero/sidebar) render as small padded chips (colored background) rather than bare colored text, also 2026-08-31. Fenced code blocks in assistant output get their own syntax-highlighted, per-language color set (see `highlight.rs`) inside a dim `╭─`/`│`/`╰─` border (rounded as of 2026-08-31, matching every other panel), independent of this hierarchy. Inline markdown in assistant prose (bold/italic/inline-code/strikethrough/links, headings, lists, blockquotes, thematic breaks — see the markdown-support Progress entry above) is styled via modifiers only except inline code, which uses a plain distinguishing color (`CODE_FG` — see the live-feedback Progress entry) instead of the reversed-video it used to.
+**Progress (2026-09-02, full visual redesign onto the Mjolnir Design System):**
+The developer imported a new design system (`claude.ai/design`, project "Mjolnir
+Design System", plus a second scratch project "Design system tokens
+discussion" holding the actual handoff bundle and its revision log — the
+source of record for every concrete decision below) and asked for it applied
+to mjolnir's existing functionality: same interactions, new look, small
+layout refactors acceptable, no new features. This is a visual/layout pass
+only — every keybinding, gate, queueing, and scroll behavior this file
+already documents is unchanged; only how it's drawn changed.
+
+**Tokens.** `palette.rs`'s `Palette` struct was rebuilt field-for-field to
+mirror the design system's `--tui-*` semantic tokens (`ground`/`bar`/
+`bar_bottom`/`line`/`rule`/`text`/`body`/`code`/`context`/`value`/`label`/
+`dim`/`quiet`/`mark`/`mark_idle`/`band`/`accent_text`/`speaker_you`/
+`speaker_agent`/`gauge_fill`/`gauge_track`/`glyph_done`/`glyph_running`/
+`glyph_pending`/`hunk_header`/`modal_line`/`diff_box`/`add`+`add_bg`+
+`add_code`/`del`+`del_bg`+`del_code`, 31 fields total) rather than the old
+flat `dim`/`bright`/`user_fg`/`bg_base`/`bg_element`/`bg_input`/`code_fg`/
+`code_bg`/`diff_add_fg`/`diff_add_bg`/`diff_del_fg`/`diff_del_bg`/
+`warning_fg`/`panel_border`/`tool_palette` set — every value is the design
+system's own resolved hex, not re-derived (dark ground `#161826`, accent
+dusty azure `#84aed9`, diff added hue 145 `#70cf75`/removed hue 24 `#e86c68`,
+etc.); the two `_bg` diff tints are the one exception, hand-blended over
+`diff_box` since ratatui has no alpha-blend primitive (documented inline
+with the source rgba + blend base, so the arithmetic is checkable). `LIGHT`
+mirrors the design system's `.tui-light` scope, including the rule that the
+selection band must be *darker* than the page there, not lighter.
+`SPINNER_FRAMES` changed from a 10-frame Braille cycle to the token layer's
+own `◐◓◑◒` (`tokens/motion.css`). `WARNING_FG` has no equivalent in the new
+token set (the system's vocabulary genuinely has no "warning" role) —
+`RetryAttempt` now reads as a bold `label`-colored "retry" tag plus `dim`
+detail instead.
+
+**Glyph vocabulary.** The design system's Iconography table is small and
+fixed (`▌ ● ◐ ○ ✔ ▶ █ + -`) with an explicit rule: "if a mark is needed and
+it is not in that table, do not draw one." `render_entry`'s tool-activity
+arm now reuses `●`/`◐` (done/running) rather than the old `▸`/`✓`/`✗`, with
+a failed call staying `●` but recolored to `del` — color carries the
+distinction, not a new glyph. `RetryAttempt`/`Error`/`Notice` dropped their
+`⟳`/`✗`/`ℹ` glyphs entirely in favor of a colored lowercase label word
+(`error:` in `del`, `notice:` in `quiet`), for the same reason.
+
+**Top bar (new — see the Layout Decision bullet below for why this is a
+structural addition, not a bare reskin).** Every one of the design system's
+five reference screens opens with a persistent 3-row identity bar plus a
+1-row rule (`TopBar.jsx`, `tokens/cells.css`'s `--bar-top-h`); the
+2026-08-31 redesign had folded identity into the single status line instead.
+`draw_top_bar` restores it: `mjolnir` in `text`, no glyph (the design
+system's own revision log: "the top bar carries no accent mark: the name is
+the brand, and a pip there indicated nothing") on the left; model name and
+build version on the right (the reference's `model · gauge · cost` group
+doesn't port literally — mjolnir tracks neither a context-window gauge nor a
+per-session cost anywhere in `StatusInfo`, so neither is fabricated).
+`draw_status_line` keeps the live-activity job it already had (spinner,
+activity label, turn/step, running tools, message count) and gains a
+right-aligned Ctrl+C hint (`^c to cancel`/`^c to exit`, matching
+`StatusLine.jsx`'s own `right` prop, adapted to Mjolnir's real binding).
+
+**Hero.** The hand-traced Braille hammer (`MJOLNIR_ART`) and FIGlet
+wordmark (`WORDMARK_ART`) are gone outright — not trimmed, removed — per the
+design system's explicit, repeated rule: "No logo... every mark is a
+Unicode box-drawing or block character," and its Assets section: "None. No
+images, no icons." `intro_content` is now the tagline plus `model`/
+`version`/`commit`/`access` fact rows on the transcript's label-column
+convention; `log::INTRO_LINE_COUNT` dropped from 18 to 6 to match.
+
+**Transcript.** `UserMessage`/`AssistantText` dropped the filled
+chat-bubble background entirely (`Prose.jsx` is plain colored text on the
+panel ground, no fill in the reference) in favor of a one-line `you`/
+`harness` speaker label (`speaker_you`/`speaker_agent`) with content
+indented under it (`SPEAKER_INDENT`, a compact stand-in for `Turn.jsx`'s
+literal 12-cell label column plus 2-cell gutter, which doesn't port to a
+variable-width ratatui panel). Fenced code blocks kept their filled-box
+treatment (the design system has no generic "code block" component to
+match, only `InlineDiff`) but moved off the old `CODE_BG` onto a new fixed
+`CODE_SYNTAX_BG` — still theme-invariant, for the same reason `CODE_BG` was
+(`syntect`'s `base16-ocean.dark` theme has no light counterpart) — picked
+noticeably darker than `DARK.ground` after a first pass nearly matched it
+and the block all but disappeared in a real dark-mode render. *(Superseded
+2026-09-03: the premise was wrong, not the reasoning — syntect bundles a
+light `base16-ocean` too, and `Palette::theme` says which is wanted, so the
+constant is gone and the block sits on the themed `diff_box` in both.)* Diff
+rendering (`render_diff_line`) now splits the `+`/`-` sign color from the
+code-text color (`add`/`del` vs. `add_code`/`del_code`), matching
+`InlineDiff.jsx` exactly instead of one merged color.
+
+**Decision panel.** The source's own revision log settled this screen
+*back* onto a bottom-anchored full-width panel after trying a centered
+modal-with-scrim — i.e. the exact shape mjolnir already had from the
+2026-09-02 decision-panel entry above — so no layout reversal was needed
+here, only chrome: a `panel_band` (accent-700 top rule + an accent-900
+title band reading `permission`, no glyph, with the payload's own kind
+right-aligned in `gauge_fill` — "bash"/"read"/"edit"/etc., mirroring
+`Modal.jsx`'s `badge` prop) and a footer (`↑↓ to move   1-N to pick   ⏎ to
+confirm` left, `saved to .mjolnir/permissions.yaml` right, no `esc to
+close` — a permission has to be answered, so there's no escape hatch key to
+advertise). Both are assembled *outside* `clamp_panel`'s truncation budget
+now (`decision_panel_lines` applies them after clamping, not before) —
+they used to share the same protected-but-still-counted tail the options
+list did, which on a real terminal (not just a torture-test one) left too
+little budget for the tail itself once the new chrome's fixed overhead was
+counted too; `panel_max_height` reserves the top bar's 4 rows and the new
+chrome's fixed 5 (band 2 + footer 3) explicitly so the total never drifts
+out of budget the way that first cut did. `render_decision_options` swapped
+the old `▸`-vs-blank cursor marker for `OptionRow.jsx`'s own convention:
+the `▌` mark is always drawn, colored `mark` (selected) or `mark_idle`
+(not) — selection is color-only, paired with the `band` background, never a
+distinct glyph.
+
+**Composer.** `draw_input` gained `Composer.jsx`'s accent `▶` prompt glyph
+on the textarea's first line (continuation lines don't carry it — multi-line
+drafts are mjolnir's own extension beyond the reference's single-line
+composer). This is the one place the redesign touched the cursor-placement
+code this file's history treats carefully: the glyph's 2-column width has
+to be added back into `draw_input`'s `set_cursor_position` math for line 0
+specifically (not every line), guarded by a new regression test.
+
+**Sidebar.** Already fully removed from the actual code before this pass
+started (only stray doc-comment mentions remained, cleaned up here) — the
+2026-08-31/09-02 Design-section prose describing a Ctrl+T sidebar was stale
+relative to the code even before the design-system import; this pass is
+what finally corrects that prose (see the Design section below).
+
+**Verified:** 139 `mjolnir-tui` tests pass (138 existing, reworked in place
+where they pinned old field names/glyphs/wording, plus one new regression
+test for the composer cursor fix — none deleted for coverage, only for
+features that no longer exist: the mascot-art shape/gradient tests and the
+per-tool-name color test). Several tests needed taller `TestBackend`
+heights, the same category of change this file's history already
+describes doing repeatedly (widening for the ANSI Shadow wordmark, again
+for the chat-padding pass) — the new top bar plus decision-panel chrome
+raises the realistic minimum terminal size a full 8-tier permission prompt
+needs room for. Full workspace `cargo test` (356 tests) and `cargo clippy -p
+mjolnir-tui --all-targets -- -D warnings` both clean; a pre-existing,
+unrelated `single_match` clippy failure in `mjolnir-core::agent.rs`'s own
+test module (already disclosed in this file's 2026-09-02 self-review
+Progress entry above) reconfirmed present with this pass's changes stashed
+out, via the same stash-comparison discipline that entry established.
+Screenshotted via `examples/preview.rs` (all six scenes, dark and light)
+through a Xvfb + xterm + ImageMagick `import` pipeline — not tmux, per
+standing developer instruction — the same "real terminal render, not just
+`TestBackend`'s text-only dump" discipline this file's palette-work
+Progress entries have used throughout; the `CODE_SYNTAX_BG`/ground
+near-collision above was caught this way, not by any automated check.
+
+**Progress (2026-09-03, fidelity correction — comparing against the actual
+handoff HTML, not just its component source):** Direct developer pushback on
+the pass above: "layout and general UX is not correct... colors appear to be
+completely wrong... I expected a very careful and very detailed overhaul."
+Root cause of the gap, found on review: the first pass was built from reading
+the design system's `.jsx` component source and `readme.md` prose and
+translating by hand — the actual pixel-exact reference (`Agent TUI v2.dc.html`
+in the second, "tokens discussion" project, plus its own revision log) was
+fetched but never *rendered and looked at* as an image; a base64 blob sitting
+in tool-call context isn't the same as seeing it. Corrected this session by
+saving the handoff HTML plus its real token CSS to disk and rendering it with
+headless Chromium (`--headless --screenshot`, run from `/root` — the snap's
+own confinement silently no-ops a write anywhere else, including `/tmp`,
+which cost real time to diagnose) — true ground truth, not a re-derived
+approximation. Pixel-sampled the render against this crate's own screenshots
+first (`convert ... txt:-`): the palette hex values themselves matched
+exactly (`#232532` top bar, `#161826` ground, bit-for-bit) — the color
+*tokens* were never wrong; what was wrong was layout structure and which
+token got applied where. Confirmed fixes, all against the rendered reference
+directly:
+
+- **Turn layout was fundamentally wrong.** The reference lays a turn out as
+  two columns *on the same rows* — a label gutter (`you`/`harness`) beside
+  its content, from the very first row — not a label on its own line with
+  content indented underneath, which is what the first pass shipped.
+  `render_entry`/`render_assistant_text` rebuilt around a new
+  `with_label_column` helper (`CONTENT_INDENT` = a fixed gutter width): the
+  label sits on row 0 only, every other row — including tool-activity/retry/
+  error/notice entries, which continue the current turn rather than
+  starting one — gets a matching blank prefix instead. `ToolActivityStatus`
+  summaries are now right-flushed (`justified_line`) instead of just
+  trailing after two spaces, matching `ToolLine.jsx`.
+- **No rule between turns.** `build_log_lines` only ever inserted a blank
+  `Line::default()` between entries; the reference draws a real flat `rule`
+  row between a fresh `UserMessage`/`AssistantText` and whatever came
+  before (not between a turn and its own tool-activity continuation, which
+  stays blank-only, matching the reference's own internal spacing).
+- **No visible border on a quoted diff.** `InlineDiff.jsx` draws a real
+  one-cell box (`┌─…─┐`/`│`/`└─…─┘`); the first pass used only a flat rule
+  above/below, invisible enough in a screenshot to read as "no diff
+  treatment at all." New `diff_box_border`/`boxed_line` draw the real
+  border, used by both the approval card's diff and a fenced ` ```diff `
+  block in assistant prose (`boxed_diff_lines`).
+- **Permission body sentence was bold+accent; the reference is plain
+  `body`.** The title *band* above it already carries the accent weight;
+  the sentence itself ("The agent wants to run a shell command.") is
+  unstyled prose. Fixed in `render_approval_card`/`render_prompt_card`.
+  Also: numbered options had a stray period ("1. Allow once") the reference
+  doesn't — `render_decision_options` dropped it.
+- **A shell command had no `CommandBlock.jsx` treatment.** It read as a dim
+  `shell: {command}` line, the same shape as any other prompt kind. New
+  `command_block_lines`: a `ground`-colored field with an accent `$`
+  prompt, used only when `kind == "shell"` — other kinds keep the plain
+  line, since a `$` prompt doesn't mean anything for a file path.
+- **Wrong voice: "Claude wants to..." instead of "The agent wants to..."**
+  — `readme.md`'s Content Fundamentals says third person for the model
+  when the harness is speaking about it; fixed across every
+  `humanize_*`/`ApprovalCard` title.
+- **Top bar showed no working directory.** The reference's identity group
+  is always `mjolnir   ~/src/gateway` (`· branch*` too, but mjolnir tracks
+  no git state anywhere and a runtime git shell-out is a real new
+  capability, not a display fix — left out, disclosed, not silently
+  faked). `current_dir_display` adds the cwd, `~`-shortened, using only
+  already-available process state (`std::env::current_dir`).
+- **Decision-panel footer's own separator used the wrong token** (`rule`,
+  the muted one, instead of `line`, which is what the reference's real
+  `border-top: 1px solid var(--tui-line)` resolves to) — and the rule the
+  reference draws *above the options list itself* (between the meta content
+  and the numbered list) didn't exist in the first pass at all; both fixed
+  in `decision_panel_lines`/`card_rule` (which now takes an explicit `fg`
+  instead of a two-state guess).
+
+Verified two ways per fix, not just by reading the diff: `cargo test`
+(140 `mjolnir-tui`, 358 workspace, all passing — several existing tests
+needed taller `TestBackend`s, since the corrected chrome has a real,
+larger minimum size than the first pass's under-built version did, the
+same category of change this file's history already describes doing
+repeatedly) and a second round of `examples/preview.rs` screenshots,
+compared frame-by-frame against the same Chromium-rendered reference used
+to find the bugs — not just against the first pass's own (wrong) output.
+`cargo clippy -p mjolnir-tui --all-targets -- -D warnings` clean.
+
+Lesson recorded plainly since it's a real process gap: reading a design
+system's component source and prose is not the same as looking at its
+actual rendered output, even when both are "available" in the same
+fetch — a base64 image blob in tool-call context has to be saved to a file
+and viewed to count as having been seen at all.
+
+**Progress (2026-09-03, grid + bottom-bar audit — third round of developer
+feedback):** the developer reported that "the chat rows themselves appear
+misaligned and do not follow the cell/grid system," that "the status line is
+above the text field input, but... it is below in the designs," and asked for
+a deep dive into the TUI design files themselves rather than the token layer
+alone. Both reports were correct. Measured against `Agent TUI v2.dc.html`'s
+own markup (its `padding`/`flex-basis` values divided by the 9x20px cell
+from `tokens/cells.css`) and fixed:
+
+1. **The grid.** `MARGIN_X` = 3 cells (`--margin-x: 27px`), `LABEL_COL_WIDTH`
+   = 12 (`--label-col: 108px`), `LABEL_GUTTER` = 2 (`--label-gutter: 18px`),
+   so `CONTENT_INDENT` = cell 17 (`--body-col: 153px`). Every speaker row now
+   puts its label in cell 3 and its prose in cell 17. Option rows are the one
+   deliberate exception the reference makes — flush to the frame edge, `▌` in
+   cell 0, number in cell 3, label in cell 6.
+2. **Bottom bar order.** `BottomBar.jsx` is blank / composer / blank /
+   **status** / blank — the status line is *below* the composer, and the
+   design system's own prose says so ("the composer is a three-row field with
+   one quiet status line under it"). It had been above. While a decision is
+   pending the panel *replaces* those rows rather than stacking above them
+   ("the panel takes the composer's place"), which also relieved the
+   long-running `clamp_panel` height pressure.
+3. **Margins are two-sided.** `padding: 0 27px` is a margin on *both* sides;
+   `filled_line` was only applying the left one, so panel prose wrapped three
+   cells late, and `body_column_width` now holds a margin back on the right so
+   code blocks and diff boxes stop short of the frame instead of running into
+   it.
+4. **Spacing measured, not guessed.** Six cells part *unrelated* groups (top
+   bar name/cwd, footer hint groups); a single-spaced ` · ` separates facts
+   *within* one group. The composer prompt is `▶` plus two spaces, putting the
+   draft's first character in cell 6. A diff sign carries its own trailing
+   space (`+ ` / `- `), coloured with the sign token, not the code.
+5. **The diff box is inset.** Inside the permission card it rides the card's
+   own `MARGIN_X`; inside a turn's body column it sits flush, since
+   `CONTENT_INDENT` already positions it. The new `Inset` type makes which one
+   applies explicit at each call site instead of hardcoding a margin into the
+   box primitives.
+6. **The transcript recedes at 35%** while a decision panel is open — the
+   reference puts the whole conversation column at `opacity:.35` in both of
+   its panel scenes. A terminal cell has no alpha, so `palette::fade`
+   composites it and `fade_area` applies it as a post-pass over the drawn
+   cells, each fading toward *its own* background so cards and diff bands
+   recede against their own surfaces.
+7. **One panel border, not two.** `draw` was drawing the bottom-bar edge and
+   `panel_band` its own rule, stacking two lines where the reference has one
+   `border-top: 1px solid var(--tui-modal-line)`. The shared row now carries
+   that single rule, in `modal_line` when a panel is open.
+8. **Code blocks follow the theme.** `CODE_SYNTAX_BG` was a fixed-dark
+   constant because `highlight_lines` was pinned to syntect's
+   `base16-ocean.dark` in both app themes — a black box in a light session,
+   against the light palette. The highlighter now picks the matching half of
+   the `base16-ocean` pair from `Palette::theme` (a new field, so anything
+   holding a palette can ask), which frees the block to sit on `diff_box`,
+   the design system's one nested-quote surface, in either theme. This closes
+   the "no way to detect the terminal's background" question that comment
+   deferred: the developer states it outright in `tui.yaml`.
+
+Also hardened along the way: `card_footer_line` drops its right-hand
+provenance token when both halves don't fit rather than wrapping a fragment
+onto a row outside the panel (found by probing at 60 columns — the design is
+drawn at 120, so nothing narrower had been checked).
+
+Three regression tests pin the corrections that came from developer reports
+directly: `the_status_line_sits_below_the_composer_not_above_it` (order, not
+coordinates, so a height change can't silently flip it back),
+`speaker_rows_sit_on_the_grids_label_and_body_columns`, and
+`the_transcript_dims_while_a_decision_panel_is_open`. Whole workspace green
+(143 in `mjolnir-tui`), `cargo clippy -p mjolnir-tui --all-targets` clean,
+both themes re-screenshotted against the Chromium-rendered reference.
+
+Lesson, again a process one: the token layer and the component prose were
+both consumed correctly and still produced a wrong layout, because neither
+states cell positions — those only exist as pixel values in the handoff
+HTML's inline styles, and had to be divided by the cell size to be read at
+all. Measuring the reference markup is a distinct step from reading it.
+
 
 ## Decisions
 
@@ -1540,3 +1839,26 @@ stash comparison — also clean).
 - .claude/spec/mjolnir-tools.md — ToolApprovalRequested semantics, ApproveTool command.
 - https://ratatui.rs/ — ratatui.
 - https://docs.rs/crossterm/ — crossterm terminal backend.
+
+### Design sources
+
+Both live on `claude.ai/design` and are read with the `DesignSync` tool
+(`/design-login` first; the tool is main-session only — subagents do not
+have it). See `.claude/CLAUDE.md`'s Design System section for the working
+notes on fetching and rendering them.
+
+- **Mjolnir Design System** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
+  — the token layer. `styles.css` imports
+  `tokens/{fonts,palette,semantic,cells,typography,elevation,motion,base}.css`.
+  `tokens/semantic.css` is the source `palette.rs`'s 31 `--tui-*` fields
+  mirror one-to-one. `tokens/cells.css` is the source of the grid: cell
+  9×20px, frame 120×36 cells, `--margin-x: 27px` (3 cells), `--label-col:
+  108px` (12), `--label-gutter: 18px` (2), `--body-col: 153px` (cell 17),
+  `--bar-top-h: 60px` (3 rows), `--bar-bottom-h: 101px` (5 rows). The
+  project `readme.md` carries the fixed glyph vocabulary and the voice rules.
+- **Agent TUI v2** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
+  — the handoff bundle: `Agent TUI v2.dc.html`, `Agent TUI v2 Light.dc.html`,
+  and a revision log. The authority for layout, and the newer of the two:
+  where it and the token project disagree, this one wins. Cell positions
+  exist *only* here, as pixel values in inline styles — see the 2026-09-03
+  Progress entry for why reading it without measuring it is not enough.

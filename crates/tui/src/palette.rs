@@ -17,10 +17,45 @@
 //! (`/theme`, see `App::apply_event`'s `ThemeChanged` arm) since `App::theme`
 //! is a plain field and `ui::draw` reads it fresh every frame.
 //!
-//! Colors here are the design system's resolved hex values verbatim
+//! Colors here are the design system's resolved hex values
 //! (`tokens/palette.css`, `tokens/semantic.css`, and the project's own
 //! `readme.md` token table) — a terminal needs explicit RGB, so this reads
 //! the same values a browser would resolve from the CSS custom properties.
+//!
+//! # Local deviation, 2026-09-03 — eleven fields are ahead of the tokens
+//!
+//! `.claude/CLAUDE.md` says the visual design is imported, not invented
+//! locally, and that is still the rule. These eleven are a deliberate,
+//! temporary exception, made on the developer's explicit direction after
+//! the design-system push was blocked, and they must be pushed back into
+//! `tokens/palette.css` + `tokens/semantic.css` and then re-synced. Until
+//! that happens this file and the token layer disagree, and *this file is
+//! the one that is wrong* — the design system is still the source of truth.
+//!
+//! What moved, and why (WCAG contrast against each theme's own ground;
+//! floors are 4.5 for text, 3.0 for non-text):
+//!
+//! | field | was | now | ratio |
+//! |---|---|---|---|
+//! | `DARK.label` / `DARK.context` | neutral-600 `#75798c` | neutral-550 `#84889b` | 4.08 → 5.01 |
+//! | `DARK.dim` / `DARK.glyph_pending` | neutral-700 `#595d6c` | neutral-650 `#676b7c` | 2.69 → 3.33 |
+//! | `DARK.bar_bottom` | `#1b1d2b` | `#1f222f` | 1.05 → 1.11 |
+//! | `DARK.diff_box` | `#1a1c29` | `#1e202e` | 1.04 → 1.09 |
+//! | `LIGHT.label` / `LIGHT.context` | neutral-600 `#75798c` | neutral-650 `#676b7c` | 3.96 → 4.86 |
+//! | `LIGHT.quiet` | neutral-600 `#75798c` | neutral-700 `#595d6c` | 3.96 → 6.02 |
+//! | `LIGHT.bar` / `bar_bottom` / `diff_box` | all `#e4e7f5` | `#e2e5f2` / `#e7e9f7` / `#e9ebf9` | one hex → three |
+//!
+//! `neutral-550` and `neutral-650` are new half-steps, placed midway
+//! between their documented neighbours in OKLCH L, C and H, so the ramp
+//! keeps its regular spacing and no existing step moves. The two ground
+//! moves are at the grounds' own hue (277.5) and chroma (0.026), so the
+//! indigo cast is unchanged — only the spacing is. Both sat below every
+//! shipping dark UI measured (VS Code 1.09, GitHub 1.09, One Dark 1.10);
+//! `DARK.bar` at 1.16 was already above them and is deliberately untouched,
+//! which is what keeps `band` reading as a lift above it rather than a hole.
+//! The four `_bg` diff tints were re-blended over the new `diff_box`.
+//! See mjolnir-tui.md's 2026-09-03 colour-transport entry for the full
+//! derivation and for why this is not the same thing as drift.
 //! The two `_bg` diff-row tints are the one exception: the source uses CSS
 //! `rgba(...)` alpha over the diff box background, which ratatui's `Color`
 //! has no runtime alpha-blend for — each is pre-blended by hand over
@@ -125,16 +160,16 @@ pub(crate) const DARK: Palette = Palette {
     theme: Theme::Dark,
     ground: Color::Rgb(0x16, 0x18, 0x26),
     bar: Color::Rgb(0x23, 0x25, 0x32),
-    bar_bottom: Color::Rgb(0x1b, 0x1d, 0x2b),
+    bar_bottom: Color::Rgb(0x1f, 0x22, 0x2f), // elev-2 (was #1b1d2b, 1.05 vs ground -> 1.11)
     line: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
     rule: Color::Rgb(0x29, 0x2b, 0x31),  // neutral-900
     text: Color::Rgb(0xe9, 0xe9, 0xed),
     body: Color::Rgb(0xcf, 0xd3, 0xe5),  // neutral-300
     code: Color::Rgb(0xe4, 0xe7, 0xf5),  // neutral-200
-    context: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
+    context: Color::Rgb(0x84, 0x88, 0x9b), // neutral-550
     value: Color::Rgb(0xb2, 0xb6, 0xca), // neutral-400
-    label: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
-    dim: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
+    label: Color::Rgb(0x84, 0x88, 0x9b), // neutral-550
+    dim: Color::Rgb(0x67, 0x6b, 0x7c),   // neutral-650
     quiet: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
     mark: Color::Rgb(0x84, 0xae, 0xd9),  // accent
     mark_idle: Color::Rgb(0x3f, 0x42, 0x4d), // neutral-800
@@ -146,19 +181,17 @@ pub(crate) const DARK: Palette = Palette {
     gauge_track: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
     glyph_done: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
     glyph_running: Color::Rgb(0x84, 0xae, 0xd9), // accent
-    glyph_pending: Color::Rgb(0x59, 0x5d, 0x6c), // neutral-700
+    glyph_pending: Color::Rgb(0x67, 0x6b, 0x7c), // neutral-650
     hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
     modal_line: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
-    diff_box: Color::Rgb(0x1a, 0x1c, 0x29),
+    diff_box: Color::Rgb(0x1e, 0x20, 0x2e), // elev-1 (was #1a1c29, 1.04 vs ground -> 1.09)
     add: Color::Rgb(0x70, 0xcf, 0x75),
-    // rgba(112,207,117,.13) over diff_box #1a1c29 -> #243332. Not hand-
-    // computed: rendered in a real browser and pixel-sampled, after a
-    // hand calculation came out a channel off in two of these four.
-    add_bg: Color::Rgb(0x24, 0x33, 0x32),
+    // rgba(112,207,117,.13) over diff_box #1e202e -> #293737.
+    add_bg: Color::Rgb(0x29, 0x37, 0x37),
     add_code: Color::Rgb(0xa0, 0xe8, 0xa1),
     del: Color::Rgb(0xe8, 0x6c, 0x68),
-    // rgba(232,108,104,.14) over diff_box #1a1c29 -> #372732
-    del_bg: Color::Rgb(0x37, 0x27, 0x32),
+    // rgba(232,108,104,.14) over diff_box #1e202e -> #3a2b36
+    del_bg: Color::Rgb(0x3a, 0x2b, 0x36),
     del_code: Color::Rgb(0xff, 0x9d, 0x96),
 };
 
@@ -169,18 +202,18 @@ pub(crate) const DARK: Palette = Palette {
 pub(crate) const LIGHT: Palette = Palette {
     theme: Theme::Light,
     ground: Color::Rgb(0xf3, 0xf5, 0xfe),  // neutral-100
-    bar: Color::Rgb(0xe4, 0xe7, 0xf5),     // neutral-200
-    bar_bottom: Color::Rgb(0xe4, 0xe7, 0xf5),
+    bar: Color::Rgb(0xe2, 0xe5, 0xf2),     // elev-3 (was #e4e7f5, shared with the two below)
+    bar_bottom: Color::Rgb(0xe7, 0xe9, 0xf7), // elev-2
     line: Color::Rgb(0xcf, 0xd3, 0xe5),    // neutral-300
     rule: Color::Rgb(0xe4, 0xe7, 0xf5),    // neutral-200
     text: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
     body: Color::Rgb(0x3f, 0x42, 0x4d),    // neutral-800
     code: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
-    context: Color::Rgb(0x75, 0x79, 0x8c), // neutral-600
+    context: Color::Rgb(0x67, 0x6b, 0x7c), // neutral-650
     value: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
-    label: Color::Rgb(0x75, 0x79, 0x8c),   // neutral-600
+    label: Color::Rgb(0x67, 0x6b, 0x7c),   // neutral-650
     dim: Color::Rgb(0x75, 0x79, 0x8c),     // neutral-600
-    quiet: Color::Rgb(0x75, 0x79, 0x8c),   // neutral-600
+    quiet: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
     mark: Color::Rgb(0x56, 0x7e, 0xa7),    // accent-600
     mark_idle: Color::Rgb(0xcf, 0xd3, 0xe5), // neutral-300
     band: Color::Rgb(0xc1, 0xd7, 0xee),    // accent-300
@@ -194,15 +227,14 @@ pub(crate) const LIGHT: Palette = Palette {
     glyph_pending: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
     hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
     modal_line: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
-    diff_box: Color::Rgb(0xe4, 0xe7, 0xf5),     // neutral-200
+    diff_box: Color::Rgb(0xe9, 0xeb, 0xf9),     // elev-1
     add: Color::Rgb(0x0a, 0x75, 0x20),
-    // rgba(10,117,32,.16) over diff_box #e4e7f5 -> #c1d5d2 (browser-sampled,
-    // see `DARK.add_bg`)
-    add_bg: Color::Rgb(0xc1, 0xd5, 0xd2),
+    // rgba(10,117,32,.16) over diff_box #e9ebf9 -> #c5d8d6
+    add_bg: Color::Rgb(0xc5, 0xd8, 0xd6),
     add_code: Color::Rgb(0x09, 0x41, 0x12),
     del: Color::Rgb(0xb3, 0x11, 0x24),
-    // rgba(179,17,36,.14) over diff_box #e4e7f5 -> #dcc8d7
-    del_bg: Color::Rgb(0xdc, 0xc8, 0xd7),
+    // rgba(179,17,36,.14) over diff_box #e9ebf9 -> #e1ccdb
+    del_bg: Color::Rgb(0xe1, 0xcc, 0xdb),
     del_code: Color::Rgb(0x62, 0x14, 0x17),
 };
 

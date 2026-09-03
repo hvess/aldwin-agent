@@ -35,8 +35,8 @@ mod wrap;
 mod tests;
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::Block;
 use ratatui::Frame;
 
 use crate::app::App;
@@ -147,56 +147,76 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // parallel palette would.
         fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
         let [edge_area, panel_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(bottom_area);
-        frame.render_widget(band_edge(Borders::BOTTOM, pal.modal_line, pal.ground), edge_area);
+        frame.render_widget(hairline(pal.modal_line, pal.ground), edge_area);
         decision::draw_panel(frame, panel_area, panel_lines, pal);
     } else {
         // blank / composer / blank / status / blank — `BottomBar.jsx`'s own
-        // five rows, on its own raised ground, with its `border-top` on the
-        // top half of the first of them.
-        frame.render_widget(band_edge(Borders::TOP, pal.line, pal.bar_bottom), bottom_area);
-        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
+        // five rows, on its own raised ground. The first of them carries
+        // the bar's `border-top` as its own underline, which is why it is
+        // painted `ground`: see the note on borders below.
+        frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_area);
+        let [pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(input_height), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
                 .areas(bottom_area);
+        frame.render_widget(hairline(pal.line, pal.ground), pad_top);
         chrome::draw_input(frame, composer_area, app);
         chrome::draw_status_line(frame, status_area, app);
     }
 }
 
-// Band edges use `BorderType::QuadrantOutside`, which is ratatui's own
-// answer to the problem that broke the first two attempts at this.
+// Band edges are an underline, not a glyph.
 //
 // A terminal cell has no sub-cell drawing, so a 1px CSS border has no
-// literal rendering. `─` on a row of its own draws through the *middle* of
-// its cell, leaving half a cell of background on the far side — the
-// "border sitting above the input field with some margin/gap" the
-// developer reported — and it spends a row the grid doesn't have, since
-// `--bar-top-h: 60px` is 3 cells and `--bar-bottom-h: 101px` is 5 with the
-// border inside them, not beside them.
+// literal rendering — but a cell *attribute* does. `SGR 4` draws a rule
+// along the bottom of the cell box at whatever hairline weight the font
+// specifies, which is exactly the shape a `border-bottom` has, and it
+// costs no glyph and no row.
 //
-// `QuadrantOutside` renders a horizontal edge as a half block whose
-// foreground is the border colour and whose background is the block's own
-// fill: `▄` for a `Borders::BOTTOM`, `▀` for a `Borders::TOP`. So the last
-// row of the top bar is bar for its top half and `line` for its bottom
-// half — the border lands exactly on the band's edge, and it costs no row,
-// because it lives on a row the band already owns.
+// Three shapes were tried and rejected first, each for a different reason:
 //
-// An earlier pass hand-rolled the same effect with `▁`/`▔` (one-eighth
-// blocks), which are thinner and closer to the reference's hairline but
-// rest on a rarely-exercised part of the Block Elements range; rejected on
-// the developer's call, "too risky to rely on glyphs". Half blocks are a
-// different tier: ratatui ships them as a first-class `BorderType`, and
-// they are what every terminal image renderer is built on. The trade is
-// thickness — half a cell where the mock has 1px — for an edge that is
-// actually on the edge.
+// * `─` on a row of its own draws through the *middle* of its cell,
+//   leaving half a cell of background on the far side — the "border
+//   sitting above the input field with some margin/gap" that was reported
+//   — and it spends a row the grid doesn't have, since `--bar-top-h: 60px`
+//   is 3 cells and `--bar-bottom-h: 101px` is 5 with the border inside
+//   them.
+// * `▁`/`▔` (one-eighth blocks) land on the right edge at roughly the
+//   right weight, but rest on a rarely-exercised part of the Block
+//   Elements range: "too risky to rely on glyphs."
+// * `BorderType::QuadrantOutside` is ratatui's own answer and uses half
+//   blocks, which are well-supported — but a half block is *half a cell*,
+//   so `--tui-line` came out as a 10px slab against the reference's 1px.
+//   "The line is thick as hell", and it was.
 //
-// Inner boxes stay `BorderType::Plain` regardless: the handoff README is
-// explicit that "the diff panel is a plain `Block::bordered()` with
+// The underline has neither problem. Colour degrades cleanly in both
+// directions: `underline_color` carries the exact token on terminals that
+// implement `SGR 58` (kitty, VTE, WezTerm, iTerm2, mintty), and on ones
+// that don't (notably Alacritty) the underline is drawn in the cell's own
+// foreground — which is set to the same token here, so the rule comes out
+// the right colour either way. `SGR 4` itself is universal.
+//
+// The one limit is direction: an underline is always on the *bottom* of a
+// cell, and ratatui has no overline modifier (`Modifier` stops at
+// `CROSSED_OUT`). So a `border-top` has to be drawn as the underline of
+// the row above it, which is why the bottom bar's first row and the
+// panel's edge row are painted in `ground` — they are the last row of the
+// transcript as far as the eye is concerned, carrying the rule that starts
+// the bar beneath them. `bar_bottom` and `ground` differ by a 1.05
+// contrast ratio, so nothing is visibly lost by that row not being bar.
+//
+// Inner boxes stay `BorderType::Plain`: the handoff README is explicit
+// that "the diff panel is a plain `Block::bordered()` with
 // `BorderType::Plain`. This was an explicit design decision after review."
 
-/// A band filled in `bg`, with `side`'s edge drawn in `fg` against that
-/// edge of the band's own outermost row — see the note on borders above.
-fn band_edge(side: Borders, fg: Color, bg: Color) -> Block<'static> {
-    Block::new().borders(side).border_type(BorderType::QuadrantOutside).style(Style::default().bg(bg)).border_style(Style::default().fg(fg))
+/// One row of `bg` carrying a hairline in `fg` along its bottom edge — a
+/// `border-bottom`, as a cell attribute rather than a glyph. See the note
+/// on borders above.
+///
+/// `fg` is set as well as `underline_color` on purpose: the two cover the
+/// terminals that implement `SGR 58` and the ones that don't, and the row
+/// has no text of its own for the foreground to affect.
+fn hairline(fg: Color, bg: Color) -> Block<'static> {
+    Block::new().style(Style::default().bg(bg).fg(fg).underline_color(fg).add_modifier(Modifier::UNDERLINED))
 }
 
 /// Composites every already-drawn cell in `area` toward its own background

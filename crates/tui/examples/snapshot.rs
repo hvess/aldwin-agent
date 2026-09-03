@@ -85,12 +85,12 @@ fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
         let mut x = 0u16;
         while x < w {
             let first = &buf[(x, y)];
-            let (fg, bg, modifier) = (first.fg, first.bg, first.modifier);
+            let (fg, bg, modifier, ul) = (first.fg, first.bg, first.modifier, first.underline_color);
             let start = x;
             let mut text = String::new();
             while x < w {
                 let cell = &buf[(x, y)];
-                if cell.fg != fg || cell.bg != bg || cell.modifier != modifier {
+                if cell.fg != fg || cell.bg != bg || cell.modifier != modifier || cell.underline_color != ul {
                     break;
                 }
                 text.push_str(cell.symbol());
@@ -105,6 +105,15 @@ fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
             }
             if modifier.contains(Modifier::DIM) {
                 style.push_str(";opacity:.6");
+            }
+            // A cell attribute, not a glyph — the band edges are drawn with
+            // it, so it has to survive into the screenshot or the thing
+            // being reviewed is invisible. `underline_color` falls back to
+            // the cell's foreground, exactly as a terminal without SGR 58
+            // does.
+            if modifier.contains(Modifier::UNDERLINED) {
+                let color = if matches!(ul, Color::Reset) { css(fg) } else { css(ul) };
+                style.push_str(&format!(";text-decoration:underline;text-decoration-color:{color};text-decoration-thickness:1px;text-underline-offset:4px"));
             }
             out.push_str(&format!("<i style=\"{style}\">{}</i>", escape(&text)));
         }

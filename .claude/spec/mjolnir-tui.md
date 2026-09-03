@@ -2117,42 +2117,48 @@ the title band, which carries text, so there is no spare cell edge to draw
 above instead, drawn on `ground` so the accent hairline sits flush against
 the top of the band with transcript above it.
 
-**Resolved with `BorderType::QuadrantOutside`, after the hand-rolled
-attempt was rejected.** `▁`/`▔` read almost exactly right, but that ink is
-the *font's* metrics rather than ours and the range is rarely exercised:
-"too risky to rely on glyphs." Fair. Researching how ratatui itself solves
-this turned up a first-class answer that had been missed:
+**Resolved as an underline, after three glyph attempts.** The shape a
+`border-bottom` actually has is not a character at all — it is a *cell
+attribute*. `SGR 4` rules the bottom of the cell box at the font's own
+hairline weight, which costs neither a glyph nor a row and lands exactly on
+the band's edge. The three rejected attempts, each for a different reason:
 
-`QuadrantOutside` renders a horizontal edge as a *half* block whose
-foreground is the border colour and whose background is the block's own
-fill. Probed against the renderer rather than taken from the docs, a
-`Block::new().borders(Borders::BOTTOM).border_type(QuadrantOutside)` emits
-`▄` with `fg = border, bg = block` across the band's last row — bar for its
-top half, `line` for its bottom — and `Borders::TOP` emits `▀`. So the
-border lands exactly on the band's edge *and* costs no row, since it lives
-on a row the band already owns. `Block::style` paints across the border
-cells and `border_style` is applied on top of it, which is what makes the
-half-block's other half come out as the band's own surface.
+| attempt | placement | weight | why not |
+|---|---|---|---|
+| `─` on its own row | mid-cell | full cell | floats; spends a row the grid doesn't have |
+| `▁`/`▔` one-eighth blocks | correct edge | ~2.5px | rarely-exercised glyph range — "too risky to rely on glyphs" |
+| `BorderType::QuadrantOutside` | correct edge | 10px | ratatui's own idiom and well-supported, but "the line is thick as hell" |
+| **underline** | **correct edge** | **1px** | — |
 
-Half blocks are a different risk tier from one-eighth blocks: ratatui ships
-them as a supported `BorderType`, and they are the basis of every terminal
-image renderer. The trade is thickness — half a cell where the mock has 1px
-— for an edge that is genuinely on the edge. `--tui-line` at 10px reads as
-a distinctly heavier stripe than the reference's hairline; that is the one
-open aesthetic question left on it.
+Measured after: `bar` #232532 to y=78, one pixel of `line` #3f424d at y=79,
+`ground` from y=80. Light theme the same, #e4e7f5 → #cfd3e5 → #f3f5fe.
 
-Inner boxes stay `BorderType::Plain` regardless: the handoff README is
-explicit that "the diff panel is a plain `Block::bordered()` with
-`BorderType::Plain`. This was an explicit design decision after review."
+Colour degrades cleanly in both directions, which is what makes this safe
+where a glyph wasn't: `underline_color` carries the exact token on
+terminals implementing `SGR 58` (kitty, VTE, WezTerm, iTerm2, mintty), and
+where it isn't implemented (notably Alacritty) the underline is drawn in
+the cell's own foreground — set to the same token here, so the rule is the
+right colour either way. `SGR 4` itself is universal. The crate already
+enabled ratatui's `underline-color` feature, so nothing new was needed.
 
-The panel keeps a row for its edge, since its first row is the title band
-and text leaves no spare half-cell there — which also matches the handoff's
-own wording, "a one-cell accent-700 rule along its top edge".
+The one limit is direction: an underline is always on the bottom of a cell
+and ratatui has no overline modifier (`Modifier` stops at `CROSSED_OUT`).
+A `border-top` therefore has to be the underline of the row *above* it,
+which is why the bottom bar's first row and the panel's edge row are
+painted `ground` rather than `bar_bottom` — they read as the transcript's
+last row carrying the rule that starts the bar beneath. `bar_bottom` and
+`ground` differ by a 1.05 contrast ratio, so nothing is visibly lost.
 
-Pinned by `the_top_bar_carries_its_border_on_the_edge_of_its_own_last_row`
-and `the_bottom_bar_carries_its_border_on_the_edge_of_its_own_first_row`,
-which assert the half-block glyph, both its colours, and that the
-neighbouring band starts in the very next cell.
+Inner boxes stay `BorderType::Plain`: the handoff README is explicit that
+"the diff panel is a plain `Block::bordered()` with `BorderType::Plain`.
+This was an explicit design decision after review."
+
+Pinned by `the_top_bar_carries_its_border_as_an_underline_on_its_last_row`
+and `the_bottom_bar_carries_its_border_as_an_underline_on_the_row_above_it`,
+which assert the modifier, both colours, the surface, and that the
+neighbouring band starts in the very next cell. `examples/snapshot.rs`
+renders the underline attribute into its HTML too — without that the thing
+under review is invisible in a screenshot.
 
 **Open, and deliberately not decided here — the palette itself.** The
 seventh report was "because the colors are wrong, everything is quite hard

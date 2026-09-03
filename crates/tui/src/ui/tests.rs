@@ -105,19 +105,19 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
 }
 
 /// Per explicit developer feedback on a rendered frame — "why is the
-/// border not aligned cleanly with the bottom of the component?" It
-/// wasn't, twice over: `─` puts the line through the *middle* of its cell,
-/// leaving half a cell of the bar's own background below it, and the row
-/// it was drawn on was spurious besides, so the 3-cell `--bar-top-h` band
-/// rendered as four.
+/// border not aligned cleanly with the bottom of the component?", then
+/// "the line is thick as hell" of the fix after that. Three shapes were
+/// tried: `─` on its own row (floats mid-cell, and costs a row the grid
+/// doesn't have), `▁`/`▔` (right weight, rarely-exercised glyphs), and
+/// `BorderType::QuadrantOutside` (well-supported, but half a cell thick).
 ///
-/// `BorderType::QuadrantOutside` is ratatui's own answer: a horizontal
-/// edge is a half block whose foreground is the border colour and whose
-/// background is the block's fill, so `▄` on the bar's last row is bar for
-/// its top half and `line` for its bottom — the border lands on the band's
-/// edge and costs no row.
+/// A border is a *cell attribute* here, not a glyph: `SGR 4` rules the
+/// bottom of the cell box at the font's own hairline weight, on the band's
+/// own last row, costing neither a glyph nor a row. `fg` is set alongside
+/// `underline_color` so the rule comes out the right colour on terminals
+/// without `SGR 58` too.
 #[test]
-fn the_top_bar_carries_its_border_on_the_edge_of_its_own_last_row() {
+fn the_top_bar_carries_its_border_as_an_underline_on_its_last_row() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -125,17 +125,23 @@ fn the_top_bar_carries_its_border_on_the_edge_of_its_own_last_row() {
     let buffer = terminal.backend().buffer().clone();
 
     let last = super::TOP_BAR_ROWS - 1;
-    assert_eq!(buffer[(0, last)].symbol(), "▄", "a bottom edge is a lower half block, so the border ink sits against the cell's bottom edge");
-    assert_eq!(buffer[(0, last)].bg, DARK.bar, "its other half is still the bar");
-    assert_eq!(buffer[(0, last)].fg, DARK.line, "the border is `line`, the structural token, not the muted `rule`");
+    let cell = &buffer[(0, last)];
+    assert_eq!(cell.symbol(), " ", "the border is an attribute, not a glyph — the cell keeps its own content");
+    assert!(cell.modifier.contains(Modifier::UNDERLINED), "the bar's last row rules its own bottom edge");
+    assert_eq!(cell.underline_color, DARK.line, "in `line`, the structural border token");
+    assert_eq!(cell.fg, DARK.line, "and in the foreground too, for terminals without SGR 58");
+    assert_eq!(cell.bg, DARK.bar, "the row itself is still the bar");
     assert_eq!(buffer[(0, super::TOP_BAR_ROWS)].bg, DARK.ground, "the transcript starts in the very next cell — the border costs no row");
 }
 
-/// The same fact mirrored at the other end: `BottomBar.jsx`'s
-/// `border-top` is an upper half block on the bar's own first row, so the
-/// border ink touches the transcript above it.
+/// The mirror case, and the one compromise in the scheme: an underline is
+/// always on the *bottom* of a cell and ratatui has no overline modifier,
+/// so `BottomBar.jsx`'s `border-top` is drawn as the underline of the row
+/// above the bar's content. That row is painted `ground` rather than
+/// `bar_bottom` so it reads as the last row of the transcript carrying the
+/// rule — the two differ by a 1.05 contrast ratio, so nothing shows.
 #[test]
-fn the_bottom_bar_carries_its_border_on_the_edge_of_its_own_first_row() {
+fn the_bottom_bar_carries_its_border_as_an_underline_on_the_row_above_it() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -143,12 +149,13 @@ fn the_bottom_bar_carries_its_border_on_the_edge_of_its_own_first_row() {
     let buffer = terminal.backend().buffer().clone();
 
     // The composer row, found by its prompt glyph, is the second of
-    // `BottomBar.jsx`'s five, so the bar begins one row above it.
-    let first = find_row(&buffer, "▶") - 1;
-    assert_eq!(buffer[(0, first)].symbol(), "▀", "a top edge is an upper half block");
-    assert_eq!(buffer[(0, first)].bg, DARK.bar_bottom, "its other half is the bar");
-    assert_eq!(buffer[(0, first)].fg, DARK.line);
-    assert_eq!(buffer[(0, first - 1)].bg, DARK.ground, "the transcript runs right up to it");
+    // `BottomBar.jsx`'s five rows, so the edge row is one above it.
+    let edge = find_row(&buffer, "▶") - 1;
+    let cell = &buffer[(0, edge)];
+    assert!(cell.modifier.contains(Modifier::UNDERLINED), "the row above the bar rules its bottom edge");
+    assert_eq!(cell.underline_color, DARK.line);
+    assert_eq!(cell.bg, DARK.ground, "painted ground, so the rule reads as the transcript's own last edge");
+    assert_eq!(buffer[(0, edge + 1)].bg, DARK.bar_bottom, "the bar's own surface begins in the very next cell");
 }
 
 /// Per explicit developer feedback — "the status line is above the text

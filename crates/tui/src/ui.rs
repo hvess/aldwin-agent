@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientatio
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{cursor_line_col, App, DecisionOption, PatternScope, PendingFront, PermState, RunningTool, ScopeHint, StatusInfo};
+use crate::app::{cursor_line_col, App, DecisionOption, GrantSummary, PatternScope, PendingFront, PermState, RunningTool, StatusInfo};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 use crate::palette::{self, Palette};
@@ -1509,9 +1509,25 @@ fn card_padding_line(bg: Color, pal: &Palette, width: u16) -> Line<'static> {
 /// selected row and `label` otherwise, per the design system's revision
 /// log on the permission screen ("options are numbered 1–4... the number is
 /// accent-300 on the selected row and neutral-600 on the rest") — no
-/// trailing per-row shortcut column any more; that moved into the panel's
+/// trailing per-row *shortcut* column any more; that moved into the panel's
 /// own footer (`decision_footer_hint`).
+///
+/// Each row does carry a second column now: the option's `detail`, dim, in
+/// a column aligned across the whole list — what choosing this option
+/// concretely does ("saved to .mjolnir/permissions.yaml"), per the
+/// developer feedback recorded on `DecisionOption::detail` itself. The
+/// column is dropped wholesale (never per-row, which would leave the list
+/// visibly ragged) on a frame too narrow to seat it without wrapping every
+/// row: the labels alone still resolve the list, and the panel's body above
+/// already states the rule in full.
 fn render_decision_options(options: &[DecisionOption], selected: usize, pal: &Palette, width: u16) -> Vec<Line<'static>> {
+    // Cells 0-5 are the mark and number columns (see the span layout
+    // below); `DETAIL_GAP` parts the label column from the detail one, and
+    // `MARGIN_X` keeps the longest detail off the frame's right edge.
+    const DETAIL_GAP: usize = 3;
+    let label_width = options.iter().map(|o| o.label.width()).max().unwrap_or(0);
+    let detail_width = options.iter().map(|o| o.detail.width()).max().unwrap_or(0);
+    let show_details = detail_width > 0 && 6 + label_width + DETAIL_GAP + detail_width + MARGIN_X <= width as usize;
     options
         .iter()
         .enumerate()
@@ -1529,27 +1545,65 @@ fn render_decision_options(options: &[DecisionOption], selected: usize, pal: &Pa
             // starting in cell 6 ("the number is a direct-pick accelerator,
             // one cell after the mark and two cells before the label"). No
             // period after the number.
-            let spans = vec![
+            let mut spans = vec![
                 Span::styled("▌  ", Style::default().fg(mark_fg).bg(bg)),
                 Span::styled(format!("{}  ", i + 1), Style::default().fg(number_fg).bg(bg)),
                 Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg)),
             ];
+            if show_details {
+                let pad = label_width - opt.label.width() + DETAIL_GAP;
+                spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+                spans.push(Span::styled(opt.detail.clone(), Style::default().fg(pal.dim).bg(bg)));
+            }
             flush_line(spans, bg, width)
         })
         .collect()
 }
 
-/// The decision panel's "Tab to broaden this grant" hint line for a
-/// path-like Tool prompt (`App::decision_scope_hint`) — shows which pattern
-/// the numbered tier options below would actually persist, and how to
-/// switch it, since `render_decision_options`' own labels ("Allow for this
-/// project") stay identical either way (see `App::decision_options`' doc
-/// comment on why) and would otherwise give no visible sign a broader grant
-/// is even on offer.
-fn scope_hint_line(hint: &ScopeHint) -> String {
-    match hint.scope {
-        PatternScope::Exact => format!("scope: this file ({})  ·  Tab for this directory ({})", hint.target, hint.dir_pattern),
-        PatternScope::Directory => format!("scope: this directory ({})  ·  Tab for this file ({})", hint.dir_pattern, hint.target),
+/// The decision panel's statement of what a *saved* answer would write —
+/// one line naming the literal `kind:pattern` rule (`App::decision_grant`),
+/// plus a second line naming the other scope Tab would switch to when the
+/// target has one.
+///
+/// Both exist because of the same developer feedback: "permissions are not
+/// clear, are we approving the tool? are we approving the directory? what
+/// are we concretely doing." The tier labels below can't answer that on
+/// their own — they stay identical whichever pattern is selected (see
+/// `App::decision_options`) — and the line they replace only rendered for
+/// path-like targets, so a `shell` prompt said nothing at all about whether
+/// "allow" meant this command or the shell tool. Naming the rule verbatim
+/// answers it in the same vocabulary the developer will later read back out
+/// of `permissions.yaml`.
+fn grant_lines(grant: &GrantSummary) -> Vec<String> {
+    let mut lines = vec![format!("saving an answer adds the rule  {}", elide(&grant.rule, GRANT_RULE_MAX))];
+    if let Some(alternate) = &grant.alternate {
+        let alternate = elide(alternate, GRANT_RULE_MAX);
+        lines.push(match grant.scope {
+            PatternScope::Exact => format!("Tab  widen it to this whole directory  {alternate}"),
+            PatternScope::Directory => format!("Tab  narrow it back to this one file  {alternate}"),
+        });
+    }
+    lines
+}
+
+/// How much of a grant rule `grant_lines` spells out before eliding. A rule
+/// is `kind:pattern` over an arbitrary tool target, and an arbitrarily long
+/// one is ordinary input (a long shell command); the target is already shown
+/// in full in the card body directly above this line, so wrapping a second
+/// copy of it across four rows would spend the panel's row budget (see
+/// `clamp_panel`, which sacrifices body rows to keep the options list
+/// whole) repeating what the developer just read. The head is what carries
+/// this line's meaning: which kind, and that the pattern is the literal
+/// target rather than a wildcard.
+const GRANT_RULE_MAX: usize = 56;
+
+/// Truncates to `max` characters with a trailing `…` — the design system's
+/// own elision glyph, already used by `clamp_panel`'s hidden-rows marker.
+fn elide(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        format!("{}…", text.chars().take(max).collect::<String>())
     }
 }
 
@@ -1837,12 +1891,19 @@ fn decision_panel_lines(app: &App, width: u16, frame_height: u16) -> Vec<Line<'s
             (render_approval_card(&pending.diff, None, Vec::new(), pal, width), "edit".to_string(), tail)
         }
         PendingFront::Prompt(pending) => {
-            // Only present for a path-like Tool prompt whose target has an
-            // enclosing directory to broaden to (`App::decision_scope_hint`)
-            // — absent for ContextFile prompts and non-path-like Tool
-            // prompts, which have nothing to toggle.
-            let mut tail = match app.decision_scope_hint() {
-                Some(hint) => card_line(&scope_hint_line(&hint), Style::default().fg(pal.dim).bg(pal.bar), pal, width),
+            // Present for every Tool prompt (its second line, the Tab
+            // toggle, only when the target has an enclosing directory to
+            // broaden to); absent for a ContextFile prompt, which persists a
+            // path rather than a grant pattern and has no rule to state.
+            let mut tail: Vec<Line<'static>> = match app.decision_grant() {
+                // Its own padding row above: the rule restates the target
+                // the card body just showed, so without a break the two sit
+                // as adjacent near-identical rows ("read: ./x.rs" directly
+                // over "…adds the rule  read:./x.rs") and read as a stutter
+                // rather than as a statement about what happens next.
+                Some(grant) => std::iter::once(card_padding_line(pal.bar, pal, width))
+                    .chain(grant_lines(&grant).iter().flat_map(|line| card_line(line, Style::default().fg(pal.dim).bg(pal.bar), pal, width)))
+                    .collect(),
                 None => Vec::new(),
             };
             tail.extend(options_rule());
@@ -1880,7 +1941,14 @@ fn decision_panel_lines(app: &App, width: u16, frame_height: u16) -> Vec<Line<'s
     // above the *options* list, inside `render_decision_options`'
     // surrounding chrome, is the one place `rule` is actually correct).
     lines.push(card_rule(pal.line, pal.bar_bottom, width));
-    lines.push(card_footer_line(decision_footer_hint(options.len(), pal), "saved to .mjolnir/permissions.yaml", pal.bar_bottom, pal, width));
+    // No right-hand provenance note. It used to read "saved to
+    // .mjolnir/permissions.yaml" under every prompt, which was true of
+    // exactly one of the tiers on offer — "allow once" and "allow for this
+    // session" save nothing at all, and "always allow" writes to the global
+    // file instead. Where each answer lands is now stated per option, on the
+    // option's own row (`DecisionOption::detail`), which is the only place
+    // it can be stated accurately.
+    lines.push(card_footer_line(decision_footer_hint(options.len(), pal), "", pal.bar_bottom, pal, width));
     lines
 }
 
@@ -1987,7 +2055,11 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
     let mut spans = if app.thinking {
         vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled("thinking…  ", Style::default().fg(pal.label))]
-    } else if app.turn_active {
+    // `awaiting_turn` counts as active here as well as in the hint below —
+    // between submitting and `TurnStarted` landing the harness is waiting on
+    // the provider, and reporting that stretch as "idle" is exactly the
+    // no-progress-feedback complaint `activity_label` exists to answer.
+    } else if app.turn_active || app.awaiting_turn {
         vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled(format!("{}  ", activity_label(app)), Style::default().fg(pal.label))]
     } else {
         vec![Span::styled("idle  ", Style::default().fg(pal.label))]
@@ -2019,7 +2091,9 @@ fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // actually cancels a turn or exits an idle session (`App::handle_key`).
     // Both halves sit inside the grid's own 3-cell margin, like every other
     // content row in a frame (`padding: 0 27px`).
-    let hint = if app.turn_active { "^c to cancel" } else { "^c to exit" };
+    // Must read the same "is anything running" state `App::cancel_or_quit`
+    // acts on, or the hint promises one thing and the key does the other.
+    let hint = if app.turn_active || app.awaiting_turn { "^c to cancel" } else { "^c to exit" };
     let [left_area, right_area] = Layout::horizontal([Constraint::Min(1), Constraint::Length(hint.width() as u16 + MARGIN_X as u16)]).areas(area);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);
     frame.render_widget(
@@ -2173,7 +2247,7 @@ mod tests {
         // before `clamp_panel`'s own "the tail always survives" guarantee
         // — which this test actually exercises — can be observed.
         let out = rendered(&mut app, 30, 34);
-        assert!(out.contains("Deny for this project") && out.contains("Always deny"), "all 8 tiers must stay visible even when the title itself needs to be abbreviated: {out:?}");
+        assert!(out.contains("4  Always allow") && out.contains("5  Deny"), "every option must stay visible even when the title itself needs to be abbreviated: {out:?}");
     }
 
     /// Companion regression: the same budget bug also printed a nonsensical
@@ -2695,7 +2769,57 @@ mod tests {
         let out = rendered(&mut app, 100, 34);
         assert!(out.contains("1  Allow once"), "the first option must be numbered: {out:?}");
         assert!(out.contains("3  Allow for this project"), "later options must be numbered too: {out:?}");
-        assert!(out.contains("8  Always deny"), "the full 8-option tier list must be shown, not a shortened set: {out:?}");
+        assert!(out.contains("5  Deny"), "the single deny option closes the list: {out:?}");
+        assert!(!out.contains("Always deny"), "the persistent deny tiers are no longer offered here: {out:?}");
+    }
+
+    /// The panel must say what each answer concretely does, not just name a
+    /// tier — the direct answer to "permissions are not clear ... what are
+    /// we concretely doing". Two halves: the rule a saved answer would add
+    /// (in the same `kind:pattern` form it takes in `permissions.yaml`), and
+    /// per-option details saying how long each answer lasts and where, if
+    /// anywhere, it is written.
+    #[test]
+    fn a_tool_prompt_states_the_rule_it_would_save_and_what_each_option_does() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 100, 34);
+        assert!(out.contains("adds the rule  shell:cargo test"), "the exact rule must be named — allow means this command, not the shell tool: {out:?}");
+        assert!(out.contains("this call only; nothing is saved"), "the once tier must say it saves nothing: {out:?}");
+        assert!(out.contains("saved to .mjolnir/permissions.yaml"), "the project tier must name where it writes: {out:?}");
+        assert!(out.contains("saved to ~/.mjolnir/permissions.yaml"), "the always tier must name the *global* file, not the project one: {out:?}");
+    }
+
+    /// The old footer claimed "saved to .mjolnir/permissions.yaml" under
+    /// every prompt, which was true of exactly one of the tiers on offer —
+    /// a standing, unconditional falsehood about where a decision lands.
+    /// Provenance is per-option now, so the footer must not restate it.
+    #[test]
+    fn the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let backend = TestBackend::new(100, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let footer_row = find_row(&buffer, "to confirm");
+        let footer: String = (0..buffer.area.width).map(|x| buffer[(x, footer_row)].symbol().to_string()).collect();
+        assert!(!footer.contains("permissions.yaml"), "the key-hint row must not carry a where-it-saves claim of its own: {footer:?}");
+    }
+
+    /// On a frame too narrow to seat the detail column, the labels alone
+    /// still have to resolve the list — details are dropped wholesale
+    /// rather than wrapping every row into an unreadable ladder.
+    #[test]
+    fn the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame() {
+        let mut app = app();
+        let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+        app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+        let out = rendered(&mut app, 46, 34);
+        assert!(out.contains("1  Allow once") && out.contains("5  Deny"), "the numbered list must survive intact: {out:?}");
+        assert!(!out.contains("nothing is saved"), "the detail column must not wrap into the narrow list: {out:?}");
     }
 
     /// Per explicit developer feedback that it wasn't clear what a tool
@@ -2758,36 +2882,35 @@ mod tests {
         let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("this file"), "must name the current exact-file scope: {out:?}");
-        assert!(out.contains("./crates/tui/src/**"), "must show the directory glob Tab would switch to: {out:?}");
-        assert!(out.contains("Tab"), "must tell the developer how to switch scope: {out:?}");
+        assert!(out.contains("adds the rule  read:./crates/tui/src/ui.rs"), "must name the rule the current exact-file scope would save: {out:?}");
+        assert!(out.contains("Tab  widen it to this whole directory  read:./crates/tui/src/**"), "must show the directory glob Tab would switch to, and that Tab is how: {out:?}");
     }
 
-    /// After toggling, the hint's wording flips to describe the *current*
-    /// scope as the directory and Tab as the way back to the exact file —
-    /// otherwise the hint would misdescribe which pattern is actually about
-    /// to be persisted.
+    /// After toggling, the stated rule becomes the directory glob and Tab
+    /// becomes the way back to the exact file — otherwise the panel would
+    /// name a rule other than the one it is about to persist.
     #[test]
-    fn toggling_scope_flips_which_pattern_the_hint_calls_current() {
+    fn toggling_scope_flips_which_pattern_the_panel_calls_current() {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         app.decision_pattern_scope = crate::app::PatternScope::Directory;
         let out = rendered(&mut app, 100, 20);
-        assert!(out.contains("this directory"), "the current scope must now read as the directory: {out:?}");
-        assert!(out.contains("./crates/tui/src/ui.rs"), "the exact file must still be shown as what Tab switches back to: {out:?}");
+        assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "the directory glob must now be the rule on the table: {out:?}");
+        assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "the exact file must still be shown as what Tab switches back to: {out:?}");
     }
 
     /// A non-path-like prompt (shell, an MCP tool's JSON blob) has nothing
-    /// to broaden — the hint must not appear and invite a Tab press that
-    /// would be a no-op.
+    /// to broaden — it still states its rule, but must not offer a Tab
+    /// press that would be a no-op.
     #[test]
-    fn a_non_path_like_prompt_shows_no_scope_hint() {
+    fn a_non_path_like_prompt_offers_no_scope_toggle() {
         let mut app = app();
         let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
         app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
         let out = rendered(&mut app, 100, 20);
-        assert!(!out.contains("scope:"), "a shell target has no directory to broaden to, so no hint should render: {out:?}");
+        assert!(out.contains("adds the rule  shell:cargo test"), "the rule itself must still be stated: {out:?}");
+        assert!(!out.contains("Tab "), "a shell target has no directory to broaden to, so no toggle should be offered: {out:?}");
     }
 
     /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
@@ -2883,7 +3006,15 @@ mod tests {
         // one inset space per wrapped row — counting characters, not
         // matching a literal substring, is what actually proves nothing was
         // dropped.
-        assert_eq!(out.matches('q').count(), 200, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+        //
+        // The grant line (`grant_lines`) restates the target as part of the
+        // rule it would save, elided at `GRANT_RULE_MAX` — so the expected
+        // count is the command block's own full 200 plus whatever of the
+        // rule survives elision past its "shell:" prefix. Derived from the
+        // constant rather than written out, so tuning the elision width
+        // can't silently turn this into a test of nothing.
+        let in_grant_line = GRANT_RULE_MAX - "shell:".len();
+        assert_eq!(out.matches('q').count(), 200 + in_grant_line, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
     }
 
     /// Regression test for the actual reported defect, not just the
@@ -2909,11 +3040,14 @@ mod tests {
         // A run of ten consecutive `y`s only ever occurs inside the wrapped
         // `$ yyy...` command line (200 `y`s, hard-broken mid-run since it
         // has no whitespace to wrap at) — unlike a single "y", which the
-        // input box's placeholder text also contains, so the *last* row
-        // matching this longer run is unambiguously that long line's final
+        // input box's placeholder text also contains. The search stops
+        // above the grant line, which restates a (differently-filled) slice
+        // of the same target as the rule it would save (`grant_lines`), so
+        // the row found is unambiguously the command block's own final
         // wrapped row, whose trailing padding is what this test checks.
         let needle = "y".repeat(10);
-        let last_title_row = (0..buffer.area.height)
+        let grant_row = find_row(&buffer, "adds the rule");
+        let last_title_row = (0..grant_row)
             .rev()
             .find(|&y| {
                 let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
@@ -3554,3 +3688,4 @@ mod tests {
         assert!(insets.iter().all(|&i| i == insets[0]), "every wrapped row must share the same left inset, got {insets:?}");
     }
 }
+

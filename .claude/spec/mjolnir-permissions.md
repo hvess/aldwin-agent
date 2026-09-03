@@ -88,6 +88,25 @@ a developer investigating "permissions felt confusing" would open first —
 this file's own 2026-09-02 directory-scope entry above is the other half of
 the same live-session feedback batch.
 
+**Progress (2026-09-03, the prompt now says what it would write; the deny
+tiers stopped being offered):** Follow-up feedback on the same theme as the
+entry above — "permissions are not clear, are we approving the tool? are we
+approving the directory? what are we concretely doing" — and, alongside it,
+"do we need all of the deny options?" Both were answered entirely in
+mjolnir-tui (see its matching Progress note): the decision panel now states
+the literal `kind:pattern` rule a saved answer would add, in exactly the
+form it takes in `permissions.yaml`, and each option says how long it lasts
+and which file, if any, it lands in. Nothing in this engine changed — no
+Model, Grammar, Decisions, or API — which is the point worth recording here:
+the four-tier prompt's symmetry (allow and deny at every tier) was a
+*presentation* choice this spec never required, and `record_tool_decision`
+still accepts `Decision::Deny` at any `ToolTier` for a caller that wants it.
+What the panel offers is now four allow tiers and a single non-persisting
+deny; a standing "never do this" rule is a deliberate `permissions.yaml`
+edit, which is also the reading this spec's own annotated header teaches. The
+tier-list Pitfall below still holds and is not weakened by this: it guards
+against the list *growing* a ninth option, and the list got shorter.
+
 ## Why
 
 Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request runs through this engine. It owns scope precedence, pattern matching, the tiered prompt round-trip, and the in-memory shape of allowlists and denylists. Cross-cutting — any crate that gates an action calls into this one rather than reimplementing the policy.

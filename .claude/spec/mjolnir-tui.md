@@ -1772,6 +1772,65 @@ states cell positions — those only exist as pixel values in the handoff
 HTML's inline styles, and had to be divided by the cell size to be read at
 all. Measuring the reference markup is a distinct step from reading it.
 
+**Progress (2026-09-03, live-feedback batch — Ctrl+C, permission clarity,
+mouse):** four items from a developer round of using the harness, three of
+them defects and one a design question answered by the developer directly.
+
+- **"Ctrl+C after /theme appears to be broken."** It was, and not only after
+  `/theme`. `cancel_or_quit` decided whether a turn was running by scanning
+  the log backwards for the most recent `UserMessage` ("running") or
+  `TurnEnded` ("finished"). A slash command is submitted like any other
+  message, so `submit` logs a `UserMessage` for it — but mjolnir-cli's
+  interceptor answers `/theme`, `/help`, `/reload-config` and any unknown
+  command itself: the core never sees them, no turn starts, and no
+  `TurnEnded` is ever appended. From the first such command onward the scan
+  answered "a turn is running" to every Ctrl+C forever, so the key sent
+  `Command::Cancel` into a session with nothing to cancel and the developer
+  could never exit with it again. Replaced with the flags the events already
+  maintain (`turn_active`, plus a new `awaiting_turn` covering the gap
+  between submitting and `TurnStarted` landing, cleared by whatever comes
+  back — a turn, or the `Notice`/`HistoryCleared`/`ThemeChanged` a locally
+  handled command answers with). Added on top as a general escape hatch,
+  since the failure class here is "trapped in the session": a second Ctrl+C
+  within `DOUBLE_CTRL_C_TICKS` always exits regardless of what the state
+  believes, with the first press saying so in the log.
+- **"Permissions are not clear — are we approving the tool? the directory?
+  what are we concretely doing?"** The panel named tiers ("Allow for this
+  project") and nothing else: not what the rule would cover, not how long it
+  lasts, not where it lands. Two additions answer it in the developer's own
+  terms. `App::decision_grant` states the literal `kind:pattern` rule a
+  saved answer adds — the same string that shows up in `permissions.yaml`,
+  so "allow" on a shell prompt visibly means *this command*, not the shell
+  tool — with the Tab scope toggle demoted to a second line under it (it
+  used to be the only such line, and rendered for path-like targets only,
+  which is exactly why a shell prompt explained nothing). `DecisionOption`
+  gained a `detail` column saying what each answer does: "this call only;
+  nothing is saved", "saved to .mjolnir/permissions.yaml", "saved to
+  ~/.mjolnir/permissions.yaml". The panel footer's standing "saved to
+  .mjolnir/permissions.yaml" note is gone — it was true of exactly one tier
+  on offer, an unconditional falsehood under every prompt.
+- **"Do we need all of the deny options?"** No, and the developer chose the
+  narrower list: four allow tiers and one `Deny` (tier `Once`), down from
+  eight. `ToolTier` is untouched — the engine still supports deny at every
+  tier — but a standing "never do this" rule belongs in `permissions.yaml`
+  as a deliberate edit, not as options 6-8 of a prompt answered under time
+  pressure. The list is also short enough now to read at a glance, which is
+  most of what the previous item was about.
+- **Text selection** — see the Out of Scope entry; mouse capture reverted.
+
+Tests: the Ctrl+C fix is pinned by
+`ctrl_c_still_quits_after_a_locally_handled_slash_command` (written against
+`/theme`'s exact event sequence) plus the double-press pair; the panel by
+`a_tool_prompt_states_the_rule_it_would_save_and_what_each_option_does`,
+`the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved`, and
+`the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame`
+(the detail column is dropped wholesale below its fit width, never wrapped
+per-row into a ladder). 150 in `mjolnir-tui`, whole workspace green, clippy
+clean on the touched crates. The panel was read back as a real render before
+being called done, per this file's standing discipline — that pass is what
+caught the rule line sitting flush against the near-identical raw-call line
+above it, now parted by a padding row.
+
 
 ## Decisions
 
@@ -1824,7 +1883,7 @@ all. Measuring the reference markup is a distinct step from reading it.
 
 ## Out of Scope
 
-- Mouse support beyond wheel-scroll — keyboard-only otherwise. *Narrowed, not reopened, 2026-09-02:* mouse capture is now on and the wheel scrolls the log (`App::handle_mouse`, see the same-day "live-feedback batch" Progress entry) — a direct fix for a developer report that the wheel couldn't scroll at all while capture was off. Click/drag/move events reach the app too now that capture is on, but nothing is wired to them; the terminal's own native text selection is still reachable behind its usual bypass modifier (Shift-drag on most terminals) instead of on a plain drag. This is the same shape the 2026-08-31 sidebar entry used for the split-pane rejection: a scoped, deliberate carve-out of one specific interaction, not a reopening of "should this app be mouse-driven."
+- Mouse support — keyboard-only, and as of 2026-09-03 that includes the wheel. *Narrowed 2026-09-02, then reverted 2026-09-03:* mouse capture was briefly enabled so the wheel could scroll the log (`App::handle_mouse`), fixing a report that the wheel couldn't scroll at all. The developer's next round of feedback was the cost of that trade — "text selection has been disabled (or is simply not working)" — which is inherent, not a bug in the wiring: a terminal routes mouse events either to the application or to its own selection, never to both, so capture buys a wheel binding at the price of click-drag selection. For a harness whose premise is that the developer reads and reasons about the transcript, selecting and copying out of it wins; PageUp/PageDown/arrow scrolling already covers the wheel's job. Capture is off, `handle_mouse` is gone, and this line is back to "keyboard-only" without the carve-out.
 - Rich/configurable color theming — a two-way `Theme::{Dark,Light}` choice exists now (2026-09-02, `tui.yaml`'s `theme` field — see the Palette bullet and its same-day Progress entry), each a small fixed semantic palette, but that's a binary switch between two hand-tuned sets, not a user-configurable/custom theming system (arbitrary colors, N themes, per-element overrides); that remains out of scope, still blocked on the mascot palette decision for anything beyond these two fixed options.
 - Syntax highlighting in diff blocks — plain text diff in V0.
 - Conversation log search or filtering.

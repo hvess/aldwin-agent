@@ -16,16 +16,42 @@ use crate::registry::{Registry, ToolDescriptor};
 pub struct Dispatcher {
     registry:    Registry,
     permissions: Arc<Engine>,
+    /// Serialises the prompt-and-record half of `check` across the tool
+    /// calls of a step, which `mjolnir-core`'s `dispatch_tools` drives
+    /// concurrently (`future::join_all`) — see `check`'s own doc comment for
+    /// the bug that makes this necessary. Held only while a prompt is
+    /// genuinely outstanding, so calls the engine can already answer never
+    /// touch it.
+    prompt_gate: tokio::sync::Mutex<()>,
 }
 
 impl Dispatcher {
     pub fn new(registry: Registry, permissions: Arc<Engine>) -> Self {
-        Self { registry, permissions }
+        Self { registry, permissions, prompt_gate: tokio::sync::Mutex::new(()) }
     }
 
     /// `Ok(true)` if the call may proceed, `Ok(false)` if denied (initially
     /// or by the developer's prompt response). Only called for `edit_class:
     /// false` tools — see module doc.
+    ///
+    /// The check happens twice on the prompt path, either side of
+    /// `prompt_gate`, and that is the whole point: a step's tool calls are
+    /// dispatched concurrently, so with one shared check every call in the
+    /// step reached `check_tool` before the developer had answered anything,
+    /// and each one independently got `PromptRequired` back. Answering the
+    /// first prompt with a grant that plainly covered the rest — approving a
+    /// directory, say — changed nothing for them, because their outcome was
+    /// already decided; the developer was asked again for every queued call
+    /// in the same directory they had just approved. That is the reported
+    /// "directory permissions don't appear to count properly when commands
+    /// are queued".
+    ///
+    /// Taking the gate before prompting makes the queued calls wait, and
+    /// re-checking after acquiring it is what lets the grant the developer
+    /// just made actually apply: a call whose target is now covered proceeds
+    /// silently, and only a genuinely still-uncovered one prompts. This is
+    /// also what makes prompting one-at-a-time real rather than incidental
+    /// — the TUI already only makes the front of its queue interactive.
     async fn check(&self, descriptor: &ToolDescriptor, call: &ToolCall, ctx: &DispatchContext) -> Result<bool, ToolError> {
         let tool = self.registry.get(&call.name).expect("caller already resolved this name");
         let target = tool.permission_target(&call.input)?;
@@ -35,7 +61,14 @@ impl Dispatcher {
         match self.permissions.check_tool(&kind, &target, false, path_like) {
             CheckOutcome::Allow => Ok(true),
             CheckOutcome::Deny => Ok(false),
-            CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, payload, &call.id, ctx).await,
+            CheckOutcome::PromptRequired(_) => {
+                let _gate = self.prompt_gate.lock().await;
+                match self.permissions.check_tool(&kind, &target, false, path_like) {
+                    CheckOutcome::Allow => Ok(true),
+                    CheckOutcome::Deny => Ok(false),
+                    CheckOutcome::PromptRequired(payload) => self.prompt_and_record(&kind, payload, &call.id, ctx).await,
+                }
+            }
         }
     }
 
@@ -231,6 +264,56 @@ mod tests {
 
         // Project-tier response actually persisted.
         assert_eq!(permissions.check_tool("echo", "hi", false, false), CheckOutcome::Allow);
+    }
+
+    /// The reported bug: "directory permissions don't appear to count
+    /// properly when commands are queued (approving a directory in the
+    /// first request doesn't automatically approve the next request in the
+    /// same directory)." Both calls of a step are dispatched concurrently,
+    /// so both used to reach `check_tool` before the developer had answered
+    /// anything and both were told `PromptRequired` — the grant made in
+    /// answer to the first could not affect the second, whose outcome was
+    /// already fixed. Now the second waits on `prompt_gate` and re-checks,
+    /// so a `<dir>/**` grant covers it and it never prompts at all.
+    #[tokio::test]
+    async fn a_directory_grant_answered_for_one_queued_call_covers_the_others() {
+        let mut registry = Registry::new();
+        registry.register(echo_tool("read", false)).unwrap();
+        let permissions = engine();
+        let dispatcher = Dispatcher::new(registry, permissions.clone());
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let first = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "read".into(), input: json!({"text": "./crates/tui/src/ui.rs"}) }, &ctx);
+        let second = dispatcher.dispatch(ToolCall { id: "c2".into(), name: "read".into(), input: json!({"text": "./crates/tui/src/app.rs"}) }, &ctx);
+
+        // Answers whichever of the two won the gate, with the broadened
+        // directory pattern the TUI's own scope toggle produces — the same
+        // `<dir>/**` glob `App::directory_glob` builds.
+        let resolve = async {
+            match events.recv().await.unwrap() {
+                Event::PromptRequested { call_id, .. } => {
+                    let response = PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Session, pattern: "./crates/tui/src/**".into() };
+                    let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
+                        panic!("expected a pending Prompt entry for {call_id}");
+                    };
+                    tx.send(serde_json::to_value(response).unwrap()).unwrap();
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        };
+
+        // Bounded, because the pre-fix failure mode is not a wrong answer
+        // but a hang: the second call raised its own prompt, and with only
+        // one answer sent, `join!` would wait on it forever. The timeout
+        // turns that into a legible failure instead of a stuck test run.
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(5), async { tokio::join!(first, second, resolve) });
+        let (first, second, ()) = joined.await.expect("the queued call must resolve from the grant already made, not sit waiting on a second prompt");
+        assert!(!first.is_error, "the answered call must run: {}", first.content);
+        assert!(!second.is_error, "the queued call must run under the grant just made for its directory: {}", second.content);
+        assert!(
+            events.try_recv().is_err(),
+            "the queued call must not raise a second prompt for a directory the developer has already approved"
+        );
     }
 
     #[tokio::test]

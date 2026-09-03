@@ -3,12 +3,19 @@ use std::sync::Arc;
 
 use mjolnir_core::{Command, Event, StepId};
 use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::log::{summarise, LogEntry, ToolActivityEntry, ToolActivityStatus};
 use crate::scroll::ScrollState;
 
 const SUMMARY_MAX_LEN: usize = 80;
+
+/// How long a second Ctrl+C still counts as "again" for the exit escape
+/// hatch in `App::cancel_or_quit`, in `App::tick`s — `run.rs` advances that
+/// counter every 120ms, so ~2 seconds. Measured in ticks rather than wall
+/// clock so the behaviour stays deterministic and testable without a real
+/// clock, the same reason `tick` itself is a counter (see its field doc).
+const DOUBLE_CTRL_C_TICKS: u64 = 16;
 
 /// (line, col) of `cursor` (a char index into `input`, same unit
 /// `App::cursor` is kept in) — both counted in chars, 0-indexed. Shared by
@@ -73,12 +80,23 @@ pub enum DecisionOutcome {
 }
 
 /// One selectable, numbered choice in the decision panel's list — a human
-/// label (rendered as `"{n}. {label}"` by `ui.rs`) plus the concrete
-/// `Command` selecting it produces. Built fresh from whichever request is at
-/// the front of the queue (`App::decision_options`) on every draw/keypress,
-/// so rendering and resolution can never disagree about what option N means.
+/// label (rendered as `"{n}  {label}"` by `ui.rs`), a `detail` saying what
+/// choosing it concretely does, plus the outcome selecting it produces.
+/// Built fresh from whichever request is at the front of the queue
+/// (`App::decision_options`) on every draw/keypress, so rendering and
+/// resolution can never disagree about what option N means.
+///
+/// `detail` exists because of direct developer feedback on the panel —
+/// "permissions are not clear, are we approving the tool? are we approving
+/// the directory? what are we concretely doing" — against a list whose
+/// labels ("Allow for this project") named a *tier* and nothing else: they
+/// said neither how long the answer lasts nor where, if anywhere, it gets
+/// written. The tier's consequence is now spelled out on the row itself
+/// ("saved to .mjolnir/permissions.yaml"), and the rule that would be saved
+/// is named once above the list by `App::decision_grant`.
 pub struct DecisionOption {
     pub label:   String,
+    pub detail:  String,
     pub outcome: DecisionOutcome,
 }
 
@@ -97,14 +115,25 @@ pub enum PatternScope {
     Directory,
 }
 
-/// What `ui.rs` needs to render the decision panel's scope-toggle hint line
-/// for a pending Tool prompt — `None` when there's nothing to toggle (the
-/// front isn't a path-like Tool prompt, or its target has no enclosing
-/// directory to broaden to).
-pub struct ScopeHint {
-    pub scope:       PatternScope,
-    pub target:      String,
-    pub dir_pattern: String,
+/// What `ui.rs` needs to state, above the options list, exactly what a
+/// *saved* answer to a pending Tool prompt would write — `rule` is the
+/// literal `kind:pattern` grant entry (the same string that lands in
+/// `permissions.yaml`, per mjolnir-permissions' `GrantKey`), and
+/// `alternate` is the other pattern the Tab toggle would switch to, present
+/// only when there is one (a path-like target with an enclosing directory
+/// to broaden to — see `directory_glob`).
+///
+/// This replaces the narrower scope-hint line, which only ever rendered for
+/// the path-like minority of prompts: a developer answering a `shell`
+/// prompt was given no statement at all of what "allow" would allowlist —
+/// that exact command string, not the shell tool as a whole — which is what
+/// the "are we approving the tool? the directory?" feedback was about.
+/// `scope` is the *currently selected* one, so the toggle line can name
+/// which direction Tab moves in.
+pub struct GrantSummary {
+    pub scope:     PatternScope,
+    pub rule:      String,
+    pub alternate: Option<String>,
 }
 
 /// Derives the enclosing-directory glob for a path-shaped grant target —
@@ -247,6 +276,16 @@ pub struct App {
     /// that `thinking` alone doesn't cover, since `thinking` is only set
     /// between `ThinkingStart`/`ThinkingEnd` (extended-thinking blocks).
     pub turn_active:       bool,
+    /// True from a submitted message until the turn it asks for either
+    /// starts (`TurnStarted`) or is answered without one ever starting —
+    /// which is what a locally-handled slash command does, acknowledging
+    /// itself with a `Notice`/`HistoryCleared`/`ThemeChanged` instead. Only
+    /// `cancel_or_quit` reads it; see its doc comment for why the pair of
+    /// flags exists at all.
+    pub awaiting_turn:     bool,
+    /// `tick` at the most recent Ctrl+C that cancelled rather than quit —
+    /// the anchor for `cancel_or_quit`'s double-press exit.
+    last_cancel_tick:      Option<u64>,
     /// Free-running animation-frame counter, advanced by `tick` (called by
     /// `run.rs` on a fixed timer) — not wall-clock time itself, so the
     /// spinner's frame selection stays deterministic and testable without a
@@ -292,6 +331,8 @@ impl App {
             status,
             should_quit: false,
             turn_active: false,
+            awaiting_turn: false,
+            last_cancel_tick: None,
             tick: 0,
             pending_tool_names: HashMap::new(),
             outbox: Vec::new(),
@@ -358,6 +399,7 @@ impl App {
                 self.status.turn = Some(turn_id.0);
                 self.status.step = None;
                 self.turn_active = true;
+                self.awaiting_turn = false;
             }
             Event::TextDelta { text, .. } => {
                 if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
@@ -410,6 +452,7 @@ impl App {
             Event::TurnEnded { reason, .. } => {
                 self.status.running_tools.clear();
                 self.turn_active = false;
+                self.awaiting_turn = false;
                 self.push(LogEntry::TurnEnded { reason: reason.into() });
             }
             Event::PromptRequested { call_id, payload } => {
@@ -430,7 +473,14 @@ impl App {
                 }
             }
             Event::PermissionsChanged { .. } => self.status.refresh_permissions(&self.permissions),
-            Event::Notice { message } => self.push(LogEntry::Notice { message }),
+            // A Notice is how a locally-handled slash command answers — no
+            // turn is coming, so whatever `submit` was waiting for has
+            // arrived (see `cancel_or_quit`). Harmless mid-turn: `turn_active`
+            // is what says a turn is running then, and this doesn't touch it.
+            Event::Notice { message } => {
+                self.awaiting_turn = false;
+                self.push(LogEntry::Notice { message });
+            }
             // `/clear` — core's ConversationLog is authoritative for what
             // the LLM sees, so the TUI's own rendered log must actually be
             // wiped in step with it, not just told about it via a Notice
@@ -445,6 +495,7 @@ impl App {
                 self.status.step = None;
                 self.thinking = false;
                 self.turn_active = false;
+                self.awaiting_turn = false;
             }
             // `/theme light|dark` — the interceptor already persisted this
             // to `tui.yaml` (see `Event::ThemeChanged`'s own doc comment in
@@ -455,7 +506,10 @@ impl App {
             // Nothing else needs updating — `App::theme` is read fresh by
             // `ui::draw` on every frame, so the very next redraw already
             // reflects it.
-            Event::ThemeChanged { theme } => self.theme = crate::palette::Theme::from_config(Some(&theme)),
+            Event::ThemeChanged { theme } => {
+                self.awaiting_turn = false;
+                self.theme = crate::palette::Theme::from_config(Some(&theme));
+            }
         }
     }
 
@@ -514,40 +568,6 @@ impl App {
         }
     }
 
-    /// The only mouse interaction handled in V0 (see mjolnir-tui.md's Out of
-    /// Scope note on mouse support) — a developer report that the wheel
-    /// couldn't scroll the log at all while a native text-selection drag was
-    /// in progress. Root cause was upstream of any app logic: `run.rs` never
-    /// enabled crossterm's mouse capture, so no `MouseEvent` ever reached the
-    /// app — every wheel notch and every click/drag was handled entirely by
-    /// the terminal emulator itself, including scroll, which most terminals
-    /// suppress or reinterpret during an active selection drag. Wiring mouse
-    /// capture on (`run.rs`) and reacting to the wheel here fixes that
-    /// directly: scrolling no longer depends on the terminal's own
-    /// selection-vs-scroll arbitration at all. A plain nudge, not a page —
-    /// a wheel notch should feel like one `Up`/`Down` press, not `PageUp`/
-    /// `PageDown`. Click/drag/move events reach here too once mouse capture
-    /// is on (crossterm reports every kind, not just scroll) but are
-    /// deliberately ignored: the developer's terminal still owns deliberate
-    /// text selection via its usual bypass modifier (Shift-drag on most
-    /// terminals) once the app isn't the one handling the click, which is
-    /// what stops an accidental plain drag from also sweeping up panel
-    /// chrome (borders, the scrollbar, the input box) the way it did before
-    /// mouse capture was enabled — see `run.rs`'s doc comment. Deliberately
-    /// not gated on `pending_approvals`/`pending_prompts` being empty (unlike
-    /// `handle_key`'s keyboard scroll bindings, which the decision list's own
-    /// Up/Down repurposes while pending): scrolling back through history to
-    /// re-read context while a decision is still pending is only useful, and
-    /// the wheel and the decision list are independent input channels with
-    /// nothing to conflict over.
-    pub fn handle_mouse(&mut self, event: MouseEvent) {
-        match event.kind {
-            MouseEventKind::ScrollUp => self.scroll.line_up(),
-            MouseEventKind::ScrollDown => self.scroll.line_down(self.total_lines()),
-            _ => {}
-        }
-    }
-
     /// Moves the cursor to the line `delta` rows away (by source line, not
     /// wrapped screen row — the input box is short enough that this rarely
     /// matters, and ratatui's own wrap point isn't available to this pure
@@ -594,22 +614,51 @@ impl App {
         }
         let text = std::mem::take(&mut self.input);
         self.cursor = 0;
+        // Set for every submission, slash command included: this side can't
+        // know which ones mjolnir-cli's interceptor will handle itself, and
+        // it doesn't need to — whatever the interceptor sends back (a
+        // `Notice`, `HistoryCleared`, `ThemeChanged`) clears the flag just
+        // as `TurnStarted` does. See `cancel_or_quit`.
+        self.awaiting_turn = true;
         self.push(LogEntry::UserMessage { text: text.clone() });
         self.outbox.push(Command::Submit { text });
     }
 
-    /// Ctrl+C: cancel the active turn if one is running (a turn is "active"
-    /// once TurnStarted has landed and hasn't yet been closed out by
-    /// TurnEnded — tracked via the last TurnEnded/TurnStarted seen in the
-    /// log), otherwise exit.
+    /// Ctrl+C: cancel the running turn if there is one, otherwise exit. A
+    /// second Ctrl+C within `DOUBLE_CTRL_C_TICKS` always exits, whatever the
+    /// state says.
+    ///
+    /// "Is a turn running" is read from `turn_active`/`awaiting_turn` — the
+    /// flags `apply_event`/`submit` maintain from the events core actually
+    /// sends. It used to be *inferred* by scanning the log backwards for the
+    /// most recent `UserMessage` (meaning "running") or `TurnEnded` (meaning
+    /// "finished"), and that is the reported "Ctrl+C after /theme appears to
+    /// be broken" bug: a slash command is submitted like any other message,
+    /// so `submit` pushes a `UserMessage` for it, but mjolnir-cli's
+    /// interceptor handles `/theme` (and `/help`, `/reload-config`, and any
+    /// unknown command) entirely on its own — the core never sees it, no
+    /// turn ever starts, and no `TurnEnded` is ever appended. The scan then
+    /// found that `UserMessage` forever after and answered "a turn is
+    /// running" to every subsequent Ctrl+C, so the key sent `Command::Cancel`
+    /// into a session with nothing to cancel and the developer could never
+    /// exit with it again. The flags can't drift that way: nothing sets them
+    /// but the events that genuinely bracket a turn.
+    ///
+    /// `awaiting_turn` covers the real gap the log scan was reaching for —
+    /// the stretch between submitting a message and `TurnStarted` arriving,
+    /// when a turn is coming but isn't running yet; a Ctrl+C there must
+    /// still cancel rather than quit out from under the request. The
+    /// double-press escape hatch is the backstop for every remaining way
+    /// "busy" could be wrong: if the flags ever say busy when nothing is,
+    /// pressing again still exits, so the developer is never trapped in the
+    /// session the way this bug trapped them.
     fn cancel_or_quit(&mut self) {
-        let turn_active = self.log.iter().rev().find_map(|e| match e {
-            LogEntry::TurnEnded { .. } => Some(false),
-            LogEntry::UserMessage { .. } => Some(true),
-            _ => None,
-        });
-        if turn_active == Some(true) {
+        let busy = self.turn_active || self.awaiting_turn;
+        let repeat = self.last_cancel_tick.is_some_and(|t| self.tick.saturating_sub(t) <= DOUBLE_CTRL_C_TICKS);
+        if busy && !repeat {
+            self.last_cancel_tick = Some(self.tick);
             self.outbox.push(Command::Cancel);
+            self.push(LogEntry::Notice { message: "cancelling — press ctrl+c again to exit".into() });
         } else {
             self.should_quit = true;
         }
@@ -624,39 +673,47 @@ impl App {
     pub fn decision_options(&self) -> Vec<DecisionOption> {
         match self.pending_front() {
             PendingFront::Approval(_) => vec![
-                DecisionOption { label: "Approve".into(), outcome: DecisionOutcome::Approve(true) },
-                DecisionOption { label: "Deny".into(), outcome: DecisionOutcome::Approve(false) },
+                DecisionOption { label: "Approve".into(), detail: "write this edit to the file".into(), outcome: DecisionOutcome::Approve(true) },
+                DecisionOption { label: "Deny".into(), detail: "nothing is written; the agent is told no".into(), outcome: DecisionOutcome::Approve(false) },
             ],
             PendingFront::Prompt(pending) => match &pending.payload {
-                // Allow tiers before deny tiers, once→session→project→always
-                // within each — same tier ordering the old o/s/p/a shortcuts
-                // used, just spelled out as list labels instead of letters.
+                // Four allow tiers (once→session→project→always) and exactly
+                // one deny. The deny side used to mirror the allow side tier
+                // for tier, making an eight-row list where the bottom half
+                // was near-dead weight — asked directly by the developer:
+                // "do we need all of the deny options?" A persistent deny is
+                // a standing rule about what the agent may never do, which
+                // belongs in `permissions.yaml` as a deliberate edit, not as
+                // options 6-8 of a prompt answered under time pressure; the
+                // engine still supports every deny tier (`ToolTier`), the
+                // panel just no longer offers them. What a *declining*
+                // developer actually needs is the one thing this keeps: stop
+                // this call.
+                //
                 // `pattern` is the same for every tier's option (the tier
                 // alone decides persistence — see `ToolTier`'s own doc
                 // comment — the pattern is an orthogonal choice, made once
                 // via the Tab scope toggle, not per-tier); labels stay
                 // untouched by the toggle so this list never grows or
                 // reflows — `ui::decision_panel_lines` renders the actual
-                // chosen pattern separately, in the scope hint line built
-                // from `decision_scope_hint`.
+                // rule that would be saved separately, above the list, from
+                // `decision_grant`.
                 PromptPayload::Tool { target, path_like, .. } => {
                     let pattern = match (self.decision_pattern_scope, path_like) {
                         (PatternScope::Directory, true) => directory_glob(target).unwrap_or_else(|| target.clone()),
                         _ => target.clone(),
                     };
                     [
-                        (Decision::Allow, ToolTier::Once, "Allow once"),
-                        (Decision::Allow, ToolTier::Session, "Allow for this session"),
-                        (Decision::Allow, ToolTier::Project, "Allow for this project"),
-                        (Decision::Allow, ToolTier::Always, "Always allow"),
-                        (Decision::Deny, ToolTier::Once, "Deny once"),
-                        (Decision::Deny, ToolTier::Session, "Deny for this session"),
-                        (Decision::Deny, ToolTier::Project, "Deny for this project"),
-                        (Decision::Deny, ToolTier::Always, "Always deny"),
+                        (Decision::Allow, ToolTier::Once, "Allow once", "this call only; nothing is saved"),
+                        (Decision::Allow, ToolTier::Session, "Allow for this session", "until mjolnir exits; nothing is saved"),
+                        (Decision::Allow, ToolTier::Project, "Allow for this project", "saved to .mjolnir/permissions.yaml"),
+                        (Decision::Allow, ToolTier::Always, "Always allow", "saved to ~/.mjolnir/permissions.yaml"),
+                        (Decision::Deny, ToolTier::Once, "Deny", "this call only; nothing is saved"),
                     ]
                     .into_iter()
-                    .map(|(decision, tier, label)| DecisionOption {
+                    .map(|(decision, tier, label, detail)| DecisionOption {
                         label:   label.into(),
+                        detail:  detail.into(),
                         outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier, pattern: pattern.clone() }),
                     })
                     .collect()
@@ -664,13 +721,19 @@ impl App {
                 PromptPayload::ContextFile { .. } => vec![
                     DecisionOption {
                         label:   "Inject for this session".into(),
+                        detail:  "until mjolnir exits; nothing is saved".into(),
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Session) }),
                     },
                     DecisionOption {
                         label:   "Inject for this project".into(),
+                        detail:  "saved to .mjolnir/context_files.yaml".into(),
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Project) }),
                     },
-                    DecisionOption { label: "No".into(), outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None }) },
+                    DecisionOption {
+                        label:   "Don't inject".into(),
+                        detail:  "the agent never sees this file; asked again next time".into(),
+                        outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None }),
+                    },
                 ],
                 // Never actually sent through this round trip in production —
                 // Edit uses the separate ToolApprovalRequested/ApprovalCard
@@ -710,28 +773,31 @@ impl App {
         }
     }
 
-    /// Scope-toggle info for the decision panel's Tool-prompt hint line
-    /// (`ui::decision_panel_lines`) — `None` when there's nothing to toggle:
-    /// the front isn't a `PromptPayload::Tool`, its target isn't
-    /// `path_like`, or the target has no enclosing directory to broaden to
-    /// (see `directory_glob`). Kept as its own read, alongside
-    /// `decision_options`' own independent match on the same payload,
-    /// rather than threaded out of `decision_options` — the two answer
-    /// different questions (selectable tier options vs. "is a toggle even
-    /// available, and what would it do") and `decision_options` already
-    /// returns owned `DecisionOption`s with no room for this extra shape,
-    /// matching how `decline_outcome` also matches the payload
-    /// independently rather than deriving from `decision_options`' output.
-    pub fn decision_scope_hint(&self) -> Option<ScopeHint> {
-        match self.pending_front() {
-            PendingFront::Prompt(pending) => match &pending.payload {
-                PromptPayload::Tool { target, path_like: true, .. } => {
-                    directory_glob(target).map(|dir_pattern| ScopeHint { scope: self.decision_pattern_scope, target: target.clone(), dir_pattern })
-                }
-                _ => None,
-            },
-            _ => None,
-        }
+    /// What a saved answer to the pending Tool prompt would actually write —
+    /// see `GrantSummary`. `None` for anything that doesn't persist a
+    /// pattern at all (an Edit approval, which is never allowlistable, and a
+    /// ContextFile prompt, which is path-keyed with no grant grammar of its
+    /// own). Kept as its own read, alongside `decision_options`' own
+    /// independent match on the same payload, rather than threaded out of
+    /// `decision_options` — the two answer different questions (selectable
+    /// tier options vs. "what rule is on the table, and is there another
+    /// scope for it") and `decision_options` already returns owned
+    /// `DecisionOption`s with no room for this extra shape, matching how
+    /// `decline_outcome` also matches the payload independently rather than
+    /// deriving from `decision_options`' output.
+    pub fn decision_grant(&self) -> Option<GrantSummary> {
+        let PendingFront::Prompt(pending) = self.pending_front() else { return None };
+        let PromptPayload::Tool { kind, target, path_like } = &pending.payload else { return None };
+        // The `kind:pattern` shape is mjolnir-permissions' own `GrantKey`
+        // rendering — shown literally, not prettified, because the point of
+        // this line is that a developer can match it against the entry that
+        // shows up in `permissions.yaml` afterwards.
+        let rule = |pattern: &str| format!("{kind}:{pattern}");
+        let dir = path_like.then(|| directory_glob(target)).flatten();
+        Some(match (self.decision_pattern_scope, dir) {
+            (PatternScope::Directory, Some(dir)) => GrantSummary { scope: PatternScope::Directory, rule: rule(&dir), alternate: Some(rule(target)) },
+            (_, dir) => GrantSummary { scope: PatternScope::Exact, rule: rule(target), alternate: dir.map(|d| rule(&d)) },
+        })
     }
 
     /// The single source of truth for "which pending request is currently
@@ -758,7 +824,7 @@ impl App {
     /// currently selected; a digit key `1`-`9` jumps to and immediately
     /// confirms that option directly, without needing Enter first; Tab
     /// flips `decision_pattern_scope` between `Exact`/`Directory` when a
-    /// scope toggle is actually available (`decision_scope_hint`) — a no-op
+    /// scope toggle is actually available (`decision_grant`) — a no-op
     /// otherwise, so a stray Tab on an Approve/Deny or ContextFile prompt
     /// (neither has a scope to toggle) can't corrupt state; any other key
     /// is silently dropped — no typing ahead, same as before.
@@ -777,7 +843,7 @@ impl App {
         }
         match key.code {
             KeyCode::Tab => {
-                if self.decision_scope_hint().is_some() {
+                if self.decision_grant().is_some_and(|g| g.alternate.is_some()) {
                     self.decision_pattern_scope = match self.decision_pattern_scope {
                         PatternScope::Exact => PatternScope::Directory,
                         PatternScope::Directory => PatternScope::Exact,
@@ -956,73 +1022,6 @@ mod tests {
         assert!(app.scroll.offset < before, "Up must scroll the log when there's no draft line to navigate to");
     }
 
-    fn scroll_event(kind: MouseEventKind) -> MouseEvent {
-        MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }
-    }
-
-    /// The bug report this responds to: the wheel couldn't scroll the log at
-    /// all (regardless of whether a selection drag was in progress) because
-    /// no `MouseEvent` ever reached the app — see `handle_mouse`'s doc
-    /// comment for the root cause.
-    #[test]
-    fn mouse_wheel_scrolls_the_log_by_one_line() {
-        let mut app = app();
-        for i in 0..20 {
-            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
-        }
-        app.render_width = 80;
-        app.scroll.set_viewport_height(5, app.total_lines());
-        let bottom = app.scroll.offset;
-
-        app.handle_mouse(scroll_event(MouseEventKind::ScrollUp));
-        assert_eq!(app.scroll.offset, bottom - 1);
-        assert!(!app.scroll.following, "scrolling up must disengage auto-follow, same as the Up key");
-
-        app.handle_mouse(scroll_event(MouseEventKind::ScrollDown));
-        assert_eq!(app.scroll.offset, bottom);
-    }
-
-    /// Click/drag/move events reach `handle_mouse` too once mouse capture is
-    /// on (crossterm reports every kind), but only the wheel is wired to
-    /// anything — everything else is a deliberate no-op (see the doc
-    /// comment), left to the terminal's own selection handling.
-    #[test]
-    fn non_scroll_mouse_events_are_ignored() {
-        let mut app = app();
-        for i in 0..20 {
-            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
-        }
-        app.render_width = 80;
-        app.scroll.set_viewport_height(5, app.total_lines());
-        let before = app.scroll.offset;
-
-        app.handle_mouse(scroll_event(MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left)));
-        app.handle_mouse(scroll_event(MouseEventKind::Drag(ratatui::crossterm::event::MouseButton::Left)));
-        app.handle_mouse(scroll_event(MouseEventKind::Moved));
-
-        assert_eq!(app.scroll.offset, before);
-    }
-
-    /// Scrolling back through history to re-read context while a decision is
-    /// pending is only useful — the wheel and the decision list's own
-    /// Up/Down keys are independent input channels with nothing to conflict
-    /// over, unlike the keyboard scroll bindings the decision list repurposes
-    /// while pending (see `handle_mouse`'s doc comment).
-    #[test]
-    fn mouse_wheel_scrolls_the_log_even_while_a_decision_is_pending() {
-        let mut app = app();
-        for i in 0..20 {
-            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
-        }
-        app.render_width = 80;
-        app.scroll.set_viewport_height(5, app.total_lines());
-        let bottom = app.scroll.offset;
-        app.pending_approvals.push_back(PendingApproval { call_id: "c1".into(), diff: String::new() });
-
-        app.handle_mouse(scroll_event(MouseEventKind::ScrollUp));
-        assert_eq!(app.scroll.offset, bottom - 1);
-    }
-
     #[test]
     fn backspace_removes_the_character_before_the_cursor() {
         let mut app = app();
@@ -1031,10 +1030,14 @@ mod tests {
         assert_eq!(app.input, "a");
     }
 
+    fn ctrl_c(app: &mut App) {
+        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    }
+
     #[test]
     fn ctrl_c_with_no_active_turn_quits() {
         let mut app = app();
-        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        ctrl_c(&mut app);
         assert!(app.should_quit);
         assert!(app.outbox.is_empty());
     }
@@ -1043,8 +1046,22 @@ mod tests {
     fn ctrl_c_with_an_active_turn_cancels_instead_of_quitting() {
         let mut app = app();
         type_str(&mut app, "go");
-        app.handle_key(press(KeyCode::Enter)); // submits -> turn considered active
-        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        app.handle_key(press(KeyCode::Enter)); // submits -> a turn is coming
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        ctrl_c(&mut app);
+        assert!(!app.should_quit);
+        assert_eq!(app.outbox.last(), Some(&Command::Cancel));
+    }
+
+    /// The gap between submitting and `TurnStarted` landing: a turn is
+    /// coming but isn't running yet, and Ctrl+C there must still cancel
+    /// rather than quit out from under the request.
+    #[test]
+    fn ctrl_c_between_submit_and_turn_started_cancels() {
+        let mut app = app();
+        type_str(&mut app, "go");
+        app.handle_key(press(KeyCode::Enter));
+        ctrl_c(&mut app);
         assert!(!app.should_quit);
         assert_eq!(app.outbox.last(), Some(&Command::Cancel));
     }
@@ -1054,9 +1071,65 @@ mod tests {
         let mut app = app();
         type_str(&mut app, "go");
         app.handle_key(press(KeyCode::Enter));
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
         app.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn });
-        app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        ctrl_c(&mut app);
         assert!(app.should_quit);
+    }
+
+    /// The reported bug: "ctrl+c after /theme appears to be broken." A
+    /// slash command is submitted like any other message (so `submit` logs
+    /// a `UserMessage` for it) but mjolnir-cli's interceptor answers it
+    /// itself — no turn ever starts, and no `TurnEnded` is ever appended.
+    /// The old log-scan heuristic saw only that `UserMessage`, concluded a
+    /// turn was running, and sent `Cancel` to every later Ctrl+C instead of
+    /// ever exiting. Written against `/theme`'s exact event sequence (a
+    /// `Notice` then `ThemeChanged`), and covering `/help`'s Notice-only
+    /// shape by the same path.
+    #[test]
+    fn ctrl_c_still_quits_after_a_locally_handled_slash_command() {
+        for events in [vec![Event::Notice { message: "theme set to light".into() }, Event::ThemeChanged { theme: "light".into() }], vec![Event::Notice { message: "commands: /help …".into() }]] {
+            let mut app = app();
+            type_str(&mut app, "/theme light");
+            app.handle_key(press(KeyCode::Enter));
+            for event in events {
+                app.apply_event(event);
+            }
+            ctrl_c(&mut app);
+            assert!(app.should_quit, "a slash command handled without a turn must not leave Ctrl+C stuck cancelling forever");
+            assert!(!app.outbox.contains(&Command::Cancel), "there is no turn to cancel");
+        }
+    }
+
+    /// The backstop for every other way "a turn is running" could be wrong:
+    /// pressing again exits regardless, so the developer is never trapped in
+    /// the session.
+    #[test]
+    fn a_second_ctrl_c_exits_even_while_a_turn_is_running() {
+        let mut app = app();
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        ctrl_c(&mut app);
+        assert!(!app.should_quit, "the first press cancels");
+        assert_eq!(app.outbox.last(), Some(&Command::Cancel));
+        ctrl_c(&mut app);
+        assert!(app.should_quit, "the second press within the window exits");
+    }
+
+    /// …but only as a *double* press. Two Ctrl+Cs far enough apart are two
+    /// independent cancels of two different stuck turns, not an exit — a
+    /// developer who cancelled a turn minutes ago and cancels another now
+    /// must not have the session quit under them.
+    #[test]
+    fn a_much_later_ctrl_c_cancels_again_instead_of_exiting() {
+        let mut app = app();
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        ctrl_c(&mut app);
+        for _ in 0..=DOUBLE_CTRL_C_TICKS {
+            app.tick();
+        }
+        ctrl_c(&mut app);
+        assert!(!app.should_quit);
+        assert_eq!(app.outbox.iter().filter(|c| **c == Command::Cancel).count(), 2);
     }
 
     #[test]
@@ -1285,7 +1358,7 @@ mod tests {
             other => panic!("expected PromptResponse, got {other:?}"),
         }
 
-        assert_eq!(app.decision_options().last().map(|o| o.label.as_str()), Some("No"), "call-2 is a ContextFile prompt — option 3 is its decline");
+        assert_eq!(app.decision_options().last().map(|o| o.label.as_str()), Some("Don't inject"), "call-2 is a ContextFile prompt — option 3 is its decline");
         app.handle_key(press(KeyCode::Char('3'))); // call-2: ContextFile, option 3 = decline
         assert!(app.pending_prompts.is_empty());
         match &app.outbox[1] {
@@ -1459,25 +1532,77 @@ mod tests {
     fn a_path_like_prompts_scope_hint_offers_the_enclosing_directory() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        let hint = app.decision_scope_hint().expect("a path-like target with a directory component must offer a scope toggle");
-        assert_eq!(hint.scope, PatternScope::Exact, "must start on the exact-file scope, not pre-broadened");
-        assert_eq!(hint.target, "./crates/tui/src/ui.rs");
-        assert_eq!(hint.dir_pattern, "./crates/tui/src/**");
+        let grant = app.decision_grant().expect("a Tool prompt always states the rule a saved answer would add");
+        assert_eq!(grant.scope, PatternScope::Exact, "must start on the exact-file scope, not pre-broadened");
+        assert_eq!(grant.rule, "read:./crates/tui/src/ui.rs", "the rule must be the literal kind:pattern entry that lands in permissions.yaml");
+        assert_eq!(grant.alternate.as_deref(), Some("read:./crates/tui/src/**"), "a path-like target with a directory component must offer the broader scope");
     }
 
+    /// A prompt with nothing to broaden still states its rule — that's the
+    /// half of this the old scope-only hint left out, and the half a
+    /// `shell` prompt has always needed most: "allow" allowlists this exact
+    /// command string, not the shell tool.
     #[test]
-    fn a_non_path_like_prompt_offers_no_scope_hint() {
+    fn a_non_path_like_prompt_states_its_rule_but_offers_no_alternate_scope() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
-        assert!(app.decision_scope_hint().is_none(), "shell targets are argv, not paths — there's no directory to broaden to");
+        let grant = app.decision_grant().expect("every Tool prompt states the rule a saved answer would add");
+        assert_eq!(grant.rule, "shell:cargo test");
+        assert!(grant.alternate.is_none(), "shell targets are argv, not paths — there's no directory to broaden to");
     }
 
     #[test]
-    fn a_path_like_target_with_no_directory_offers_no_scope_hint() {
+    fn a_path_like_target_with_no_directory_offers_no_alternate_scope() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("main.rs") });
-        assert!(app.decision_scope_hint().is_none(), "a bare filename has no enclosing directory to broaden to");
+        let grant = app.decision_grant().expect("every Tool prompt states the rule a saved answer would add");
+        assert_eq!(grant.rule, "read:main.rs");
+        assert!(grant.alternate.is_none(), "a bare filename has no enclosing directory to broaden to");
+    }
+
+    /// A ContextFile prompt persists an approved *path*, not a grant
+    /// pattern — there's no `kind:pattern` rule to state, and claiming one
+    /// would be inventing a mechanism that doesn't exist.
+    #[test]
+    fn a_context_file_prompt_has_no_grant_rule_to_state() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+        assert!(app.decision_grant().is_none());
+    }
+
+    /// After toggling, the summary describes the directory glob as the rule
+    /// on the table and the exact file as what Tab switches back to — the
+    /// two must swap together, or the panel would name a rule other than the
+    /// one `decision_options` is about to persist.
+    #[test]
+    fn toggling_scope_swaps_the_stated_rule_and_its_alternate() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.handle_key(press(KeyCode::Tab));
+        let grant = app.decision_grant().unwrap();
+        assert_eq!(grant.scope, PatternScope::Directory);
+        assert_eq!(grant.rule, "read:./crates/tui/src/**");
+        assert_eq!(grant.alternate.as_deref(), Some("read:./crates/tui/src/ui.rs"));
+    }
+
+    /// The list the developer sees is the answer to "do we need all of the
+    /// deny options?" — four allow tiers and exactly one deny, whose tier is
+    /// `Once` so declining can never write a standing rule.
+    #[test]
+    fn a_tool_prompt_offers_four_allow_tiers_and_a_single_deny() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./src/main.rs") });
+        let options = app.decision_options();
+        let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, vec!["Allow once", "Allow for this session", "Allow for this project", "Always allow", "Deny"]);
+        assert!(options.iter().all(|o| !o.detail.is_empty()), "every option must say what choosing it concretely does");
+        assert_eq!(
+            options[4].outcome,
+            DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "./src/main.rs".into() }),
+            "the one deny must be the non-persisting Once tier"
+        );
     }
 
     #[test]

@@ -63,6 +63,35 @@ tools never call `permission_target`/`permission_target_is_path` at all,
 so this is invisible to Edit by construction, matching mjolnir's
 non-negotiable Edit-is-never-allowlistable constraint.
 
+**Progress (2026-09-03, a grant made mid-step now applies to the rest of
+the step):** Developer report — "directory permissions don't appear to
+count properly when commands are queued (approving a directory in the first
+request doesn't automatically approve the next request in the same
+directory)." The path-like directory scope above worked exactly as designed
+and still failed here, for a reason upstream of it: mjolnir-core dispatches
+a step's tool calls concurrently (`dispatch_tools`' `future::join_all`), so
+every call in the step reached `Engine::check_tool` before the developer had
+answered anything, and each independently got `PromptRequired` back. The
+answer to the first prompt — even a `<dir>/**` grant plainly covering the
+rest — could not affect calls whose outcome was already decided, so the
+developer was asked again for every queued call in the directory they had
+just approved.
+
+Fixed in `Dispatcher` with a `prompt_gate` (`tokio::sync::Mutex`) and a
+second check: `check` still runs the fast, uncontended check first, and only
+a call that comes back `PromptRequired` takes the gate — then re-checks
+under it, because by the time it acquires the gate the grant made in answer
+to an earlier prompt has been recorded. A call now covered proceeds
+silently; only a genuinely still-uncovered one prompts. This also makes
+one-prompt-at-a-time real rather than incidental (the TUI only ever makes
+the front of its queue interactive anyway). Pinned by
+`a_directory_grant_answered_for_one_queued_call_covers_the_others`, which is
+bounded by a timeout on purpose: the pre-fix failure is a *hang* (a second
+prompt raised that nothing answers), not a wrong value, and was confirmed to
+fail that way with the fix reverted before being accepted as a regression
+test. Edit's approval gate is untouched — `edit_class` calls never enter
+`check` at all.
+
 ## Why
 
 Owns every concrete tool Mjolnir can dispatch — the V0 built-ins (Read, Diff, Explain, Edit, shell) and the MCP bridge that maps remote tools onto the same dispatch surface. Implements core's ToolDispatcher trait. Hosts the Edit approval gate as structural friction the developer cannot configure away. Other crates supply policy and protocol; this crate supplies behaviour.

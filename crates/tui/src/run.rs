@@ -6,7 +6,7 @@ use mjolnir_permissions::Engine;
 use crossterm::cursor::Show;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event as CtEvent, EventStream};
+use ratatui::crossterm::event::{DisableMouseCapture, Event as CtEvent, EventStream};
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{execute, ExecutableCommand};
 use ratatui::Terminal;
@@ -22,25 +22,22 @@ use crate::ui;
 /// alone), and always restores the terminal on the way out — success,
 /// `Err`, or a panic unwinding through `run_loop` — via `TerminalGuard`.
 ///
-/// Mouse capture is on (`EnableMouseCapture`), not off as V0's original
-/// keyboard-only design had it — a developer report that the wheel couldn't
-/// scroll the log while a native text-selection drag was in progress traced
-/// back to this: with capture off, every mouse event (wheel included) was
-/// handled entirely by the terminal emulator, which most terminals suppress
-/// or reinterpret during an active selection drag, so the app never even saw
-/// the notch. `app::App::handle_mouse` only reacts to the wheel; every other
-/// mouse event kind (click/drag/move) is ignored outright. The one real
-/// trade-off: once an app has mouse capture, a plain click/drag no longer
-/// performs the terminal's native text selection — that's a terminal-level
-/// behavior this app doesn't control, present in effectively every
-/// mouse-aware terminal app (vim's `mouse=a`, htop, tmux panes, ...) — the
-/// developer's terminal still supports deliberate selection via its usual
-/// bypass modifier (Shift-drag on most terminals; Option-drag on iTerm2).
-/// This is a net improvement for the *other* half of that same report — an
-/// accidental plain drag no longer sweeps up panel chrome (borders, the
-/// scrollbar, the input box) into the clipboard the way it did when every
-/// drag was native selection; a deliberate Shift-drag still can, same as any
-/// other bordered terminal app.
+/// Mouse capture is deliberately **off** — the terminal keeps the mouse, so
+/// a plain click-drag is its own native text selection, and copying a chunk
+/// of the transcript works the way it does in any other terminal output.
+/// This reverses a brief experiment with capture on (which had let the wheel
+/// scroll the log directly): a terminal hands mouse events either to the
+/// application or to its own selection, never to both, so that trade cost
+/// selection outright, reported directly as "text selection has been
+/// disabled (or is simply not working)". For a harness whose whole premise
+/// is that the developer reads and reasons about the transcript, being able
+/// to select and copy out of it beats a wheel binding that
+/// PageUp/PageDown/arrow-key scrolling already covers.
+///
+/// Nothing is sent to enable capture, so nothing needs disabling on the way
+/// out — but `restore_terminal` still emits `DisableMouseCapture` anyway, as
+/// a cheap belt-and-braces reset of a mode this process may have inherited
+/// or a previous build may have left on in the same terminal.
 ///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
 /// `Theme::from_config` — mjolnir-cli's bootstrap does this) selects which
@@ -51,7 +48,6 @@ pub async fn run(events: mpsc::Receiver<Event>, commands: mpsc::Sender<Command>,
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
-    stdout.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let guard = TerminalGuard::new();
@@ -134,9 +130,9 @@ async fn run_loop(
             input_event = input.next() => {
                 match input_event {
                     Some(Ok(CtEvent::Key(key))) => app.handle_key(key),
-                    Some(Ok(CtEvent::Mouse(mouse))) => app.handle_mouse(mouse),
-                    // Resize is picked up on the next draw naturally; paste
-                    // events aren't handled in V0.
+                    // Mouse events never arrive (capture is off — see
+                    // `run`'s doc comment); resize is picked up on the next
+                    // draw naturally; paste events aren't handled in V0.
                     Some(Ok(_)) => {}
                     Some(Err(_)) | None => break,
                 }

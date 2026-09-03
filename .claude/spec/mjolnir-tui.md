@@ -2193,6 +2193,89 @@ section exists to forbid. Left for the developer to direct, with the
 measurements above as the case; whatever is chosen belongs in the design
 system first and in `palette.rs` second, or the two drift.
 
+**Progress (2026-09-03, colour-transport audit — the pipeline is exact, so
+the palette is the finding):** the developer put a design frame and a
+screenshot of `main` side by side and reported a stark colour difference,
+suspecting "we have done something wrong with consuming the colors/applying
+them," noting it was not the first time. It is not a consumption bug. The
+whole path was measured end to end, and every layer this crate controls is
+exact:
+
+1. **Tokens → `palette.rs`.** All 33 `DARK` fields diffed mechanically
+   against `tokens/palette.css` + `tokens/semantic.css`: 0 mismatches. (The
+   two pre-blended `_bg` tints were re-derived too — `del_bg` is exact;
+   `add_bg` is one unit off in R and B from a hand blend, within the
+   browser-sampling note already on it.)
+2. **`palette.rs` → render buffer.** `tests/snapshots/render.snap` carries
+   every cell of 11 scenes × 4 sizes × 2 themes. Across all **315,040
+   cells**: zero `Color::Reset` backgrounds, and zero named/ANSI (therefore
+   terminal-remappable) colours anywhere. The surfaces in the buffer are
+   `Rgb(22,24,38)` / `Rgb(35,37,50)` / `Rgb(27,29,43)` — the tokens verbatim.
+3. **Buffer → the wire.** The real binary was run under a pty and its
+   output parsed. Every colour is 24-bit truecolor SGR: `48;2;22;24;38`,
+   `48;2;35;37;50`, `48;2;27;29;43`, foregrounds likewise. Nothing is
+   downsampled by us, and ratatui/crossterm add no colour-depth logic. The
+   only bare `ESC[39m ESC[49m ESC[59m ESC[0m` is ratatui's end-of-frame
+   reset, after all cells are painted.
+4. **Quantisation ruled out as the cause of what was reported.** If
+   something downstream *were* collapsing to the 256-colour cube,
+   `ground`/`bar_bottom`/`diff_box` would all land on index 234 `#1c1c1c`
+   — one flat grey, indigo gone, the plane hierarchy destroyed. The
+   screenshot still shows the indigo cast, so truecolor is arriving. (The
+   check is still worth having: `tmux display -p '#{client_termfeatures}'`
+   must contain `RGB`, and `COLORTERM` must be `truecolor`.)
+
+**One real defect found and fixed.** The `, ` separating tool names in
+`chrome::draw_status_line` was a bare `Span::raw`, i.e. `Style::default()`
+— the *terminal's* default foreground, not a token. It was the single cell
+in the entire corpus painting a visible glyph outside the palette's
+control: near-black on a light-profile terminal, near-white on a dark one.
+Now `label`. `chrome.rs`'s own `highlight_command_tokens` doc comment
+already stated this rule for composer words; nothing enforced it, so it was
+violated 90 lines above the comment.
+
+Enforced now by `every_painted_cell_uses_a_palette_colour_never_the_terminals_own`,
+which walks every cell of every scene at every size in both themes and
+asserts two rules: no `Reset` background anywhere (a hole in the opaque
+canvas), and no `Reset` foreground on a cell carrying a glyph. Whitespace
+is exempt — `grid`/`row` build margins and gutters from bare `Span::raw`
+and paint no ink, so constraining those would forbid a genuinely colourless
+idiom. This is the durable answer to "not the first time": the class of bug
+is now a test failure rather than a review catch.
+
+**So the difference the developer is seeing is the palette itself — the
+open item in the entry above, restated.** Those measurements were
+re-derived independently this session and reproduce exactly:
+`ground`/`bar_bottom`/`diff_box` sit at 1.01–1.05 contrast (three planes
+that are one plane to the eye), `dim`/`glyph_done`/`glyph_pending` at
+2.7 against a 3.0 non-text floor, `label`/`context` at 4.1 against a 4.5
+text floor; in light, `bar`/`bar_bottom`/`diff_box` are literally one hex
+and `quiet`/`label`/`context`/`dim` are literally one hex.
+
+Two things make that read worse in a terminal than in the mock, and both
+argue the fix has to be *more* separation than the browser needs, not the
+same:
+
+- A 1.05 plane step survives in a browser as a large flat antialiased
+  region. In a terminal the same step is drawn per cell, under text
+  antialiasing, at the display's own gamma — the boundary that reads as a
+  soft plane edge in the mock reads as nothing.
+- The mock is 15px JetBrains Mono at a 20px line box with browser
+  rasterisation. A terminal uses the developer's font at their size,
+  weight and hinting, so the *amount of ink* per glyph differs — which
+  moves apparent lightness of every text tier independently of its hex.
+
+Neither is fixable in `palette.rs`, and neither is the developer's terminal
+being misconfigured. `scratchpad/color-probe.sh` (not checked in) prints
+the environment, a truecolor round-trip gradient, the six surfaces as
+swatches, and an OSC 11 readback, for confirming transport on any specific
+terminal before touching palette again.
+
+Still open, and still the developer's call for the same reason as before:
+closing this needs neutral steps between `#9397ab` and `#cfd3e5` and ground
+steps between `#161826` and `#232532`, which the documented ramp does not
+have. That is a design-system change first, `palette.rs` second.
+
 
 ## References
 

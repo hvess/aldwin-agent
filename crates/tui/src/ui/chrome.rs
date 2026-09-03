@@ -182,7 +182,16 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled("tools: ", Style::default().fg(pal.label)));
         for (i, tool) in s.running_tools.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::raw(", "));
+                // `label`, not a bare `Span::raw` — the separator carries a
+                // visible glyph, and `Style::default()` is the *terminal's*
+                // default foreground, not a token: on a light-profile
+                // terminal it renders near-black against this bar and on a
+                // dark one near-white, the one cell in the whole frame not
+                // under the palette's control. Same rule
+                // `highlight_command_tokens` states for composer words; the
+                // whitespace `Span::raw`s elsewhere are exempt only because
+                // they paint no glyph.
+                spans.push(Span::styled(", ", Style::default().fg(pal.label)));
             }
             spans.push(Span::styled(running_tool_name(tool).to_string(), Style::default().fg(pal.value)));
         }

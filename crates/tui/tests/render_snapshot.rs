@@ -84,6 +84,65 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
+/// Every cell the frame paints must carry palette colours, not the
+/// terminal's own defaults — the invariant behind `palette.rs` existing at
+/// all, asserted here rather than left to a reader spotting a bare
+/// `Span::raw` in review.
+///
+/// `Color::Reset` means "whatever this terminal paints by default", so a
+/// cell carrying one is outside the design system: it renders near-black on
+/// a light-profile terminal and near-white on a dark one, and no palette
+/// change can move it. Two separate rules, because the two channels fail
+/// differently:
+///
+/// * **Background** — never `Reset` anywhere, blank cells included. A
+///   `Reset` background is a hole in the opaque canvas `ui::draw` paints
+///   first, showing the developer's terminal through the frame.
+/// * **Foreground** — never `Reset` on a cell that actually carries a
+///   glyph. Whitespace is exempt: `grid`/`row` build margins and gutters
+///   from bare `Span::raw`, which paints no ink, so constraining those
+///   would forbid an idiom that is genuinely colourless.
+///
+/// Found one real violation when written: the `, ` between tool names in
+/// `chrome::draw_status_line` was a bare `Span::raw`, the single cell in
+/// the whole 315k-cell corpus painting a visible glyph in the terminal's
+/// foreground rather than a token.
+#[test]
+fn every_painted_cell_uses_a_palette_colour_never_the_terminals_own() {
+    for theme in [Theme::Dark, Theme::Light] {
+        for scene_name in SCENES {
+            for (width, height) in SIZES {
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+                scene(scene_name, &mut app);
+                let buffer = render(&mut app, width, height);
+                let where_ = |x: u16, y: u16| format!("{theme:?} {scene_name} {width}x{height} at ({x},{y})");
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = &buffer[(x, y)];
+                        assert_ne!(
+                            cell.bg,
+                            ratatui::style::Color::Reset,
+                            "{}: background is Color::Reset — the terminal's own background shows through the frame here",
+                            where_(x, y)
+                        );
+                        if cell.symbol().trim().is_empty() {
+                            continue;
+                        }
+                        assert_ne!(
+                            cell.fg,
+                            ratatui::style::Color::Reset,
+                            "{}: glyph {:?} is painted in Color::Reset — the terminal's own foreground, not a palette token \
+                             (a bare `Span::raw`/`Style::default()` carrying visible text)",
+                            where_(x, y),
+                            cell.symbol()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A human-readable pointer at the first differing line, so a failure says
 /// *what* moved rather than only *that* something did.
 fn first_difference(expected: &str, actual: &str) -> String {

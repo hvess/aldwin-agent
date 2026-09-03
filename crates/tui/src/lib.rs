@@ -2,10 +2,17 @@
 //! `.claude/spec/mjolnir-tui.md`.
 //!
 //! `App` (`app.rs`) holds all state and the pure event/key handling logic —
-//! unit-tested without a terminal. `ui.rs` renders it (tested against
-//! `ratatui::backend::TestBackend`). `run.rs` is the thin, effectively
-//! untestable glue: multiplexing crossterm input and core events onto one
-//! `tokio::select!` and driving the terminal.
+//! unit-tested without a terminal. `ui/` renders it: `ui/mod.rs` owns the
+//! frame's band layout and nothing else, and each of its submodules owns
+//! one job (see that module's own doc comment for the table). `run.rs` is
+//! the thin, effectively untestable glue: multiplexing crossterm input and
+//! core events onto one `tokio::select!` and driving the terminal.
+//!
+//! Rendering is verified two ways. `ui/tests.rs` asserts frame-level facts
+//! against `ratatui::backend::TestBackend` — why each thing is where it is.
+//! `tests/render_snapshot.rs` pins every cell, colour and modifier of every
+//! scene at four frame sizes in both themes, so a refactor that was meant
+//! to preserve output can be shown to have done so.
 //!
 //! Two things from mjolnir-tui.md's Pitfalls not fully addressed: tool-
 //! activity groups render each call as one bounded summary line (via

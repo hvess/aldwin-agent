@@ -1891,6 +1891,64 @@ above it, now parted by a padding row.
 - Session persistence, conversation save/restore — out of V0 per parent spec.
 - Web client rendering — V1.
 
+**Progress (2026-09-03, ui module audit — structure, not appearance):** the
+developer asked for an audit of the TUI implementation on the grounds that it
+had become over-abstracted and hard to extend. It had, in a specific way:
+`ui.rs` was 3,691 lines doing six unrelated jobs (frame layout, a text
+wrapper, a markdown parser, a diff renderer, a filled-row primitive library,
+and the decision panel's domain logic), and inside it eight near-identical
+row builders — `filled_line`, `flush_line`, `boxed_line`, `card_line`,
+`card_padding_line`, `card_rule`, `card_footer_line`, `diff_box_border` —
+each re-derived the same wrap → measure → pad-to-width loop, each computing
+its own available content width from the same formula. `diff_box_border` and
+`boxed_line` had to independently agree on `width - 2*inset - 2` for a box's
+top edge to line up with its own sides.
+
+Changes:
+
+- **`ui.rs` → `ui/`**, eight modules with one job each: `grid` (the cell
+  constants and the `Ctx` render context), `wrap`, `row`, `markdown`, `diff`,
+  `transcript`, `decision`, `chrome`. `ui/mod.rs` is 189 lines and is now the
+  only file that touches band layout.
+- **One row primitive.** `row::Row` is four numbers — margin, border, pad,
+  fill — and every card row, diff row, option row, box edge and blank spacer
+  is a constructor over it. The available content width (`Row::avail`) is
+  computed once, so a box's edges and its sides can no longer disagree.
+- **`Ctx` replaces the `(pal, width)` pair** threaded by hand through 25-odd
+  signatures in inconsistent positions. Narrowing into a column is explicit
+  (`ctx.body()`), which is where the two historical width-divergence bugs
+  recorded above would have been visible at the call site.
+- **`PromptView::of`** derives the panel's four facts about a `PromptPayload`
+  (sentence, literal call, badge, whether the target is a command block) in
+  one match instead of four scattered ones, so a new payload variant is one
+  arm rather than a hunt.
+- **Defect found by the new snapshot, and fixed:** `clamp_panel` trimmed the
+  panel to fit by blind row count, so a diff too tall for its band was cut
+  mid-box — a `┌───┐` on screen with no `└───┘` under it and nothing saying
+  anything had been dropped. The approval card is now sized against the
+  panel's budget *before* it is drawn (its head is measured, not assumed,
+  since a wrapped path or sentence is more than one row), and overflow
+  collapses into an in-box marker; a band too short for a box at all gets an
+  honest one-line note instead of half a box. `clamp_panel` survives as a
+  last resort for a prompt card's arbitrarily long target, which contains no
+  box to cut.
+- **Second defect, same source:** the elided-context marker inside a diff box
+  set a foreground but no background, so its text sat on the frame ground —
+  a visible hole across the middle of the box. `Row`'s "spans carry their own
+  fill" contract makes that hard to get wrong now.
+
+Verification was three passes, and the instrument is checked in.
+`tests/render_snapshot.rs` renders 11 scenes × 4 frame sizes × 2 themes and
+serializes every cell's symbol, fg, bg and modifiers to
+`tests/snapshots/render.snap`. A baseline was captured *before* any
+refactoring; afterwards the only frames that differed were the approval
+scenes, and only in the two ways above — every other scene was byte-identical,
+colours included. It also carries `no_frame_leaves_a_bordered_box_unclosed`,
+which counts `┌` against `└` in the fixed panel and would have failed against
+the pre-fix code. 150 unit tests and clippy stay clean; the visible design is
+unchanged apart from the two fixes.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

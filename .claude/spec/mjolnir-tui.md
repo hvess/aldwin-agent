@@ -2117,11 +2117,34 @@ the title band, which carries text, so there is no spare cell edge to draw
 above instead, drawn on `ground` so the accent hairline sits flush against
 the top of the band with transcript above it.
 
-Pinned by `the_top_bar_carries_its_border_on_its_own_last_row` and
-`the_bottom_bar_carries_its_border_on_its_own_first_row`, which assert both
-facts together — the glyph and its surface, and that the neighbouring band
-starts in the very next cell, so a future change can't quietly reintroduce
-either the floating line or the extra row.
+**The glyph half was then reverted, on the developer's call.** `▁`/`▔`
+read almost exactly right, but the thickness and placement of that ink are
+the *font's* metrics rather than ours (hence the stray pixel above), and a
+font without the glyph renders tofu: "I think it's too risky to rely on
+glyphs." Fair — the whole chrome edge would have depended on one codepoint
+being well-cut in whatever font the developer runs.
+
+What replaced it is the thing the reference leans on anyway. The bars are
+already a different surface from the frame (`bar` #232532, `bar_bottom`
+#1b1d2b against `ground` #161826), and at 1:1 the mock's 1px `--tui-line`
+hairline between them is close to imperceptible — the surface change is
+what the eye actually reads. So the change of background *is* the edge: it
+lands on the cell boundary by construction, costs no row, and depends on
+nothing but truecolor, which every other pixel of this UI already needs.
+Measured after: `bar` to y=79, `ground` from y=80, nothing in between.
+`--tui-line` keeps its real job — drawn box borders (`Row::border`, the
+diff box), where a glyph occupies a whole cell honestly instead of
+impersonating a hairline.
+
+The decision panel loses its `modal_line` edge along with the others and no
+longer takes a row for one; its `band` (accent-900) title row is already
+the topmost thing in the panel and carries that signal on its own.
+
+Pinned by `the_top_bar_ends_on_the_cell_boundary_with_no_border_row` and
+`the_bottom_bar_starts_on_the_cell_boundary_with_no_border_row`, which
+assert the surface on the band's own edge cell, the absence of any glyph
+there, and that the neighbouring band starts in the very next cell — so
+neither the floating line nor the extra row can come back quietly.
 
 **Open, and deliberately not decided here — the palette itself.** The
 seventh report was "because the colors are wrong, everything is quite hard

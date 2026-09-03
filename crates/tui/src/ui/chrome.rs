@@ -46,13 +46,6 @@ pub(super) fn input_height(input: &str) -> u16 {
 pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
-    // `TopBar.jsx`'s `border-bottom: 1px solid var(--tui-line)`, drawn
-    // against the bottom edge of the bar's own last row so it touches the
-    // transcript below with no strip of bar between — see `super::edge_row`
-    // for why `─` on a row of its own was the wrong shape for this.
-    if let Some(last) = area.height.checked_sub(1) {
-        frame.render_widget(super::edge_row(super::Edge::Bottom, pal.line, pal.bar, area.width), Rect { y: area.y + last, height: 1, ..area });
-    }
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
     let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
 

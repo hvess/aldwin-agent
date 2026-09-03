@@ -2082,6 +2082,47 @@ against the previous pass's output. `cargo test --workspace` green (155 in
 `mjolnir-tui`), `cargo clippy -p mjolnir-tui --all-targets -D warnings`
 clean. `render.snap` regenerated deliberately after eyeballing the frames.
 
+**Progress (2026-09-03, follow-up — the border was still not on the bar's
+edge):** the developer looked at the top bar in the screenshots above and
+asked why the border was not aligned cleanly with the bottom of the
+component. It wasn't, and the entry above had only half-fixed it: painting
+the border row in the bar's own background closed the gap *above* the line
+but not the one below it.
+
+Two faults, measured by sampling a column of pixels down the rendered edge:
+
+1. **`─` is the wrong glyph for a border.** It draws through the *middle* of
+   its cell, so the row left half a cell of bar under the line: the bar band
+   ran to y=99 with the line at y=89, ten pixels of bar below it. A CSS
+   border is the last pixel of its band and touches its neighbour with
+   nothing in between. The one-eighth blocks are the glyphs that do that —
+   `▁` fills the bottom ~2.5px of its cell, `▔` the top — which at a 20px
+   cell is about as close to the reference's 1px hairline as a terminal
+   gets. Both are Block Elements (U+2580–U+259F), the same range as the `█`
+   and `▌` the glyph table already mandates, so any terminal that can draw
+   those can draw these. Measured after: bar to y=75, line at y=76–78,
+   ground from y=80 — one stray pixel of bar at y=79, which is the font's
+   own glyph placement rather than the layout.
+2. **The border was costing a row.** `--bar-top-h: 60px` is 3 cells and
+   `--bar-bottom-h: 101px` is 5; the extra `1px` in each *is* the border, so
+   it belongs inside the band. Spending a separate row on it rendered the
+   3-cell top bar as four and the 5-cell bottom bar as six. Both edges now
+   live on a row the band already owns — the top bar's last row, the bottom
+   bar's first (blank) row — which also hands two rows back to the
+   transcript.
+
+The decision panel is the one exception and keeps a row: its first row is
+the title band, which carries text, so there is no spare cell edge to draw
+`border-top: 1px solid var(--tui-modal-line)` against. It takes the row
+above instead, drawn on `ground` so the accent hairline sits flush against
+the top of the band with transcript above it.
+
+Pinned by `the_top_bar_carries_its_border_on_its_own_last_row` and
+`the_bottom_bar_carries_its_border_on_its_own_first_row`, which assert both
+facts together — the glyph and its surface, and that the neighbouring band
+starts in the very next cell, so a future change can't quietly reintroduce
+either the floating line or the extra row.
+
 **Open, and deliberately not decided here — the palette itself.** The
 seventh report was "because the colors are wrong, everything is quite hard
 to read, we must solidify the color palette for both dark and light modes."

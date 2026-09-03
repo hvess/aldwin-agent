@@ -46,6 +46,10 @@ use grid::Ctx;
 
 pub(crate) use transcript::row_count as log_row_count;
 
+/// `--bar-top-h: 60px` — 3 cells. The `1px` border below it in the
+/// reference is *inside* this band, not a fourth row: see [`edge_row`].
+pub(super) const TOP_BAR_ROWS: u16 = 3;
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let pal = app.theme.palette();
     let area = frame.area();
@@ -92,42 +96,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // "input is disabled while a permission is pending: there is nothing to
     // type into, so the prompt row is not drawn at all."
     let input_height = chrome::input_height(&app.input);
-    let bottom_bar_height = if pending { panel_height } else { 1 + input_height + 1 + 1 + 1 };
-    let [top_bar_area, top_rule_area, log_area, bottom_rule_area, bottom_bar_area] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(bottom_bar_height),
-    ])
-    .areas(area);
+    // Both bars carry their own border inside their own band (see
+    // [`edge_row`]), so neither costs a row: 3 for the top bar
+    // (`--bar-top-h`), and `BottomBar.jsx`'s blank/composer/blank/status/
+    // blank for the bottom one (`--bar-bottom-h`), the composer's own
+    // height apart.
+    //
+    // The panel is the one exception. Its first row is the title band,
+    // which carries text, so there is no spare cell edge to draw its
+    // `border-top: 1px solid var(--tui-modal-line)` against — it takes the
+    // row above instead, drawn on `ground` so the accent hairline sits
+    // flush against the top of the band with transcript above it.
+    let bottom_height = if pending { panel_height + 1 } else { input_height + 4 };
+    let [top_bar_area, log_area, bottom_area] =
+        Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(bottom_height)]).areas(area);
 
     chrome::draw_top_bar(frame, top_bar_area, app);
-
-    // Both bars are separated from the body by a real structural border in
-    // `line` (`TopBar.jsx`'s `border-bottom` and `BottomBar.jsx`'s
-    // `border-top`, both `1px solid var(--tui-line)`) — *not* the more
-    // muted `rule`, which is only ever a freestanding separator *within*
-    // content (a turn break, the rule above the options list).
-    //
-    // A border row is painted in the background of the surface it *belongs
-    // to*, never the frame's `ground`. In CSS the border is a 1px slice of
-    // a 61px band, so it touches its own bar with nothing in between; a
-    // terminal has to spend a whole 20px row on it, and filling that row
-    // with `ground` puts a visible strip of frame background between the
-    // bar and its own edge. Reported directly, for both of them: "the input
-    // field top border is sitting above the input field with some
-    // margin/gap, the same is for the very top session bar."
-    frame.render_widget(edge(pal.line, pal.bar, area.width), top_rule_area);
-    // While a decision is pending this row is the *panel's* own top border,
-    // and the reference gives that one `modal_line`, not `line` — a heavier
-    // edge for a surface that has taken the composer's place. Drawing it
-    // here rather than inside the panel is what keeps it to a single rule:
-    // the bottom bar's edge and the panel's border are the same row, not
-    // two stacked ones. Its field is `band`, since the panel's own first
-    // row is the title band this border runs along the top of.
-    let (edge_fg, edge_bg) = if pending { (pal.modal_line, pal.band) } else { (pal.line, pal.bar_bottom) };
-    frame.render_widget(edge(edge_fg, edge_bg, area.width), bottom_rule_area);
 
     // No drawn border and no title — the reference shows no box anywhere
     // around the conversation, just filled cards floating directly on the
@@ -162,22 +146,59 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // it once here can't drift from the panel's own colours the way a
         // parallel palette would.
         fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
-        decision::draw_panel(frame, bottom_bar_area, panel_lines, pal);
+        let [panel_edge_area, panel_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(bottom_area);
+        frame.render_widget(edge_row(Edge::Bottom, pal.modal_line, pal.ground, area.width), panel_edge_area);
+        decision::draw_panel(frame, panel_area, panel_lines, pal);
     } else {
         // blank / composer / blank / status / blank — `BottomBar.jsx`'s own
-        // five rows, on its own raised ground.
-        frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_bar_area);
-        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
+        // five rows, on its own raised ground. The first blank row also
+        // carries the bar's `border-top`, against the top edge of its own
+        // cell, so the border touches the transcript above it rather than
+        // floating half a cell down inside the bar.
+        frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_area);
+        let [pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(input_height), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-                .areas(bottom_bar_area);
+                .areas(bottom_area);
+        frame.render_widget(edge_row(Edge::Top, pal.line, pal.bar_bottom, area.width), pad_top);
         chrome::draw_input(frame, composer_area, app);
         chrome::draw_status_line(frame, status_area, app);
     }
 }
 
-/// One full-width structural border row between two bands.
-fn edge(fg: Color, bg: Color, width: u16) -> Paragraph<'static> {
-    Paragraph::new(Line::from(Span::styled("─".repeat(width as usize), Style::default().fg(fg)))).block(Block::new().style(Style::default().bg(bg)))
+/// Which edge of its own cell a border row is drawn against.
+///
+/// `─` is the wrong glyph for this and was the bug: it draws through the
+/// *middle* of its cell, so a border row rendered with it leaves half a
+/// cell of its own background on the far side. Measured on the top bar,
+/// that put the line 10px above the bar's bottom edge — "the border is not
+/// aligned cleanly with the bottom of the component". A CSS border is the
+/// last pixel of its band, touching the neighbour with nothing in between.
+///
+/// The one-eighth blocks are the glyphs that actually do that: `▁` fills
+/// the bottom ~2.5px of its cell and `▔` the top, which at a 20px cell is
+/// about as close to the reference's 1px hairline as a terminal gets. Both
+/// are Block Elements (U+2580–U+259F), the same range as the `█` and `▌`
+/// the design system's own glyph table already mandates, so a terminal that
+/// can draw those can draw these.
+#[derive(Clone, Copy)]
+enum Edge {
+    /// A `border-bottom`: the line sits on the last row of its own band.
+    Bottom,
+    /// A `border-top`: the line sits on the first row of its own band.
+    Top,
+}
+
+/// One full-width structural border, drawn against `edge` of a single row
+/// that otherwise belongs to `bg` — so the border costs no row of its own.
+/// `--bar-top-h: 60px` and `--bar-bottom-h: 101px` are 3 and 5 cells; the
+/// extra `1px` in each is the border, which is why it has to live inside
+/// the band rather than beside it.
+fn edge_row(edge: Edge, fg: Color, bg: Color, width: u16) -> Paragraph<'static> {
+    let glyph = match edge {
+        Edge::Bottom => "▁",
+        Edge::Top => "▔",
+    };
+    Paragraph::new(Line::from(Span::styled(glyph.repeat(width as usize), Style::default().fg(fg).bg(bg))))
 }
 
 /// Composites every already-drawn cell in `area` toward its own background

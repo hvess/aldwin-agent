@@ -104,6 +104,50 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
     panic!("row containing {needle:?} not found");
 }
 
+/// Per explicit developer feedback on a rendered frame — "why is the
+/// border not aligned cleanly with the bottom of the component?" It
+/// wasn't. A border row drawn with `─` puts the line through the *middle*
+/// of its cell, leaving half a cell of the bar's own background below it,
+/// and it cost a whole row besides — so the 3-cell `--bar-top-h` band
+/// rendered as four.
+///
+/// Both facts are pinned here: the bar occupies exactly `TOP_BAR_ROWS`
+/// cells with its border inside them, and the border is a bottom-edge
+/// glyph on the bar's own surface with the transcript's `ground`
+/// immediately below.
+#[test]
+fn the_top_bar_carries_its_border_on_its_own_last_row() {
+    let mut app = app();
+    let backend = TestBackend::new(60, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let last = super::TOP_BAR_ROWS - 1;
+    assert_eq!(buffer[(0, last)].symbol(), "▁", "the bar's border must sit against the bottom edge of its own cell, not through the middle of one");
+    assert_eq!(buffer[(0, last)].bg, DARK.bar, "that cell still belongs to the bar");
+    assert_eq!(buffer[(0, last)].fg, DARK.line, "the border is `line` — the structural border token, not the muted `rule`");
+    assert_eq!(buffer[(0, super::TOP_BAR_ROWS)].bg, DARK.ground, "the transcript starts immediately below the bar: the border costs no row of its own");
+}
+
+/// The same fact at the other end of the frame, mirrored:
+/// `BottomBar.jsx`'s `border-top` sits against the *top* edge of the
+/// bar's own first row, so the transcript above it touches the border
+/// with no strip of bar between.
+#[test]
+fn the_bottom_bar_carries_its_border_on_its_own_first_row() {
+    let mut app = app();
+    let backend = TestBackend::new(60, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let first = find_row(&buffer, "▔");
+    assert_eq!(buffer[(0, first)].bg, DARK.bar_bottom, "the border's cell belongs to the bottom bar");
+    assert_eq!(buffer[(0, first)].fg, DARK.line);
+    assert_eq!(buffer[(0, first - 1)].bg, DARK.ground, "the transcript runs right up to the border");
+}
+
 /// Per explicit developer feedback — "the status line is above the text
 /// field input, but if I remember correctly it is below in the designs"
 /// — and it is: `BottomBar.jsx` reads blank / composer / blank / status /

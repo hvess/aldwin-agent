@@ -16,9 +16,20 @@ fn main() {
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // `target/` is checked into this repo, and cargo has necessarily
+    // written to it before this build script runs — so an unfiltered
+    // `git status --porcelain` calls *every* build dirty, a clean CI
+    // checkout of a release tag included. v0.1.12 shipped reporting
+    // `0.1.12 (3117724b-dirty)` for exactly that reason. Only a source
+    // change should mark a build dirty; build output never can.
+    //
+    // `:(top)` makes the pathspec repo-root-relative rather than relative
+    // to this crate's directory, which is where a build script runs.
     let dirty = Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--", ":(top)", ":(top,exclude)target"])
         .output()
+        .ok()
+        .filter(|out| out.status.success())
         .map(|out| !out.stdout.is_empty())
         .unwrap_or(false);
 

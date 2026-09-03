@@ -1970,7 +1970,17 @@ because the manifest and the tag never met anywhere.
   mid-draw — `ui` is a pure function of `App` again, which is what lets a
   render test pin build identity instead of inheriting it.
 
-That last point also fixes a defect in the snapshot harness added earlier
+A follow-up the v0.1.12 artifact itself exposed: it reported
+`0.1.12 (3117724b-dirty)` despite being built from a clean CI checkout of
+the tag. `build.rs` decided dirtiness with a bare `git status --porcelain`,
+and this repo checks `target/` in (402 tracked files) — cargo has
+necessarily written there before a build script runs, so every build looked
+dirty, official releases included. The check is now scoped with
+`:(top) :(top,exclude)target`, which is repo-root-relative (a build script's
+cwd is its own crate) and ignores build output while still catching any real
+source change.
+
+That earlier point also fixes a defect in the snapshot harness added earlier
 the same day: it inherited the real version, commit and working directory,
 so `render.snap` encoded the identity of whoever generated it. It passed
 only because committing does not touch `.git/HEAD` and so did not rerun

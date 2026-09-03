@@ -6,7 +6,7 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -45,7 +45,10 @@ pub(super) fn input_height(input: &str) -> u16 {
 /// anywhere in `StatusInfo`, so neither is fabricated here.
 pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
-    frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
+    // `TopBar.jsx`'s `border-bottom: 1px solid var(--tui-line)`, on the
+    // bottom half of the bar's own last row — see the note on borders in
+    // `super`. Content still sits on row 1, clear of it.
+    frame.render_widget(super::band_edge(Borders::BOTTOM, pal.line, pal.bar), area);
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
     let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
 

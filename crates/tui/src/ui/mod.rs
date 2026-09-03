@@ -35,8 +35,8 @@ mod wrap;
 mod tests;
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::widgets::Block;
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, BorderType, Borders};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -96,14 +96,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // "input is disabled while a permission is pending: there is nothing to
     // type into, so the prompt row is not drawn at all."
     let input_height = chrome::input_height(&app.input);
-    // Three bands, no border rows: the change of surface between them is
-    // the edge (see the note above `TOP_BAR_ROWS`'s own comment block
-    // below). 3 cells for the top bar (`--bar-top-h`), and `BottomBar.jsx`'s
-    // blank/composer/blank/status/blank for the bottom one
-    // (`--bar-bottom-h`), the composer's own height apart. The panel takes
-    // exactly the rows it built, its `band` title row landing directly under
-    // the transcript.
-    let bottom_height = if pending { panel_height } else { input_height + 4 };
+    // Three bands, each carrying its own edge inside itself (see the note
+    // on borders further down this file). 3 cells for the top bar
+    // (`--bar-top-h`), and `BottomBar.jsx`'s blank/composer/blank/status/
+    // blank for the bottom one (`--bar-bottom-h`), the composer's own
+    // height apart.
+    //
+    // The panel is the one exception and takes a row for its edge: its
+    // first row is the title band, which carries text, so there is no spare
+    // cell for a half block there. The row above gets it instead, on
+    // `ground`, which is also what the handoff describes — "a one-cell
+    // accent-700 rule along its top edge".
+    let bottom_height = if pending { panel_height + 1 } else { input_height + 4 };
     let [top_bar_area, log_area, bottom_area] =
         Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(bottom_height)]).areas(area);
 
@@ -142,12 +146,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // it once here can't drift from the panel's own colours the way a
         // parallel palette would.
         fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
-        decision::draw_panel(frame, bottom_area, panel_lines, pal);
+        let [edge_area, panel_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(bottom_area);
+        frame.render_widget(band_edge(Borders::BOTTOM, pal.modal_line, pal.ground), edge_area);
+        decision::draw_panel(frame, panel_area, panel_lines, pal);
     } else {
         // blank / composer / blank / status / blank — `BottomBar.jsx`'s own
-        // five rows, on its own raised ground, whose first cell row is where
-        // the bar's edge against the transcript falls.
-        frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_area);
+        // five rows, on its own raised ground, with its `border-top` on the
+        // top half of the first of them.
+        frame.render_widget(band_edge(Borders::TOP, pal.line, pal.bar_bottom), bottom_area);
         let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(input_height), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
                 .areas(bottom_area);
@@ -156,35 +162,42 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-// No drawn border row between bands, by decision rather than omission.
+// Band edges use `BorderType::QuadrantOutside`, which is ratatui's own
+// answer to the problem that broke the first two attempts at this.
 //
-// A terminal cell is one glyph, one foreground, one background — there is
-// no sub-cell drawing, so a 1px CSS border has no faithful rendering here.
-// Three shapes were tried against that fact:
+// A terminal cell has no sub-cell drawing, so a 1px CSS border has no
+// literal rendering. `─` on a row of its own draws through the *middle* of
+// its cell, leaving half a cell of background on the far side — the
+// "border sitting above the input field with some margin/gap" the
+// developer reported — and it spends a row the grid doesn't have, since
+// `--bar-top-h: 60px` is 3 cells and `--bar-bottom-h: 101px` is 5 with the
+// border inside them, not beside them.
 //
-// * `─` on a row of its own draws through the *middle* of its cell, leaving
-//   half a cell of background on each side. That is the "border sitting
-//   above the input field with some margin/gap" the developer reported, and
-//   painting the row in the bar's own colour only closed the half above it.
-// * A row filled solid in `line` sits exactly on the boundary, but spends
-//   20px on a 1px rule — a grey stripe far heavier than anything in the
-//   reference.
-// * `▁`/`▔` (Block Elements) put ~2.5px of ink against the correct cell
-//   edge and read almost exactly right — but the thickness and placement of
-//   that ink are the *font's* metrics, not ours, and a font without the
-//   glyph renders tofu. Rejected on the developer's call: "I think it's too
-//   risky to rely on glyphs."
+// `QuadrantOutside` renders a horizontal edge as a half block whose
+// foreground is the border colour and whose background is the block's own
+// fill: `▄` for a `Borders::BOTTOM`, `▀` for a `Borders::TOP`. So the last
+// row of the top bar is bar for its top half and `line` for its bottom
+// half — the border lands exactly on the band's edge, and it costs no row,
+// because it lives on a row the band already owns.
 //
-// What is left is the thing the reference actually leans on anyway. The
-// bars are already a different surface from the frame (`bar` #232532 and
-// `bar_bottom` #1b1d2b against `ground` #161826), and at 1:1 the mock's
-// 1px `--tui-line` hairline between them is close to imperceptible — the
-// surface change is doing the work. So the change of background *is* the
-// edge: it lands exactly on the cell boundary by construction, costs no
-// row, and depends on nothing but truecolor, which every other pixel of
-// this UI already requires. `--tui-line` keeps its real job, drawn box
-// borders (`Row::border`, the diff box), where a glyph occupies a whole
-// cell honestly rather than pretending to be a hairline.
+// An earlier pass hand-rolled the same effect with `▁`/`▔` (one-eighth
+// blocks), which are thinner and closer to the reference's hairline but
+// rest on a rarely-exercised part of the Block Elements range; rejected on
+// the developer's call, "too risky to rely on glyphs". Half blocks are a
+// different tier: ratatui ships them as a first-class `BorderType`, and
+// they are what every terminal image renderer is built on. The trade is
+// thickness — half a cell where the mock has 1px — for an edge that is
+// actually on the edge.
+//
+// Inner boxes stay `BorderType::Plain` regardless: the handoff README is
+// explicit that "the diff panel is a plain `Block::bordered()` with
+// `BorderType::Plain`. This was an explicit design decision after review."
+
+/// A band filled in `bg`, with `side`'s edge drawn in `fg` against that
+/// edge of the band's own outermost row — see the note on borders above.
+fn band_edge(side: Borders, fg: Color, bg: Color) -> Block<'static> {
+    Block::new().borders(side).border_type(BorderType::QuadrantOutside).style(Style::default().bg(bg)).border_style(Style::default().fg(fg))
+}
 
 /// Composites every already-drawn cell in `area` toward its own background
 /// at `alpha`, the way CSS `opacity` would. Each cell fades toward *its

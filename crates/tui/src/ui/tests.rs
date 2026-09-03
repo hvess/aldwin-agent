@@ -106,19 +106,18 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
 
 /// Per explicit developer feedback on a rendered frame — "why is the
 /// border not aligned cleanly with the bottom of the component?" It
-/// wasn't, twice over. A border row drawn with `─` puts the line through
-/// the *middle* of its cell, leaving half a cell of the bar's own
-/// background below it; and the row itself was spurious, so the 3-cell
-/// `--bar-top-h` band rendered as four.
+/// wasn't, twice over: `─` puts the line through the *middle* of its cell,
+/// leaving half a cell of the bar's own background below it, and the row
+/// it was drawn on was spurious besides, so the 3-cell `--bar-top-h` band
+/// rendered as four.
 ///
-/// A terminal cell has no sub-cell drawing, so there is no faithful 1px
-/// border to render — and glyphs that approximate one were rejected
-/// outright ("I think it's too risky to rely on glyphs"). The change of
-/// surface *is* the edge, which is what this pins: the bar occupies
-/// exactly `TOP_BAR_ROWS` cells of `bar`, and the very next cell is the
-/// transcript's `ground`. No glyph, so nothing here depends on a font.
+/// `BorderType::QuadrantOutside` is ratatui's own answer: a horizontal
+/// edge is a half block whose foreground is the border colour and whose
+/// background is the block's fill, so `▄` on the bar's last row is bar for
+/// its top half and `line` for its bottom — the border lands on the band's
+/// edge and costs no row.
 #[test]
-fn the_top_bar_ends_on_the_cell_boundary_with_no_border_row() {
+fn the_top_bar_carries_its_border_on_the_edge_of_its_own_last_row() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -126,28 +125,29 @@ fn the_top_bar_ends_on_the_cell_boundary_with_no_border_row() {
     let buffer = terminal.backend().buffer().clone();
 
     let last = super::TOP_BAR_ROWS - 1;
-    assert_eq!(buffer[(0, last)].bg, DARK.bar, "the bar's last row is still the bar");
-    assert_eq!(buffer[(0, last)].symbol(), " ", "no border glyph: the surface change is the edge");
+    assert_eq!(buffer[(0, last)].symbol(), "▄", "a bottom edge is a lower half block, so the border ink sits against the cell's bottom edge");
+    assert_eq!(buffer[(0, last)].bg, DARK.bar, "its other half is still the bar");
+    assert_eq!(buffer[(0, last)].fg, DARK.line, "the border is `line`, the structural token, not the muted `rule`");
     assert_eq!(buffer[(0, super::TOP_BAR_ROWS)].bg, DARK.ground, "the transcript starts in the very next cell — the border costs no row");
 }
 
-/// The same fact at the other end of the frame: the transcript runs to
-/// the last cell before the bottom bar, which starts on `bar_bottom` with
-/// no row of chrome between them.
+/// The same fact mirrored at the other end: `BottomBar.jsx`'s
+/// `border-top` is an upper half block on the bar's own first row, so the
+/// border ink touches the transcript above it.
 #[test]
-fn the_bottom_bar_starts_on_the_cell_boundary_with_no_border_row() {
+fn the_bottom_bar_carries_its_border_on_the_edge_of_its_own_first_row() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
 
-    // The composer's own row, found by its prompt glyph, is the second row
-    // of `BottomBar.jsx`'s blank/composer/blank/status/blank — so the bar
-    // begins one row above it.
+    // The composer row, found by its prompt glyph, is the second of
+    // `BottomBar.jsx`'s five, so the bar begins one row above it.
     let first = find_row(&buffer, "▶") - 1;
-    assert_eq!(buffer[(0, first)].bg, DARK.bar_bottom, "the bar's first row is already the bar");
-    assert_eq!(buffer[(0, first)].symbol(), " ", "no border glyph: the surface change is the edge");
+    assert_eq!(buffer[(0, first)].symbol(), "▀", "a top edge is an upper half block");
+    assert_eq!(buffer[(0, first)].bg, DARK.bar_bottom, "its other half is the bar");
+    assert_eq!(buffer[(0, first)].fg, DARK.line);
     assert_eq!(buffer[(0, first - 1)].bg, DARK.ground, "the transcript runs right up to it");
 }
 

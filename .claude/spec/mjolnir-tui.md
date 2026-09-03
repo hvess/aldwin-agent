@@ -2117,34 +2117,42 @@ the title band, which carries text, so there is no spare cell edge to draw
 above instead, drawn on `ground` so the accent hairline sits flush against
 the top of the band with transcript above it.
 
-**The glyph half was then reverted, on the developer's call.** `▁`/`▔`
-read almost exactly right, but the thickness and placement of that ink are
-the *font's* metrics rather than ours (hence the stray pixel above), and a
-font without the glyph renders tofu: "I think it's too risky to rely on
-glyphs." Fair — the whole chrome edge would have depended on one codepoint
-being well-cut in whatever font the developer runs.
+**Resolved with `BorderType::QuadrantOutside`, after the hand-rolled
+attempt was rejected.** `▁`/`▔` read almost exactly right, but that ink is
+the *font's* metrics rather than ours and the range is rarely exercised:
+"too risky to rely on glyphs." Fair. Researching how ratatui itself solves
+this turned up a first-class answer that had been missed:
 
-What replaced it is the thing the reference leans on anyway. The bars are
-already a different surface from the frame (`bar` #232532, `bar_bottom`
-#1b1d2b against `ground` #161826), and at 1:1 the mock's 1px `--tui-line`
-hairline between them is close to imperceptible — the surface change is
-what the eye actually reads. So the change of background *is* the edge: it
-lands on the cell boundary by construction, costs no row, and depends on
-nothing but truecolor, which every other pixel of this UI already needs.
-Measured after: `bar` to y=79, `ground` from y=80, nothing in between.
-`--tui-line` keeps its real job — drawn box borders (`Row::border`, the
-diff box), where a glyph occupies a whole cell honestly instead of
-impersonating a hairline.
+`QuadrantOutside` renders a horizontal edge as a *half* block whose
+foreground is the border colour and whose background is the block's own
+fill. Probed against the renderer rather than taken from the docs, a
+`Block::new().borders(Borders::BOTTOM).border_type(QuadrantOutside)` emits
+`▄` with `fg = border, bg = block` across the band's last row — bar for its
+top half, `line` for its bottom — and `Borders::TOP` emits `▀`. So the
+border lands exactly on the band's edge *and* costs no row, since it lives
+on a row the band already owns. `Block::style` paints across the border
+cells and `border_style` is applied on top of it, which is what makes the
+half-block's other half come out as the band's own surface.
 
-The decision panel loses its `modal_line` edge along with the others and no
-longer takes a row for one; its `band` (accent-900) title row is already
-the topmost thing in the panel and carries that signal on its own.
+Half blocks are a different risk tier from one-eighth blocks: ratatui ships
+them as a supported `BorderType`, and they are the basis of every terminal
+image renderer. The trade is thickness — half a cell where the mock has 1px
+— for an edge that is genuinely on the edge. `--tui-line` at 10px reads as
+a distinctly heavier stripe than the reference's hairline; that is the one
+open aesthetic question left on it.
 
-Pinned by `the_top_bar_ends_on_the_cell_boundary_with_no_border_row` and
-`the_bottom_bar_starts_on_the_cell_boundary_with_no_border_row`, which
-assert the surface on the band's own edge cell, the absence of any glyph
-there, and that the neighbouring band starts in the very next cell — so
-neither the floating line nor the extra row can come back quietly.
+Inner boxes stay `BorderType::Plain` regardless: the handoff README is
+explicit that "the diff panel is a plain `Block::bordered()` with
+`BorderType::Plain`. This was an explicit design decision after review."
+
+The panel keeps a row for its edge, since its first row is the title band
+and text leaves no spare half-cell there — which also matches the handoff's
+own wording, "a one-cell accent-700 rule along its top edge".
+
+Pinned by `the_top_bar_carries_its_border_on_the_edge_of_its_own_last_row`
+and `the_bottom_bar_carries_its_border_on_the_edge_of_its_own_first_row`,
+which assert the half-block glyph, both its colours, and that the
+neighbouring band starts in the very next cell.
 
 **Open, and deliberately not decided here — the palette itself.** The
 seventh report was "because the colors are wrong, everything is quite hard

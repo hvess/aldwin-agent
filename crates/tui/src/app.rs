@@ -174,6 +174,20 @@ pub struct RunningTool {
 
 pub struct StatusInfo {
     pub model_name:    String,
+    /// This build's release version and the commit it came from — read
+    /// once here rather than by the render layer, which used to reach for
+    /// `env!` mid-draw. Facts about the session belong with the rest of
+    /// the session's state: it keeps `ui` a pure function of `App` (a
+    /// render test can pin them instead of inheriting whatever the build
+    /// happened to embed), and it puts them beside `model_name`, which is
+    /// the same kind of fact and was already here.
+    pub version:       String,
+    pub commit:        String,
+    /// The working directory, `~`-shortened like a shell prompt — the top
+    /// bar's own left-group fact. Same reasoning as `version`/`commit`,
+    /// and more so: this one varies by machine, so a render that read it
+    /// directly could not be pinned by a test at all.
+    pub cwd:           Option<String>,
     pub turn:          Option<u64>,
     pub step:          Option<u64>,
     pub running_tools: Vec<RunningTool>,
@@ -191,6 +205,23 @@ impl StatusInfo {
         // hardcoded, so a future change to Engine's edit_class handling
         // can't silently desync the status bar from reality.
         self.edit = perm_state(engine, "edit", true);
+    }
+}
+
+/// The session's working directory, `~`-shortened like a shell prompt.
+/// `None` only if the process's cwd genuinely can't be read — not worth a
+/// placeholder for a case this rare.
+fn current_dir_display() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return Some(cwd.display().to_string());
+    };
+    if cwd == home {
+        return Some("~".to_string());
+    }
+    match cwd.strip_prefix(&home) {
+        Ok(rest) if !rest.as_os_str().is_empty() => Some(format!("~/{}", rest.display())),
+        _ => Some(cwd.display().to_string()),
     }
 }
 
@@ -313,7 +344,18 @@ pub struct App {
 
 impl App {
     pub fn new(model_name: String, permissions: Arc<Engine>) -> Self {
-        let mut status = StatusInfo { model_name, turn: None, step: None, running_tools: vec![], read: PermState::Denied, shell: PermState::Denied, edit: PermState::Denied };
+        let mut status = StatusInfo {
+            model_name,
+            version: crate::version::VERSION.to_string(),
+            commit: crate::version::GIT_HASH.to_string(),
+            cwd: current_dir_display(),
+            turn: None,
+            step: None,
+            running_tools: vec![],
+            read: PermState::Denied,
+            shell: PermState::Denied,
+            edit: PermState::Denied,
+        };
         status.refresh_permissions(&permissions);
         Self {
             permissions,

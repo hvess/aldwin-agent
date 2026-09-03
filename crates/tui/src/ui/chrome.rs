@@ -58,9 +58,9 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     // crate doesn't have, so the identity group stops at cwd rather than
     // showing a branch it has no way to know.
     let mut left_spans = vec![Span::styled("mjolnir", Style::default().fg(pal.text))];
-    if let Some(cwd) = current_dir_display() {
+    if let Some(cwd) = &app.status.cwd {
         left_spans.push(Span::raw("      "));
-        left_spans.push(Span::styled(cwd, Style::default().fg(pal.quiet)));
+        left_spans.push(Span::styled(cwd.clone(), Style::default().fg(pal.quiet)));
     }
     frame.render_widget(Paragraph::new(Line::from(left_spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);
 
@@ -73,29 +73,11 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let right = Paragraph::new(Line::from(vec![
         Span::styled(app.status.model_name.clone(), Style::default().fg(pal.quiet)),
         Span::styled(" · ", Style::default().fg(pal.dim)),
-        Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), Style::default().fg(pal.text)),
+        Span::styled(format!("v{}", app.status.version), Style::default().fg(pal.text)),
     ]))
     .alignment(Alignment::Right)
     .block(Block::new().padding(Padding::right(MARGIN_X as u16)));
     frame.render_widget(right, right_area);
-}
-
-/// The session's working directory, `~`-shortened like a shell prompt —
-/// `TopBar.jsx`'s own left-group fact (`~/src/gateway`). `None` only if the
-/// process's cwd genuinely can't be read — not worth a placeholder for a
-/// case this rare.
-fn current_dir_display() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
-        return Some(cwd.display().to_string());
-    };
-    if cwd == home {
-        return Some("~".to_string());
-    }
-    match cwd.strip_prefix(&home) {
-        Ok(rest) if !rest.as_os_str().is_empty() => Some(format!("~/{}", rest.display())),
-        _ => Some(cwd.display().to_string()),
-    }
 }
 
 /// A `RunningTool`'s display name — `name` comes from a `ToolUseRequested`

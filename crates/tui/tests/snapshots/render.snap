@@ -1,6 +1,6 @@
 === Dark empty 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|                                                                                                                        |Reset/Rgb(22, 24, 38)/0x120
@@ -16,8 +16,8 @@
  14|   every strike is yours to call. nothing moves without you.                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x57 Reset/Rgb(22, 24, 38)/0x60
  15|                                                                                                                        |Reset/Rgb(22, 24, 38)/0x120
  16|   model    claude-sonnet-5                                                                                             |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x15 Reset/Rgb(22, 24, 38)/0x93
- 17|   version  v0.1.0                                                                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x102
- 18|   commit   e62cbd84-dirty                                                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x14 Reset/Rgb(22, 24, 38)/0x94
+ 17|   version  v0.0.0                                                                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x102
+ 18|   commit   0badc0de                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x8 Reset/Rgb(22, 24, 38)/0x100
  19|   access   read:deny   shell:deny   edit:deny                                                                          |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x14 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x6 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x5 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x73
  20|                                                                                                                        |Reset/Rgb(22, 24, 38)/0x120
  21|                                                                                                                        |Reset/Rgb(22, 24, 38)/0x120
@@ -37,7 +37,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark empty 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|                                                                                |Reset/Rgb(22, 24, 38)/0x80
@@ -47,8 +47,8 @@
   8|   every strike is yours to call. nothing moves without you.                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x57 Reset/Rgb(22, 24, 38)/0x20
   9|                                                                                |Reset/Rgb(22, 24, 38)/0x80
  10|   model    claude-sonnet-5                                                     |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x15 Reset/Rgb(22, 24, 38)/0x53
- 11|   version  v0.1.0                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x62
- 12|   commit   e62cbd84-dirty                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x14 Reset/Rgb(22, 24, 38)/0x54
+ 11|   version  v0.0.0                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x62
+ 12|   commit   0badc0de                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x8 Reset/Rgb(22, 24, 38)/0x60
  13|   access   read:deny   shell:deny   edit:deny                                  |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x14 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x6 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x5 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x33
  14|                                                                                |Reset/Rgb(22, 24, 38)/0x80
  15|                                                                                |Reset/Rgb(22, 24, 38)/0x80
@@ -62,7 +62,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark empty 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                                                    |Reset/Rgb(22, 24, 38)/0x52
@@ -71,8 +71,8 @@
   7|without you.                                        |Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x12 Reset/Rgb(22, 24, 38)/0x40
   8|                                                    |Reset/Rgb(22, 24, 38)/0x52
   9|   model    claude-sonnet-5                         |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x15 Reset/Rgb(22, 24, 38)/0x25
- 10|   version  v0.1.0                                  |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x34
- 11|   commit   e62cbd84-dirty                          |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x14 Reset/Rgb(22, 24, 38)/0x26
+ 10|   version  v0.0.0                                  |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x34
+ 11|   commit   0badc0de                                |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x8 Reset/Rgb(22, 24, 38)/0x32
  12|   access   read:deny   shell:deny   edit:deny      |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x14 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x6 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x5 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x5
  13|                                                    |Reset/Rgb(22, 24, 38)/0x52
  14|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
@@ -83,7 +83,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark empty 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|                                                                                                                                                                |Reset/Rgb(22, 24, 38)/0x160
@@ -103,8 +103,8 @@
  18|   every strike is yours to call. nothing moves without you.                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x57 Reset/Rgb(22, 24, 38)/0x100
  19|                                                                                                                                                                |Reset/Rgb(22, 24, 38)/0x160
  20|   model    claude-sonnet-5                                                                                                                                     |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x15 Reset/Rgb(22, 24, 38)/0x133
- 21|   version  v0.1.0                                                                                                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x142
- 22|   commit   e62cbd84-dirty                                                                                                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x14 Reset/Rgb(22, 24, 38)/0x134
+ 21|   version  v0.0.0                                                                                                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x6 Reset/Rgb(22, 24, 38)/0x142
+ 22|   commit   0badc0de                                                                                                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x9 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x8 Reset/Rgb(22, 24, 38)/0x140
  23|   access   read:deny   shell:deny   edit:deny                                                                                                                  |Reset/Rgb(22, 24, 38)/0x3 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x14 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x6 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x2 Rgb(117, 121, 140)/Rgb(22, 24, 38)/0x5 Rgb(232, 108, 104)/Rgb(22, 24, 38)/0x5 Reset/Rgb(22, 24, 38)/0x113
  24|                                                                                                                                                                |Reset/Rgb(22, 24, 38)/0x160
  25|                                                                                                                                                                |Reset/Rgb(22, 24, 38)/0x160
@@ -128,7 +128,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Dark conversation 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           Can you refactor the retry logic in llm/src/client.rs to use exponential backoff?                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x81 Reset/Rgb(22, 24, 38)/0x22
@@ -165,7 +165,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark conversation 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|                 1. Add a backoff_ms helper                                     |Reset/Rgb(22, 24, 38)/0x17 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x9 Rgb(228, 231, 245)/Rgb(22, 24, 38)/0x10 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x7 Reset/Rgb(22, 24, 38)/0x37
@@ -190,7 +190,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark conversation 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                        100 *                       |Reset/Rgb(22, 24, 38)/0x17 Reset/Rgb(26, 28, 41)/0x3 Rgb(192, 197, 206)/Rgb(26, 28, 41)/0x4 Rgb(208, 135, 112)/Rgb(26, 28, 41)/0x3 Rgb(192, 197, 206)/Rgb(26, 28, 41)/0x2 Reset/Rgb(26, 28, 41)/0x20 Reset/Rgb(22, 24, 38)/0x3
@@ -211,7 +211,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark conversation 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           Can you refactor the retry logic in llm/src/client.rs to use exponential backoff?                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x81 Reset/Rgb(22, 24, 38)/0x62
@@ -256,7 +256,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Dark markdown 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   harness       Heading one                                                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x7 Reset/Rgb(22, 24, 38)/0x7 Rgb(207, 211, 229)/Rgb(22, 24, 38)/9x11 Reset/Rgb(22, 24, 38)/0x92
@@ -293,7 +293,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark markdown 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|                 reasonable frame width.                                        |Reset/Rgb(22, 24, 38)/0x17 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x23 Reset/Rgb(22, 24, 38)/0x40
@@ -318,7 +318,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark markdown 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                 words that it wraps too            |Reset/Rgb(22, 24, 38)/0x17 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x23 Reset/Rgb(22, 24, 38)/0x12
@@ -339,7 +339,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark markdown 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   harness       Heading one                                                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x7 Reset/Rgb(22, 24, 38)/0x7 Rgb(207, 211, 229)/Rgb(22, 24, 38)/9x11 Reset/Rgb(22, 24, 38)/0x132
@@ -384,7 +384,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Dark fenced_diff 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   harness       Here is the change:                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x7 Reset/Rgb(22, 24, 38)/0x7 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x19 Reset/Rgb(22, 24, 38)/0x84
@@ -421,7 +421,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark fenced_diff 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|                                                                                |Reset/Rgb(22, 24, 38)/0x80
@@ -446,7 +446,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark fenced_diff 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                 │start + size;                 │   |Reset/Rgb(22, 24, 38)/0x17 Rgb(63, 66, 77)/Rgb(55, 39, 50)/0x1 Rgb(255, 157, 150)/Rgb(55, 39, 50)/0x13 Reset/Rgb(55, 39, 50)/0x17 Rgb(63, 66, 77)/Rgb(55, 39, 50)/0x1 Reset/Rgb(22, 24, 38)/0x3
@@ -467,7 +467,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark fenced_diff 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   harness       Here is the change:                                                                                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(178, 182, 202)/Rgb(22, 24, 38)/0x7 Reset/Rgb(22, 24, 38)/0x7 Rgb(207, 211, 229)/Rgb(22, 24, 38)/0x19 Reset/Rgb(22, 24, 38)/0x124
@@ -512,7 +512,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Dark tools 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           grep for TODO across the repo and summarize                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x60
@@ -549,7 +549,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark tools 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   you           grep for TODO across the repo and summarize                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x20
@@ -574,7 +574,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark tools 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|   you           grep for TODO across the repo      |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x29 Reset/Rgb(22, 24, 38)/0x6
@@ -595,7 +595,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark tools 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           grep for TODO across the repo and summarize                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(149, 188, 228)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(233, 233, 237)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x100
@@ -640,7 +640,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Dark approval 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           fix the off-by-one in the pagination helper                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x60
@@ -677,7 +677,7 @@
  35|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                        |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x72
 === Dark approval 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   you           fix the off-by-one in the pagination helper                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x20
@@ -702,7 +702,7 @@
  23|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x32
 === Dark approval 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                 pagination helper                  |Reset/Rgb(22, 24, 38)/0x17 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x17 Reset/Rgb(22, 24, 38)/0x18
@@ -723,7 +723,7 @@
  19|   ↑↓ to move      1-2 to pick      ⏎ to confirm    |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x4
 === Dark approval 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           fix the off-by-one in the pagination helper                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x100
@@ -768,7 +768,7 @@
  43|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x112
 === Dark approval_large 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           fix the off-by-one in the pagination helper                                                            |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x60
@@ -805,7 +805,7 @@
  35|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                        |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x72
 === Dark approval_large 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   you           fix the off-by-one in the pagination helper                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x20
@@ -830,7 +830,7 @@
  23|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x32
 === Dark approval_large 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                 pagination helper                  |Reset/Rgb(22, 24, 38)/0x17 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x17 Reset/Rgb(22, 24, 38)/0x18
@@ -851,7 +851,7 @@
  19|   ↑↓ to move      1-2 to pick      ⏎ to confirm    |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x4
 === Dark approval_large 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           fix the off-by-one in the pagination helper                                                                                                    |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x43 Reset/Rgb(22, 24, 38)/0x100
@@ -896,7 +896,7 @@
  43|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x112
 === Dark prompt 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           run the test suite                                                                                     |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x18 Reset/Rgb(22, 24, 38)/0x85
@@ -933,7 +933,7 @@
  35|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                        |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x72
 === Dark prompt 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   you           run the test suite                                             |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x18 Reset/Rgb(22, 24, 38)/0x45
@@ -979,7 +979,7 @@
  19|▌  5  Deny                                          |Rgb(63, 66, 77)/Rgb(35, 37, 50)/0x3 Rgb(117, 121, 140)/Rgb(35, 37, 50)/0x3 Rgb(207, 211, 229)/Rgb(35, 37, 50)/0x4 Reset/Rgb(35, 37, 50)/0x42
 === Dark prompt 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           run the test suite                                                                                                                             |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x18 Reset/Rgb(22, 24, 38)/0x125
@@ -1024,7 +1024,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x112
 === Dark prompt_path 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           what does the dispatcher do on a deny-by-absence?                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x49 Reset/Rgb(22, 24, 38)/0x54
@@ -1061,7 +1061,7 @@
  35|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                        |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x72
 === Dark prompt_path 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   you           what does the dispatcher do on a deny-by-absence?              |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x49 Reset/Rgb(22, 24, 38)/0x14
@@ -1107,7 +1107,7 @@
  19|▌  3  Allow for this project                        |Rgb(63, 66, 77)/Rgb(35, 37, 50)/0x3 Rgb(117, 121, 140)/Rgb(35, 37, 50)/0x3 Rgb(207, 211, 229)/Rgb(35, 37, 50)/0x22 Reset/Rgb(35, 37, 50)/0x24
 === Dark prompt_path 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           what does the dispatcher do on a deny-by-absence?                                                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x49 Reset/Rgb(22, 24, 38)/0x94
@@ -1152,7 +1152,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x112
 === Dark prompt_scoped 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|   you           what does the dispatcher do on a deny-by-absence?                                                      |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x49 Reset/Rgb(22, 24, 38)/0x54
@@ -1235,7 +1235,7 @@
  19|▌  3  Allow for this project                        |Rgb(63, 66, 77)/Rgb(35, 37, 50)/0x3 Rgb(117, 121, 140)/Rgb(35, 37, 50)/0x3 Rgb(207, 211, 229)/Rgb(35, 37, 50)/0x22 Reset/Rgb(35, 37, 50)/0x24
 === Dark prompt_scoped 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|   you           what does the dispatcher do on a deny-by-absence?                                                                                              |Reset/Rgb(22, 24, 38)/0x3 Rgb(66, 81, 104)/Rgb(22, 24, 38)/0x3 Reset/Rgb(22, 24, 38)/0x11 Rgb(96, 97, 108)/Rgb(22, 24, 38)/0x49 Reset/Rgb(22, 24, 38)/0x94
@@ -1280,7 +1280,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(27, 29, 43)/0x3 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x2 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x3 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x14 Rgb(132, 174, 217)/Rgb(22, 24, 38)/0x1 Rgb(147, 151, 171)/Rgb(22, 24, 38)/0x11 Reset/Rgb(27, 29, 43)/0x112
 === Dark long 120x36
   0|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x40 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x64 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                        |Reset/Rgb(35, 37, 50)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x120
   4|                                                                                                                        |Reset/Rgb(22, 24, 38)/0x120
@@ -1317,7 +1317,7 @@
  35|                                                                                                                        |Reset/Rgb(27, 29, 43)/0x120
 === Dark long 80x24
   0|                                                                                |Reset/Rgb(35, 37, 50)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x24 Reset/Rgb(35, 37, 50)/0x13 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x24 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                |Reset/Rgb(35, 37, 50)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x80
   4|   │   6    6 │   }                                                         │   |Reset/Rgb(35, 37, 50)/0x3 Rgb(63, 66, 77)/Rgb(26, 28, 41)/0x1 Rgb(89, 93, 108)/Rgb(26, 28, 41)/0x12 Rgb(26, 28, 41)/Rgb(26, 28, 41)/0x2 Rgb(117, 121, 140)/Rgb(26, 28, 41)/0x1 Reset/Rgb(26, 28, 41)/0x57 Rgb(63, 66, 77)/Rgb(26, 28, 41)/0x1 Reset/Rgb(35, 37, 50)/0x3
@@ -1342,7 +1342,7 @@
  23|                                                                                |Reset/Rgb(27, 29, 43)/0x80
 === Dark long 52x20
   0|                                                    |Reset/Rgb(35, 37, 50)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x25 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x5 Reset/Rgb(35, 37, 50)/0x3
   2|                                                    |Reset/Rgb(35, 37, 50)/0x52
   3|────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x52
   4|                                                    |Reset/Rgb(35, 37, 50)/0x52
@@ -1363,7 +1363,7 @@
  19|                                                    |Reset/Rgb(27, 29, 43)/0x52
 === Dark long 160x44
   0|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x37 Reset/Rgb(35, 37, 50)/0x80 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x7 Reset/Rgb(35, 37, 50)/0x6 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x13 Reset/Rgb(35, 37, 50)/0x104 Rgb(147, 151, 171)/Rgb(35, 37, 50)/0x15 Rgb(89, 93, 108)/Rgb(35, 37, 50)/0x3 Rgb(233, 233, 237)/Rgb(35, 37, 50)/0x6 Reset/Rgb(35, 37, 50)/0x3
   2|                                                                                                                                                                |Reset/Rgb(35, 37, 50)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(63, 66, 77)/Rgb(22, 24, 38)/0x160
   4|                                                                                                                                                                |Reset/Rgb(22, 24, 38)/0x160
@@ -1408,7 +1408,7 @@
  43|                                                                                                                                                                |Reset/Rgb(27, 29, 43)/0x160
 === Light empty 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|                                                                                                                        |Reset/Rgb(243, 245, 254)/0x120
@@ -1424,8 +1424,8 @@
  14|   every strike is yours to call. nothing moves without you.                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x57 Reset/Rgb(243, 245, 254)/0x60
  15|                                                                                                                        |Reset/Rgb(243, 245, 254)/0x120
  16|   model    claude-sonnet-5                                                                                             |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x15 Reset/Rgb(243, 245, 254)/0x93
- 17|   version  v0.1.0                                                                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x102
- 18|   commit   e62cbd84-dirty                                                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x14 Reset/Rgb(243, 245, 254)/0x94
+ 17|   version  v0.0.0                                                                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x102
+ 18|   commit   0badc0de                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x8 Reset/Rgb(243, 245, 254)/0x100
  19|   access   read:deny   shell:deny   edit:deny                                                                          |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x6 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x5 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x73
  20|                                                                                                                        |Reset/Rgb(243, 245, 254)/0x120
  21|                                                                                                                        |Reset/Rgb(243, 245, 254)/0x120
@@ -1445,7 +1445,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light empty 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|                                                                                |Reset/Rgb(243, 245, 254)/0x80
@@ -1455,8 +1455,8 @@
   8|   every strike is yours to call. nothing moves without you.                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x57 Reset/Rgb(243, 245, 254)/0x20
   9|                                                                                |Reset/Rgb(243, 245, 254)/0x80
  10|   model    claude-sonnet-5                                                     |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x15 Reset/Rgb(243, 245, 254)/0x53
- 11|   version  v0.1.0                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x62
- 12|   commit   e62cbd84-dirty                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x14 Reset/Rgb(243, 245, 254)/0x54
+ 11|   version  v0.0.0                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x62
+ 12|   commit   0badc0de                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x8 Reset/Rgb(243, 245, 254)/0x60
  13|   access   read:deny   shell:deny   edit:deny                                  |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x6 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x5 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x33
  14|                                                                                |Reset/Rgb(243, 245, 254)/0x80
  15|                                                                                |Reset/Rgb(243, 245, 254)/0x80
@@ -1470,7 +1470,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light empty 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                                                    |Reset/Rgb(243, 245, 254)/0x52
@@ -1479,8 +1479,8 @@
   7|without you.                                        |Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x12 Reset/Rgb(243, 245, 254)/0x40
   8|                                                    |Reset/Rgb(243, 245, 254)/0x52
   9|   model    claude-sonnet-5                         |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x15 Reset/Rgb(243, 245, 254)/0x25
- 10|   version  v0.1.0                                  |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x34
- 11|   commit   e62cbd84-dirty                          |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x14 Reset/Rgb(243, 245, 254)/0x26
+ 10|   version  v0.0.0                                  |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x34
+ 11|   commit   0badc0de                                |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x8 Reset/Rgb(243, 245, 254)/0x32
  12|   access   read:deny   shell:deny   edit:deny      |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x6 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x5 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x5
  13|                                                    |Reset/Rgb(243, 245, 254)/0x52
  14|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
@@ -1491,7 +1491,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light empty 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|                                                                                                                                                                |Reset/Rgb(243, 245, 254)/0x160
@@ -1511,8 +1511,8 @@
  18|   every strike is yours to call. nothing moves without you.                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x57 Reset/Rgb(243, 245, 254)/0x100
  19|                                                                                                                                                                |Reset/Rgb(243, 245, 254)/0x160
  20|   model    claude-sonnet-5                                                                                                                                     |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x15 Reset/Rgb(243, 245, 254)/0x133
- 21|   version  v0.1.0                                                                                                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x142
- 22|   commit   e62cbd84-dirty                                                                                                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x14 Reset/Rgb(243, 245, 254)/0x134
+ 21|   version  v0.0.0                                                                                                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x6 Reset/Rgb(243, 245, 254)/0x142
+ 22|   commit   0badc0de                                                                                                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x9 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x8 Reset/Rgb(243, 245, 254)/0x140
  23|   access   read:deny   shell:deny   edit:deny                                                                                                                  |Reset/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x6 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x5 Rgb(179, 17, 36)/Rgb(243, 245, 254)/0x5 Reset/Rgb(243, 245, 254)/0x113
  24|                                                                                                                                                                |Reset/Rgb(243, 245, 254)/0x160
  25|                                                                                                                                                                |Reset/Rgb(243, 245, 254)/0x160
@@ -1536,7 +1536,7 @@
  43|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
 === Light conversation 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           Can you refactor the retry logic in llm/src/client.rs to use exponential backoff?                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x81 Reset/Rgb(243, 245, 254)/0x22
@@ -1573,7 +1573,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light conversation 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|                 1. Add a backoff_ms helper                                     |Reset/Rgb(243, 245, 254)/0x17 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x9 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x10 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x7 Reset/Rgb(243, 245, 254)/0x37
@@ -1598,7 +1598,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light conversation 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                        100 *                       |Reset/Rgb(243, 245, 254)/0x17 Reset/Rgb(228, 231, 245)/0x3 Rgb(79, 91, 102)/Rgb(228, 231, 245)/0x4 Rgb(208, 135, 112)/Rgb(228, 231, 245)/0x3 Rgb(79, 91, 102)/Rgb(228, 231, 245)/0x2 Reset/Rgb(228, 231, 245)/0x20 Reset/Rgb(243, 245, 254)/0x3
@@ -1619,7 +1619,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light conversation 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           Can you refactor the retry logic in llm/src/client.rs to use exponential backoff?                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x81 Reset/Rgb(243, 245, 254)/0x62
@@ -1664,7 +1664,7 @@
  43|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
 === Light markdown 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   harness       Heading one                                                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x7 Reset/Rgb(243, 245, 254)/0x7 Rgb(63, 66, 77)/Rgb(243, 245, 254)/9x11 Reset/Rgb(243, 245, 254)/0x92
@@ -1701,7 +1701,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light markdown 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|                 reasonable frame width.                                        |Reset/Rgb(243, 245, 254)/0x17 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x23 Reset/Rgb(243, 245, 254)/0x40
@@ -1726,7 +1726,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light markdown 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                 words that it wraps too            |Reset/Rgb(243, 245, 254)/0x17 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x23 Reset/Rgb(243, 245, 254)/0x12
@@ -1747,7 +1747,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light markdown 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   harness       Heading one                                                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x7 Reset/Rgb(243, 245, 254)/0x7 Rgb(63, 66, 77)/Rgb(243, 245, 254)/9x11 Reset/Rgb(243, 245, 254)/0x132
@@ -1792,7 +1792,7 @@
  43|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
 === Light fenced_diff 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   harness       Here is the change:                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x7 Reset/Rgb(243, 245, 254)/0x7 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x19 Reset/Rgb(243, 245, 254)/0x84
@@ -1829,7 +1829,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light fenced_diff 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|                                                                                |Reset/Rgb(243, 245, 254)/0x80
@@ -1854,7 +1854,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light fenced_diff 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                 │start + size;                 │   |Reset/Rgb(243, 245, 254)/0x17 Rgb(207, 211, 229)/Rgb(220, 200, 215)/0x1 Rgb(98, 20, 23)/Rgb(220, 200, 215)/0x13 Reset/Rgb(220, 200, 215)/0x17 Rgb(207, 211, 229)/Rgb(220, 200, 215)/0x1 Reset/Rgb(243, 245, 254)/0x3
@@ -1875,7 +1875,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light fenced_diff 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   harness       Here is the change:                                                                                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(89, 93, 108)/Rgb(243, 245, 254)/0x7 Reset/Rgb(243, 245, 254)/0x7 Rgb(63, 66, 77)/Rgb(243, 245, 254)/0x19 Reset/Rgb(243, 245, 254)/0x124
@@ -1920,7 +1920,7 @@
  43|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
 === Light tools 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           grep for TODO across the repo and summarize                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x60
@@ -1957,7 +1957,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light tools 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   you           grep for TODO across the repo and summarize                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x20
@@ -1982,7 +1982,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light tools 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|   you           grep for TODO across the repo      |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x29 Reset/Rgb(243, 245, 254)/0x6
@@ -2003,7 +2003,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light tools 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           grep for TODO across the repo and summarize                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(64, 97, 129)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(41, 43, 49)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x100
@@ -2048,7 +2048,7 @@
  43|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
 === Light approval 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           fix the off-by-one in the pagination helper                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x60
@@ -2085,7 +2085,7 @@
  35|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                        |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x72
 === Light approval 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   you           fix the off-by-one in the pagination helper                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x20
@@ -2110,7 +2110,7 @@
  23|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x32
 === Light approval 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                 pagination helper                  |Reset/Rgb(243, 245, 254)/0x17 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x17 Reset/Rgb(243, 245, 254)/0x18
@@ -2131,7 +2131,7 @@
  19|   ↑↓ to move      1-2 to pick      ⏎ to confirm    |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x4
 === Light approval 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           fix the off-by-one in the pagination helper                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x100
@@ -2176,7 +2176,7 @@
  43|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x112
 === Light approval_large 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           fix the off-by-one in the pagination helper                                                            |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x60
@@ -2213,7 +2213,7 @@
  35|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                        |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x72
 === Light approval_large 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   you           fix the off-by-one in the pagination helper                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x20
@@ -2238,7 +2238,7 @@
  23|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x32
 === Light approval_large 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                 pagination helper                  |Reset/Rgb(243, 245, 254)/0x17 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x17 Reset/Rgb(243, 245, 254)/0x18
@@ -2259,7 +2259,7 @@
  19|   ↑↓ to move      1-2 to pick      ⏎ to confirm    |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x4
 === Light approval_large 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           fix the off-by-one in the pagination helper                                                                                                    |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x43 Reset/Rgb(243, 245, 254)/0x100
@@ -2304,7 +2304,7 @@
  43|   ↑↓ to move      1-2 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x112
 === Light prompt 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           run the test suite                                                                                     |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x18 Reset/Rgb(243, 245, 254)/0x85
@@ -2341,7 +2341,7 @@
  35|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                        |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x72
 === Light prompt 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   you           run the test suite                                             |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x18 Reset/Rgb(243, 245, 254)/0x45
@@ -2387,7 +2387,7 @@
  19|▌  5  Deny                                          |Rgb(207, 211, 229)/Rgb(228, 231, 245)/0x3 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x3 Rgb(63, 66, 77)/Rgb(228, 231, 245)/0x4 Reset/Rgb(228, 231, 245)/0x42
 === Light prompt 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           run the test suite                                                                                                                             |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x18 Reset/Rgb(243, 245, 254)/0x125
@@ -2432,7 +2432,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x112
 === Light prompt_path 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           what does the dispatcher do on a deny-by-absence?                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x49 Reset/Rgb(243, 245, 254)/0x54
@@ -2469,7 +2469,7 @@
  35|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                        |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x72
 === Light prompt_path 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   you           what does the dispatcher do on a deny-by-absence?              |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x49 Reset/Rgb(243, 245, 254)/0x14
@@ -2515,7 +2515,7 @@
  19|▌  3  Allow for this project                        |Rgb(207, 211, 229)/Rgb(228, 231, 245)/0x3 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x3 Rgb(63, 66, 77)/Rgb(228, 231, 245)/0x22 Reset/Rgb(228, 231, 245)/0x24
 === Light prompt_path 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           what does the dispatcher do on a deny-by-absence?                                                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x49 Reset/Rgb(243, 245, 254)/0x94
@@ -2560,7 +2560,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x112
 === Light prompt_scoped 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|   you           what does the dispatcher do on a deny-by-absence?                                                      |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x49 Reset/Rgb(243, 245, 254)/0x54
@@ -2643,7 +2643,7 @@
  19|▌  3  Allow for this project                        |Rgb(207, 211, 229)/Rgb(228, 231, 245)/0x3 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x3 Rgb(63, 66, 77)/Rgb(228, 231, 245)/0x22 Reset/Rgb(228, 231, 245)/0x24
 === Light prompt_scoped 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|   you           what does the dispatcher do on a deny-by-absence?                                                                                              |Reset/Rgb(243, 245, 254)/0x3 Rgb(180, 193, 210)/Rgb(243, 245, 254)/0x3 Reset/Rgb(243, 245, 254)/0x11 Rgb(172, 174, 182)/Rgb(243, 245, 254)/0x49 Reset/Rgb(243, 245, 254)/0x94
@@ -2688,7 +2688,7 @@
  43|   ↑↓ to move      1-5 to pick      ⏎ to confirm                                                                                                                |Reset/Rgb(228, 231, 245)/0x3 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x2 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x3 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x14 Rgb(86, 126, 167)/Rgb(243, 245, 254)/0x1 Rgb(117, 121, 140)/Rgb(243, 245, 254)/0x11 Reset/Rgb(228, 231, 245)/0x112
 === Light long 120x36
   0|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                        claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x40 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x64 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x120
   4|                                                                                                                        |Reset/Rgb(243, 245, 254)/0x120
@@ -2725,7 +2725,7 @@
  35|                                                                                                                        |Reset/Rgb(228, 231, 245)/0x120
 === Light long 80x24
   0|                                                                                |Reset/Rgb(228, 231, 245)/0x80
-  1|   mjolnir      ~/Projects/mjolnir-harne             claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x24 Reset/Rgb(228, 231, 245)/0x13 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x24 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                |Reset/Rgb(228, 231, 245)/0x80
   3|────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x80
   4|   │   6    6 │   }                                                         │   |Reset/Rgb(228, 231, 245)/0x3 Rgb(207, 211, 229)/Rgb(228, 231, 245)/0x1 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x12 Rgb(228, 231, 245)/Rgb(228, 231, 245)/0x2 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x1 Reset/Rgb(228, 231, 245)/0x57 Rgb(207, 211, 229)/Rgb(228, 231, 245)/0x1 Reset/Rgb(228, 231, 245)/0x3
@@ -2750,7 +2750,7 @@
  23|                                                                                |Reset/Rgb(228, 231, 245)/0x80
 === Light long 52x20
   0|                                                    |Reset/Rgb(228, 231, 245)/0x52
-  1|   mjolnir      ~/Projectsclaude-sonnet-5 · v0.1.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateclaude-sonnet-5 · v0.0.   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x28 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x5 Reset/Rgb(228, 231, 245)/0x3
   2|                                                    |Reset/Rgb(228, 231, 245)/0x52
   3|────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x52
   4|                                                    |Reset/Rgb(228, 231, 245)/0x52
@@ -2771,7 +2771,7 @@
  19|                                                    |Reset/Rgb(228, 231, 245)/0x52
 === Light long 160x44
   0|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
-  1|   mjolnir      ~/Projects/mjolnir-harness/crates/tui                                                                                claude-sonnet-5 · v0.1.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x37 Reset/Rgb(228, 231, 245)/0x80 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
+  1|   mjolnir      ~/src/gateway                                                                                                        claude-sonnet-5 · v0.0.0   |Reset/Rgb(228, 231, 245)/0x3 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x7 Reset/Rgb(228, 231, 245)/0x6 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x13 Reset/Rgb(228, 231, 245)/0x104 Rgb(117, 121, 140)/Rgb(228, 231, 245)/0x18 Rgb(41, 43, 49)/Rgb(228, 231, 245)/0x6 Reset/Rgb(228, 231, 245)/0x3
   2|                                                                                                                                                                |Reset/Rgb(228, 231, 245)/0x160
   3|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────|Rgb(207, 211, 229)/Rgb(243, 245, 254)/0x160
   4|                                                                                                                                                                |Reset/Rgb(243, 245, 254)/0x160

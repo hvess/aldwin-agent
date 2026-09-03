@@ -10,6 +10,12 @@
 //! frame, colors included, which is what makes a layout refactor
 //! provably output-preserving rather than merely test-passing.
 //!
+//! Build identity — the release version, the commit, the working directory
+//! — is pinned per scene rather than inherited from the build (see
+//! [`fixed_identity`]). The first cut of this file did inherit it, which
+//! meant the snapshot encoded who generated it: it broke on the next
+//! commit, on a dirty tree, and on any checkout at a different path.
+//!
 //! Regenerate deliberately, after eyeballing the diff:
 //!
 //! ```text
@@ -54,7 +60,7 @@ fn every_scene_renders_exactly_as_recorded() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
             for (width, height) in SIZES {
-                let mut app = App::new("claude-sonnet-5".into(), engine()).with_theme(theme);
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
                 scene(scene_name, &mut app);
                 let buffer = render(&mut app, width, height);
                 let _ = writeln!(out, "=== {theme:?} {scene_name} {width}x{height}");
@@ -91,6 +97,19 @@ fn first_difference(expected: &str, actual: &str) -> String {
         }
     }
     format!("render changed in length: expected {} lines, got {}", expected.lines().count(), actual.lines().count())
+}
+
+/// Replaces the three facts that vary with the build and the machine — the
+/// release version, the commit, and the working directory — with fixed
+/// stand-ins, so the snapshot records layout and colour rather than the
+/// identity of whoever regenerated it. Chosen to be representative widths:
+/// a three-part version, an 8-character short hash, and the design
+/// system's own example path.
+fn fixed_identity(mut app: App) -> App {
+    app.status.version = "0.0.0".into();
+    app.status.commit = "0badc0de".into();
+    app.status.cwd = Some("~/src/gateway".into());
+    app
 }
 
 fn engine() -> Arc<Engine> {
@@ -280,7 +299,7 @@ fn no_frame_leaves_a_bordered_box_unclosed() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in PANEL_SCENES {
             for (width, height) in SIZES {
-                let mut app = App::new("claude-sonnet-5".into(), engine()).with_theme(theme);
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
                 scene(scene_name, &mut app);
                 let buffer = render(&mut app, width, height);
                 let (mut opened, mut closed) = (0, 0);

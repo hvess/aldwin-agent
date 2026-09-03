@@ -31,12 +31,14 @@ mod palette;
 mod run;
 mod scroll;
 mod ui;
+mod version;
 
 pub use app::App;
 pub use log::{LogEntry, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 pub use palette::Theme;
 pub use run::run;
 pub use scroll::ScrollState;
+pub use version::{GIT_HASH, VERSION, VERSION_FULL};
 
 /// Exposed only for `examples/preview.rs` — the design-iteration harness
 /// that seeds an `App` with representative `LogEntry`s and draws it once

@@ -1949,6 +1949,40 @@ the pre-fix code. 150 unit tests and clippy stay clean; the visible design is
 unchanged apart from the two fixes.
 
 
+**Progress (2026-09-03, version reporting + snapshot determinism):** the
+developer reported that the TUI's top bar showed `v0.1.0` on a v0.1.11
+build, and that `mjolnir --version` was wrong the same way. One root cause:
+releases were tag-only. `Cargo.toml`'s workspace version sat at `0.1.0`
+through eleven tagged releases, and both the top bar and clap's `version`
+read `CARGO_PKG_VERSION`, so every build in that stretch reported `0.1.0`
+truthfully — the manifest really did say that. Nothing could catch it,
+because the manifest and the tag never met anywhere.
+
+- `Cargo.toml` is now the source of truth and is bumped before tagging;
+  `release.yml` fails the build when a `v*` tag disagrees with it, which is
+  what stops the two drifting again.
+- `version.rs` holds `VERSION`, `GIT_HASH` and `VERSION_FULL`
+  (`0.1.12 (a1b2c3d4)`). `mjolnir --version` prints the full form: on this
+  harness most builds sit after the last tag, so the release number alone
+  cannot tell two of them apart.
+- `StatusInfo` gained `version`, `commit` and `cwd`, filled by `App::new`.
+  The render layer no longer reaches for `env!` or `std::env::current_dir`
+  mid-draw — `ui` is a pure function of `App` again, which is what lets a
+  render test pin build identity instead of inheriting it.
+
+That last point also fixes a defect in the snapshot harness added earlier
+the same day: it inherited the real version, commit and working directory,
+so `render.snap` encoded the identity of whoever generated it. It passed
+only because committing does not touch `.git/HEAD` and so did not rerun
+`build.rs`; `touch .git/HEAD` broke it immediately, and it would have broken
+for any other checkout path or a dirty tree. Scenes now pin `0.0.0` /
+`0badc0de` / `~/src/gateway`, and the file is stable across commits,
+machines and dirty trees. Confirmed by regenerating, then forcing a
+`build.rs` rerun and a dirty tree and re-running: no diff. The regenerated
+snapshot's only change was the 96 identity rows; every other row was
+untouched.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

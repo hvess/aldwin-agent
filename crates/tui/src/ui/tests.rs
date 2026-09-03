@@ -1329,6 +1329,9 @@ fn an_ordinary_turn_end_renders_no_log_row() {
 fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
     let status = StatusInfo {
         model_name:    "claude-sonnet-5".into(),
+        version:       "9.9.9".into(),
+        commit:        "abcd1234".into(),
+        cwd:           Some("~/src/gateway".into()),
         turn:          None,
         step:          None,
         running_tools: vec![],
@@ -1340,11 +1343,30 @@ fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
     // Tall enough that the whole banner fits without auto-follow scroll
     // pushing its top rows out of view — see the sizing comment on
     // user_and_assistant_messages_are_visually_distinct.
-    let out = rendered(&mut app(), 110, 40);
+    let mut banner_app = app();
+    let commit = banner_app.status.commit.clone();
+    let out = rendered(&mut banner_app, 110, 40);
     assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
     assert!(out.contains("every strike is yours to call."), "the tagline should appear in the welcome banner");
-    assert!(out.contains(env!("MJOLNIR_GIT_HASH")), "the build's git commit should appear in the welcome banner, distinct from the static crate version");
+    assert!(out.contains(&commit), "the build's git commit should appear in the welcome banner, distinct from the release version");
     assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "the banner should surface the current directory's permission model");
+}
+
+/// Regression guard for the reported defect: the top bar and the welcome
+/// banner printed `env!("CARGO_PKG_VERSION")` directly, and the workspace
+/// manifest was never bumped at release time, so every build claimed to be
+/// v0.1.0 no matter which release it was. Both now render whatever
+/// `StatusInfo` carries, which `App::new` fills from `version::VERSION` —
+/// so this asserts the wiring, and `version.rs`'s own tests assert that
+/// constant tracks the manifest.
+#[test]
+fn the_top_bar_and_banner_report_the_running_builds_version() {
+    let mut app = app();
+    app.status.version = "9.9.9".into();
+    app.status.commit = "feedface".into();
+    let out = rendered(&mut app, 110, 40);
+    assert!(out.contains("v9.9.9"), "the top bar must show the running build's version, not a hardcoded one: {out:?}");
+    assert!(out.contains("feedface"), "the welcome banner must show the running build's commit: {out:?}");
 }
 
 #[test]

@@ -300,7 +300,16 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     };
     next.version = mjolnir_config::PROVIDER_VERSION;
 
-    if next == current {
+    let now = qualified(&next, mjolnir_llm::identify(&next));
+
+    // "Already on" has to be true of the *session*, not only of the file.
+    // The two can disagree — a hand-edited `provider.yaml` picked up by
+    // `/reload-config` moves what is on disk without touching the client the
+    // session holds — and reporting no change while the session runs
+    // something else is exactly the "says the model is already selected when
+    // it isn't" this command was fixed for once already. When they disagree
+    // this falls through and swaps, which is what the developer asked for.
+    if next == current && now == session.model {
         // Never a dead end. Naming the provider you are already on is the
         // most likely way to reach this branch, and it is what a developer
         // types when they are reaching for a list of models — so the notice
@@ -316,7 +325,6 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
         mjolnir_config::Scope::Project => mjolnir_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next)),
         mjolnir_config::Scope::Global => mjolnir_llm::resolve(None, &next),
     };
-    let now = qualified(&next, mjolnir_llm::identify(&next));
 
     // Before the write, not after: a provider the session cannot actually
     // reach must not be left on disk for the next start to fail on.
@@ -847,11 +855,15 @@ mod tests {
     async fn naming_the_current_provider_keeps_the_current_model() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        // One session across both calls: the first moves it onto
+        // `claude-opus-5`, and "already on" is now a statement about the
+        // session as much as about the file.
+        let mut session = session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
         let _ = notice(&mut rx).await;
 
-        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session, &tx).await;
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-opus-5"), "{message}");
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
@@ -932,6 +944,29 @@ mod tests {
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-sonnet-5"), "{message}");
         assert!(!message.contains("Restart"), "nothing changed, so nothing needs restarting: {message}");
+    }
+
+    /// The file and the session can disagree — `/reload-config` picks up a
+    /// hand-edited `provider.yaml` without rebuilding the client the session
+    /// holds. Asking for what the file already says must then still move the
+    /// session, or the developer is told "already on" a model they are
+    /// demonstrably not running.
+    #[tokio::test]
+    async fn what_the_file_already_says_is_still_a_swap_when_the_session_is_elsewhere() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        // The session booted on a different model from the one on disk.
+        let (mut session, seen) = recording_session();
+        session.model = "anthropic/claude-opus-5".into();
+        let (tx, mut rx) = mpsc::channel(8);
+
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, &tx).await;
+
+        let message = notice(&mut rx).await;
+        assert!(!message.contains("already on"), "the session is not on it, whatever the file says: {message}");
+        assert!(message.contains("now on anthropic/claude-sonnet-5"), "{message}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "the client is rebuilt, which is the whole point of the command here");
+        assert_eq!(session.model, "anthropic/claude-sonnet-5");
     }
 
     /// Two `/model` calls in one session: the second moves off what the

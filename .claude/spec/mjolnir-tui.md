@@ -2706,6 +2706,54 @@ bar's model) and row 35 (the status line) to the new name in the same frame
 as the notice — the pty capture only rewrote the cells that changed, which
 is exactly the two places the old code could not reach.
 
+**Progress (2026-09-06, audit of the model-switch round):** an audit of the
+change above, asked for immediately after it. Four findings, all fixed here,
+and the first three were latent damage rather than cosmetics.
+
+*The stream was never proved.* Every turn reaches its client through
+`ClientHandle::stream`, and nothing exercised it — the end-to-end check had
+only ever run slash commands. The handle now holds `Arc<dyn LlmClient>`
+rather than the concrete `AnyLlmClient`, which is both what core sees
+through the trait and what lets a test put its own client in there. Three
+tests followed: events stream through whatever client is in the handle, the
+next request runs on the client that replaced it, and — the guarantee that
+makes a live swap safe at all — a stream built before a swap and drained
+after it still yields the *old* client's events, so a turn cannot change
+model half way through.
+
+*A chosen key variable was being overwritten.* First run rebuilt the whole
+`provider.yaml` from the catalogue row, so a developer who exports their key
+as `ANTHROPIC_KEY_WORK` and changed only the *model* would have had
+`api_key_env` reset to the catalogue's default and their next start broken.
+`first_run_provider_config` now carries `api_key_env` over when the answer
+names the provider already configured, and takes the catalogue's only when
+it names a different one — a different endpoint really does have a different
+key. That is also what makes an unchanged answer compare byte-equal, so
+confirming still writes nothing.
+
+*An endpoint with no row could be pressed past.* A `provider.yaml` aimed at
+a host the catalogue cannot name has no row on this screen: the lists would
+open at the top, on a provider the developer is not using, and `⏎⏎⏎` would
+move that project onto Anthropic — a decision by inertia, on the screen
+built to prevent them. `asks_for_a_provider` holds the two steps back in
+exactly that case (`access` alone, as before) and in no other. Confirmed
+against the binary: a global `provider.yaml` on `http://localhost:8000/…`
+drew `step 1/1` and left the project with `permissions.yaml` only.
+
+*"Already on" could still be false.* The guard compared the argument against
+the *file*, and file and session can disagree — `/reload-config` picks up a
+hand-edited `provider.yaml` without rebuilding the client. Asking for what
+the file already said would then report no change while the session ran
+something else, which is the same sentence the developer complained about
+in the round above. It now requires both the file and `slash::Session` to
+agree before it reports no change; when they disagree it falls through and
+swaps, which is what was asked for.
+
+Re-verified against the binary after all four: `/model` on the model the
+session is really running still says "already on"; the next `/model` swapped
+and repainted both bars; `/model google/…` with `GOOGLE_API_KEY` unset
+refused by name, kept the session, and wrote nothing.
+
 
 ## References
 

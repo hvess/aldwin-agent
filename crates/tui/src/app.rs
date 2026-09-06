@@ -2041,6 +2041,23 @@ mod tests {
         assert!(app.log.is_empty(), "and nothing is logged either");
     }
 
+    /// Reopening the picker after a swap opens on where the session is
+    /// *now*, not where it booted — `ModelChanged` carries both halves for
+    /// exactly this, and marking the wrong row `· current` would be the
+    /// same stale-name bug one screen over.
+    #[test]
+    fn the_picker_reopens_on_the_model_the_session_swapped_to() {
+        let mut app = app_with_catalogue();
+        app.apply_event(Event::ModelChanged { provider: Some("delta".into()), model: "delta-small".into() });
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+
+        let picker = app.picker.as_ref().expect("the picker is open");
+        let current = picker.rows().into_iter().find(|r| r.current).expect("a row is marked current");
+        assert_eq!(current.label, "delta", "the provider list opens marked on the row the session moved to");
+        assert_eq!(picker.model, 1, "and its model list on the model it moved to");
+    }
+
     /// A developer who names a model is not asking to be shown a list.
     #[test]
     fn model_with_an_argument_is_forwarded_untouched() {

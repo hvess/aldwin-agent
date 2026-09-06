@@ -189,16 +189,23 @@ pub struct Answers {
 
 /// The screen's whole state.
 ///
-/// `steps` is built from what is actually unanswered, which is why it is a
+/// `steps` is built from what the caller asks for, which is why it is a
 /// list rather than a fixed pair. Three cases reach this screen:
 ///
 /// * a true first run — no provider config anywhere, and a directory the
 ///   harness has never been pointed at — asks `provider`, `model`, then
 ///   `access`;
 /// * entering a fresh project while a provider is already configured asks
-///   `access` alone;
+///   all three too, with the first two opened on that provider
+///   ([`Configured`]) so confirming them changes nothing — deciding what
+///   *this* project runs on is the point of the screen, and a version of it
+///   that showed `access` alone made that undecidable there;
 /// * losing the provider config in a project that has already declared its
 ///   access posture asks `provider` and `model`.
+///
+/// The caller is what holds the first two back — mjolnir-cli does so for a
+/// `provider.yaml` aimed at an endpoint the catalogue cannot name, since
+/// every row here would then be somewhere the developer is not.
 ///
 /// `model` is never a step on its own: it is the provider question
 /// narrowed, and its list is the chosen provider's own.
@@ -255,13 +262,17 @@ impl FirstRun {
     /// first; `curated` is how many of them show before `more`.
     ///
     /// The two flags are independent, and only the questions they turn on
-    /// are shown. `ask_provider` is false when a provider is already
-    /// configured; `ask_access` is false when this directory already has a
-    /// `permissions.yaml`. Both directions matter: a screen that asks a
-    /// question already answered invites the developer to answer it
-    /// differently, and the access answer is written by *adding* grants, so
-    /// re-asking it could only ever widen an allow list the developer had
-    /// already settled.
+    /// are shown. `ask_access` is false when this directory already has a
+    /// `permissions.yaml`, and that direction matters on its own: the
+    /// access answer is written by *adding* grants, so re-asking it could
+    /// only ever widen an allow list the developer had already settled.
+    ///
+    /// `ask_provider` is not the same kind of flag, because the provider
+    /// answer is a *replacement* rather than an addition and the lists open
+    /// on where the developer already stands ([`FirstRun::preselect`]) —
+    /// asking again is offering a decision, not risking one. The caller
+    /// passes false only when this screen has no row for what is configured;
+    /// see the type's own doc comment.
     pub fn new(providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool, ask_access: bool) -> Self {
         // An empty catalogue cannot be asked about, whatever the caller
         // said — `commit` would have no id to return.

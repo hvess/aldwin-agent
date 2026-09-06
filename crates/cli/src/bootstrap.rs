@@ -19,7 +19,6 @@ use crate::slash;
 /// object), so this small enum exists to give `run()` a single concrete
 /// type to build an `Agent` with — the alternative would be duplicating the
 /// whole channel/task/TUI wiring below in two near-identical branches.
-#[derive(Debug)]
 enum AnyLlmClient {
     Anthropic(mjolnir_llm::AnthropicClient),
     OpenAi(mjolnir_llm::OpenAiCompatibleClient),
@@ -52,11 +51,15 @@ fn build_client(config: mjolnir_llm::ProviderConfig) -> Result<AnyLlmClient, mjo
 /// handle, `/model` rebuilds the client in it, and core stays generic over
 /// `C: LlmClient` without learning that providers exist (see
 /// `slash::ModelSwitch`).
+/// Held as a trait object rather than an `AnyLlmClient` so what is inside
+/// the handle is exactly what core sees through the trait — and so a test
+/// can put a client of its own in there and stream through it, which is the
+/// one thing about this indirection that has to be proved rather than read.
 #[derive(Clone)]
-struct ClientHandle(Arc<std::sync::RwLock<Arc<AnyLlmClient>>>);
+struct ClientHandle(Arc<std::sync::RwLock<Arc<dyn LlmClient>>>);
 
 impl ClientHandle {
-    fn new(client: AnyLlmClient) -> Self {
+    fn new(client: impl LlmClient + 'static) -> Self {
         Self(Arc::new(std::sync::RwLock::new(Arc::new(client))))
     }
 }
@@ -79,13 +82,19 @@ impl LlmClient for ClientHandle {
     }
 }
 
+impl ClientHandle {
+    fn store(&self, client: Arc<dyn LlmClient>) {
+        *self.0.write().expect("client lock poisoned") = client;
+    }
+}
+
 impl slash::ModelSwitch for ClientHandle {
     /// Builds first and stores second, so a client that cannot be
     /// constructed — the new provider's `api_key_env` is not exported —
     /// leaves the session on the one it has.
     fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String> {
         let client = build_client(config.clone()).map_err(|e| e.to_string())?;
-        *self.0.write().expect("client lock poisoned") = Arc::new(client);
+        self.store(Arc::new(client));
         Ok(())
     }
 }
@@ -119,11 +128,23 @@ fn catalogue_choices() -> Vec<mjolnir_tui::ProviderChoice> {
 /// developer exports the key themselves.
 ///
 /// `current` is whatever already supplies the setting, when anything does.
-/// Only the thinking budget is taken from it — a developer's preference,
-/// not the host's, so it survives a move between providers, the same rule
-/// `/model` applies. It is also what makes an unchanged answer compare
-/// equal to what is on disk, so confirming the lists writes nothing.
+/// Two fields come from it rather than from the catalogue row:
+///
+/// * the thinking budget, always — a developer's preference, not the
+///   host's, so it survives a move between providers, the same rule
+///   `/model` applies;
+/// * the key variable, but only when the answer names the provider that is
+///   already configured. A developer who exports their Anthropic key as
+///   `ANTHROPIC_KEY_WORK` has said so in `provider.yaml`, and changing the
+///   *model* on that provider is not a request to be moved back onto the
+///   catalogue's default variable name — which would break their next
+///   start. Naming a different provider is a different endpoint with a
+///   different key, so there the catalogue's variable is the right one.
+///
+/// Carrying both is also what makes an unchanged answer compare equal to
+/// what is on disk, so confirming the lists writes nothing at all.
 fn first_run_provider_config(provider: &mjolnir_llm::Provider, model: Option<&str>, current: Option<&ProviderConfig>) -> ProviderConfig {
+    let on_this_provider = current.filter(|c| mjolnir_llm::identify(c).map(|p| p.id) == Some(provider.id));
     ProviderConfig {
         version:                  PROVIDER_VERSION,
         provider:                 provider.kind,
@@ -132,9 +153,22 @@ fn first_run_provider_config(provider: &mjolnir_llm::Provider, model: Option<&st
         // — which the real catalogue never has).
         model:                    model.unwrap_or_else(|| provider.default_model()).to_string(),
         base_url:                 provider.base_url.map(String::from),
-        api_key_env:              provider.api_key_env.to_string(),
+        api_key_env:              on_this_provider.map_or_else(|| provider.api_key_env.to_string(), |c| c.api_key_env.clone()),
         extended_thinking_budget: current.and_then(|c| c.extended_thinking_budget),
     }
+}
+
+/// Whether the first-run screen carries the provider and model steps at
+/// all, given that it is opening for one reason or the other.
+///
+/// Yes when there is nothing configured — the question has to be answered
+/// before a client can be built — and yes when what is configured is a
+/// catalogue row the lists can open on. No in the one remaining case: a
+/// `provider.yaml` pointed at an endpoint the catalogue cannot name, where
+/// every row on the screen is somewhere the developer is not, and pressing
+/// through would move them off their own endpoint.
+fn asks_for_a_provider(needs_provider: bool, configured: &mjolnir_tui::Configured) -> bool {
+    needs_provider || configured.provider.is_some()
 }
 
 /// Where the first-run screen's provider and model lists open: whatever
@@ -206,6 +240,15 @@ pub async fn run() -> Result<(), StartupError> {
     // there: the lists were simply absent. They open on what is already
     // configured (`Configured`), so confirming costs three keystrokes and
     // changes nothing — the question is asked, not reopened.
+    //
+    // The exception is a `provider.yaml` pointed at an endpoint the
+    // catalogue has never seen, which no row on that screen represents. The
+    // lists would open at the top, on a provider the developer is not
+    // using, and pressing through them would move the project off their own
+    // endpoint — an answer given by inertia, which is the one thing this
+    // screen exists to prevent. So a configured provider the catalogue
+    // cannot name is left alone and only `access` is asked, exactly as
+    // before.
     let needs_provider = config.global_provider().is_err();
     let needs_access = !cwd.join(".mjolnir").join("permissions.yaml").exists();
     if needs_provider || needs_access {
@@ -215,10 +258,11 @@ pub async fn run() -> Result<(), StartupError> {
         // crate or on mjolnir-llm to find out.
         let choices = catalogue_choices();
         let configured = configured_for_first_run(&config);
+        let ask_provider = asks_for_a_provider(needs_provider, &configured);
         // `None` means the developer quit without answering. Nothing is
         // written and no session opens — a first run that was dismissed must
         // not fall back to defaults, least of all for the access question.
-        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, true, needs_access, configured)
+        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, ask_provider, needs_access, configured)
             .await
             .map_err(StartupError::FirstRun)?
         else {
@@ -389,6 +433,40 @@ mod tests {
         assert_eq!(moved.extended_thinking_budget, Some(4_000), "a preference of the developer's survives the move");
     }
 
+    /// A key variable the developer chose is part of how they reach their
+    /// provider, not part of which model they picked — changing the model
+    /// on that provider must not quietly restore the catalogue's default
+    /// variable name and break their next start.
+    #[test]
+    fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
+        let anthropic = mjolnir_llm::provider("anthropic").expect("a catalogue provider");
+        let current = ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..first_run_provider_config(anthropic, Some("claude-sonnet-5"), None) };
+
+        let same_provider = first_run_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
+        assert_eq!(same_provider.api_key_env, "ANTHROPIC_KEY_WORK", "the developer's own variable is how they reach this provider");
+        assert_eq!(same_provider.model, "claude-opus-5");
+
+        // A different provider is a different endpoint with a different
+        // key, so there the catalogue's variable is the right one.
+        let google = mjolnir_llm::provider("google").expect("a catalogue provider");
+        let moved = first_run_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
+        assert_eq!(moved.api_key_env, google.api_key_env);
+    }
+
+    /// The two steps are on every screen that opens — except when what is
+    /// configured is an endpoint the catalogue cannot name, where no row
+    /// represents where the developer already is.
+    #[test]
+    fn the_provider_steps_are_held_back_only_for_an_endpoint_with_no_row() {
+        let known = mjolnir_tui::Configured { provider: Some("anthropic".into()), model: Some("claude-opus-5".into()) };
+        let unknown = mjolnir_tui::Configured { provider: None, model: Some("qwen3-coder".into()) };
+
+        assert!(asks_for_a_provider(true, &mjolnir_tui::Configured::default()), "a true first run has to ask");
+        assert!(asks_for_a_provider(false, &known), "a catalogue row is a row the lists can open on");
+        assert!(!asks_for_a_provider(false, &unknown), "pressing through rows that are all somewhere else is not an answer");
+        assert!(asks_for_a_provider(true, &unknown), "nothing configured still has to be asked, whatever else is on disk");
+    }
+
     /// The lists open on whatever supplies the setting — project file over
     /// global, the same precedence the session itself runs on.
     #[test]
@@ -411,36 +489,87 @@ mod tests {
         assert_eq!(shadowed.model.as_deref(), Some("gemini-2.5-flash"));
     }
 
+    /// A client that answers with its own name, so a test can tell which
+    /// one a stream actually ran through — the whole point of the handle is
+    /// that the answer changes, and nothing else here can observe it.
+    struct NamedClient(&'static str);
+
+    impl LlmClient for NamedClient {
+        fn stream<'a>(&'a self, _: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            Box::pin(futures::stream::iter([Ok(LlmEvent::TextDelta { text: self.0.into() })]))
+        }
+    }
+
+    /// Drains one request through `handle`, returning the text it yielded.
+    async fn stream_text(handle: &ClientHandle) -> String {
+        let request = LlmRequest { model: "m", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let mut text = String::new();
+        let mut stream = handle.stream(request);
+        while let Some(Ok(LlmEvent::TextDelta { text: delta })) = stream.next().await {
+            text.push_str(&delta);
+        }
+        text
+    }
+
+    /// The indirection has to be transparent: what core streams through the
+    /// handle is whatever client is in it, events and all. Nothing else in
+    /// this crate proves that — the agent reaches its client through this
+    /// `stream` on every single turn.
+    #[tokio::test]
+    async fn the_handle_streams_through_the_client_currently_in_it() {
+        let handle = ClientHandle::new(NamedClient("first"));
+        assert_eq!(stream_text(&handle).await, "first");
+
+        handle.store(Arc::new(NamedClient("second")));
+        assert_eq!(stream_text(&handle).await, "second", "the next request runs on the client that replaced it");
+    }
+
+    /// The guarantee that makes a live swap safe: a request already in
+    /// flight finishes on the client it started on. The stream is built
+    /// before the swap and drained after it.
+    #[tokio::test]
+    async fn a_swap_does_not_reach_a_request_already_in_flight() {
+        let handle = ClientHandle::new(NamedClient("first"));
+        let request = LlmRequest { model: "m", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let mut in_flight = handle.stream(request);
+
+        handle.store(Arc::new(NamedClient("second")));
+
+        let mut text = String::new();
+        while let Some(Ok(LlmEvent::TextDelta { text: delta })) = in_flight.next().await {
+            text.push_str(&delta);
+        }
+        assert_eq!(text, "first", "a turn must not change model half way through");
+    }
+
     /// A swap is the whole of `/model`'s live half, and its failure mode is
     /// the one startup has: a key variable that is not exported. The
     /// session has to be left on the client it already had when that
     /// happens, not on nothing.
-    #[test]
-    fn a_swap_that_cannot_build_a_client_leaves_the_running_one_in_place() {
+    #[tokio::test]
+    async fn a_swap_that_cannot_build_a_client_leaves_the_running_one_in_place() {
         // A name of this test's own, so a parallel test's environment can
         // neither satisfy nor break it.
         const KEY: &str = "MJOLNIR_SWAP_TEST_KEY";
         const ABSENT: &str = "MJOLNIR_SWAP_TEST_KEY_NEVER_SET";
         std::env::set_var(KEY, "not-a-real-key");
 
-        let config = |key: &str, model: &str| mjolnir_llm::ProviderConfig {
+        let config = |key: &str| mjolnir_llm::ProviderConfig {
             kind:                     ProviderKind::Anthropic,
-            model:                    model.to_string(),
+            model:                    "a-model".into(),
             api_key_env:              key.to_string(),
             base_url:                 None,
             extended_thinking_budget: 1_000,
         };
-        let running = |handle: &ClientHandle| format!("{:?}", handle.0.read().unwrap());
 
-        let handle = ClientHandle::new(build_client(config(KEY, "first-model")).expect("the key is exported"));
-        assert!(running(&handle).contains("first-model"));
-
-        let error = slash::ModelSwitch::switch(&handle, &config(ABSENT, "second-model")).expect_err("no key is exported for this one");
+        let handle = ClientHandle::new(NamedClient("the session's own"));
+        let error = slash::ModelSwitch::switch(&handle, &config(ABSENT)).expect_err("no key is exported for this one");
         assert!(error.contains(ABSENT), "the missing variable's name has to reach the developer: {error}");
-        assert!(running(&handle).contains("first-model"), "a failed build must not disturb the session's client");
+        assert_eq!(stream_text(&handle).await, "the session's own", "a failed build must not disturb the session's client");
 
-        slash::ModelSwitch::switch(&handle, &config(KEY, "second-model")).expect("a client that builds replaces the one in place");
-        assert!(running(&handle).contains("second-model"));
+        // Not streamed through: the client this one builds is the real
+        // Anthropic client, and polling it would put a request on the wire.
+        slash::ModelSwitch::switch(&handle, &config(KEY)).expect("a client that builds replaces the one in place");
     }
 
     /// Every catalogue row reaches the TUI with its models on it — a row

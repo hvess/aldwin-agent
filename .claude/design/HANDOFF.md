@@ -118,6 +118,18 @@ The chroma curve runs the other way in this theme — the accent needs *more* ch
 
 0. Top bar (`4a`, `5a`, `5c`, `5d`) — the identity slot held the project name (`gateway`, and `harness` in first run) behind an accent `▌`. It now holds the harness name `mjolnir` with no glyph, sitting on the 3-cell content margin. Nothing is lost, since `~/src/gateway` sits immediately to its right, and the pip was marking nothing — `▌` now appears only where it means selection or a caret. Title rows lost their pips for the same reason: `review changes` in `5b` and `permission` in `5a` now start on the 3-cell margin like `commands` in `5c`, which never had one.
 
+> **Measured 2026-09-06 — the gap here is not `--group-gap`.** This section,
+> and the summary line elsewhere that says "the 6-cell gap survives only
+> between the brand and everything else", both leave the impression that the
+> directory sits six cells after the name. It does not. `4a`, `5a`, `5c` and
+> `5d` all carry exactly **three** spaces there, which after the 3-cell
+> margin and the seven letters of `mjolnir` puts the directory on **cell 13**
+> — the body column. `--group-gap`'s six cells are real, but they part two
+> unrelated groups: `review changes` / `3 files` in `5b`'s title bar, and the
+> key hints in every footer. Mjolnir shipped six cells here for three weeks
+> on the strength of the prose above; see `.claude/spec/mjolnir-tui.md`'s
+> audit entry of the same date.
+
 0. Permission (`5a`) — options are numbered `1`–`4` and the trailing shortcut-key column is gone. The number is a direct-pick accelerator, and the keys that were on the rows moved into the footer: `↑↓ to move`, `1-4 to pick`, `⏎ to confirm`. Before that, the screen was a centred 80-cell modal over a dimmed-and-scrimmed session. It is now a bottom-anchored full-width panel on `5c`'s structure, covering the composer rows, since input is disabled while a permission is open. The modal geometry tokens (`--modal-w`, `--modal-x`, `--modal-y`) are consequently unused by these screens.
 
 After the first handoff, six grid/content inconsistencies were corrected in both theme files. They are reflected in the tables below; the older copies of these files are superseded.

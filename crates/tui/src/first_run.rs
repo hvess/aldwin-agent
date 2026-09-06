@@ -122,27 +122,35 @@ pub enum Step {
     Access,
 }
 
-/// What first run answered. Returned to the bootstrap, which writes both.
+/// What first run answered. Returned to the bootstrap, which writes it.
+///
+/// Both fields are optional, and both mean the same thing when absent: the
+/// question was not asked, so the caller must leave what is already on disk
+/// alone. An `AccessTier` here that the developer never chose would be a
+/// permission answered by inertia, which is the one thing this screen exists
+/// to prevent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answers {
     /// The chosen provider's id — the caller looks the rest up in the
     /// catalogue it built the [`ProviderChoice`] list from.
     pub provider: Option<String>,
-    pub access:   AccessTier,
+    pub access:   Option<AccessTier>,
 }
 
 /// The screen's whole state.
 ///
 /// `steps` is built from what is actually unanswered, which is why it is a
-/// list rather than a fixed pair. Two cases reach this screen:
+/// list rather than a fixed pair. Three cases reach this screen:
 ///
-/// * a true first run — no provider config anywhere — asks `provider` then
-///   `access`;
-/// * entering a project that has no `.mjolnir/permissions.yaml` while a
-///   provider is already configured asks `access` alone.
+/// * a true first run — no provider config anywhere, and a directory the
+///   harness has never been pointed at — asks `provider` then `access`;
+/// * entering a fresh project while a provider is already configured asks
+///   `access` alone;
+/// * losing the provider config in a project that has already declared its
+///   access posture asks `provider` alone.
 ///
-/// The `step n/m` counter reads off this list, so the one-question case
-/// says "step 1/1" rather than claiming a step that will never come.
+/// The `step n/m` counter reads off this list, so a one-question case says
+/// "step 1/1" rather than claiming a step that will never come.
 ///
 /// `access` starts on `ask`, the most restrictive tier.
 ///
@@ -186,13 +194,29 @@ pub struct FirstRun {
 impl FirstRun {
     /// `providers` is the whole catalogue in display order, curated rows
     /// first; `curated` is how many of them show before `more`.
-    /// `ask_provider` is false when a provider is already configured and
-    /// only the directory's access posture is unanswered.
-    pub fn new(providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool) -> Self {
+    ///
+    /// The two flags are independent, and only the questions they turn on
+    /// are shown. `ask_provider` is false when a provider is already
+    /// configured; `ask_access` is false when this directory already has a
+    /// `permissions.yaml`. Both directions matter: a screen that asks a
+    /// question already answered invites the developer to answer it
+    /// differently, and the access answer is written by *adding* grants, so
+    /// re-asking it could only ever widen an allow list the developer had
+    /// already settled.
+    pub fn new(providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool, ask_access: bool) -> Self {
         // An empty catalogue cannot be asked about, whatever the caller
         // said — `commit` would have no id to return.
         let ask_provider = ask_provider && !providers.is_empty();
-        let steps = if ask_provider { vec![Step::Provider, Step::Access] } else { vec![Step::Access] };
+        let mut steps = Vec::new();
+        if ask_provider {
+            steps.push(Step::Provider);
+        }
+        // A screen with no question on it is not a screen, and `step()`
+        // indexes this list. The caller does not open one; if it did, the
+        // question to fall back on is the default-deny one.
+        if ask_access || steps.is_empty() {
+            steps.push(Step::Access);
+        }
         let curated = curated.min(providers.len());
         Self { providers, curated, expanded: false, steps, index: 0, provider: 0, access: 0, finished: None }
     }
@@ -284,7 +308,8 @@ impl FirstRun {
             .contains(&Step::Provider)
             .then(|| self.providers.get(self.provider).map(|p| p.id.clone()))
             .flatten();
-        self.finished = Some(Some(Answers { provider, access: AccessTier::ORDER[self.access] }));
+        let access = self.steps.contains(&Step::Access).then(|| AccessTier::ORDER[self.access]);
+        self.finished = Some(Some(Answers { provider, access }));
     }
 
     /// One key. Returns `true` if the screen is done (see `finished`).
@@ -339,7 +364,13 @@ impl FirstRun {
 ///
 /// Mirrors [`crate::run::run`]'s terminal handling, including restoring the
 /// terminal on an error or a panic unwinding out of the loop.
-pub async fn run(theme: Theme, providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool) -> io::Result<Option<Answers>> {
+pub async fn run(
+    theme: Theme,
+    providers: Vec<ProviderChoice>,
+    curated: usize,
+    ask_provider: bool,
+    ask_access: bool,
+) -> io::Result<Option<Answers>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
@@ -347,7 +378,7 @@ pub async fn run(theme: Theme, providers: Vec<ProviderChoice>, curated: usize, a
     let mut terminal = Terminal::new(backend)?;
     let guard = Guard;
 
-    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider).await;
+    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider, ask_access).await;
     drop(guard);
     restore()?;
     result
@@ -359,8 +390,9 @@ async fn run_loop(
     providers: Vec<ProviderChoice>,
     curated: usize,
     ask_provider: bool,
+    ask_access: bool,
 ) -> io::Result<Option<Answers>> {
-    let mut state = FirstRun::new(providers, curated, ask_provider);
+    let mut state = FirstRun::new(providers, curated, ask_provider, ask_access);
     let mut events = EventStream::new();
     let pal = theme.palette();
 
@@ -418,7 +450,7 @@ pub(crate) const SAMPLE_CURATED: usize = 3;
 #[cfg(test)]
 impl Default for FirstRun {
     fn default() -> Self {
-        Self::new(sample_providers(), SAMPLE_CURATED, true)
+        Self::new(sample_providers(), SAMPLE_CURATED, true, true)
     }
 }
 
@@ -452,7 +484,7 @@ mod tests {
         assert!(key(&mut state, KeyCode::Enter), "enter on the last step commits");
         assert_eq!(
             state.finished,
-            Some(Some(Answers { provider: Some("alpha".into()), access: AccessTier::Ask }))
+            Some(Some(Answers { provider: Some("alpha".into()), access: Some(AccessTier::Ask) }))
         );
     }
 
@@ -462,17 +494,17 @@ mod tests {
     /// already configured.
     #[test]
     fn the_access_only_run_commits_on_the_first_enter_and_names_no_provider() {
-        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false);
+        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false, true);
         assert_eq!(state.step(), Step::Access);
         assert!(key(&mut state, KeyCode::Enter));
-        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: AccessTier::Ask })));
+        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: Some(AccessTier::Ask) })));
     }
 
     /// Clamped, not wrapping — a wrapping list makes it possible to land on
     /// the widest tier by holding a key down.
     #[test]
     fn access_selection_clamps_at_both_ends() {
-        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false);
+        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false, true);
         for _ in 0..10 {
             key(&mut state, KeyCode::Up);
         }
@@ -518,7 +550,7 @@ mod tests {
     #[test]
     fn a_fully_curated_catalogue_shows_no_more_row() {
         let providers = sample_providers();
-        let state = FirstRun::new(providers.clone(), providers.len(), true);
+        let state = FirstRun::new(providers.clone(), providers.len(), true, true);
         assert!(!state.shows_more());
         assert_eq!(state.visible_providers().len(), providers.len());
     }
@@ -527,19 +559,44 @@ mod tests {
     /// `visible_providers` slices on `curated`.
     #[test]
     fn curated_is_clamped_to_the_catalogue_it_was_given() {
-        let state = FirstRun::new(sample_providers(), 99, true);
+        let state = FirstRun::new(sample_providers(), 99, true, true);
         assert_eq!(state.curated, sample_providers().len());
         assert!(!state.shows_more());
+    }
+
+    /// The mirror of the access-only run: a directory that has already
+    /// answered its access question is not asked it again, and the commit
+    /// says so by returning no tier. `add_grant` only ever adds, so an
+    /// unasked answer written into an existing `permissions.yaml` could only
+    /// widen a list the developer had already settled.
+    #[test]
+    fn the_provider_only_run_asks_one_question_and_names_no_access_tier() {
+        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, true, false);
+        assert_eq!(state.steps, vec![Step::Provider]);
+        assert_eq!(state.position(Step::Provider), Some((1, 1)), "the counter must not claim a step that will never come");
+        assert_eq!(state.position(Step::Access), None);
+        assert!(key(&mut state, KeyCode::Enter), "the only step commits on the first enter");
+        assert_eq!(state.finished, Some(Some(Answers { provider: Some("alpha".into()), access: None })));
+    }
+
+    /// `step()` indexes `steps`, so a screen with no question on it would
+    /// panic. The caller never opens one; if it did, the question to fall
+    /// back on is the default-deny one.
+    #[test]
+    fn a_screen_with_nothing_to_ask_falls_back_to_the_default_deny_question() {
+        let state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false, false);
+        assert_eq!(state.steps, vec![Step::Access]);
+        assert_eq!(state.step(), Step::Access);
     }
 
     /// An empty catalogue cannot be asked about, whatever the caller said,
     /// or the commit would have no id to return.
     #[test]
     fn an_empty_catalogue_skips_the_provider_step_entirely() {
-        let mut state = FirstRun::new(Vec::new(), 3, true);
+        let mut state = FirstRun::new(Vec::new(), 3, true, true);
         assert_eq!(state.steps, vec![Step::Access]);
         assert!(key(&mut state, KeyCode::Enter));
-        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: AccessTier::Ask })));
+        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: Some(AccessTier::Ask) })));
     }
 
     #[test]
@@ -569,7 +626,7 @@ mod tests {
         assert!(key(&mut state, KeyCode::Enter));
         assert_eq!(
             state.finished,
-            Some(Some(Answers { provider: Some("bravo".into()), access: AccessTier::All }))
+            Some(Some(Answers { provider: Some("bravo".into()), access: Some(AccessTier::All) }))
         );
     }
 
@@ -587,7 +644,7 @@ mod tests {
         assert!(key(&mut state, KeyCode::Enter));
         assert_eq!(
             state.finished,
-            Some(Some(Answers { provider: Some("foxtrot".into()), access: AccessTier::Ask }))
+            Some(Some(Answers { provider: Some("foxtrot".into()), access: Some(AccessTier::Ask) }))
         );
     }
 

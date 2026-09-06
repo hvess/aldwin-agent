@@ -79,11 +79,11 @@ naming a command that did not exist; this is the command.
 One command, not two, because the two halves are not separable: a model id
 means nothing without the provider whose catalogue it comes from, and
 picking a provider with no model would leave `provider.yaml` incomplete.
-`/model [provider/]model` splits its argument on the *first* `/` only. No
-slash means a model id on the provider already configured. A slash means
-the half before it must name a catalogue provider
-(`mjolnir_llm::PROVIDERS`), and everything after it is the model — so
-`openrouter/qwen/qwen3-coder` reaches the right place. A slashed argument
+`/model [provider/]model` splits its argument on the *first* `/` only. A
+name the catalogue knows (`mjolnir_llm::PROVIDERS`) is a provider whether or
+not a slash follows it; anything else with no slash is a model id on the
+provider already configured. Everything after that first slash is the model
+— so `openrouter/qwen/qwen3-coder` reaches the right place. A slashed argument
 whose first segment is *not* a provider is rejected rather than read as a
 slashed model id: both readings are available, and the rejected one is what
 a mistyped provider looks like (`gogle/gemini-2.5-pro` would otherwise be
@@ -134,6 +134,31 @@ the display list to `run_first_run`, then maps the returned id back to the
 catalogue row to build the `ProviderConfig`. `Answers::provider` is an
 `Option`, so the access-only run — a new directory under an already
 configured provider — cannot overwrite a provider it never asked about.
+
+
+**Post-archive addition (2026-09-06, `/model` audit):** An audit of the
+command as first written found two ways it wrote something the developer
+did not ask for. Both are fixed and pinned.
+
+1. **A bare provider name was written as a model id.** The slashed form was
+   validated against the catalogue and the bare form was not, so `/model
+   openai` wrote `model: openai` onto whatever provider was already
+   configured and reported success — the failure only surfacing at the next
+   start, as the host rejecting a model it had never heard of. A name the
+   catalogue knows is now a provider in *either* form, `/model openai` and
+   `/model openai/` being the same instruction. The provider half also folds
+   case now, since `/theme` already accepts `LIGHT`; the model half is left
+   exactly as typed, because a host compares it byte for byte.
+2. **Naming the provider you were already on reset your model.** `/model
+   anthropic` on `anthropic/claude-opus-5` took the catalogue default and
+   dropped you to `claude-sonnet-5`. Naming where you already are is not a
+   request to be moved, so the current model is kept and the command reports
+   "already on …".
+
+Also from the same pass: `bootstrap` writes first run's access answer only
+when the access question was actually asked. See `.claude/spec/mjolnir-tui.
+md`'s entry of the same date — `add_grant` only ever adds, so an unasked
+answer could only widen an allow list the developer had already settled.
 
 
 ## Design

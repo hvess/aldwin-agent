@@ -132,18 +132,27 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// without the provider whose catalogue it comes from, and picking a provider
 /// with no model would leave `provider.yaml` incomplete.
 ///
-/// **Argument grammar.** The argument is split on its *first* `/` only. An
-/// argument with no slash is a model id on the provider already configured.
-/// One with a slash must name a provider before it — `google/gemini-2.5-pro`
-/// — and everything after that first slash is the model, so a model id that
-/// itself contains slashes is reachable as `openrouter/qwen/qwen3-coder`.
+/// **Argument grammar.** The argument is split on its *first* `/` only.
+///
+/// * A provider's name, alone or with a trailing `/` — that provider. On its
+///   default model, unless it is already the configured provider, in which
+///   case the model you are on is kept: naming where you already are is not
+///   a request to be moved.
+/// * `provider/model` — both halves at once. Everything after the first
+///   slash is the model, so a model id that itself contains slashes is
+///   reachable as `openrouter/qwen/qwen3-coder`.
+/// * Anything else — a model id on the provider already configured.
+///
+/// A name the catalogue knows is a provider in *either* form, which is the
+/// rule the first cut got wrong: it validated the slashed form and read the
+/// bare form as a model id, so `/model openai` wrote `model: openai` onto
+/// whatever provider was set and reported success.
 ///
 /// A slashed argument whose first segment is *not* a provider is rejected
 /// rather than read as a model id containing a slash. Both readings are
 /// available, and the rejected one is what a mistyped provider name looks
 /// like: `/model gogle/gemini-2.5-pro` would otherwise quietly write
-/// `gogle/gemini-2.5-pro` as a model on whatever provider was already set,
-/// and report success.
+/// `gogle/gemini-2.5-pro` as a model on whatever provider was already set.
 ///
 /// The provider half is validated against the catalogue — it decides an
 /// endpoint, a wire dialect and a key variable, none of which can be guessed
@@ -181,9 +190,23 @@ async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, e
 
     // Split on the first `/` only — see this function's own doc comment for
     // why the left half is a provider only when it names one.
+    //
+    // A *bare* provider name means the same as `provider/`: that provider, on
+    // its default model. Reading it as a model id was the first cut and was
+    // silently destructive — `/model openai` wrote `model: openai` onto
+    // whatever provider was already configured and reported success, and the
+    // next start failed at the host with a model it had never heard of. The
+    // slashed form was validated against the catalogue and the bare form was
+    // not, which is the same name treated two different ways.
     let (provider, model) = match arg.split_once('/') {
-        Some((head, tail)) if mjolnir_llm::provider(head).is_some() => (mjolnir_llm::provider(head), tail.trim()),
-        _ => (None, arg),
+        Some((head, tail)) => match named_provider(head) {
+            Some(p) => (Some(p), tail.trim()),
+            None => (None, arg),
+        },
+        None => match named_provider(arg) {
+            Some(p) => (Some(p), ""),
+            None => (None, arg),
+        },
     };
 
     // A leading `/` from `/model /foo`, or a trailing one from
@@ -202,6 +225,12 @@ async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, e
             };
             if !model.is_empty() {
                 next.model = model.to_string();
+            } else if known.map(|c| c.id) == Some(p.id) {
+                // Naming the provider you are already on is not a request to
+                // be moved off the model you are already using. Without this,
+                // `/model anthropic` on `anthropic/claude-opus-5` would
+                // quietly drop you back to the catalogue's default.
+                next.model = current.model.clone();
             }
             next
         }
@@ -241,10 +270,21 @@ async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, e
     }
 }
 
+/// The catalogue row `name` names, case-insensitively.
+///
+/// Only the *provider* half is folded: catalogue ids are lowercase by
+/// construction (a test pins it) and `/theme` already accepts `LIGHT`, so
+/// rejecting `/model Anthropic` would be the odd one out. Model ids are left
+/// exactly as typed — they are opaque strings a host compares byte for byte,
+/// and some really are mixed-case.
+fn named_provider(name: &str) -> Option<&'static mjolnir_llm::Provider> {
+    mjolnir_llm::provider(&name.trim().to_ascii_lowercase())
+}
+
 /// `provider/model` when the endpoint is one the catalogue knows, and the
 /// bare model id when the developer has pointed `provider.yaml` at an
 /// endpoint of their own — naming a provider there would be a guess.
-pub fn qualified(config: &mjolnir_config::ProviderConfig, known: Option<&mjolnir_llm::Provider>) -> String {
+pub(crate) fn qualified(config: &mjolnir_config::ProviderConfig, known: Option<&mjolnir_llm::Provider>) -> String {
     match known {
         Some(p) => format!("{}/{}", p.id, config.model),
         None => config.model.clone(),
@@ -631,6 +671,74 @@ mod tests {
         let saved = cfg.global_provider().unwrap();
         assert_eq!(saved.model, "vendor/some-model");
         assert_eq!(saved.api_key_env, "DEEPSEEK_API_KEY");
+    }
+
+    /// A bare provider name means that provider on its default model —
+    /// the same as `provider/`. The first cut read it as a *model* id and
+    /// wrote `model: openai` onto whatever provider was already set,
+    /// reporting success; the next start then failed at the host with a
+    /// model it had never heard of.
+    #[tokio::test]
+    async fn a_bare_provider_name_switches_provider_rather_than_becoming_a_model_id() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (tx, mut rx) = mpsc::channel(8);
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, SESSION_MODEL, &tx).await;
+
+        let message = notice(&mut rx).await;
+        assert!(message.contains("openai/gpt-5"), "{message}");
+        let saved = cfg.global_provider().unwrap();
+        assert_eq!(saved.model, mjolnir_llm::provider("openai").unwrap().default_model());
+        assert_eq!(saved.api_key_env, "OPENAI_API_KEY", "the endpoint and key must move with the name");
+    }
+
+    /// Naming the provider you are already on keeps the model you are on.
+    /// Taking the catalogue default instead would make `/model anthropic`
+    /// a silent downgrade from `claude-opus-5`.
+    #[tokio::test]
+    async fn naming_the_current_provider_keeps_the_current_model() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (tx, mut rx) = mpsc::channel(8);
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let _ = notice(&mut rx).await;
+
+        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let message = notice(&mut rx).await;
+        assert!(message.contains("already on anthropic/claude-opus-5"), "{message}");
+        assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
+    }
+
+    /// `/model openai` and `/model openai/` are the same instruction.
+    #[tokio::test]
+    async fn a_bare_provider_and_a_trailing_slash_mean_the_same_thing() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (tx, mut rx) = mpsc::channel(8);
+
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let _ = notice(&mut rx).await;
+        let bare = cfg.global_provider().unwrap();
+
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let _ = notice(&mut rx).await;
+        assert_eq!(cfg.global_provider().unwrap(), bare);
+    }
+
+    /// The provider half folds case, like `/theme` does; the model half is
+    /// left exactly as typed, because a host compares it byte for byte.
+    #[tokio::test]
+    async fn the_provider_half_is_case_insensitive_and_the_model_half_is_not() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (tx, mut rx) = mpsc::channel(8);
+        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, SESSION_MODEL, &tx).await;
+
+        let _ = notice(&mut rx).await;
+        let saved = cfg.global_provider().unwrap();
+        assert_eq!(saved.api_key_env, "GOOGLE_API_KEY", "GOOGLE must resolve to the google row");
+        assert_eq!(saved.model, "Gemini-2.5-Flash", "the model id must survive verbatim");
     }
 
     /// A mistyped provider is rejected rather than written as part of a

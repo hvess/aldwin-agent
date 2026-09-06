@@ -2519,6 +2519,61 @@ expanded screen against the 36-row frame, which is the tallest it ever
 gets. 444 workspace tests pass; clippy clean.
 
 
+**Progress (2026-09-06, audit of the provider round — the identity bar was
+never on the grid):** An audit pass over `4388605` in the shape of the
+2026-09-06 `5d` audit: measure the render against the re-fetched frame
+rather than re-reading the code. It found one grid defect that had been in
+*every* scene since the bar was written, and two logic defects in the
+round's own new code.
+
+**The identity bar's working directory sat on cell 16.** Both top bars —
+`chrome::draw_top_bar` and first run's — put `--group-gap`'s six cells
+between `mjolnir` and the cwd. Cell 16 is a position no token in
+`cells.css` names. The reference's own `4a`, `5a`, `5c` and `5d` bars all
+put the directory *three* cells after the seven-letter name, which is cell
+13 — the body column, the same cell a transcript turn's content starts on.
+Six cells part two genuinely unrelated groups (`5b`'s `review changes` /
+`3 files`, and the footer's key hints), and the identity bar is not that.
+
+`HANDOFF.md`'s prose says the six-cell gap "survives only between the brand
+and everything else", which is exactly the trap CLAUDE.md's design notes
+warn about: the prose does not state positions, the frame does. The gap is
+now `chrome::brand_pad()` — derived from `BRAND`'s own width against
+`CONTENT_INDENT`, so cell 13 is never restated — and `BRAND` itself is
+written once rather than as a literal in two files.
+
+Pinned by `the_identity_bar_puts_the_working_directory_on_the_body_column`
+in `tests/render_snapshot.rs`, over all 11 scenes in both themes, measuring
+the rendered buffer. Verified load-bearing by mutation: hard-coding the pad
+back to 6 fails it with "the cwd starts on cell 16, not the body column".
+`render.snap` regenerated; the diff is row 1 of every scene and nothing
+else.
+
+**First run re-asked a question the directory had already answered.**
+`FirstRun::new` took only `ask_provider`, and put `Step::Access` in the
+list unconditionally — so losing `~/.mjolnir/provider.yaml` in a project
+that already had a `permissions.yaml` re-asked the access question. That is
+worse than noise: `bootstrap` writes the answer with `Config::add_grant`,
+which only ever *adds*, so an answer of `all` in that state would silently
+widen an allow list the developer had already curated. The one direction a
+default-deny harness must never move on its own.
+
+`new` now takes `ask_access` too, and `Answers::access` is an
+`Option<AccessTier>` — absent meaning "not asked, leave what is on disk
+alone", the same contract `provider` already had. `bootstrap` writes grants
+only when it is `Some`. Covered by
+`the_provider_only_run_asks_one_question_and_names_no_access_tier`, and by
+a test that a screen with nothing to ask still has a step rather than
+panicking in `step()`.
+
+Recorded, not fixed: at 52 cells the identity group and the status group
+touch with no separating space (`~/src/gatewayclaude-sonnet-5`). Pre-
+existing — they touched before this change too, three characters earlier —
+and outside the design's own 120×36 frame, which is the only size the
+reference specifies. 454 workspace tests pass; clippy clean over the
+changed crates.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

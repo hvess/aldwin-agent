@@ -112,7 +112,7 @@ pub async fn run() -> Result<(), StartupError> {
         // `None` means the developer quit without answering. Nothing is
         // written and no session opens — a first run that was dismissed must
         // not fall back to defaults, least of all for the access question.
-        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, needs_provider)
+        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, needs_provider, needs_access)
             .await
             .map_err(StartupError::FirstRun)?
         else {
@@ -124,13 +124,21 @@ pub async fn run() -> Result<(), StartupError> {
             let picked = mjolnir_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
             config.set_provider(Scope::Global, first_run_provider_config(picked)).map_err(StartupError::FirstRunWrite)?;
         }
+        // Again, answered only when it was asked. `add_grant` only ever adds,
+        // so writing an unasked answer into a directory that already has a
+        // `permissions.yaml` could only widen an allow list the developer had
+        // already settled — the one direction a default-deny harness must
+        // never move on its own.
+        //
         // Written even when the tier grants nothing: the file's existence is
         // what records that this directory's question has been answered, so
         // an `ask` answer has to leave one behind or it would be asked again
         // on the next start.
-        config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
-        for entry in answers.access.grants() {
-            config.add_grant(Scope::Project, GrantList::Allow, entry).map_err(StartupError::FirstRunWrite)?;
+        if let Some(tier) = answers.access {
+            config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
+            for entry in tier.grants() {
+                config.add_grant(Scope::Project, GrantList::Allow, entry).map_err(StartupError::FirstRunWrite)?;
+            }
         }
     }
 

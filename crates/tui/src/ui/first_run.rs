@@ -18,6 +18,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
+use super::chrome::{brand_pad, BRAND};
 use super::grid::{with_label_column, Ctx, CONTENT_INDENT, MARGIN_X};
 use super::row::band_row;
 use crate::first_run::{AccessTier, FirstRun, Step};
@@ -32,7 +33,10 @@ const FOOTER_ROWS: u16 = 3;
 /// share it (`--option-label-col`).
 const OPTION_LABEL_COL: usize = 16;
 
-/// `--group-gap`: 6 cells part two unrelated groups inside a bar.
+/// `--group-gap`: 6 cells part two unrelated groups inside a bar — here,
+/// the footer's two key hints. Deliberately *not* what sits between the
+/// brand and the working directory; that is a pad to the body column (see
+/// `chrome::brand_pad`).
 const GROUP_GAP: usize = 6;
 
 /// Where the harness's answers land. Stated plainly rather than implied,
@@ -69,9 +73,9 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
 }
 
 /// The same 3-row identity band every screen opens with, on `bar`: the
-/// plain word `mjolnir`, a 6-cell group gap, the working directory, and the
-/// version flush to the right margin — what the reference's own `5d` top bar
-/// carries.
+/// plain word `mjolnir`, the working directory starting on the body column,
+/// and the version flush to the right margin — what the reference's own `5d`
+/// top bar carries.
 ///
 /// The wordmark below is a different thing and deliberately not repeated
 /// here ("It is not in the top bar"), and the bar carries no `▌` either —
@@ -85,12 +89,14 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     let version = format!("v{}", crate::version::VERSION);
     let mut spans = vec![
         Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar)),
-        Span::styled("mjolnir", on_bar(pal.text)),
-        // `--group-gap`: 6 cells between two unrelated groups.
-        Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar)),
+        Span::styled(BRAND, on_bar(pal.text)),
+        // The cwd lands on the body column, cell 13 — not `--group-gap`
+        // away. See `chrome::brand_pad`; the session bar draws the same
+        // thing, and the two must not disagree.
+        Span::styled(" ".repeat(brand_pad()), Style::default().bg(pal.bar)),
         Span::styled(cwd.clone(), on_bar(pal.dim)),
     ];
-    let used = MARGIN_X + "mjolnir".chars().count() + GROUP_GAP + cwd.chars().count();
+    let used = MARGIN_X + BRAND.chars().count() + brand_pad() + cwd.chars().count();
     let gap = (area.width as usize).saturating_sub(used).saturating_sub(version.chars().count()).saturating_sub(MARGIN_X);
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar)));
     spans.push(Span::styled(version, on_bar(pal.dim)));
@@ -271,7 +277,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, ctx: Ctx) {
     let mut left = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
     for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose")].into_iter().enumerate() {
         if i > 0 {
-            left.push(Span::styled("      ", Style::default().bg(pal.bar_bottom)));
+            left.push(Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar_bottom)));
         }
         left.extend(key(k, verb));
     }

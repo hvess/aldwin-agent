@@ -452,6 +452,38 @@ fn every_scene_respects_the_three_cell_margins() {
     });
 }
 
+/// The identity bar puts the harness name on the margin and the working
+/// directory on the body column — the same cell 13 a transcript turn's
+/// content starts on.
+///
+/// This one was wrong in every scene until it was measured. The bar used
+/// `--group-gap`'s six cells between the name and the directory, which put
+/// the directory on cell 16 — a position no token in `cells.css` names.
+/// Six cells part two *unrelated* groups (`5b`'s `review changes` / `3
+/// files`, the footer's key hints); the reference's own `4a`, `5a`, `5c`
+/// and `5d` bars all put the cwd three cells after a seven-letter name,
+/// which is the body column exactly. The prose in `HANDOFF.md` says the
+/// six-cell gap "survives only between the brand and everything else",
+/// which is the stale statement — the frame is the authority on positions,
+/// per this project's own "measure the handoff HTML" rule.
+#[test]
+fn the_identity_bar_puts_the_working_directory_on_the_body_column() {
+    let mut seen = 0;
+    every_scene(|name, theme, buffer| {
+        // Row 1 of the 3-row top bar is the content row in every scene.
+        let row: String = (0..buffer.area.width).map(|x| buffer[(x, 1)].symbol()).collect();
+        let Some(rest) = row.strip_prefix(&" ".repeat(MARGIN)) else { return };
+        let Some(after_brand) = rest.strip_prefix("mjolnir") else { return };
+        // Only scenes whose bar actually carries a directory beside the name.
+        if after_brand.trim_start().starts_with(['~', '/']) {
+            let start = MARGIN + "mjolnir".chars().count() + (after_brand.len() - after_brand.trim_start().len());
+            assert_eq!(start, BODY_COL, "{theme:?}/{name}: the cwd starts on cell {start}, not the body column\n{row}");
+            seen += 1;
+        }
+    });
+    assert!(seen > 0, "no scene drew an identity bar with a directory — the test measured nothing");
+}
+
 /// A transcript turn puts its speaker on the margin and its content on the
 /// body column. Both halves matter: the label proves the margin, and the
 /// content proves the 8-cell label column plus its 2-cell gutter, which is

@@ -10,9 +10,22 @@ use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::grid::{Ctx, MARGIN_X};
+use super::grid::{Ctx, CONTENT_INDENT, MARGIN_X};
 use crate::app::{cursor_line_col, App, RunningTool};
 use crate::log::LogEntry;
+
+/// The harness name, and nothing else — "the name is the brand, and a pip
+/// there indicated nothing". Written once because two screens draw this bar:
+/// the session's and first run's.
+pub(super) const BRAND: &str = "mjolnir";
+
+/// Cells between the brand and whatever follows it in the identity bar, so
+/// that what follows lands on the body column. Derived from `BRAND`'s own
+/// width rather than stated as a number — cell 13 is fixed by the grid, and
+/// a second statement of it could only ever drift.
+pub(super) fn brand_pad() -> usize {
+    CONTENT_INDENT.saturating_sub(MARGIN_X).saturating_sub(BRAND.width())
+}
 
 /// `--spinner-frames` from `tokens/motion.css` — a quarter-block cycling at
 /// roughly 100ms per frame. `App::tick` advances this every 120ms
@@ -53,17 +66,22 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
     let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
 
-    // "mjolnir      ~/src/gateway" — six cells part the name from the
-    // directory, the gap the reference reserves for two *unrelated* groups
-    // (facts within one group ride the tighter ` · ` rhythm instead — see
-    // the right group below). The working directory is real, always-
-    // available process state, not fabricated; a git branch/dirty marker
-    // would need a new capability (shelling out to git at runtime) this
-    // crate doesn't have, so the identity group stops at cwd rather than
-    // showing a branch it has no way to know.
-    let mut left_spans = vec![Span::styled("mjolnir", Style::default().fg(pal.text))];
+    // "mjolnir   ~/src/gateway" — the directory starts on the body column,
+    // cell 13, like every other left-hand word in the system. That is a pad
+    // derived from the brand's own width, not a gap: `--group-gap`'s six
+    // cells part two *unrelated* groups (`5b`'s `review changes` / `3
+    // files`, and the footer's key hints), and the identity bar is not
+    // that — the reference's own `4a`/`5a`/`5c`/`5d` bars all put the cwd
+    // three cells after a seven-letter name, which is cell 13 exactly.
+    // Facts *within* one group ride the tighter ` · ` rhythm — see the
+    // right group below. The working directory is real, always-available
+    // process state, not fabricated; a git branch/dirty marker would need a
+    // new capability (shelling out to git at runtime) this crate doesn't
+    // have, so the identity group stops at cwd rather than showing a branch
+    // it has no way to know.
+    let mut left_spans = vec![Span::styled(BRAND, Style::default().fg(pal.text))];
     if let Some(cwd) = &app.status.cwd {
-        left_spans.push(Span::raw("      "));
+        left_spans.push(Span::raw(" ".repeat(brand_pad())));
         left_spans.push(Span::styled(cwd.clone(), Style::default().fg(pal.quiet)));
     }
     frame.render_widget(Paragraph::new(Line::from(left_spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);

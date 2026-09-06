@@ -132,16 +132,27 @@ pub struct Answers {
 /// The `step n of m` counter reads off this list, so the one-question case
 /// says "step 1 of 1" rather than claiming a step that will never come.
 ///
-/// `access` is an `Option` on purpose: the design system is explicit that
+/// `access` starts on `ask`, the most restrictive tier.
+///
+/// This is a deliberate departure from the design system, which says
 /// "nothing is preselected on `access`. Every row shows an idle `▌`, which
-/// is how the frame says a decision is still open." A default here would
-/// quietly answer a security question on the developer's behalf.
+/// is how the frame says a decision is still open." That reads well and
+/// behaved badly: with nothing selected, `⏎` had to refuse to commit, so a
+/// developer pressing it saw a screen that simply did not respond — most
+/// visibly on the access-only run, where `access` is the *first* step and
+/// the very first key press appeared to do nothing.
+///
+/// Preselecting is safe here only because of *which* row is preselected.
+/// `ask` grants nothing at all, so the default answer is the default-deny
+/// one and an accidental `⏎` widens no permission. A preselected `read` or
+/// `all` would be the thing the design system is guarding against — a
+/// security question answered by inertia — and must not be introduced.
 #[derive(Debug, Clone)]
 pub struct FirstRun {
     pub steps:    Vec<Step>,
     pub index:    usize,
     pub model:    usize,
-    pub access:   Option<usize>,
+    pub access:   usize,
     /// Set when `⏎` commits the last step, or when the developer quits.
     pub finished: Option<Option<Answers>>,
 }
@@ -157,7 +168,7 @@ impl FirstRun {
     /// directory's access posture is unanswered.
     pub fn new(ask_model: bool) -> Self {
         let steps = if ask_model { vec![Step::Model, Step::Access] } else { vec![Step::Access] };
-        Self { steps, index: 0, model: 0, access: None, finished: None }
+        Self { steps, index: 0, model: 0, access: 0, finished: None }
     }
 
     /// Which question is taking arrow keys.
@@ -180,11 +191,11 @@ impl FirstRun {
         }
     }
 
-    /// The selected index of the current step, or `None` on `access` before
-    /// anything is chosen.
-    fn selected(&self) -> Option<usize> {
+    /// The selected index of the current step. Always present: every list
+    /// opens with a row selected (see [`FirstRun::access`]).
+    fn selected(&self) -> usize {
         match self.step() {
-            Step::Model => Some(self.model),
+            Step::Model => self.model,
             Step::Access => self.access,
         }
     }
@@ -192,29 +203,25 @@ impl FirstRun {
     fn select(&mut self, index: usize) {
         match self.step() {
             Step::Model => self.model = index,
-            Step::Access => self.access = Some(index),
+            Step::Access => self.access = index,
         }
     }
 
-    /// `↑`/`↓`. On `access`, where nothing is preselected, the first press
-    /// lands on an end of the list rather than moving from an imaginary
-    /// cursor — `↓` picks the first row, `↑` the last.
+    /// `↑`/`↓`, clamped at both ends rather than wrapping — a list that
+    /// wraps makes it possible to land on the widest access tier by holding
+    /// a key down.
     fn step_selection(&mut self, delta: isize) {
         let len = self.len();
-        let next = match self.selected() {
-            Some(current) => (current as isize + delta).clamp(0, len as isize - 1) as usize,
-            None if delta > 0 => 0,
-            None => len - 1,
-        };
+        let next = (self.selected() as isize + delta).clamp(0, len as isize - 1) as usize;
         self.select(next);
     }
 
     /// One key. Returns `true` if the screen is done (see `finished`).
     ///
-    /// `⏎` on `model` advances; `⏎` on `access` commits, but only once a row
-    /// is actually selected — an unanswered access question cannot be
-    /// committed by pressing enter at it, which is the whole point of
-    /// preselecting nothing.
+    /// `⏎` advances to the next step, or commits on the last one. Every step
+    /// always has a selection, so `⏎` is never a no-op — see
+    /// [`FirstRun::access`] for why that is worth more than the design
+    /// system's unanswered-by-default state.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         if matches!(code, KeyCode::Char('c') | KeyCode::Char('d')) && modifiers.contains(KeyModifiers::CONTROL) {
             self.finished = Some(None);
@@ -237,18 +244,13 @@ impl FirstRun {
                 }
             }
             KeyCode::Enter => {
-                // The last step commits; any earlier one advances. `access`
-                // additionally refuses to commit while unanswered, which is
-                // the point of preselecting nothing on it.
-                let is_last = self.index + 1 >= self.steps.len();
-                if !is_last {
+                // The last step commits; any earlier one advances.
+                if self.index + 1 < self.steps.len() {
                     self.index += 1;
-                } else if self.step() != Step::Access || self.access.is_some() {
-                    let access = self.access.map(|i| AccessTier::ORDER[i]);
-                    if let Some(access) = access {
-                        self.finished = Some(Some(Answers { model: MODELS[self.model].id, access }));
-                        return true;
-                    }
+                } else {
+                    self.finished =
+                        Some(Some(Answers { model: MODELS[self.model].id, access: AccessTier::ORDER[self.access] }));
+                    return true;
                 }
             }
             _ => {}
@@ -327,36 +329,51 @@ mod tests {
         state.handle_key(code, KeyModifiers::NONE)
     }
 
+    /// `ask` is preselected, and it must be `ask` specifically: it is the
+    /// tier that grants nothing, so the default answer is the default-deny
+    /// one and an accidental `⏎` can never widen a permission.
     #[test]
-    fn access_starts_with_nothing_selected() {
+    fn access_starts_on_ask_the_tier_that_grants_nothing() {
         let state = FirstRun::default();
-        assert_eq!(state.access, None, "the design system is explicit that nothing is preselected on access");
+        assert_eq!(AccessTier::ORDER[state.access], AccessTier::Ask);
+        assert!(AccessTier::ORDER[state.access].grants().is_empty(), "the preselected tier must grant nothing");
     }
 
-    /// The security consequence of preselecting nothing: enter at an
-    /// unanswered access step must not commit a tier the developer never
-    /// chose.
+    /// Enter is never a no-op. Before `ask` was preselected, enter on an
+    /// unanswered access step did nothing at all, so on the access-only run
+    /// — where access is the *first* step — the very first key press
+    /// appeared to leave the screen frozen.
     #[test]
-    fn enter_on_an_unanswered_access_step_does_not_commit() {
+    fn enter_always_advances_or_commits() {
         let mut state = FirstRun::default();
         assert!(!key(&mut state, KeyCode::Enter), "enter on the model step advances rather than finishing");
         assert_eq!(state.step(), Step::Access);
-        assert!(!key(&mut state, KeyCode::Enter), "enter must not commit an access answer that was never given");
-        assert!(state.finished.is_none());
+        assert!(key(&mut state, KeyCode::Enter), "enter on the last step commits");
+        assert_eq!(state.finished, Some(Some(Answers { model: MODELS[0].id, access: AccessTier::Ask })));
     }
 
+    /// The access-only run: one step, and enter commits it immediately.
     #[test]
-    fn down_on_an_unanswered_list_lands_on_the_first_row() {
+    fn the_access_only_run_commits_on_the_first_enter() {
         let mut state = FirstRun::new(false);
-        key(&mut state, KeyCode::Down);
-        assert_eq!(state.access, Some(0));
+        assert_eq!(state.step(), Step::Access);
+        assert!(key(&mut state, KeyCode::Enter));
+        assert_eq!(state.finished, Some(Some(Answers { model: MODELS[0].id, access: AccessTier::Ask })));
     }
 
+    /// Clamped, not wrapping — a wrapping list makes it possible to land on
+    /// the widest tier by holding a key down.
     #[test]
-    fn up_on_an_unanswered_list_lands_on_the_last_row() {
+    fn access_selection_clamps_at_both_ends() {
         let mut state = FirstRun::new(false);
-        key(&mut state, KeyCode::Up);
-        assert_eq!(state.access, Some(AccessTier::ORDER.len() - 1));
+        for _ in 0..10 {
+            key(&mut state, KeyCode::Up);
+        }
+        assert_eq!(state.access, 0);
+        for _ in 0..10 {
+            key(&mut state, KeyCode::Down);
+        }
+        assert_eq!(state.access, AccessTier::ORDER.len() - 1);
     }
 
     #[test]

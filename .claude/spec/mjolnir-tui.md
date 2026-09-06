@@ -2356,9 +2356,7 @@ reverse-video wordmark (`  M J O L N I R  `, accent as ground, desk as ink —
 never the multi-row block that was built and cut), the positioning line in
 `--tui-dim`, three blank rows between sections, the shared option row
 (`▌`, two spaces, a 16-cell name field, then a purpose statement), and
-`config → ~/.mjolnir/` in the footer. Nothing is preselected on `access`, so
-`⏎` refuses to commit it — a security question must not be answered by
-inertia.
+`config → ~/.mjolnir/` in the footer.
 
 Three deliberate deviations, each because the design's own wording would have
 been false here:
@@ -2372,6 +2370,21 @@ been false here:
 3. **`1 of 2`, not `step 1 of 2`.** The label column is 8 cells since Turn 13
    and the longer form overflowed into the first option row. The reference
    wrote "step 2 of 3" when that column was 12 cells wide.
+4. **`ask` is preselected on the access list.** The design system says
+   "nothing is preselected on `access`. Every row shows an idle `▌`, which
+   is how the frame says a decision is still open." Built that way first,
+   and reported as a defect: with nothing selected `⏎` had to refuse to
+   commit, so pressing it did nothing — most visibly on the access-only run,
+   where `access` is the first step and the very first key press left the
+   screen apparently frozen.
+
+   The preselection is safe *because of which row it is*. `ask` grants
+   nothing, so the default answer is the default-deny one and an accidental
+   `⏎` widens no permission. A preselected `read` or `all` would be exactly
+   the inertia the design system is guarding against and must not be
+   introduced; a test pins the preselected tier to the one whose `grants()`
+   is empty rather than to index 0, so reordering the scale cannot quietly
+   change what enter agrees to.
 
 Also corrected here: `bottom_height` still reserved a row for the panel edge
 removed in the borderless pass, which put a stray `bar` row *below* the

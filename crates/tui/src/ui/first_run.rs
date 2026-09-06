@@ -97,14 +97,11 @@ fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
         let rows: Vec<Line<'static>> = AccessTier::ORDER
             .iter()
             .enumerate()
-            .map(|(i, tier)| option_row(tier.label(), tier.purpose(), state.access == Some(i), ctx))
+            .map(|(i, tier)| option_row(tier.label(), tier.purpose(), i == state.access, ctx))
             .collect();
         lines.extend(step_section("access", (n, m), state.step() == Step::Access, rows, ctx));
     }
 
-    // Nothing else is drawn. The `▌` marks on the access rows stay idle
-    // until one is picked, which is how the frame says the decision is
-    // still open — see `FirstRun::access`.
     let _ = pal;
     lines
 }
@@ -281,20 +278,34 @@ mod tests {
         assert_eq!(below, 0, "one row, never a block — the row under it carries no reverse video");
     }
 
-    /// Nothing is preselected on access: every row shows an idle mark, which
-    /// is how the frame says the decision is still open.
+    /// Both lists open with a row selected, and selection is always the
+    /// accent `▌` *and* the band together — never one without the other.
+    /// `ask` is the preselected access row (see `FirstRun::access`).
     #[test]
-    fn access_rows_all_start_idle_with_no_selection_band() {
+    fn both_lists_open_with_a_row_selected() {
         let buffer = render(&FirstRun::default(), 120, 36);
-        let banded = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).count();
-        assert_eq!(banded, 1, "only the model step's own selection is banded; access has none");
+        let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
+        assert_eq!(banded.len(), 2, "one banded row per list — the model default and `ask`");
+        for y in banded {
+            assert!(
+                (0..120).any(|x| buffer[(x, y)].symbol() == "▌" && buffer[(x, y)].fg == DARK.mark),
+                "row {y} carries the band, so it must carry the accent mark too"
+            );
+        }
+        let row: String = (0..120).map(|x| buffer[(x, banded_ask(&buffer))].symbol()).collect();
+        assert!(row.contains("ask"), "the preselected access row is `ask`: {row:?}");
+    }
+
+    /// The second banded row — the access list's selection.
+    fn banded_ask(buffer: &ratatui::buffer::Buffer) -> u16 {
+        (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).nth(1).expect("an access selection")
     }
 
     /// Selecting an access tier lights exactly that row, mark and band
     /// together — never one without the other.
     #[test]
     fn selecting_an_access_tier_bands_that_row_and_marks_it() {
-        let state = FirstRun { index: 1, access: Some(2), ..Default::default() };
+        let state = FirstRun { index: 1, access: 2, ..Default::default() };
         let buffer = render(&state, 120, 36);
         let row = (0..36u16).find(|y| (0..120).any(|x| buffer[(x, *y)].symbol() == "a" && buffer[(x, *y)].bg == DARK.band)).is_some();
         assert!(row, "the chosen tier's row carries the selection band");
@@ -359,6 +370,17 @@ mod tests {
         assert_eq!(access - last_model - 1, 3, "three blank rows part the sections");
         for y in (last_model + 1)..access {
             assert!(blank(y), "and they are genuinely blank");
+        }
+    }
+
+    #[test]
+    #[ignore = "visual aid; run with --ignored to eyeball the screen"]
+    fn dump() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        for y in 0..36 {
+            let row: String = (0..120).map(|x| buffer[(x, y)].symbol()).collect();
+            let banded = (0..120).any(|x| buffer[(x, y)].bg == DARK.band);
+            println!("{y:2}|{row}|{}", if banded { " <- selected" } else { "" });
         }
     }
 

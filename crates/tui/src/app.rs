@@ -309,7 +309,7 @@ impl StatusInfo {
 /// The session's working directory, `~`-shortened like a shell prompt.
 /// `None` only if the process's cwd genuinely can't be read — not worth a
 /// placeholder for a case this rare.
-fn current_dir_display() -> Option<String> {
+pub(crate) fn current_dir_display() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
         return Some(cwd.display().to_string());

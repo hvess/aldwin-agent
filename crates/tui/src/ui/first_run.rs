@@ -30,6 +30,9 @@ const FOOTER_ROWS: u16 = 3;
 /// it (`--option-label-col`).
 const OPTION_LABEL_COL: usize = 16;
 
+/// `--group-gap`: 6 cells part two unrelated groups inside a bar.
+const GROUP_GAP: usize = 6;
+
 /// Where the harness's answers land. Stated plainly rather than implied,
 /// per the design system's Content Fundamentals. A directory, not a single
 /// file, because the two answers land in two files inside it.
@@ -48,18 +51,34 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
     draw_footer(frame, footer, ctx);
 }
 
-/// The same 3-row identity band every screen opens with, on `bar`. It
-/// carries the plain word `mjolnir` — the wordmark below is a different
-/// thing and deliberately not repeated here ("It is not in the top bar").
+/// The same 3-row identity band every screen opens with, on `bar`: the
+/// plain word `mjolnir`, a 6-cell group gap, the working directory, and the
+/// version flush to the right margin — what the reference's own `5d` top bar
+/// carries.
+///
+/// The wordmark below is a different thing and deliberately not repeated
+/// here ("It is not in the top bar"), and the bar carries no `▌` either —
+/// "the name is the brand, and a pip there indicated nothing".
 fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     let Some(row) = area.height.checked_sub(2).map(|_| Rect { y: area.y + 1, height: 1, ..area }) else { return };
-    let line = Line::from(vec![
-        Span::raw(" ".repeat(MARGIN_X)),
-        Span::styled("mjolnir", Style::default().fg(pal.text).bg(pal.bar)),
-        Span::styled("      first run", Style::default().fg(pal.dim).bg(pal.bar)),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(Style::default().bg(pal.bar)), row);
+    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
+
+    let cwd = crate::app::current_dir_display().unwrap_or_default();
+    let version = format!("v{}", crate::version::VERSION);
+    let mut spans = vec![
+        Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar)),
+        Span::styled("mjolnir", on_bar(pal.text)),
+        // `--group-gap`: 6 cells between two unrelated groups.
+        Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar)),
+        Span::styled(cwd.clone(), on_bar(pal.dim)),
+    ];
+    let used = MARGIN_X + "mjolnir".chars().count() + GROUP_GAP + cwd.chars().count();
+    let gap = (area.width as usize).saturating_sub(used).saturating_sub(version.chars().count()).saturating_sub(MARGIN_X);
+    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar)));
+    spans.push(Span::styled(version, on_bar(pal.dim)));
+    spans.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar)));
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar)), row);
 }
 
 fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
@@ -283,6 +302,64 @@ mod tests {
             .filter(|y| (0..120).any(|x| buffer[(x, *y)].symbol() == "▌" && buffer[(x, *y)].fg == DARK.mark))
             .count();
         assert_eq!(marks, 2, "one accent mark per step — the model row and the chosen access row");
+    }
+
+    /// Every landmark on this screen is a whole number of cells off the
+    /// grid: the 3-cell margin, the 8-cell label column with its 2-cell
+    /// gutter (so body text lands on cell 13), and the 16-cell option name
+    /// field the model list and the access list share.
+    #[test]
+    fn every_column_lands_on_the_grid() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        let row_text = |y: u16| -> String { (0..120).map(|x| buffer[(x, y)].symbol()).collect() };
+        // Byte offset converted to a *cell* offset: `▌` is three bytes, so
+        // `str::find` alone would report every column past a mark two cells
+        // to the right of where it actually is. The grid counts cells.
+        let col_of = |y: u16, needle: &str| -> usize {
+            let row = row_text(y);
+            let byte = row.find(needle).expect("needle on row");
+            row[..byte].chars().count()
+        };
+
+        // Anchored on the option row, not on the word "model" — the
+        // positioning line contains that word too, 21 cells in.
+        let label = (0..36u16).find(|y| row_text(*y).contains("sonnet-5")).expect("the model label row");
+        assert_eq!(col_of(label, "model"), MARGIN_X, "a step label starts on the 3-cell margin");
+        assert_eq!(col_of(label, "▌"), CONTENT_INDENT, "its option rows start on the body column, cell 13");
+        assert_eq!(col_of(label, "sonnet-5"), CONTENT_INDENT + 3, "the mark plus two spaces, then the name");
+        assert_eq!(col_of(label, "balanced"), CONTENT_INDENT + 3 + OPTION_LABEL_COL, "the purpose starts past the 16-cell name field");
+
+        let access = (0..36u16).find(|y| row_text(*y).contains("access")).expect("the access label row");
+        assert_eq!(col_of(access, "access"), MARGIN_X, "both steps share one label column");
+        assert_eq!(col_of(access, "▌"), CONTENT_INDENT);
+        assert_eq!(col_of(access, "every tool"), CONTENT_INDENT + 3 + OPTION_LABEL_COL, "and one name field, so the two lists read as one control");
+
+        let mark = (0..36u16).find(|y| row_text(*y).contains("M J O L N I R")).expect("the wordmark");
+        assert_eq!(col_of(mark, "M J O L N I R"), MARGIN_X + 1, "the wordmark's own one-space pad sits inside the margin");
+    }
+
+    /// `--section-gap-h`: three blank rows between first-run sections, and
+    /// the bands are 3 / rest / 3 rows.
+    #[test]
+    fn the_vertical_bands_and_section_gaps_are_whole_rows() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        let row_text = |y: u16| -> String { (0..120).map(|x| buffer[(x, y)].symbol()).collect() };
+        let blank = |y: u16| row_text(y).trim().is_empty();
+
+        for y in 0..TOP_BAR_ROWS {
+            assert_eq!(buffer[(0, y)].bg, DARK.bar, "the top bar is {TOP_BAR_ROWS} rows");
+        }
+        assert_eq!(buffer[(0, TOP_BAR_ROWS)].bg, DARK.ground, "and the body begins immediately after it");
+        for y in (36 - FOOTER_ROWS)..36 {
+            assert_eq!(buffer[(0, y)].bg, DARK.bar_bottom, "the footer is {FOOTER_ROWS} rows");
+        }
+
+        let last_model = (0..36u16).rev().find(|y| row_text(*y).contains("haiku")).expect("the last model row");
+        let access = (0..36u16).find(|y| row_text(*y).contains("access")).expect("the access label");
+        assert_eq!(access - last_model - 1, 3, "three blank rows part the sections");
+        for y in (last_model + 1)..access {
+            assert!(blank(y), "and they are genuinely blank");
+        }
     }
 
     /// The footer states where the answers land, plainly rather than by

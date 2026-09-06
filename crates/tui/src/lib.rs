@@ -36,7 +36,7 @@ mod version;
 
 pub use app::App;
 pub use log::{LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
-pub use first_run::{run as run_first_run, AccessTier, Answers as FirstRunAnswers, MODELS};
+pub use first_run::{run as run_first_run, AccessTier, Answers as FirstRunAnswers, ProviderChoice};
 pub use palette::Theme;
 pub use run::run;
 pub use scroll::ScrollState;

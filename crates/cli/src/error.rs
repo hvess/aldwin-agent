@@ -38,4 +38,10 @@ pub enum StartupError {
     /// on the next start as though nothing had been decided.
     #[error("could not save the first-run answers: {0}")]
     FirstRunWrite(#[source] mjolnir_config::ConfigError),
+
+    /// First run only ever offers ids it took from the catalogue, so this
+    /// means the two lists have drifted apart in code — not something a
+    /// developer can do wrong.
+    #[error("first run returned the provider {id:?}, which is not in the catalogue")]
+    UnknownProvider { id: String },
 }

@@ -1,12 +1,24 @@
 //! First run — the design system's screen `5d`, and the state behind it.
 //!
 //! Entering a project with no `.mjolnir/permissions.yaml` asks two questions
-//! and then starts: which model to default to, and how much runs without
-//! asking in this directory. Both answers are written before the session
-//! opens, which is why this runs as its own screen with its own terminal
-//! loop rather than as a mode inside [`crate::app::App`]: the model choice
-//! decides which LLM client the bootstrap constructs, so it has to be
-//! answered before that client exists.
+//! and then starts: which provider the model runs on, and how much runs
+//! without asking in this directory. Both answers are written before the
+//! session opens, which is why this runs as its own screen with its own
+//! terminal loop rather than as a mode inside [`crate::app::App`]: the
+//! provider choice decides which LLM client the bootstrap constructs, so it
+//! has to be answered before that client exists.
+//!
+//! The first step asks for a *provider*, not a model. Turn 13's `5d` moved
+//! it: a model id means nothing until you know whose catalogue it comes from,
+//! and the provider is the answer that has to be settled before a client can
+//! be built at all. The model follows from it — first run writes that
+//! provider's default and `/model` changes it once the session is running,
+//! which is what the step's own prose promises.
+//!
+//! This screen never sees the catalogue itself. [`ProviderChoice`] is the
+//! display half of a row — an id and a purpose — handed in by the caller,
+//! because the catalogue lives in `mjolnir-llm` (endpoints, key variables,
+//! wire dialects) and this crate does not depend on it.
 //!
 //! The screen is also the one place the brand is set as a mark. Per the
 //! design system's Brand mark section the wordmark is "one row, never a
@@ -86,37 +98,37 @@ impl AccessTier {
     }
 }
 
-/// One model on offer. `id` is what lands in `provider.yaml`; `label` is the
-/// short name shown in the option's 16-cell field, since a full model id
-/// does not fit it and the design's own mock uses short names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModelChoice {
-    pub id:      &'static str,
-    pub label:   &'static str,
-    pub purpose: &'static str,
+/// One provider row, as the screen needs it: the lowercase id in the
+/// option's 16-cell field, and what picking it does.
+///
+/// Owned `String`s rather than `&'static str` because the caller composes
+/// these from its own catalogue rather than from a literal in this crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChoice {
+    pub id:      String,
+    pub purpose: String,
 }
 
-/// The models first run offers. Not every model the provider has — three
-/// named points on a speed/depth scale, which is what the question is
-/// actually asking. `provider.yaml` takes any id afterwards.
-pub const MODELS: [ModelChoice; 3] = [
-    ModelChoice { id: "claude-sonnet-5", label: "sonnet-5", purpose: "balanced; a good default" },
-    ModelChoice { id: "claude-opus-5", label: "opus-5", purpose: "slower, deeper" },
-    ModelChoice { id: "claude-haiku-4-5-20251001", label: "haiku-4.5", purpose: "fast, cheap" },
-];
+impl ProviderChoice {
+    pub fn new(id: impl Into<String>, purpose: impl Into<String>) -> Self {
+        Self { id: id.into(), purpose: purpose.into() }
+    }
+}
 
 /// Which question is taking arrow keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    Model,
+    Provider,
     Access,
 }
 
 /// What first run answered. Returned to the bootstrap, which writes both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answers {
-    pub model:  &'static str,
-    pub access: AccessTier,
+    /// The chosen provider's id — the caller looks the rest up in the
+    /// catalogue it built the [`ProviderChoice`] list from.
+    pub provider: Option<String>,
+    pub access:   AccessTier,
 }
 
 /// The screen's whole state.
@@ -124,13 +136,13 @@ pub struct Answers {
 /// `steps` is built from what is actually unanswered, which is why it is a
 /// list rather than a fixed pair. Two cases reach this screen:
 ///
-/// * a true first run — no provider config anywhere — asks `model` then
+/// * a true first run — no provider config anywhere — asks `provider` then
 ///   `access`;
 /// * entering a project that has no `.mjolnir/permissions.yaml` while a
-///   model is already configured asks `access` alone.
+///   provider is already configured asks `access` alone.
 ///
-/// The `step n of m` counter reads off this list, so the one-question case
-/// says "step 1 of 1" rather than claiming a step that will never come.
+/// The `step n/m` counter reads off this list, so the one-question case
+/// says "step 1/1" rather than claiming a step that will never come.
 ///
 /// `access` starts on `ask`, the most restrictive tier.
 ///
@@ -147,28 +159,42 @@ pub struct Answers {
 /// one and an accidental `⏎` widens no permission. A preselected `read` or
 /// `all` would be the thing the design system is guarding against — a
 /// security question answered by inertia — and must not be introduced.
+///
+/// The provider list has the same property for a different reason: it opens
+/// on the first curated row, and every row on it costs the same — a
+/// provider choice grants nothing and is one `/model` away from being
+/// changed.
 #[derive(Debug, Clone)]
 pub struct FirstRun {
-    pub steps:    Vec<Step>,
-    pub index:    usize,
-    pub model:    usize,
-    pub access:   usize,
+    /// Every provider on offer, curated rows first.
+    pub providers: Vec<ProviderChoice>,
+    /// How many of `providers` show before the `more` row. Clamped to the
+    /// list's own length at construction, so a caller cannot promise more
+    /// curated rows than it supplied.
+    pub curated:   usize,
+    /// Set once `more` has been taken: the list becomes the whole catalogue
+    /// and the `more` row goes away, having nothing left to reveal.
+    pub expanded:  bool,
+    pub steps:     Vec<Step>,
+    pub index:     usize,
+    pub provider:  usize,
+    pub access:    usize,
     /// Set when `⏎` commits the last step, or when the developer quits.
-    pub finished: Option<Option<Answers>>,
-}
-
-impl Default for FirstRun {
-    fn default() -> Self {
-        Self::new(true)
-    }
+    pub finished:  Option<Option<Answers>>,
 }
 
 impl FirstRun {
-    /// `ask_model` is false when a model is already configured and only the
-    /// directory's access posture is unanswered.
-    pub fn new(ask_model: bool) -> Self {
-        let steps = if ask_model { vec![Step::Model, Step::Access] } else { vec![Step::Access] };
-        Self { steps, index: 0, model: 0, access: 0, finished: None }
+    /// `providers` is the whole catalogue in display order, curated rows
+    /// first; `curated` is how many of them show before `more`.
+    /// `ask_provider` is false when a provider is already configured and
+    /// only the directory's access posture is unanswered.
+    pub fn new(providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool) -> Self {
+        // An empty catalogue cannot be asked about, whatever the caller
+        // said — `commit` would have no id to return.
+        let ask_provider = ask_provider && !providers.is_empty();
+        let steps = if ask_provider { vec![Step::Provider, Step::Access] } else { vec![Step::Access] };
+        let curated = curated.min(providers.len());
+        Self { providers, curated, expanded: false, steps, index: 0, provider: 0, access: 0, finished: None }
     }
 
     /// Which question is taking arrow keys.
@@ -176,33 +202,55 @@ impl FirstRun {
         self.steps[self.index.min(self.steps.len() - 1)]
     }
 
-    /// `(n, m)` for the `step n of m` counter — 1-based, over the steps this
+    /// `(n, m)` for the `step n/m` counter — 1-based, over the steps this
     /// run actually has.
     pub fn position(&self, step: Step) -> Option<(usize, usize)> {
         let at = self.steps.iter().position(|s| *s == step)?;
         Some((at + 1, self.steps.len()))
     }
 
-    /// How many rows the current step's list has.
+    /// The provider rows currently on screen — the curated prefix until
+    /// `more` is taken, the whole catalogue after.
+    pub fn visible_providers(&self) -> &[ProviderChoice] {
+        if self.expanded {
+            &self.providers
+        } else {
+            &self.providers[..self.curated]
+        }
+    }
+
+    /// Whether the `more` row is on screen. It goes once taken, and never
+    /// appears when the curated prefix is already the whole catalogue.
+    pub fn shows_more(&self) -> bool {
+        !self.expanded && self.curated < self.providers.len()
+    }
+
+    /// The index of the `more` row, when there is one: immediately after
+    /// the last visible provider.
+    fn more_index(&self) -> Option<usize> {
+        self.shows_more().then(|| self.visible_providers().len())
+    }
+
+    /// How many rows the current step's list has, `more` included.
     fn len(&self) -> usize {
         match self.step() {
-            Step::Model => MODELS.len(),
+            Step::Provider => self.visible_providers().len() + usize::from(self.shows_more()),
             Step::Access => AccessTier::ORDER.len(),
         }
     }
 
     /// The selected index of the current step. Always present: every list
-    /// opens with a row selected (see [`FirstRun::access`]).
+    /// opens with a row selected (see [`FirstRun`]'s own doc comment).
     fn selected(&self) -> usize {
         match self.step() {
-            Step::Model => self.model,
+            Step::Provider => self.provider,
             Step::Access => self.access,
         }
     }
 
     fn select(&mut self, index: usize) {
         match self.step() {
-            Step::Model => self.model = index,
+            Step::Provider => self.provider = index,
             Step::Access => self.access = index,
         }
     }
@@ -216,12 +264,36 @@ impl FirstRun {
         self.select(next);
     }
 
+    /// `⏎` on the provider step's `more` row: the list becomes the whole
+    /// catalogue and the selection stays where it is, which is now the first
+    /// row `more` revealed rather than `more` itself. Nothing is committed
+    /// and no step advances — taking `more` is asking to see the rest of the
+    /// question, not answering it.
+    fn expand(&mut self) {
+        self.expanded = true;
+        // The `more` row was the last one; after expanding, that index is
+        // the first newly revealed provider. Clamp anyway — a one-entry
+        // catalogue with `curated == 1` shows no `more` row at all, so this
+        // is unreachable, but `provider` indexes a slice.
+        self.provider = self.provider.min(self.providers.len().saturating_sub(1));
+    }
+
+    fn commit(&mut self) {
+        let provider = self
+            .steps
+            .contains(&Step::Provider)
+            .then(|| self.providers.get(self.provider).map(|p| p.id.clone()))
+            .flatten();
+        self.finished = Some(Some(Answers { provider, access: AccessTier::ORDER[self.access] }));
+    }
+
     /// One key. Returns `true` if the screen is done (see `finished`).
     ///
     /// `⏎` advances to the next step, or commits on the last one. Every step
-    /// always has a selection, so `⏎` is never a no-op — see
-    /// [`FirstRun::access`] for why that is worth more than the design
-    /// system's unanswered-by-default state.
+    /// always has a selection, so `⏎` is never a no-op — see [`FirstRun`]
+    /// for why that is worth more than the design system's
+    /// unanswered-by-default state. The one row it neither advances nor
+    /// commits on is `more`, which expands the list in place.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         if matches!(code, KeyCode::Char('c') | KeyCode::Char('d')) && modifiers.contains(KeyModifiers::CONTROL) {
             self.finished = Some(None);
@@ -244,12 +316,13 @@ impl FirstRun {
                 }
             }
             KeyCode::Enter => {
-                // The last step commits; any earlier one advances.
-                if self.index + 1 < self.steps.len() {
+                if self.step() == Step::Provider && Some(self.provider) == self.more_index() {
+                    self.expand();
+                } else if self.index + 1 < self.steps.len() {
+                    // The last step commits; any earlier one advances.
                     self.index += 1;
                 } else {
-                    self.finished =
-                        Some(Some(Answers { model: MODELS[self.model].id, access: AccessTier::ORDER[self.access] }));
+                    self.commit();
                     return true;
                 }
             }
@@ -266,7 +339,7 @@ impl FirstRun {
 ///
 /// Mirrors [`crate::run::run`]'s terminal handling, including restoring the
 /// terminal on an error or a panic unwinding out of the loop.
-pub async fn run(theme: Theme, ask_model: bool) -> io::Result<Option<Answers>> {
+pub async fn run(theme: Theme, providers: Vec<ProviderChoice>, curated: usize, ask_provider: bool) -> io::Result<Option<Answers>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
@@ -274,14 +347,20 @@ pub async fn run(theme: Theme, ask_model: bool) -> io::Result<Option<Answers>> {
     let mut terminal = Terminal::new(backend)?;
     let guard = Guard;
 
-    let result = run_loop(&mut terminal, theme, ask_model).await;
+    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider).await;
     drop(guard);
     restore()?;
     result
 }
 
-async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, theme: Theme, ask_model: bool) -> io::Result<Option<Answers>> {
-    let mut state = FirstRun::new(ask_model);
+async fn run_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    theme: Theme,
+    providers: Vec<ProviderChoice>,
+    curated: usize,
+    ask_provider: bool,
+) -> io::Result<Option<Answers>> {
+    let mut state = FirstRun::new(providers, curated, ask_provider);
     let mut events = EventStream::new();
     let pal = theme.palette();
 
@@ -299,7 +378,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, theme: 
                 continue;
             }
             if state.handle_key(key.code, key.modifiers) {
-                return Ok(state.finished.flatten());
+                return Ok(state.finished.clone().flatten());
             }
         }
     }
@@ -319,6 +398,28 @@ fn restore() -> io::Result<()> {
     let mut stdout = io::stdout();
     let _ = execute!(stdout, LeaveAlternateScreen);
     Ok(())
+}
+
+/// A stand-in catalogue for tests in this crate, shaped like the real one:
+/// three curated rows and three more behind `more`. Deliberately not the
+/// real ids — a test that hard-codes `mjolnir-llm`'s catalogue would fail
+/// every time a provider is added to it.
+#[cfg(test)]
+pub(crate) fn sample_providers() -> Vec<ProviderChoice> {
+    ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+        .into_iter()
+        .map(|id| ProviderChoice::new(id, format!("{id} models · {}_API_KEY", id.to_ascii_uppercase())))
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) const SAMPLE_CURATED: usize = 3;
+
+#[cfg(test)]
+impl Default for FirstRun {
+    fn default() -> Self {
+        Self::new(sample_providers(), SAMPLE_CURATED, true)
+    }
 }
 
 #[cfg(test)]
@@ -346,26 +447,32 @@ mod tests {
     #[test]
     fn enter_always_advances_or_commits() {
         let mut state = FirstRun::default();
-        assert!(!key(&mut state, KeyCode::Enter), "enter on the model step advances rather than finishing");
+        assert!(!key(&mut state, KeyCode::Enter), "enter on the provider step advances rather than finishing");
         assert_eq!(state.step(), Step::Access);
         assert!(key(&mut state, KeyCode::Enter), "enter on the last step commits");
-        assert_eq!(state.finished, Some(Some(Answers { model: MODELS[0].id, access: AccessTier::Ask })));
+        assert_eq!(
+            state.finished,
+            Some(Some(Answers { provider: Some("alpha".into()), access: AccessTier::Ask }))
+        );
     }
 
-    /// The access-only run: one step, and enter commits it immediately.
+    /// The access-only run: one step, and enter commits it immediately. It
+    /// answers no provider question, so it must not claim to have answered
+    /// one — a `Some(..)` here would overwrite the provider the developer
+    /// already configured.
     #[test]
-    fn the_access_only_run_commits_on_the_first_enter() {
-        let mut state = FirstRun::new(false);
+    fn the_access_only_run_commits_on_the_first_enter_and_names_no_provider() {
+        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false);
         assert_eq!(state.step(), Step::Access);
         assert!(key(&mut state, KeyCode::Enter));
-        assert_eq!(state.finished, Some(Some(Answers { model: MODELS[0].id, access: AccessTier::Ask })));
+        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: AccessTier::Ask })));
     }
 
     /// Clamped, not wrapping — a wrapping list makes it possible to land on
     /// the widest tier by holding a key down.
     #[test]
     fn access_selection_clamps_at_both_ends() {
-        let mut state = FirstRun::new(false);
+        let mut state = FirstRun::new(sample_providers(), SAMPLE_CURATED, false);
         for _ in 0..10 {
             key(&mut state, KeyCode::Up);
         }
@@ -376,36 +483,112 @@ mod tests {
         assert_eq!(state.access, AccessTier::ORDER.len() - 1);
     }
 
+    /// The provider list is the curated prefix plus one `more` row, and the
+    /// selection cannot leave it.
     #[test]
-    fn selection_clamps_at_both_ends() {
+    fn the_provider_list_opens_curated_with_one_more_row() {
+        let mut state = FirstRun::default();
+        assert_eq!(state.visible_providers().len(), SAMPLE_CURATED);
+        assert!(state.shows_more());
+        for _ in 0..10 {
+            key(&mut state, KeyCode::Down);
+        }
+        assert_eq!(state.provider, SAMPLE_CURATED, "the last selectable row is `more`, not the last provider");
+    }
+
+    /// `more` reveals the rest of the catalogue and takes its own row away
+    /// — it has nothing left to show — landing the selection on the first
+    /// provider it revealed rather than dumping it back at the top.
+    #[test]
+    fn more_expands_the_list_in_place_without_committing() {
+        let mut state = FirstRun::default();
+        for _ in 0..10 {
+            key(&mut state, KeyCode::Down);
+        }
+        assert!(!key(&mut state, KeyCode::Enter), "taking `more` must not finish the screen");
+        assert!(state.expanded);
+        assert!(!state.shows_more(), "`more` has nothing left to reveal, so it goes");
+        assert_eq!(state.visible_providers().len(), sample_providers().len());
+        assert_eq!(state.step(), Step::Provider, "and the step has not advanced either");
+        assert_eq!(state.providers[state.provider].id, "delta", "the selection lands on the first newly revealed row");
+    }
+
+    /// A catalogue with nothing behind `more` shows no `more` row: a row
+    /// that reveals nothing is a row that does nothing.
+    #[test]
+    fn a_fully_curated_catalogue_shows_no_more_row() {
+        let providers = sample_providers();
+        let state = FirstRun::new(providers.clone(), providers.len(), true);
+        assert!(!state.shows_more());
+        assert_eq!(state.visible_providers().len(), providers.len());
+    }
+
+    /// A caller cannot promise more curated rows than it supplied —
+    /// `visible_providers` slices on `curated`.
+    #[test]
+    fn curated_is_clamped_to_the_catalogue_it_was_given() {
+        let state = FirstRun::new(sample_providers(), 99, true);
+        assert_eq!(state.curated, sample_providers().len());
+        assert!(!state.shows_more());
+    }
+
+    /// An empty catalogue cannot be asked about, whatever the caller said,
+    /// or the commit would have no id to return.
+    #[test]
+    fn an_empty_catalogue_skips_the_provider_step_entirely() {
+        let mut state = FirstRun::new(Vec::new(), 3, true);
+        assert_eq!(state.steps, vec![Step::Access]);
+        assert!(key(&mut state, KeyCode::Enter));
+        assert_eq!(state.finished, Some(Some(Answers { provider: None, access: AccessTier::Ask })));
+    }
+
+    #[test]
+    fn provider_selection_clamps_at_both_ends() {
         let mut state = FirstRun::default();
         for _ in 0..10 {
             key(&mut state, KeyCode::Up);
         }
-        assert_eq!(state.model, 0);
-        for _ in 0..10 {
-            key(&mut state, KeyCode::Down);
-        }
-        assert_eq!(state.model, MODELS.len() - 1);
+        assert_eq!(state.provider, 0);
     }
 
     #[test]
     fn a_digit_picks_that_row_and_out_of_range_digits_are_ignored() {
         let mut state = FirstRun::default();
         key(&mut state, KeyCode::Char('2'));
-        assert_eq!(state.model, 1);
+        assert_eq!(state.provider, 1);
         key(&mut state, KeyCode::Char('9'));
-        assert_eq!(state.model, 1, "a digit past the end of the list must not move the selection");
+        assert_eq!(state.provider, 1, "a digit past the end of the list must not move the selection");
     }
 
     #[test]
     fn answering_both_steps_yields_both_answers() {
         let mut state = FirstRun::default();
-        key(&mut state, KeyCode::Char('2')); // opus
+        key(&mut state, KeyCode::Char('2')); // bravo
         key(&mut state, KeyCode::Enter);
         key(&mut state, KeyCode::Char('3')); // all
         assert!(key(&mut state, KeyCode::Enter));
-        assert_eq!(state.finished, Some(Some(Answers { model: "claude-opus-5", access: AccessTier::All })));
+        assert_eq!(
+            state.finished,
+            Some(Some(Answers { provider: Some("bravo".into()), access: AccessTier::All }))
+        );
+    }
+
+    /// A provider revealed by `more` is answerable like any other — the
+    /// expansion is a view change, not a separate mode.
+    #[test]
+    fn a_provider_from_behind_more_can_be_committed() {
+        let mut state = FirstRun::default();
+        for _ in 0..10 {
+            key(&mut state, KeyCode::Down);
+        }
+        key(&mut state, KeyCode::Enter); // take `more`
+        key(&mut state, KeyCode::Char('6')); // foxtrot
+        key(&mut state, KeyCode::Enter); // advance to access
+        assert!(key(&mut state, KeyCode::Enter));
+        assert_eq!(
+            state.finished,
+            Some(Some(Answers { provider: Some("foxtrot".into()), access: AccessTier::Ask }))
+        );
     }
 
     #[test]

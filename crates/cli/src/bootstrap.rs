@@ -35,11 +35,23 @@ impl LlmClient for AnyLlmClient {
 
 const CHANNEL_CAPACITY: usize = 64;
 
-/// The environment variable a first-run `provider.yaml` names for its API
-/// key. `provider.yaml` deliberately has no field a plaintext key could go
-/// in (see `ProviderConfig`), so first run writes the variable's *name* and
-/// the developer exports the key themselves.
-const DEFAULT_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+/// The `provider.yaml` a first-run answer writes: everything but the model
+/// comes straight off the catalogue row the developer picked, and the model
+/// is that provider's own default (`/model` changes it afterwards).
+///
+/// `provider.yaml` deliberately has no field a plaintext key could go in
+/// (see `ProviderConfig`), so this writes the key variable's *name* and the
+/// developer exports the key themselves.
+fn first_run_provider_config(provider: &mjolnir_llm::Provider) -> ProviderConfig {
+    ProviderConfig {
+        version:                  PROVIDER_VERSION,
+        provider:                 provider.kind,
+        model:                    provider.default_model().to_string(),
+        base_url:                 provider.base_url.map(String::from),
+        api_key_env:              provider.api_key_env.to_string(),
+        extended_thinking_budget: None,
+    }
+}
 
 /// The startup sequence from mjolnir-cli.md, in order:
 /// 1. init_global_if_empty — refuse to start on PartiallyPresent.
@@ -76,8 +88,9 @@ pub async fn run() -> Result<(), StartupError> {
     // First run, per ADR 0001. Two independent questions, and only the
     // unanswered ones are asked:
     //
-    // * no provider config resolves anywhere — the model is unknown, and it
-    //   has to be answered before the LLM client below can be constructed;
+    // * no provider config resolves anywhere — where the model runs is
+    //   unknown, and it has to be answered before the LLM client below can
+    //   be constructed;
     // * this project has no `.mjolnir/permissions.yaml` — a directory the
     //   harness has never been pointed at, whose access posture is
     //   therefore undeclared.
@@ -85,29 +98,31 @@ pub async fn run() -> Result<(), StartupError> {
     // The file's *existence* is the test, not whether it parses to an empty
     // allow list: a developer who has deliberately allowed nothing has
     // answered the question, and must not be asked again on every start.
-    let needs_model = config.global_provider().is_err();
+    let needs_provider = config.global_provider().is_err();
     let needs_access = !cwd.join(".mjolnir").join("permissions.yaml").exists();
-    if needs_model || needs_access {
+    if needs_provider || needs_access {
+        // mjolnir-tui is handed the display half of each catalogue row and
+        // nothing else — it renders the list, it does not know what an
+        // endpoint or a key variable is, and it does not depend on this
+        // crate or on mjolnir-llm to find out.
+        let choices = mjolnir_llm::PROVIDERS
+            .iter()
+            .map(|p| mjolnir_tui::ProviderChoice::new(p.id, p.purpose))
+            .collect::<Vec<_>>();
         // `None` means the developer quit without answering. Nothing is
         // written and no session opens — a first run that was dismissed must
         // not fall back to defaults, least of all for the access question.
-        let Some(answers) = mjolnir_tui::run_first_run(theme, needs_model).await.map_err(StartupError::FirstRun)? else {
+        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, needs_provider)
+            .await
+            .map_err(StartupError::FirstRun)?
+        else {
             return Ok(());
         };
-        if needs_model {
-            config
-                .set_provider(
-                    Scope::Global,
-                    ProviderConfig {
-                        version:                  PROVIDER_VERSION,
-                        provider:                 ProviderKind::Anthropic,
-                        model:                    answers.model.to_string(),
-                        base_url:                 None,
-                        api_key_env:              DEFAULT_API_KEY_ENV.to_string(),
-                        extended_thinking_budget: None,
-                    },
-                )
-                .map_err(StartupError::FirstRunWrite)?;
+        // Answered only when it was asked — the access-only run leaves the
+        // provider the developer already configured alone.
+        if let Some(id) = answers.provider.as_deref() {
+            let picked = mjolnir_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
+            config.set_provider(Scope::Global, first_run_provider_config(picked)).map_err(StartupError::FirstRunWrite)?;
         }
         // Written even when the tier grants nothing: the file's existence is
         // what records that this directory's question has been answered, so
@@ -128,6 +143,13 @@ pub async fn run() -> Result<(), StartupError> {
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
     let provider_config = mjolnir_llm::resolve(project_provider.as_ref(), &global_provider);
     let model_name = provider_config.model.clone();
+    // What this process actually booted on, captured before anything can
+    // rewrite `provider.yaml` underneath it. `/model` persists a choice it
+    // cannot apply to a running session, and has to name what the session
+    // is still using — which stops being what is on disk the moment the
+    // command is used once.
+    let effective_provider = project_provider.clone().unwrap_or_else(|| global_provider.clone());
+    let session_model = slash::qualified(&effective_provider, mjolnir_llm::identify(&effective_provider));
     let client = match provider_config.kind {
         ProviderKind::Anthropic => AnyLlmClient::Anthropic(mjolnir_llm::AnthropicClient::new(provider_config)?),
         ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(mjolnir_llm::OpenAiCompatibleClient::new(provider_config)?),
@@ -154,7 +176,7 @@ pub async fn run() -> Result<(), StartupError> {
     let (agent_cmd_tx, agent_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), event_tx.clone()));
+    let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), session_model, event_tx.clone()));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
     let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme).await;

@@ -70,6 +70,72 @@ note for the `App`/`ui.rs` side (switches live, no restart, since `App::
 theme` is read fresh on every draw) and mjolnir-core.md's for the new
 `Event` variant.
 
+**Post-archive addition (2026-09-06, `/model`):** Follow-up to mjolnir-tui's
+same-day first-run rework, where screen `5d`'s first step became *provider*
+rather than *model* and its prose promises "/model picks a model once the
+session starts". That clause had been dropped from the frame twice for
+naming a command that did not exist; this is the command.
+
+One command, not two, because the two halves are not separable: a model id
+means nothing without the provider whose catalogue it comes from, and
+picking a provider with no model would leave `provider.yaml` incomplete.
+`/model [provider/]model` splits its argument on the *first* `/` only. No
+slash means a model id on the provider already configured. A slash means
+the half before it must name a catalogue provider
+(`mjolnir_llm::PROVIDERS`), and everything after it is the model — so
+`openrouter/qwen/qwen3-coder` reaches the right place. A slashed argument
+whose first segment is *not* a provider is rejected rather than read as a
+slashed model id: both readings are available, and the rejected one is what
+a mistyped provider looks like (`gogle/gemini-2.5-pro` would otherwise be
+written verbatim as a model on whatever provider was already set, and
+reported as success).
+
+The provider half is validated; the model half is not. A provider decides
+an endpoint, a wire dialect and a key variable, none of which can be
+guessed from a name. A model id is a plain string in `provider.yaml`, and a
+provider's real catalogue is a network call away and changes without us —
+so the notice lists what the harness *knows* rather than claiming to know
+all of it.
+
+Two things it does differently from `/theme`, both because the truth is
+different:
+
+1. **It writes the scope that actually supplies the setting** — project
+   `provider.yaml` when one exists, global otherwise. Writing global while
+   a project file shadows it would report a change the next start ignores.
+2. **It does not take effect now, and says so.** The `LlmClient` is
+   constructed in `bootstrap::run` and moved into the agent task, which
+   owns it for the life of the process; there is no way to swap it under a
+   running turn. `/theme` really does apply on the next redraw, so it
+   promises that; this one persists the choice and states plainly that the
+   session keeps what it started with. Emitting an event that redrew the
+   top bar with the new model name would have been the easy lie.
+
+   The model it names there is threaded in — `run_interceptor` takes a
+   `session_model: String` captured in `bootstrap::run` beside the client it
+   describes. Reading the current setting back off disk was the first cut
+   and was wrong the moment the command was used twice in one session: the
+   second call reported the *first* call's write as what the session was
+   running. Caught by previewing the notices rather than by a test, and now
+   pinned by `the_session_model_reported_is_the_one_the_process_started_with`.
+
+`HELP_TEXT` updated to include it. The catalogue itself lives in
+mjolnir-llm (see its own post-archive note): first run and this command
+read the same list, so a provider added there appears in both without
+either being edited.
+
+**Post-archive addition (2026-09-06, first run asks for a provider):**
+`bootstrap::run`'s `needs_model` is now `needs_provider`, and the answer it
+writes comes off a catalogue row rather than being hard-coded Anthropic —
+`DEFAULT_API_KEY_ENV` is gone with it. The CLI is what joins the two
+crates that must not depend on each other: it maps `mjolnir_llm::PROVIDERS`
+into `mjolnir_tui::ProviderChoice` (id and purpose, nothing else) and hands
+the display list to `run_first_run`, then maps the returned id back to the
+catalogue row to build the `ProviderConfig`. `Answers::provider` is an
+`Option`, so the access-only run — a new directory under an already
+configured provider — cannot overwrite a provider it never asked about.
+
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

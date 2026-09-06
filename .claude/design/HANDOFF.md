@@ -280,6 +280,33 @@ Purpose: settle account, model and access before the first prompt.
 > **Superseded by Turn 13 — see `SYNC.md`.** First run was rebuilt: wordmark,
 > positioning line, **two** steps, a four-point access scale, and **no account
 > step**.
+>
+> **Superseded again (frame re-fetched 2026-09-06).** The two steps are now
+> **`provider` then `access`**; there is no `model` step at all. Measured off
+> `Agent TUI v2.dc.html`'s own inline styles in the discussion project
+> (`25845063-…`), since neither this prose nor the token CSS states these:
+>
+> - Step shape: name in the 8-cell label column, `step n/m` beneath it in
+>   `--t-dim` (exactly 8 cells — hence the slash), and in the body column one
+>   row of `--t-body` prose, one blank row, then the option rows. Active
+>   step's label in `--t-accent-you`, inactive in `--t-label`; **both** state
+>   their number.
+> - `provider` prose: `Where the model runs. /model picks a model once the
+>   session starts.` Rows, in the shared 16-cell option field: `anthropic`
+>   (`claude models · ANTHROPIC_API_KEY`), `google` (`gemini models ·
+>   GOOGLE_API_KEY`), `openai` (`gpt models · OPENAI_API_KEY`), `ollama`
+>   (`local models · no key`), then `more` (`the full provider list`) with a
+>   `→` flush to the 3-cell right margin. `more`'s name is `--t-label` and its
+>   purpose `--t-dim` — one step quieter than a real option.
+> - `access` prose: `Which actions run without asking. /access changes it
+>   later.` Four rows, none selected while `provider` is the active step.
+> - The selected row's purpose text is `--t-accent-text`, not `--t-quiet`.
+> - Footer: `⏎ continue`, then `↑↓ choose`, with the config location right.
+>
+> Mjolnir ships three of the four provider rows (`ollama` cannot work while
+> `api_key_env` is required), three access points rather than four, and drops
+> the `/access` clause — see `.claude/spec/mjolnir-tui.md`'s entry of the same
+> date.
 
 ## Interactions & behavior
 

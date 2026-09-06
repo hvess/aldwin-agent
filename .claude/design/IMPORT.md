@@ -63,6 +63,15 @@ not upstream text. Everything else in that file is as fetched.
   read path and it round-trips content through the model context, so these were
   left for a targeted fetch rather than a blind copy. **They remain the only
   place cell positions exist** (CLAUDE.md's "measure the handoff HTML" rule).
+
+  `Agent TUI v2.dc.html` was fetched once, later on 2026-09-06, because `5d`
+  had changed upstream: first run's opening step is now `provider`, and the
+  `model` step is gone. It was measured, not copied — the frame's own
+  paragraph in `HANDOFF.md` carries what came out of it, and nothing new
+  landed in `tokens/`. Every landmark it needed (`--label-col`,
+  `--option-label-col`, `--section-gap-h`) already existed; the frame's
+  update was content, not grid. **The design's own `updatedAt` is no guide to
+  whether this happened** — see the note above on why.
 - `tokens/{base,elevation,fonts,motion,typography}.css`, `styles.css`,
   `_ds_bundle.js`, `_ds_manifest.json`, `_adherence.oxlintrc.json`.
 - `screenshots/` (33 PNGs), `uploads/` (16 PNGs + a zip).

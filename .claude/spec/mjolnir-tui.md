@@ -2452,6 +2452,73 @@ means nothing is thinking. Pre-existing and provider-independent, but
 Covered by `a_turn_ending_mid_thinking_clears_the_flag` in `app.rs`.
 
 
+**Progress (2026-09-06, screen 5d asks for a provider, not a model):** The
+design's `5d` was re-fetched from the discussion project
+(`25845063-…`, `Agent TUI v2.dc.html`) and had changed: the first step is
+now `provider`, `access` has moved to `step 2/2`, and the `model` step is
+gone from first run entirely. Rebuilt to match.
+
+The move is the right one and worth stating: a model id means nothing until
+you know whose catalogue it comes from, and the provider is the answer that
+has to be settled before an `LlmClient` can be constructed at all. The model
+follows from it — first run writes the chosen provider's default and
+`/model` changes it once the session is running.
+
+What the frame now carries, measured off the handoff HTML rather than read
+off its prose:
+
+- Each step is its name in the 8-cell label column, `step n/m` beneath it,
+  and in the body column one row of prose, a blank row, then the option
+  rows. The prose row is new; the two steps sit 3 blank rows apart as
+  before (`--section-gap-h`).
+- The provider list is 3 curated rows plus a `more` row carrying `the full
+  provider list` and a `→` flush to the 3-cell right margin. `⏎` on `more`
+  expands the list in place — it neither commits nor advances a step, since
+  taking it is asking to see the rest of the question. The row then goes,
+  having nothing left to reveal, and the selection lands on the first
+  provider it uncovered rather than snapping back to the top.
+- A selected row's purpose text moved from `--tui-quiet` to
+  `--tui-accent-text`, which is what `5a`, `5c` and `5d` all show and what
+  the old code was alone in not doing.
+- The footer's key order is the reference's: `⏎ continue` then `↑↓ choose`.
+
+Two earlier deviations are now closed, and one stays:
+
+1. **`step n/m`, not `1 of 2`.** The 2026-09-06 entry above shortened it
+   because `step 1 of 2` overflowed the 8-cell label column. The reference
+   writes it with a slash — `step 1/2` is *exactly* 8 cells — so the
+   reference's own wording fits and is used. A test measures the counter at
+   cells 3–10 and asserts the 2-cell gutter behind it stays blank.
+2. **`/model` in the prose is now true.** The clause was dropped twice for
+   naming a command that did not exist; `/model [provider/]model` was built
+   alongside this (see `.claude/spec/archive/mjolnir-cli.md`).
+3. **`/access` is still dropped.** The access step's design copy promises
+   "/access changes it later" and there is no such command, so the sentence
+   ends at "Which actions run without asking." A test asserts the string
+   `/access` appears nowhere in the rendered frame — a promise the harness
+   cannot keep is worse than a shorter sentence.
+
+`ollama` is absent from the provider list, which the design shows as its
+fourth curated row. It is the one row whose copy — "local models · no key" —
+the harness cannot honour: `api_key_env` is required in `provider.yaml` and
+the OpenAI-compatible client refuses to start when the variable it names is
+unset, so the row would be an option that cannot open a session. See
+`.claude/spec/archive/mjolnir-llm.md`'s catalogue note.
+
+Layering: this crate still does not know what an endpoint or a key variable
+is. `ProviderChoice { id, purpose }` is the display half of a catalogue row,
+handed in by mjolnir-cli, and `Answers::provider` is the id handed back —
+an `Option`, so the access-only run cannot overwrite a provider it never
+asked about. `MODELS` and `ModelChoice` are gone from this crate; the
+catalogue that replaced them is `mjolnir_llm::PROVIDERS`.
+
+`FirstRun::default()` is now `#[cfg(test)]` and builds a stand-in catalogue
+(`alpha`…`foxtrot`, three curated) rather than the real one, so a test does
+not fail every time a provider is added upstream. One test measures the
+expanded screen against the 36-row frame, which is the tallest it ever
+gets. 444 workspace tests pass; clippy clean.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

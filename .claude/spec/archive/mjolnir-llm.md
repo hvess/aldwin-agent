@@ -88,6 +88,48 @@ downstream fix this surfaced, recorded in `.claude/spec/mjolnir-tui.md`:
 `App::thinking` was never cleared by `TurnEnded`, so a stream dying
 mid-thinking left the spinner claiming the agent was still thinking.
 
+**Post-archive addition (2026-09-06, the provider catalogue):** `catalog.rs`
+— what first run's `provider` step and `/model` choose between. It is a
+static list of `Provider` rows: an id, a `ProviderKind`, the row copy the
+frame shows, the key variable's *name*, the full chat-completions URL, and
+a short list of model ids.
+
+It lives in this crate because every field in it is knowledge this crate
+already owns — which wire dialect a host speaks, what its endpoint is, and
+which variable holds its key. mjolnir-tui renders the list but must not
+depend on this crate (`depends_on: [mjolnir-core]`), so mjolnir-cli maps
+each row down to the display half (`ProviderChoice { id, purpose }`) and
+hands *that* to `run_first_run`. Nothing about an endpoint crosses into the
+TUI.
+
+Three rules the tests pin rather than the prose:
+
+- **The model lists are seeds, not a ceiling.** A provider's real catalogue
+  is a network call away and changes without us. `provider.yaml` takes any
+  model id as a plain string and so does `/model`; `models[0]` is only what
+  first run writes when the developer picks a provider and says nothing
+  else, and `every_provider_offers_a_model` is what stops that indexing an
+  empty slice.
+- **The endpoint identifies a provider, not a name stored on disk.**
+  `identify()` matches a written `ProviderConfig` back to its catalogue row
+  on `(kind, base_url)`. `provider.yaml` records what to *call*; adding a
+  name field would be a second source of truth that could disagree with the
+  URL beside it, and a hand-written endpoint correctly comes back as
+  `None` rather than being labelled with someone else's name.
+- **`CURATED` is a prefix, not a second list.** First run shows
+  `PROVIDERS[..CURATED]` and hangs the rest behind one `more` row, so the
+  first question is answerable without reading a catalogue.
+
+**No keyless provider.** The design's `5d` offers `ollama` as "local models
+· no key", and it is not here. `api_key_env` is a required field of
+`provider.yaml` and `OpenAiCompatibleClient::new` refuses to start when the
+variable it names is unset, so a keyless row would be an option that cannot
+open a session. Supporting one means relaxing that field to an `Option`,
+which changes a persisted format and wants its own decision record first;
+that was weighed and deferred rather than worked around, and the row is
+absent rather than present-and-broken.
+
+
 ## Why
 
 Writing the Anthropic client by hand is what makes caching, streaming, and retry behaviour controllable rather than abstract. This crate owns the wire and translates Anthropic SSE into the core's normalised event stream. No Anthropic type crosses its public surface, so the V0.5 OpenAI-compatible adapter is a sibling impl behind the same trait, not a refactor.

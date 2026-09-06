@@ -691,7 +691,7 @@ fn a_tool_prompt_states_the_rule_it_would_save_and_what_each_option_does() {
     let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  shell:cargo test"), "the exact rule must be named — allow means this command, not the shell tool: {out:?}");
+    assert!(out.contains("adds the rule  shell:cargo *"), "the rule must be named — allow means every cargo command, not this one argv (ADR 0001): {out:?}");
     assert!(out.contains("this call only; nothing is saved"), "the once tier must say it saves nothing: {out:?}");
     assert!(out.contains("saved to .mjolnir/permissions.yaml"), "the project tier must name where it writes: {out:?}");
     assert!(out.contains("saved to ~/.mjolnir/permissions.yaml"), "the always tier must name the *global* file, not the project one: {out:?}");
@@ -779,44 +779,64 @@ fn a_shell_prompt_shows_a_command_block_instead_of_a_raw_line() {
 }
 
 /// A path-like Tool prompt whose target has an enclosing directory must
-/// show the scope-toggle hint, naming both the current (exact-file)
-/// scope and what Tab would broaden it to — this is the actual
-/// discoverability path for the "approve this whole directory" feature.
+/// show the scope-toggle hint, naming both the current (directory)
+/// scope and the exact file Tab would narrow it to — so the developer
+/// can always see that the grant on the table is broader than the call
+/// that triggered it.
 #[test]
 fn a_path_like_prompt_shows_the_directory_scope_hint() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 20);
-    assert!(out.contains("adds the rule  read:./crates/tui/src/ui.rs"), "must name the rule the current exact-file scope would save: {out:?}");
-    assert!(out.contains("Tab  widen it to this whole directory  read:./crates/tui/src/**"), "must show the directory glob Tab would switch to, and that Tab is how: {out:?}");
+    assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "must name the rule the default directory scope would save: {out:?}");
+    assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "must show the exact file Tab would switch to, and that Tab is how: {out:?}");
 }
 
-/// After toggling, the stated rule becomes the directory glob and Tab
-/// becomes the way back to the exact file — otherwise the panel would
-/// name a rule other than the one it is about to persist.
+/// A path prompt opens on the directory glob (ADR 0001 makes the broad
+/// unit the default) with Tab offered as the way back to the exact file,
+/// and narrowing swaps both halves — otherwise the panel would name a
+/// rule other than the one it is about to persist.
 #[test]
 fn toggling_scope_flips_which_pattern_the_panel_calls_current() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    app.decision_pattern_scope = crate::app::PatternScope::Directory;
     let out = rendered(&mut app, 100, 20);
-    assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "the directory glob must now be the rule on the table: {out:?}");
-    assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "the exact file must still be shown as what Tab switches back to: {out:?}");
+    assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "the directory glob is the default rule on the table: {out:?}");
+    assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "the exact file must be shown as what Tab switches to: {out:?}");
+
+    app.decision_pattern_scope = crate::app::PatternScope::Exact;
+    let out = rendered(&mut app, 100, 20);
+    assert!(out.contains("adds the rule  read:./crates/tui/src/ui.rs"), "narrowing must put the exact file on the table: {out:?}");
+    assert!(out.contains("Tab  widen it to this whole directory  read:./crates/tui/src/**"), "and offer the directory back: {out:?}");
 }
 
-/// A non-path-like prompt (shell, an MCP tool's JSON blob) has nothing
-/// to broaden — it still states its rule, but must not offer a Tab
-/// press that would be a no-op.
+/// A shell prompt broadens to its *program*, not to a directory it does
+/// not have. This inverts the old behaviour, which offered no toggle at
+/// all on a non-path-like target and wrote the exact argv — the friction
+/// ADR 0001 exists to remove.
 #[test]
-fn a_non_path_like_prompt_offers_no_scope_toggle() {
+fn a_shell_prompt_offers_a_program_scope_toggle() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 20);
-    assert!(out.contains("adds the rule  shell:cargo test"), "the rule itself must still be stated: {out:?}");
-    assert!(!out.contains("Tab "), "a shell target has no directory to broaden to, so no toggle should be offered: {out:?}");
+    assert!(out.contains("adds the rule  shell:cargo *"), "the program glob is the default rule for a command: {out:?}");
+    assert!(out.contains("Tab  narrow it back to this one command  shell:cargo test -p gateway"), "the exact command must be offered back: {out:?}");
+}
+
+/// The degenerate case the program unit still has to handle: a target
+/// with no program token at all has nothing broader than itself, so the
+/// panel states its rule and offers no Tab press that would be a no-op.
+#[test]
+fn a_target_with_no_broader_form_offers_no_scope_toggle() {
+    let mut app = app();
+    let payload = PromptPayload::Tool { kind: "read".into(), target: "main.rs".into(), path_like: true };
+    app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+    let out = rendered(&mut app, 100, 20);
+    assert!(out.contains("adds the rule  read:main.rs"), "the rule itself must still be stated: {out:?}");
+    assert!(!out.contains("Tab "), "a bare filename has no enclosing directory to broaden to: {out:?}");
 }
 
 /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
@@ -922,8 +942,14 @@ fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
     // itself: `grid::elide` bounds the *whole* result to `max` cells,
     // the trailing glyph included, since its callers are hand-composed
     // rows that have exactly that many cells to spend.
+    //
+    // Since ADR 0001 a shell prompt also has an *alternate* — the exact
+    // command, offered back by Tab — which restates the same target a
+    // second time under the same elision. So the target's characters
+    // appear in three places: the command block in full, the broad rule,
+    // and the alternate.
     let in_grant_line = GRANT_RULE_MAX - "shell:".len() - 1;
-    assert_eq!(out.matches('q').count(), 200 + in_grant_line, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+    assert_eq!(out.matches('q').count(), 200 + 2 * in_grant_line, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
 }
 
 /// Regression test for the actual reported defect, not just the

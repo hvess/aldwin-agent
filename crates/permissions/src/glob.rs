@@ -72,3 +72,36 @@ mod tests {
         assert!(glob_match("*", "anything"));
     }
 }
+
+#[cfg(test)]
+mod adr_0001_tests {
+    use super::*;
+
+    /// The `all` access tier writes `shell:*`. If `*` did not match a
+    /// command with arguments, that tier would silently grant nothing.
+    #[test]
+    fn a_bare_star_matches_any_command() {
+        assert!(glob_match("*", "cargo test -p gateway"));
+        assert!(glob_match("*", "ls"));
+        assert!(glob_match("*", ""));
+    }
+
+    /// The program unit `cargo *` matches any cargo invocation with
+    /// arguments, and deliberately not a bare `cargo` — the trailing space
+    /// is literal, so an argument-less command re-prompts rather than
+    /// slipping through.
+    #[test]
+    fn a_program_glob_matches_that_programs_commands_only() {
+        assert!(glob_match("cargo *", "cargo test -p gateway"));
+        assert!(glob_match("cargo *", "cargo build"));
+        assert!(!glob_match("cargo *", "cargo"), "fails closed on a bare program name");
+        assert!(!glob_match("cargo *", "git status"), "must not leak to another program");
+    }
+
+    /// `read:**` is what the `read` tier writes.
+    #[test]
+    fn a_double_star_matches_any_path() {
+        assert!(glob_match("**", "./crates/tui/src/ui.rs"));
+        assert!(glob_match("**", "main.rs"));
+    }
+}

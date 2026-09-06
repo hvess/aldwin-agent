@@ -184,6 +184,35 @@ Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request run
 - GC of unreachable context-file paths — flagged, deferred past V0.
 - Audit log of grant changes — out of V0; TUI shows current state only.
 
+**Progress (2026-09-06, ADR 0001 — the grant unit):** A grant is no longer an
+exact argv or a single file path by default. See
+`.claude/adr/0001-tool-level-permission-grants.md` for the decision and its
+alternatives; the short version is that tools are classified three ways and
+the class picks the unit — `read`/`explain` grant over a **directory**,
+`shell` grants over a **program** (`argv[0]`, so `shell:cargo *`), and `edit`
+is not grantable at all and is now formally out of the permissions model.
+
+The engine is untouched: `kind:pattern` and the glob matcher are exactly as
+this spec describes them, and every persisted entry — including exact-argv
+ones from earlier builds — still matches as before, so there is no migration.
+What changed is which patterns the TUI *offers*: `PatternScope` is now
+`Broad` (default) / `Exact` rather than `Exact` (default) / `Directory`, and
+Tab narrows where it used to widen. `GrantSummary` gained a `unit` so the Tab
+hint can say "this whole directory" or "every cargo command" rather than one
+wording that was wrong for half the prompts.
+
+This closes the "are we approving the tool? the directory?" feedback recorded
+at `app.rs:127` in its own terms rather than by restating the rule more
+precisely, which is what the previous pass did.
+
+**Deliberately still true:** Edit is refused at `engine.rs:92` before any list
+is consulted, and no first-run tier writes an `edit:` rule. The claim the
+harness can make is "no `edit` lands without a diff you accepted" — *not*
+"nothing writes without your approval", since a program-level shell grant can
+still write (`cargo test` runs build scripts, `git checkout` mutates). The
+design system's readme overstates this and wants rewording to name `edit`.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent; default-deny and friction-as-feature decisions.

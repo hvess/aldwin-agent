@@ -278,6 +278,19 @@ impl Config {
         })
     }
 
+    /// Writes `permissions.yaml` for `scope` if it does not exist yet,
+    /// leaving whatever it already holds untouched if it does.
+    ///
+    /// The point is the file's *existence*, not its contents: mjolnir-cli
+    /// treats a project with no permissions file as one whose access
+    /// question has never been answered, so an answer of "allow nothing"
+    /// still has to leave a file behind or it would be asked again on every
+    /// start. Without this, that case could only be expressed by adding a
+    /// grant and removing it again.
+    pub fn ensure_permissions(&self, scope: Scope) -> Result<(), ConfigError> {
+        self.with_permissions_mut(scope, |_| {})
+    }
+
     pub fn remove_grant(&self, scope: Scope, list: GrantList, entry: &str) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| {
             let target = match list { GrantList::Allow => &mut cfg.allow, GrantList::Deny => &mut cfg.deny };

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use mjolnir_config::{Config, InitOutcome, McpServer, ProviderKind};
+use mjolnir_config::{Config, GrantList, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
 use mjolnir_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
 use mjolnir_permissions::Engine;
 use mjolnir_tools::{register_mcp_tools, Dispatcher, McpBridge};
@@ -35,6 +35,12 @@ impl LlmClient for AnyLlmClient {
 
 const CHANNEL_CAPACITY: usize = 64;
 
+/// The environment variable a first-run `provider.yaml` names for its API
+/// key. `provider.yaml` deliberately has no field a plaintext key could go
+/// in (see `ProviderConfig`), so first run writes the variable's *name* and
+/// the developer exports the key themselves.
+const DEFAULT_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+
 /// The startup sequence from mjolnir-cli.md, in order:
 /// 1. init_global_if_empty — refuse to start on PartiallyPresent.
 /// 2. Load all config layers (`Config::open` — refuses to start on any
@@ -58,6 +64,59 @@ pub async fn run() -> Result<(), StartupError> {
     match config.init_global_if_empty()? {
         InitOutcome::Created | InitOutcome::AlreadyPresent => {}
         InitOutcome::PartiallyPresent { missing } => return Err(StartupError::PartiallyPresentGlobalConfig { missing }),
+    }
+
+    // `theme` is global-only (see mjolnir-config's annotated tui.yaml) —
+    // resolved once, before anything draws, and never revisited for the rest
+    // of the session (mjolnir_tui::palette's own doc comment explains why
+    // this is a one-time explicit choice, not a live setting). Read here
+    // rather than just before the session TUI because first run draws first.
+    let theme = mjolnir_tui::Theme::from_config(config.global_tui().theme.as_deref());
+
+    // First run, per ADR 0001. Two independent questions, and only the
+    // unanswered ones are asked:
+    //
+    // * no provider config resolves anywhere — the model is unknown, and it
+    //   has to be answered before the LLM client below can be constructed;
+    // * this project has no `.mjolnir/permissions.yaml` — a directory the
+    //   harness has never been pointed at, whose access posture is
+    //   therefore undeclared.
+    //
+    // The file's *existence* is the test, not whether it parses to an empty
+    // allow list: a developer who has deliberately allowed nothing has
+    // answered the question, and must not be asked again on every start.
+    let needs_model = config.global_provider().is_err();
+    let needs_access = !cwd.join(".mjolnir").join("permissions.yaml").exists();
+    if needs_model || needs_access {
+        // `None` means the developer quit without answering. Nothing is
+        // written and no session opens — a first run that was dismissed must
+        // not fall back to defaults, least of all for the access question.
+        let Some(answers) = mjolnir_tui::run_first_run(theme, needs_model).await.map_err(StartupError::FirstRun)? else {
+            return Ok(());
+        };
+        if needs_model {
+            config
+                .set_provider(
+                    Scope::Global,
+                    ProviderConfig {
+                        version:                  PROVIDER_VERSION,
+                        provider:                 ProviderKind::Anthropic,
+                        model:                    answers.model.to_string(),
+                        base_url:                 None,
+                        api_key_env:              DEFAULT_API_KEY_ENV.to_string(),
+                        extended_thinking_budget: None,
+                    },
+                )
+                .map_err(StartupError::FirstRunWrite)?;
+        }
+        // Written even when the tier grants nothing: the file's existence is
+        // what records that this directory's question has been answered, so
+        // an `ask` answer has to leave one behind or it would be asked again
+        // on the next start.
+        config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
+        for entry in answers.access.grants() {
+            config.add_grant(Scope::Project, GrantList::Allow, entry).map_err(StartupError::FirstRunWrite)?;
+        }
     }
 
     let permissions = Arc::new(Engine::new(config.clone()));
@@ -98,11 +157,6 @@ pub async fn run() -> Result<(), StartupError> {
     let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), event_tx.clone()));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
-    // `theme` is global-only (see mjolnir-config's annotated tui.yaml) —
-    // resolved once here, before the TUI's first draw, and never revisited
-    // for the rest of the session (mjolnir_tui::palette's own doc comment
-    // explains why this is a one-time explicit choice, not a live setting).
-    let theme = mjolnir_tui::Theme::from_config(config.global_tui().theme.as_deref());
     let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme).await;
 
     // The TUI dropped its command sender on return, closing tui_cmd_rx;

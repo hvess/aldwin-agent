@@ -7,7 +7,7 @@ mod store;
 
 pub use domain::{
     ContextFilesConfig, McpConfig, McpServer, McpTransport, PermissionsConfig, ProviderConfig,
-    ProviderKind, TuiConfig,
+    ProviderKind, TuiConfig, PROVIDER_VERSION,
 };
 pub use error::ConfigError;
 pub use scope::Scope;

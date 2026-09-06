@@ -74,6 +74,17 @@ Two rules that now govern every layout decision (Turn 13):
 and what it corrected; read the 2026-09-06 entry before touching layout in
 `crates/tui/src/ui/`.
 
+## Decision records
+
+`.claude/adr/` holds numbered architecture decision records for changes that
+alter a stated constraint or a persisted format. Read them before reopening
+a decision they cover.
+
+- **0001 — Grants are per tool and per program, not per command string.**
+  Tool classes pick the grant unit; `edit` is out of the permissions model
+  entirely and stays a conscious diff. Also re-derives first run's access
+  scale to three points.
+
 ## Key Constraints (non-negotiable)
 
 - Default-deny permissions: no tool may act without an explicit grant. No "obviously safe" carve-out.

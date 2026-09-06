@@ -2339,6 +2339,45 @@ longer reserves two rows for edges.
 box-drawing glyph anywhere.
 
 
+**Progress (2026-09-06, screen 5d — first run):** Built. `crates/tui/src/
+first_run.rs` holds the state and its own terminal loop; `crates/tui/src/ui/
+first_run.rs` draws it. It runs *before* the session TUI because the model
+answer decides which LLM client `mjolnir-cli`'s bootstrap constructs, so it
+cannot be a mode inside `App`.
+
+Triggered by either question being unanswered: no provider config resolves
+(the model is unknown), or the project has no `.mjolnir/permissions.yaml`
+(this directory's access posture is undeclared). Only the unanswered steps
+are shown, and the `n of m` counter reads off that list — entering a new
+directory with a model already configured asks one question, not two.
+
+Faithful to the design system's Brand mark and First run sections: a one-row
+reverse-video wordmark (`  M J O L N I R  `, accent as ground, desk as ink —
+never the multi-row block that was built and cut), the positioning line in
+`--tui-dim`, three blank rows between sections, the shared option row
+(`▌`, two spaces, a 16-cell name field, then a purpose statement), and
+`config → ~/.mjolnir/` in the footer. Nothing is preselected on `access`, so
+`⏎` refuses to commit it — a security question must not be answered by
+inertia.
+
+Three deliberate deviations, each because the design's own wording would have
+been false here:
+
+1. **Three access points, not four.** With editing de-scoped (ADR 0001) the
+   `write` tier collapses into `read`, and a drafted `run` tier would have
+   written identical grants. See ADR 0001 §5.
+2. **No `/model` or `/access` in the prose.** The design's copy promises both
+   commands; neither exists (`/clear /exit /help /nope /quit /theme`). The
+   clause is dropped rather than shipped false.
+3. **`1 of 2`, not `step 1 of 2`.** The label column is 8 cells since Turn 13
+   and the longer form overflowed into the first option row. The reference
+   wrote "step 2 of 3" when that column was 12 cells wide.
+
+Also corrected here: `bottom_height` still reserved a row for the panel edge
+removed in the borderless pass, which put a stray `bar` row *below* the
+footer. The panel now takes exactly its own rows.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

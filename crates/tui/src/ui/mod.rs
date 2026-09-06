@@ -25,6 +25,7 @@
 mod chrome;
 mod decision;
 mod diff;
+pub(crate) mod first_run;
 mod grid;
 mod markdown;
 mod row;
@@ -102,12 +103,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // blank for the bottom one (`--bar-bottom-h`), the composer's own
     // height apart.
     //
-    // The panel is the one exception and takes a row for its edge: its
-    // first row is the title band, which carries text, so there is no spare
-    // cell for a half block there. The row above gets it instead, on
-    // `ground`, which is also what the handoff describes — "a one-cell
-    // accent-700 rule along its top edge".
-    let bottom_height = if pending { panel_height + 1 } else { input_height + 4 };
+    // The panel takes exactly its own rows. It used to claim one more for
+    // an edge above it — back when a `border-top` had to be drawn as the
+    // underline of the row above the band. There is no edge now, and
+    // leaving the row reserved put a stray `bar` row *below* the footer,
+    // since the panel's content renders from the top of its rect.
+    let bottom_height = if pending { panel_height } else { input_height + 4 };
     let [top_bar_area, log_area, bottom_area] =
         Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(bottom_height)]).areas(area);
 

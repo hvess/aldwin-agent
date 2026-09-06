@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use super::diff;
 use super::grid::{elide, Ctx, MARGIN_X};
 use super::row::{band_row, Row};
-use crate::app::{App, DecisionOption, GrantSummary, PatternScope, PendingFront};
+use crate::app::{App, DecisionOption, GrantSummary, GrantUnit, PatternScope, PendingFront};
 use crate::palette::Palette;
 
 /// Maximum rows the panel is allowed to claim, derived from the frame's
@@ -363,9 +363,15 @@ fn grant_lines(grant: &GrantSummary) -> Vec<String> {
     let mut lines = vec![format!("saving an answer adds the rule  {}", elide(&grant.rule, GRANT_RULE_MAX))];
     if let Some(alternate) = &grant.alternate {
         let alternate = elide(alternate, GRANT_RULE_MAX);
-        lines.push(match grant.scope {
-            PatternScope::Exact => format!("Tab  widen it to this whole directory  {alternate}"),
-            PatternScope::Directory => format!("Tab  narrow it back to this one file  {alternate}"),
+        // The wording follows the tool's own broad unit (ADR 0001): a path
+        // widens to its directory, a command to its program. One shared
+        // phrasing was wrong for half the prompts as soon as `shell` stopped
+        // granting the exact argv.
+        lines.push(match (grant.scope, &grant.unit) {
+            (PatternScope::Exact, GrantUnit::Directory) => format!("Tab  widen it to this whole directory  {alternate}"),
+            (PatternScope::Broad, GrantUnit::Directory) => format!("Tab  narrow it back to this one file  {alternate}"),
+            (PatternScope::Exact, GrantUnit::Program(program)) => format!("Tab  widen it to every {program} command  {alternate}"),
+            (PatternScope::Broad, GrantUnit::Program(_)) => format!("Tab  narrow it back to this one command  {alternate}"),
         });
     }
     lines

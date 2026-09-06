@@ -28,4 +28,14 @@ pub enum StartupError {
 
     #[error("could not read the current working directory: {0}")]
     Cwd(#[source] std::io::Error),
+
+    #[error("the first-run screen could not be drawn: {0}")]
+    FirstRun(#[source] std::io::Error),
+
+    /// Failing to persist a first-run answer is fatal rather than a warning:
+    /// the session would otherwise start with an access posture the
+    /// developer chose but the harness never recorded, and would ask again
+    /// on the next start as though nothing had been decided.
+    #[error("could not save the first-run answers: {0}")]
+    FirstRunWrite(#[source] mjolnir_config::ConfigError),
 }

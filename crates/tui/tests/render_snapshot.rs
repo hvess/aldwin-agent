@@ -376,3 +376,178 @@ fn no_frame_leaves_a_bordered_box_unclosed() {
         }
     }
 }
+
+// ── Grid conformance ────────────────────────────────────────────────────
+//
+// The snapshot above proves a render is *unchanged*. These prove it is
+// *correct* — that every scene sits on the design system's grid rather than
+// merely on the grid it sat on yesterday. Without them a wrong column is
+// preserved as faithfully as a right one, which is how the label column
+// stayed at 12 cells for as long as it did.
+//
+// Measured off the rendered buffer, never off the constants, per this
+// project's "render it before trusting your reading of it" rule: reading
+// `MARGIN_X` back out of the code and asserting it equals itself proves
+// nothing about what a developer sees.
+
+/// The design system's horizontal landmarks, in cells
+/// (`tokens/cells.css`). Restated here on purpose: a test that imported
+/// them from the code under test could only ever agree with it.
+const MARGIN: usize = 3;
+const LABEL_COL: usize = 8;
+const LABEL_GUTTER: usize = 2;
+const BODY_COL: usize = MARGIN + LABEL_COL + LABEL_GUTTER; // cell 13
+
+/// Cell index of the first non-blank glyph on a row, or `None` if blank.
+///
+/// Counts *cells*, not bytes — `▌` is three bytes, and measuring columns
+/// with `str::find` reports everything past a mark two cells right of where
+/// it is.
+fn first_glyph(buffer: &Buffer, y: u16) -> Option<usize> {
+    (0..buffer.area.width).find(|x| buffer[(*x, y)].symbol().trim() != " " && !buffer[(*x, y)].symbol().trim().is_empty()).map(|x| x as usize)
+}
+
+fn last_glyph(buffer: &Buffer, y: u16) -> Option<usize> {
+    (0..buffer.area.width).rev().find(|x| !buffer[(*x, y)].symbol().trim().is_empty()).map(|x| x as usize)
+}
+
+/// Every scene, both themes, at the design's own 120×36 frame.
+fn every_scene(mut f: impl FnMut(&str, Theme, &Buffer)) {
+    for theme in [Theme::Dark, Theme::Light] {
+        for name in SCENES {
+            let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+            scene(name, &mut app);
+            let buffer = render(&mut app, 120, 36);
+            f(name, theme, &buffer);
+        }
+    }
+}
+
+/// Nothing is drawn inside the 3-cell left margin, and nothing inside the
+/// 3-cell right margin.
+///
+/// The one deliberate exception is a selectable option row, which the
+/// design runs flush to the frame's own left edge so its `▌` mark lands in
+/// cell 0 ("Four option rows, flush to the frame's left edge"). That is the
+/// *only* row type allowed to start before the margin, so the exception is
+/// spelled as "cell 0 and the glyph is a mark" rather than as "anything
+/// before cell 3".
+#[test]
+fn every_scene_respects_the_three_cell_margins() {
+    every_scene(|name, theme, buffer| {
+        for y in 0..buffer.area.height {
+            let Some(first) = first_glyph(buffer, y) else { continue };
+            let is_option_row = first == 0 && buffer[(0, y)].symbol() == "▌";
+            assert!(
+                first >= MARGIN || is_option_row,
+                "{theme:?}/{name} row {y}: content starts in cell {first}, inside the 3-cell margin, and is not a flush option row"
+            );
+            let last = last_glyph(buffer, y).unwrap();
+            let right_edge = buffer.area.width as usize - 1;
+            assert!(
+                last <= right_edge - MARGIN,
+                "{theme:?}/{name} row {y}: content reaches cell {last}, inside the 3-cell right margin (frame ends at {right_edge})"
+            );
+        }
+    });
+}
+
+/// A transcript turn puts its speaker on the margin and its content on the
+/// body column. Both halves matter: the label proves the margin, and the
+/// content proves the 8-cell label column plus its 2-cell gutter, which is
+/// the measurement that was wrong for the longest.
+#[test]
+fn transcript_turns_use_the_label_column_and_the_body_column() {
+    let mut seen = 0;
+    every_scene(|name, theme, buffer| {
+        for y in 0..buffer.area.height {
+            let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<Vec<_>>().join("");
+            let cells: Vec<&str> = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect();
+            for label in ["you", "harness"] {
+                // The label must be at the margin, and must be the row's
+                // first glyph — otherwise this is prose that merely
+                // contains the word.
+                if first_glyph(buffer, y) != Some(MARGIN) {
+                    continue;
+                }
+                if !cells[MARGIN..MARGIN + label.len()].concat().eq(label) {
+                    continue;
+                }
+                seen += 1;
+                let after = cells[MARGIN + label.len()..BODY_COL].concat();
+                assert!(after.trim().is_empty(), "{theme:?}/{name} row {y}: the label column must be padding after {label:?}, got {after:?}");
+                let body_start = (BODY_COL..buffer.area.width as usize).find(|x| !cells[*x].trim().is_empty());
+                assert_eq!(
+                    body_start,
+                    Some(BODY_COL),
+                    "{theme:?}/{name} row {y}: a {label:?} turn's content must begin on the body column, cell {BODY_COL}: {row:?}"
+                );
+            }
+        }
+    });
+    assert!(seen > 0, "the scenes must actually contain transcript turns, or this test proves nothing");
+}
+
+/// The chrome bands are whole rows of one tone, and the boundaries between
+/// them are tonal rather than drawn — the Turn 13 rule, asserted over every
+/// scene rather than the one screen it was first checked on.
+#[test]
+fn every_scene_parts_its_bands_by_tone_and_draws_no_rules() {
+    every_scene(|name, theme, buffer| {
+        // The top bar is three rows of one colour, and the row under it is
+        // a different one.
+        let bar = buffer[(0, 0)].bg;
+        for y in 0..3u16 {
+            assert_eq!(buffer[(0, y)].bg, bar, "{theme:?}/{name}: the top bar is 3 rows of one tone");
+        }
+        assert_ne!(buffer[(0, 3)].bg, bar, "{theme:?}/{name}: the band below the top bar must differ in tone — that step is the boundary");
+
+        // Nothing anywhere is stroked, and no cell carries an underline
+        // standing in for a border.
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                assert!(
+                    !"─│┌┐└┘├┤┬┴┼╭╮╰╯━┃║╔╗╚╝▁▔".contains(cell.symbol()),
+                    "{theme:?}/{name} at {x},{y}: {:?} is a box-drawing glyph — nothing inside a frame is stroked",
+                    cell.symbol()
+                );
+
+            }
+
+            // A border drawn as a cell attribute: a whole row of blank
+            // cells carrying an underline, which is exactly the shape the
+            // bars used before Turn 13. Asserted per row rather than per
+            // cell, because an underlined *space inside a markdown heading*
+            // is legitimate text styling, not a rule.
+            let underlined_blanks = (0..buffer.area.width)
+                .filter(|x| {
+                    let cell = &buffer[(*x, y)];
+                    cell.modifier.contains(ratatui::style::Modifier::UNDERLINED) && cell.symbol().trim().is_empty()
+                })
+                .count();
+            assert!(
+                underlined_blanks < buffer.area.width as usize / 2,
+                "{theme:?}/{name} row {y}: {underlined_blanks} blank underlined cells — that is a border drawn as an attribute"
+            );
+        }
+    });
+}
+
+/// Scrollbars are listed under "Deliberately absent" in the design system,
+/// beside tabs, breadcrumbs and "any control that needs a mouse". One used
+/// to render down the right edge whenever the transcript overflowed — the
+/// single element in the frame that sat outside the right margin.
+#[test]
+fn no_scene_draws_a_scrollbar() {
+    every_scene(|name, theme, buffer| {
+        let right = buffer.area.width - 1;
+        for y in 0..buffer.area.height {
+            let symbol = buffer[(right, y)].symbol();
+            assert!(
+                symbol.trim().is_empty(),
+                "{theme:?}/{name} row {y}: {symbol:?} in the frame's last column — a scrollbar track is deliberately absent"
+            );
+        }
+    });
+}

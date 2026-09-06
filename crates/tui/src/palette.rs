@@ -48,6 +48,13 @@
 //! theme clears 3.0:1 on its recessed field). Every value below is now the
 //! token's own, so this file and the token layer agree again.
 //!
+//! There is deliberately no `line` field. `--tui-line` still exists
+//! upstream but is marked legacy there and scoped to "annotation around a
+//! frame"; its last consumer here was the transcript scrollbar, which the
+//! design lists under "Deliberately absent" and which has now been removed.
+//! `cells.css` states the rule this follows: "If a token here is not applied
+//! through a `var()` somewhere, delete it rather than document it."
+//!
 //! # Why there is no alpha blending here any more
 //!
 //! A diff row's fill used to be a CSS `rgba(...)` tint that had to be
@@ -102,11 +109,6 @@ pub(crate) struct Palette {
     /// stays one-to-one with the token layer and the snapshot fixtures can
     /// render a framed scene.
     pub scrim: Color,
-    /// `--tui-line` — legacy. Nothing inside a frame is stroked any more
-    /// (see this module's doc comment), so this survives for the one thing
-    /// the design system has no token for: the transcript scrollbar, which
-    /// is terminal chrome rather than part of a designed frame.
-    pub line: Color,
     /// `--tui-text` — primary text: paths that change, the current row,
     /// the composer draft, the "you" turn's content.
     pub text: Color,
@@ -184,7 +186,6 @@ pub(crate) const DARK: Palette = Palette {
     bar_bottom: Color::Rgb(0x36, 0x31, 0x3f),  // ground-4
     bar: Color::Rgb(0x47, 0x42, 0x51),         // ground-5
     panel_title: Color::Rgb(0x5d, 0x57, 0x6b), // ground-6
-    line: Color::Rgb(0x47, 0x42, 0x51),        // neutral-800 (legacy)
     text: Color::Rgb(0xf4, 0xf2, 0xf9),        // neutral-100
     body: Color::Rgb(0xe3, 0xdf, 0xeb),        // neutral-200
     code: Color::Rgb(0xec, 0xe9, 0xf3),
@@ -232,7 +233,6 @@ pub(crate) const LIGHT: Palette = Palette {
     bar_bottom: Color::Rgb(0xce, 0xc9, 0xd8),
     bar: Color::Rgb(0xe4, 0xe1, 0xeb),
     panel_title: Color::Rgb(0xce, 0xc6, 0xdf),
-    line: Color::Rgb(0xc9, 0xc5, 0xd2), // neutral-300 (legacy)
     text: Color::Rgb(0x17, 0x15, 0x1c),
     body: Color::Rgb(0x32, 0x2e, 0x39),
     code: Color::Rgb(0x22, 0x1f, 0x28),

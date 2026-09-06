@@ -2378,6 +2378,54 @@ removed in the borderless pass, which put a stray `bar` row *below* the
 footer. The panel now takes exactly its own rows.
 
 
+**Progress (2026-09-06, grid conformance + scrollbar removed):** The
+transcript's `Scrollbar` is gone. The design system lists scrollbars under
+"Deliberately absent" beside tabs, breadcrumbs and "any control that needs a
+mouse", and this one drew a `║` track down the frame's last column whenever
+the log overflowed — the single element in the frame sitting outside the
+3-cell right margin. The log still scrolls; only the drawn indicator is
+gone, and nothing replaced it: the transcript is bottom-anchored, so the
+live end is always on screen. `Palette::line` went with it, since the
+scrollbar was its last consumer and `cells.css`'s own rule is "if a token
+here is not applied through a `var()` somewhere, delete it rather than
+document it".
+
+Four conformance tests now sit beside the snapshot in
+`tests/render_snapshot.rs`, run over all 11 scenes in both themes at the
+design's 120×36 frame. The snapshot proves a render is *unchanged*; these
+prove it is *correct*, which is the gap that let the label column stay at 12
+cells for as long as it did — a wrong column is preserved as faithfully as a
+right one.
+
+They assert: both 3-cell margins (with the flush option row as the single
+spelled-out exception); that a transcript turn puts its speaker on the
+margin and its content on cell 13; that the top bar is three rows of one
+tone with a *different* tone beneath it, and that no box-drawing glyph or
+full row of underlined blanks appears anywhere; and that no scene draws a
+scrollbar. All four measure the rendered buffer rather than reading the
+constants back out of the code, and the grid values are restated in the test
+rather than imported — a test that imports `MARGIN_X` can only ever agree
+with it.
+
+Verified load-bearing by mutation: setting `LABEL_COL_WIDTH` back to 12
+fails the turn test with the actual rendered row in the message.
+
+Two things this surfaced and did *not* fix, both recorded rather than
+changed:
+
+1. The permission panel's option rows still derive their name column from
+   the longest label instead of the system's fixed 16-cell field, so the
+   panel's list and first run's list are two geometries for what the design
+   calls one control. The cause is upstream of the grid — Mjolnir's option
+   labels are sentences ("Allow for this session", 22 cells) that cannot fit
+   16, and Mjolnir added a detail column the reference's `5a` has no
+   equivalent for. Fixing it means shortening permission copy.
+2. Markdown headings render `BOLD | UNDERLINED`, where the design says one
+   size and one weight throughout and that "hierarchy is color and
+   position". This is LLM-authored prose rather than frame chrome, so it is
+   arguably a different domain, but it is a deviation either way.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

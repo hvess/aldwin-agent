@@ -2,10 +2,10 @@
 //! welcome hero that stands in for an empty log, and the panel that scrolls
 //! them.
 
-use ratatui::layout::{Margin, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -76,9 +76,17 @@ fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
 }
 
 /// Renders the log panel: `block` onto `outer`, its content onto `inner`
-/// (already computed once by `super::draw`), plus a `Scrollbar` on the
-/// inner-right edge when there's more content than the viewport can show
-/// and the log isn't showing the (never-scrollable) hero.
+/// (already computed once by `super::draw`).
+///
+/// **No scrollbar.** The design system lists scrollbars under "Deliberately
+/// absent", beside tabs, breadcrumbs and "any control that needs a mouse",
+/// and this one was drawing a `║` track down column 119 whenever the
+/// transcript overflowed — the one thing in the frame that sat outside the
+/// grid's right margin. The log still scrolls; what is gone is the drawn
+/// indicator of it. Nothing replaced it: the transcript is bottom-anchored,
+/// so the live end of the conversation is always the thing on screen, and
+/// the design's answer to "where am I" is that you are at the bottom unless
+/// you moved.
 pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, app: &App) {
     let ctx = Ctx::new(app.theme.palette(), inner.width);
     let lines = build_lines(app, ctx, inner.height);
@@ -89,19 +97,9 @@ pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block
     // (pre-wrap) rows instead and drift out of sync the moment anything
     // wraps.
     let offset = app.scroll.offset.min(u16::MAX as usize) as u16;
-    let total = app.total_lines();
 
     frame.render_widget(block, outer);
     frame.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).scroll((offset, 0)), inner);
-
-    if !app.log.is_empty() && total > inner.height as usize {
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).style(Style::default().fg(ctx.pal.line));
-        let mut state = ScrollbarState::new(total).position(offset as usize);
-        // Renders into the block's own right-border column, inset by 1 row
-        // top/bottom so it doesn't overwrite the panel's corners — the
-        // standard ratatui pattern (see `Scrollbar`'s own doc example).
-        frame.render_stateful_widget(scrollbar, outer.inner(Margin { vertical: 1, horizontal: 0 }), &mut state);
-    }
 }
 
 /// The number of terminal rows the log panel's inner area needs to fully

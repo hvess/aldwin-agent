@@ -4,8 +4,8 @@
 //!
 //! Structure, top to bottom, matching the design system's Permission
 //! screen: a title band, the card body (a sentence, the target, and either
-//! a bordered diff or a command block), the grant the answer would save,
-//! a rule, the numbered options, and a key-hint footer.
+//! a recessed diff field or a command block), the grant the answer would
+//! save, a separator band, the numbered options, and a key-hint footer.
 
 use mjolnir_permissions::PromptPayload;
 use ratatui::layout::Rect;
@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::diff;
 use super::grid::{elide, Ctx, MARGIN_X};
-use super::row::{rule_row, Row};
+use super::row::{band_row, Row};
 use crate::app::{App, DecisionOption, GrantSummary, PatternScope, PendingFront};
 use crate::palette::Palette;
 
@@ -33,12 +33,15 @@ pub(super) fn max_height(frame_height: u16) -> usize {
     // While a decision is pending the panel *is* the bottom bar — it takes
     // the composer's and status line's rows rather than stacking above
     // them (see `super::draw`), so those aren't reserved here.
-    const RESERVED_FOR_REST_OF_UI: u16 = 3 /* top bar */ + 1 /* top bar rule */ + 1 /* one row of log */ + 1 /* bottom bar edge */;
-    // [`panel_lines`] adds the band's row and the footer's 3 rows *outside*
+    // The top bar's rule row and the panel's own edge row are both gone —
+    // neither the bar nor the panel is stroked any more, so neither spends
+    // a row on an edge.
+    const RESERVED_FOR_REST_OF_UI: u16 = 3 /* top bar */ + 1 /* one row of log */;
+    // [`panel_lines`] adds the band's row and the footer's rows *outside*
     // the budget this bounds (see there for why) — reserved here too, so
     // the combined total still fits the same overall budget, not just the
     // clamped body alone.
-    const PANEL_CHROME: u16 = 1 /* band */ + 3 /* footer padding + rule + hint */;
+    const PANEL_CHROME: u16 = 1 /* band */ + 2 /* footer padding + hint */;
     (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI + PANEL_CHROME) as usize).max(6)
 }
 
@@ -130,26 +133,25 @@ impl PromptView {
     }
 }
 
-/// The Edit approval card: a sentence, the path, and the diff as a real
-/// bordered box (`InlineDiff.jsx`: `border: 1px solid var(--tui-line)`) on
-/// `diff_box` — one step off the card's `bar` field, so it reads as "a
-/// quoted block inside this card," the same nesting the command block uses
-/// for a different payload kind.
+/// The Edit approval card: a sentence, the path, and the diff as a
+/// recessed field on `diff_box` — a step off the card's `bar`, so it reads
+/// as "a quoted block inside this card," the same nesting the command block
+/// uses for a different payload kind. No outline: see the note on borders
+/// in `super`.
 ///
 /// Only ever the live panel — a *resolved* Edit's record in the log is a
-/// tool line plus its diff box on the turn's own body column, not a second
-/// copy of this card (see `transcript::render_entry`).
+/// tool line plus its diff field on the turn's own body column, not a
+/// second copy of this card (see `transcript::render_entry`).
 ///
 /// `card_rows` caps the whole card — [`panel_lines`] passes what's left of
-/// the panel's budget once the tail is known, and the diff box is sized
+/// the panel's budget once the tail is known, and the diff field is sized
 /// against whatever the card's own (wrappable, so measured rather than
-/// assumed) head leaves of that. The card therefore always fits its budget,
-/// which is what keeps [`clamp_panel`] from ever cutting into the box and
-/// leaving it unclosed.
+/// assumed) head leaves of that, so the card always fits its budget.
 fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<usize>, ctx: Ctx) -> Vec<Line<'static>> {
-    /// Two borders, one diff row and one elision marker — below this a box
-    /// can't say anything a plain note wouldn't say better.
-    const MIN_BOX_ROWS: usize = 4;
+    /// One diff row and one elision marker — below this a quoted field
+    /// can't say anything a plain note wouldn't say better. It was 4 while
+    /// the field had two edge rows of its own to pay for.
+    const MIN_BOX_ROWS: usize = 2;
 
     let pal = ctx.pal;
     let card = Row::card(pal.bar);
@@ -180,7 +182,7 @@ fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<us
         lines.extend(card.text(&format!("⋯ {hidden} diff line{} not shown ⋯", if hidden == 1 { "" } else { "s" }), pal.dim, ctx));
     } else {
         let budget = diff::Budget { collapse_context: true, max_rows: room };
-        lines.extend(diff::boxed(&body, budget, Row::boxed(pal.diff_box).inset(MARGIN_X, pal.bar), ctx));
+        lines.extend(diff::boxed(&body, budget, Row::field(pal.diff_box).inset(MARGIN_X, pal.bar), ctx));
     }
 
     lines.extend(tail);
@@ -232,18 +234,35 @@ fn command_block(command: &str, ctx: Ctx) -> Vec<Line<'static>> {
 /// field, on top of the `MARGIN_X` the field itself is inset by.
 const COMMAND_BLOCK_PAD: usize = 2;
 
-/// `Modal.jsx`'s title row: a field of `band` carrying the plain-lowercase
-/// kind (`permission`) in `accent_text`, no glyph (per the design system's
-/// revision log: a `▌` pip "indicated nothing" here), and the payload's own
-/// kind right-aligned in `hunk_header` — accent-600, the same step the
-/// reference's `7 of 22` count uses on the commands panel's header, not the
-/// neutral `dim` a shared right-hand style used to force on it. No rule of
-/// its own: the panel's single `border-top` is drawn by `super::draw`, on
-/// the row the bottom bar's own edge would otherwise occupy.
+/// The panel's title row: a field of `panel_title` carrying the
+/// plain-lowercase kind (`permission`) in `accent_text`, no glyph (per the
+/// design system's revision log: a `▌` pip "indicated nothing" here), and
+/// the payload's own kind right-aligned in `speaker_you`.
+///
+/// Two things here were wrong before and are fixed to match the system's
+/// own Turn 13 corrections:
+///
+/// * The field was `band` — the *selection* colour, an accent fill. That is
+///   precisely the treatment the design system rejected: a title row "began
+///   on an accent field, which read as a filled accent band and broke the
+///   guide's rule" that the accent is a mark and never a field. Its own
+///   `_ds_bundle.js` had the identical bug ("`CommandPanel` painted its
+///   title row with `--tui-band`, the selection colour, instead of
+///   `--tui-panel-title`"). The title row is a *lift*: `panel_title` is the
+///   top of the ground ladder, one step above the panel rather than an
+///   accent laid over it, which leaves the selection band the only accent
+///   fill in the frame besides the gauge.
+/// * The badge was `hunk_header`, the gauge-fill accent step. On the
+///   lighter title field that measured 2.2:1; the `you` step clears 3.8:1,
+///   and the system moved the right-flush fact there for exactly that
+///   reason.
+///
+/// No rule along the panel's top edge either — the step off the transcript
+/// is the whole boundary (see `super::draw`).
 fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
-    Row::card(ctx.pal.band).split(
+    Row::card(ctx.pal.panel_title).split(
         vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.accent_text))],
-        vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.hunk_header))],
+        vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.speaker_you))],
         ctx,
     )
 }
@@ -373,11 +392,12 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
         return Vec::new();
     }
     let card = Row::card(pal.bar);
-    // The flat `rule` above the options list — `readme.md`: freestanding
-    // rules are "one step more muted than the structural borders they sit
-    // beside." Shared by both arms below, since every payload kind's
-    // options list gets the same rule ahead of it.
-    let options_rule = || vec![card.blank(ctx), rule_row(pal.rule, pal.bar, ctx), card.blank(ctx)];
+    // The separator above the options list. The design system's permission
+    // screen replaced the old accent rule here with "one row of the
+    // recessed tone" — a band that sinks below the panel rather than a line
+    // drawn across it. Shared by both arms below, since every payload
+    // kind's options list gets the same separator ahead of it.
+    let options_rule = || vec![card.blank(ctx), band_row(pal.recess, ctx), card.blank(ctx)];
     let queue_note = |queued: usize| -> Vec<Line<'static>> {
         if queued > 1 {
             card.text(&format!("(+{} more pending)", queued - 1), pal.dim, ctx)
@@ -433,10 +453,12 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     let mut lines = vec![band("permission", &badge_text, ctx)];
     lines.extend(clamped);
     lines.push(card.blank(ctx));
-    // `line`, not the more muted `rule` — matches the reference's real
-    // `border-top: 1px solid var(--tui-line)` on this footer row (the rule
-    // above the *options* list is the one place `rule` is correct).
-    lines.push(rule_row(pal.line, pal.bar_bottom, ctx));
+    // No rule above the footer. It used to carry the reference's
+    // `border-top: 1px solid var(--tui-line)`, but Turn 13 removed that
+    // stroke along with every other one: the footer sits on the bottom-bar
+    // tone and the step down from the panel's own `bar` is the boundary.
+    // The blank row above is `card`'s, so it is still on `bar` — which is
+    // what makes the step land exactly where the rule used to.
     // No right-hand provenance note. It used to read "saved to
     // .mjolnir/permissions.yaml" under every prompt, which was true of
     // exactly one of the tiers on offer — "allow once" and "allow for this

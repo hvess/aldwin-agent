@@ -11,6 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::grid::Ctx;
+use super::row::band_row;
 
 /// One piece of assistant text — either prose or a fenced code block.
 pub(super) enum Segment {
@@ -67,7 +68,13 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let indent = &line[..line.len() - trimmed_start.len()];
 
     if is_hr(trimmed_start) {
-        return Line::from(Span::styled("─".repeat(20), Style::default().fg(pal.dim)));
+        // A markdown thematic break is a separator, and separators are
+        // bands: one row of `break_`, the same treatment a turn break gets.
+        // It used to be a 20-cell run of `─`, which is not in the design
+        // system's glyph vocabulary at all (`▌ ● ◐ ○ ✔ ▶ █ + -`) — and
+        // that vocabulary is closed: "if a mark is needed and it is not in
+        // that table, do not draw one."
+        return band_row(pal.break_, ctx);
     }
     if let Some((level, rest)) = parse_heading(trimmed_start) {
         let style = if level <= 2 { base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { base.add_modifier(Modifier::BOLD) };

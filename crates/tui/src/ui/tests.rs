@@ -104,20 +104,23 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
     panic!("row containing {needle:?} not found");
 }
 
-/// Per explicit developer feedback on a rendered frame — "why is the
-/// border not aligned cleanly with the bottom of the component?", then
-/// "the line is thick as hell" of the fix after that. Three shapes were
-/// tried: `─` on its own row (floats mid-cell, and costs a row the grid
-/// doesn't have), `▁`/`▔` (right weight, rarely-exercised glyphs), and
-/// `BorderType::QuadrantOutside` (well-supported, but half a cell thick).
+/// The chrome bars are parted from the transcript by their *tone*, not by
+/// anything drawn between them.
 ///
-/// A border is a *cell attribute* here, not a glyph: `SGR 4` rules the
-/// bottom of the cell box at the font's own hairline weight, on the band's
-/// own last row, costing neither a glyph nor a row. `fg` is set alongside
-/// `underline_color` so the rule comes out the right colour on terminals
-/// without `SGR 58` too.
+/// This is the end of a long argument with the medium. A 1px CSS border has
+/// no literal rendering in a cell grid, and three shapes were tried and
+/// rejected in turn — `─` on its own row (floats mid-cell, and costs a row
+/// the grid doesn't have), `▁`/`▔` (right weight, rarely-exercised glyphs),
+/// and `BorderType::QuadrantOutside` (well-supported, but half a cell
+/// thick) — before settling on an `SGR 4` underline as a cell attribute.
+/// The design system then removed borders altogether, which makes the whole
+/// question moot: a band's step on the ground ladder is the boundary, and a
+/// background colour is exact in a cell grid in a way a hairline never was.
+///
+/// So the assertion is the absence of any rule at all, plus the tonal step
+/// that replaced it.
 #[test]
-fn the_top_bar_carries_its_border_as_an_underline_on_its_last_row() {
+fn the_top_bar_is_parted_from_the_transcript_by_tone_with_no_rule_drawn() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -126,36 +129,35 @@ fn the_top_bar_carries_its_border_as_an_underline_on_its_last_row() {
 
     let last = super::TOP_BAR_ROWS - 1;
     let cell = &buffer[(0, last)];
-    assert_eq!(cell.symbol(), " ", "the border is an attribute, not a glyph — the cell keeps its own content");
-    assert!(cell.modifier.contains(Modifier::UNDERLINED), "the bar's last row rules its own bottom edge");
-    assert_eq!(cell.underline_color, DARK.line, "in `line`, the structural border token");
-    assert_eq!(cell.fg, DARK.line, "and in the foreground too, for terminals without SGR 58");
-    assert_eq!(cell.bg, DARK.bar, "the row itself is still the bar");
-    assert_eq!(buffer[(0, super::TOP_BAR_ROWS)].bg, DARK.ground, "the transcript starts in the very next cell — the border costs no row");
+    assert_eq!(cell.symbol(), " ", "nothing is drawn into the bar's last row");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "and nothing is ruled along it either — the boundary is tonal now");
+    assert_eq!(cell.bg, DARK.bar, "the bar's last row is bar, all the way down");
+    assert_eq!(buffer[(0, super::TOP_BAR_ROWS)].bg, DARK.ground, "and the transcript's ground begins in the very next cell");
+    assert_ne!(DARK.bar, DARK.ground, "which only reads as a boundary because the two tones differ");
 }
 
-/// The mirror case, and the one compromise in the scheme: an underline is
-/// always on the *bottom* of a cell and ratatui has no overline modifier,
-/// so `BottomBar.jsx`'s `border-top` is drawn as the underline of the row
-/// above the bar's content. That row is painted `ground` rather than
-/// `bar_bottom` so it reads as the last row of the transcript carrying the
-/// rule — the two differ by a 1.05 contrast ratio, so nothing shows.
+/// The mirror case. The bottom bar used to need the fiddliest part of the
+/// underline scheme — an underline is always on the *bottom* of a cell and
+/// ratatui has no overline modifier, so a `border-top` had to be drawn as
+/// the underline of the row above, which then had to be painted `ground`
+/// rather than `bar_bottom` to read correctly. All five of the bar's rows
+/// are simply `bar_bottom` now.
 #[test]
-fn the_bottom_bar_carries_its_border_as_an_underline_on_the_row_above_it() {
+fn the_bottom_bar_is_parted_from_the_transcript_by_tone_with_no_rule_drawn() {
     let mut app = app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
 
-    // The composer row, found by its prompt glyph, is the second of
-    // `BottomBar.jsx`'s five rows, so the edge row is one above it.
-    let edge = find_row(&buffer, "▶") - 1;
-    let cell = &buffer[(0, edge)];
-    assert!(cell.modifier.contains(Modifier::UNDERLINED), "the row above the bar rules its bottom edge");
-    assert_eq!(cell.underline_color, DARK.line);
-    assert_eq!(cell.bg, DARK.ground, "painted ground, so the rule reads as the transcript's own last edge");
-    assert_eq!(buffer[(0, edge + 1)].bg, DARK.bar_bottom, "the bar's own surface begins in the very next cell");
+    // The composer row, found by its prompt glyph, is the second of the
+    // bar's five rows, so the bar's own first row is one above it.
+    let first = find_row(&buffer, "▶") - 1;
+    let cell = &buffer[(0, first)];
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "no rule above the bar — the step down from the transcript is the boundary");
+    assert_eq!(cell.bg, DARK.bar_bottom, "the bar's own surface starts on its first row, not one row late");
+    assert_eq!(buffer[(0, first - 1)].bg, DARK.ground, "with the transcript's ground immediately above it");
+    assert_ne!(DARK.bar_bottom, DARK.ground, "which only reads as a boundary because the two tones differ");
 }
 
 /// Per explicit developer feedback — "the status line is above the text
@@ -986,15 +988,12 @@ fn approval_card_colors_added_and_removed_lines_distinctly() {
 
     let removed_row = find_row(&buffer, "old");
     let added_row = find_row(&buffer, "new");
-    // Column 3 is the box's own left `│`, which stays on the box's
-    // surface — in the reference the tint is a background on the row
-    // *inside* a `border: 1px solid var(--tui-line)`, so the border
-    // never takes it. Column 4 is the first cell of the tinted field.
-    const BORDER: u16 = MARGIN_X as u16;
-    const FIELD: u16 = BORDER + 1;
-    assert_eq!(buffer[(BORDER, removed_row)].bg, DARK.diff_box, "the box's border must stay on the box's own surface, not take the row's tint");
-    assert_eq!(buffer[(FIELD, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background across the row");
-    assert_eq!(buffer[(FIELD, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background across the row");
+    // The field has no border, so its first cell past the card's own
+    // margin is the row fill itself — there is no longer an edge column
+    // that has to be held back off the tint.
+    const FIELD: u16 = MARGIN_X as u16;
+    assert_eq!(buffer[(FIELD, removed_row)].bg, DARK.del_row, "a removed line should carry the removed-line fill from the field's very first cell");
+    assert_eq!(buffer[(FIELD, added_row)].bg, DARK.add_row, "an added line should carry the added-line fill from the field's very first cell");
     assert_ne!(buffer[(FIELD, removed_row)].bg, buffer[(FIELD, added_row)].bg, "added and removed lines must be visually distinct");
 }
 
@@ -1373,15 +1372,13 @@ fn fenced_code_block_is_stripped_of_its_fences_and_syntax_highlighted() {
     assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
 }
 
-/// A ```diff fence gets `InlineDiff.jsx`'s own real bordered box
-/// (`boxed_diff_lines`/`diff_box_border`) — a deliberate return to a
-/// drawn box, per the design system's own spec for a quoted diff,
-/// superseding the older "no box, no label, full-width color only"
-/// rule this test used to check for (the hand-drawn `╭─ diff`/`╰─`
-/// generic code-block box that rule was reacting to is still gone —
-/// this is `InlineDiff`'s own square, one-cell-thick border, not that).
+/// A ```diff fence renders as the design system's recessed field: the diff
+/// rows on their own ground, no language label, and — since Turn 13 — no
+/// outline of any kind. The hand-drawn `╭─ diff`/`╰─` generic code-block
+/// box is long gone, and so now is the square `┌`/`└` box that briefly
+/// replaced it; a quoted diff is parted from the prose around it by tone.
 #[test]
-fn a_diff_fenced_code_block_renders_a_bordered_box_with_no_language_label() {
+fn a_diff_fenced_code_block_renders_an_unoutlined_field_with_no_language_label() {
     let mut app = app();
     app.log.push(LogEntry::AssistantText { text: "here's the change:\n```diff\n-old line\n+new line\n```".into() });
     let backend = TestBackend::new(100, 20);
@@ -1392,24 +1389,25 @@ fn a_diff_fenced_code_block_renders_a_bordered_box_with_no_language_label() {
 
     assert!(!out.contains("diff"), "a diff fence must not label itself \"diff\": {out:?}");
     assert!(out.contains("old line") && out.contains("new line"), "the diff content itself must still be shown: {out:?}");
-    assert!(out.contains('┌') && out.contains('└'), "a diff fence should draw InlineDiff's own real box border: {out:?}");
+    for corner in ['┌', '└', '┐', '┘', '│'] {
+        assert!(!out.contains(corner), "nothing inside a frame is stroked any more — found {corner:?} in: {out:?}");
+    }
 
-    // `CONTENT_INDENT`, not column 0 — the turn's label column sits
-    // ahead of the box. That cell is the box's own left `│`, which keeps
-    // the box surface; the tint starts in the cell after it.
+    // `CONTENT_INDENT`, not column 0 — the turn's label column sits ahead
+    // of the field. With no border there is no inner edge to step past:
+    // the fill starts in that very cell.
     let removed_row = find_row(&buffer, "old line");
     let added_row = find_row(&buffer, "new line");
-    let field = CONTENT_INDENT as u16 + 1;
-    assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.diff_box, "the box's left border keeps the box's own surface rather than the row's tint");
-    assert_eq!(buffer[(field, removed_row)].bg, DARK.del_bg, "a removed line should carry the removed-line background from its box's inner edge");
-    assert_eq!(buffer[(field, added_row)].bg, DARK.add_bg, "an added line should carry the added-line background from its box's inner edge");
+    let field = CONTENT_INDENT as u16;
+    assert_eq!(buffer[(field, removed_row)].bg, DARK.del_row, "a removed line should carry the removed-line fill from the field's first cell");
+    assert_eq!(buffer[(field, added_row)].bg, DARK.add_row, "an added line should carry the added-line fill from the field's first cell");
 }
 
 /// A diff fence at the very start of an assistant message (no leading
-/// prose) must still render its full box, indented under the `harness`
+/// prose) must still render its full field, indented under the `harness`
 /// label column the same as any other content.
 #[test]
-fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_box() {
+fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_field() {
     let mut app = app();
     app.log.push(LogEntry::AssistantText { text: "```diff\n-old line\n```".into() });
     let backend = TestBackend::new(100, 20);
@@ -1417,7 +1415,7 @@ fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_box() {
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let removed_row = find_row(&buffer, "old line");
-    assert_eq!(buffer[(CONTENT_INDENT as u16 + 1, removed_row)].bg, DARK.del_bg, "the diff row's background must reach its box's inner edge even with no leading prose ahead of it");
+    assert_eq!(buffer[(CONTENT_INDENT as u16, removed_row)].bg, DARK.del_row, "the diff row's fill must reach the field's first cell even with no leading prose ahead of it");
 }
 
 /// Regression test for explicit developer feedback: an ordinary

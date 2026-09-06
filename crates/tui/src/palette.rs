@@ -1,6 +1,8 @@
 //! Themeable color palette for `ui.rs` — ported from the Mjolnir Design
-//! System (`claude.ai/design`, project "Mjolnir Design System", synced
-//! 2026-09-02) rather than hand-picked. Field names mirror the design
+//! System (`claude.ai/design`, synced 2026-09-06 from the bound copy in the
+//! "Design system tokens discussion" project, which is the current one —
+//! see `.claude/design/IMPORT.md`) rather than hand-picked. Field names
+//! mirror the design
 //! system's own `--tui-*` semantic tokens (`tokens/semantic.css`), so a
 //! value here can be checked directly against that source instead of
 //! against another layer of local naming. Two fixed instances — `DARK`
@@ -22,46 +24,39 @@
 //! `readme.md` token table) — a terminal needs explicit RGB, so this reads
 //! the same values a browser would resolve from the CSS custom properties.
 //!
-//! # Local deviation, 2026-09-03 — eleven fields are ahead of the tokens
+//! # The ground ladder carries every boundary
 //!
-//! `.claude/CLAUDE.md` says the visual design is imported, not invented
-//! locally, and that is still the rule. These eleven are a deliberate,
-//! temporary exception, made on the developer's explicit direction after
-//! the design-system push was blocked, and they must be pushed back into
-//! `tokens/palette.css` + `tokens/semantic.css` and then re-synced. Until
-//! that happens this file and the token layer disagree, and *this file is
-//! the one that is wrong* — the design system is still the source of truth.
+//! Nothing inside a frame is stroked any more. The design system's Turn 13
+//! rebuild removed every rule, pane divider and box outline and made a
+//! band's *tone* the thing that separates it from its neighbour, so the
+//! seven `--color-ground-0…6` steps are load-bearing structure rather than
+//! decoration. `palette.css` states the consequence directly: "Changing a
+//! step's lightness removes a boundary." The roles that read those steps
+//! are [`Palette::scrim`], [`Palette::recess`], [`Palette::break_`],
+//! [`Palette::ground`], [`Palette::bar_bottom`], [`Palette::bar`] and
+//! [`Palette::panel_title`], in ascending order in the dark theme and
+//! descending in the light one.
 //!
-//! What moved, and why (WCAG contrast against each theme's own ground;
-//! floors are 4.5 for text, 3.0 for non-text):
+//! That is also why the previous local contrast deviation is gone. Eleven
+//! fields here used to sit ahead of the tokens, hand-nudged for WCAG
+//! headroom because the hand-tuned palette kept failing at the dim steps.
+//! The upstream ramps are now *generated* — one hue (300°), lightness
+//! climbing in even OKLCH steps, chroma falling as lightness rises — which
+//! is the systematic fix that deviation was standing in for, and the
+//! measurements are recorded upstream (the muted ramp clears 3.3:1 at the
+//! dim step on the chrome bar, the binding band in a dark theme; the light
+//! theme clears 3.0:1 on its recessed field). Every value below is now the
+//! token's own, so this file and the token layer agree again.
 //!
-//! | field | was | now | ratio |
-//! |---|---|---|---|
-//! | `DARK.label` / `DARK.context` | neutral-600 `#75798c` | neutral-550 `#84889b` | 4.08 → 5.01 |
-//! | `DARK.dim` / `DARK.glyph_pending` | neutral-700 `#595d6c` | neutral-650 `#676b7c` | 2.69 → 3.33 |
-//! | `DARK.bar_bottom` | `#1b1d2b` | `#1f222f` | 1.05 → 1.11 |
-//! | `DARK.diff_box` | `#1a1c29` | `#1e202e` | 1.04 → 1.09 |
-//! | `LIGHT.label` / `LIGHT.context` | neutral-600 `#75798c` | neutral-650 `#676b7c` | 3.96 → 4.86 |
-//! | `LIGHT.quiet` | neutral-600 `#75798c` | neutral-700 `#595d6c` | 3.96 → 6.02 |
-//! | `LIGHT.bar` / `bar_bottom` / `diff_box` | all `#e4e7f5` | `#e2e5f2` / `#e7e9f7` / `#e9ebf9` | one hex → three |
+//! # Why there is no alpha blending here any more
 //!
-//! `neutral-550` and `neutral-650` are new half-steps, placed midway
-//! between their documented neighbours in OKLCH L, C and H, so the ramp
-//! keeps its regular spacing and no existing step moves. The two ground
-//! moves are at the grounds' own hue (277.5) and chroma (0.026), so the
-//! indigo cast is unchanged — only the spacing is. Both sat below every
-//! shipping dark UI measured (VS Code 1.09, GitHub 1.09, One Dark 1.10);
-//! `DARK.bar` at 1.16 was already above them and is deliberately untouched,
-//! which is what keeps `band` reading as a lift above it rather than a hole.
-//! The four `_bg` diff tints were re-blended over the new `diff_box`.
-//! See mjolnir-tui.md's 2026-09-03 colour-transport entry for the full
-//! derivation and for why this is not the same thing as drift.
-//! The two `_bg` diff-row tints are the one exception: the source uses CSS
-//! `rgba(...)` alpha over the diff box background, which ratatui's `Color`
-//! has no runtime alpha-blend for — each is pre-blended by hand over
-//! `diff_box` (the surface a diff row actually renders on) and documented
-//! with the source rgba + the blend base, so the arithmetic can be checked
-//! independently of trusting the hardcoded result.
+//! A diff row's fill used to be a CSS `rgba(...)` tint that had to be
+//! pre-blended by hand over `diff_box`, since ratatui's `Color` has no
+//! runtime alpha. The system now ships a *resolved solid* for exactly this
+//! case — `--tui-add-row` / `--tui-del-row` alongside the `-bg` tints — so
+//! the row fills below are the tokens' own opaque hexes and no arithmetic
+//! stands between the source and this file. The `-bg` rgba tints have no
+//! terminal rendering and are deliberately not carried.
 
 use ratatui::style::Color;
 
@@ -79,21 +74,39 @@ pub(crate) struct Palette {
     /// `--tui-bar` — chrome surfaces: the top bar and the decision panel
     /// body.
     pub bar: Color,
-    /// `--tui-bar-bottom` — the bottom bar (composer + status line).
+    /// `--tui-bar-bottom` — the bottom bar (composer + status line), one
+    /// step *above* the ground in the dark theme.
     pub bar_bottom: Color,
-    /// `--tui-line` — structural one-cell borders/rules between panels.
+    /// `--tui-recess` — a field sunk below the frame ground: the inline
+    /// diff, the permission command block, the review file pane, and the
+    /// one-row separator above the permission options.
+    pub recess: Color,
+    /// `--tui-break` — the one-row band that separates transcript turns and
+    /// first-run steps. This *replaces* the flat rule glyph: the design
+    /// system's Turn 13 rebuild settled separators as "a full row of a
+    /// different ground, never a rule", and notes that in a terminal that is
+    /// "a single `Style::bg` on a one-row rect, so nothing here needs
+    /// approximating".
+    ///
+    /// Named with a trailing underscore only because `break` is a Rust
+    /// keyword; it mirrors `--tui-break` one-to-one like every other field.
+    pub break_: Color,
+    /// `--tui-panel-title` — an overlay panel's title row, the top of the
+    /// ground ladder. A *lift*, not a well: the design system moved this
+    /// off the accent field (which read as a filled accent band and broke
+    /// the "accent is a mark, never a field" rule) and then off the
+    /// recessed tone (which made a header the darkest strip in the frame).
+    pub panel_title: Color,
+    /// `--tui-scrim` — the desk outside the terminal window. Unused by a
+    /// real terminal, which has no outside, but carried so the palette
+    /// stays one-to-one with the token layer and the snapshot fixtures can
+    /// render a framed scene.
+    pub scrim: Color,
+    /// `--tui-line` — legacy. Nothing inside a frame is stroked any more
+    /// (see this module's doc comment), so this survives for the one thing
+    /// the design system has no token for: the transcript scrollbar, which
+    /// is terminal chrome rather than part of a designed frame.
     pub line: Color,
-    /// A flat separator rule, one step more muted than `line` — the design
-    /// system's revision log ("Rules") settled freestanding rules (turn
-    /// breaks, the rule above permission options, first-run step
-    /// separators) as flat single-color rows, one step dimmer than a real
-    /// border, not Nocturne's fading-gradient treatment the token layer
-    /// still ships (`--rule-fade`) — the revision log states that token is
-    /// unused by the five reference screens. A single dim row is also the
-    /// natural terminal-cell rendering anyway: "in a terminal that is one
-    /// row of the dimmest available colour, so nothing here needs
-    /// approximating."
-    pub rule: Color,
     /// `--tui-text` — primary text: paths that change, the current row,
     /// the composer draft, the "you" turn's content.
     pub text: Color,
@@ -140,59 +153,67 @@ pub(crate) struct Palette {
     /// `--tui-glyph-pending` — a pending hunk/step (`○`).
     pub glyph_pending: Color,
     pub hunk_header: Color,
-    /// `--tui-modal-line` — the decision panel's own top rule.
-    pub modal_line: Color,
+    /// `--tui-reverse-bg` / `--tui-reverse-ink` — reverse video, the accent
+    /// as ground with the desk as ink. The design system uses this for the
+    /// wordmark; it is the one place the accent is allowed to be a filled
+    /// field.
+    pub reverse_bg: Color,
+    pub reverse_ink: Color,
     /// `--tui-diff-box` — the surface a quoted diff renders on.
     pub diff_box: Color,
     pub add: Color,
-    /// `--tui-add-bg` pre-blended over `diff_box` — see this module's doc
-    /// comment.
-    pub add_bg: Color,
+    /// `--tui-add-row` — the resolved solid fill of an added row. Not the
+    /// `--tui-add-bg` rgba tint, which has no terminal rendering; see this
+    /// module's doc comment.
+    pub add_row: Color,
     pub add_code: Color,
     pub del: Color,
-    /// `--tui-del-bg` pre-blended over `diff_box` — see this module's doc
-    /// comment.
-    pub del_bg: Color,
+    /// `--tui-del-row` — the resolved solid fill of a removed row.
+    pub del_row: Color,
     pub del_code: Color,
 }
 
 pub(crate) const DARK: Palette = Palette {
     theme: Theme::Dark,
-    ground: Color::Rgb(0x16, 0x18, 0x26),
-    bar: Color::Rgb(0x23, 0x25, 0x32),
-    bar_bottom: Color::Rgb(0x1f, 0x22, 0x2f), // elev-2 (was #1b1d2b, 1.05 vs ground -> 1.11)
-    line: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
-    rule: Color::Rgb(0x29, 0x2b, 0x31),  // neutral-900
-    text: Color::Rgb(0xe9, 0xe9, 0xed),
-    body: Color::Rgb(0xcf, 0xd3, 0xe5),  // neutral-300
-    code: Color::Rgb(0xe4, 0xe7, 0xf5),  // neutral-200
-    context: Color::Rgb(0x84, 0x88, 0x9b), // neutral-550
-    value: Color::Rgb(0xb2, 0xb6, 0xca), // neutral-400
-    label: Color::Rgb(0x84, 0x88, 0x9b), // neutral-550
-    dim: Color::Rgb(0x67, 0x6b, 0x7c),   // neutral-650
-    quiet: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
-    mark: Color::Rgb(0x84, 0xae, 0xd9),  // accent
-    mark_idle: Color::Rgb(0x3f, 0x42, 0x4d), // neutral-800
-    band: Color::Rgb(0x20, 0x2d, 0x39),  // accent-900
-    accent_text: Color::Rgb(0xc1, 0xd7, 0xee), // accent-300
-    speaker_you: Color::Rgb(0x95, 0xbc, 0xe4),  // accent-400
-    speaker_agent: Color::Rgb(0xb2, 0xb6, 0xca), // neutral-400
-    gauge_fill: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
-    gauge_track: Color::Rgb(0x3f, 0x42, 0x4d),  // neutral-800
-    glyph_done: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
-    glyph_running: Color::Rgb(0x84, 0xae, 0xd9), // accent
-    glyph_pending: Color::Rgb(0x67, 0x6b, 0x7c), // neutral-650
-    hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
-    modal_line: Color::Rgb(0x40, 0x61, 0x81),   // accent-700
-    diff_box: Color::Rgb(0x1e, 0x20, 0x2e), // elev-1 (was #1a1c29, 1.04 vs ground -> 1.09)
-    add: Color::Rgb(0x70, 0xcf, 0x75),
-    // rgba(112,207,117,.13) over diff_box #1e202e -> #293737.
-    add_bg: Color::Rgb(0x29, 0x37, 0x37),
-    add_code: Color::Rgb(0xa0, 0xe8, 0xa1),
-    del: Color::Rgb(0xe8, 0x6c, 0x68),
-    // rgba(232,108,104,.14) over diff_box #1e202e -> #3a2b36
-    del_bg: Color::Rgb(0x3a, 0x2b, 0x36),
-    del_code: Color::Rgb(0xff, 0x9d, 0x96),
+    // The ground ladder, darkest to lightest: --color-ground-0…6. These
+    // seven are the frame's entire structure now that nothing is stroked.
+    scrim: Color::Rgb(0x0c, 0x0a, 0x11),       // ground-0
+    recess: Color::Rgb(0x0f, 0x0b, 0x15),      // ground-1
+    break_: Color::Rgb(0x1e, 0x1a, 0x26),      // ground-2
+    ground: Color::Rgb(0x27, 0x23, 0x2f),      // ground-3
+    bar_bottom: Color::Rgb(0x36, 0x31, 0x3f),  // ground-4
+    bar: Color::Rgb(0x47, 0x42, 0x51),         // ground-5
+    panel_title: Color::Rgb(0x5d, 0x57, 0x6b), // ground-6
+    line: Color::Rgb(0x47, 0x42, 0x51),        // neutral-800 (legacy)
+    text: Color::Rgb(0xf4, 0xf2, 0xf9),        // neutral-100
+    body: Color::Rgb(0xe3, 0xdf, 0xeb),        // neutral-200
+    code: Color::Rgb(0xec, 0xe9, 0xf3),
+    context: Color::Rgb(0x9a, 0x95, 0xa4),     // neutral-500
+    value: Color::Rgb(0xc9, 0xc5, 0xd2),       // neutral-300
+    label: Color::Rgb(0xb1, 0xad, 0xbb),       // neutral-400
+    dim: Color::Rgb(0x9a, 0x95, 0xa4),         // neutral-500
+    quiet: Color::Rgb(0xc9, 0xc5, 0xd2),       // neutral-300
+    mark: Color::Rgb(0xbe, 0x9d, 0xf7),        // accent-400
+    mark_idle: Color::Rgb(0x5d, 0x57, 0x6a),   // neutral-700
+    band: Color::Rgb(0x60, 0x47, 0x88),        // band-dark
+    accent_text: Color::Rgb(0xdf, 0xd1, 0xfb), // accent-200
+    speaker_you: Color::Rgb(0xce, 0xb6, 0xfb), // accent-300
+    speaker_agent: Color::Rgb(0xc9, 0xc5, 0xd2), // neutral-300
+    gauge_fill: Color::Rgb(0xa0, 0x81, 0xd5),  // accent-500
+    gauge_track: Color::Rgb(0x60, 0x5a, 0x6c),
+    glyph_done: Color::Rgb(0x7f, 0x64, 0xab),    // accent-700
+    glyph_running: Color::Rgb(0xbe, 0x9d, 0xf7), // accent-400
+    glyph_pending: Color::Rgb(0x5d, 0x57, 0x6a), // neutral-700
+    hunk_header: Color::Rgb(0xa0, 0x81, 0xd5),   // accent-500
+    reverse_bg: Color::Rgb(0xbe, 0x9d, 0xf7),    // accent-400
+    reverse_ink: Color::Rgb(0x0c, 0x0a, 0x11),   // ground-0
+    diff_box: Color::Rgb(0x3a, 0x36, 0x48),      // diff-ground
+    add: Color::Rgb(0x5e, 0xd4, 0x76),
+    add_row: Color::Rgb(0x3d, 0x4b, 0x42),
+    add_code: Color::Rgb(0x9c, 0xea, 0xa7),
+    del: Color::Rgb(0xf6, 0x6d, 0x67),
+    del_row: Color::Rgb(0x4b, 0x3a, 0x42),
+    del_code: Color::Rgb(0xff, 0xa8, 0xa0),
 };
 
 /// The design system's `.tui-light` scope — same layout, ramps flipped;
@@ -201,41 +222,46 @@ pub(crate) const DARK: Palette = Palette {
 /// page, not lighter").
 pub(crate) const LIGHT: Palette = Palette {
     theme: Theme::Light,
-    ground: Color::Rgb(0xf3, 0xf5, 0xfe),  // neutral-100
-    bar: Color::Rgb(0xe2, 0xe5, 0xf2),     // elev-3 (was #e4e7f5, shared with the two below)
-    bar_bottom: Color::Rgb(0xe7, 0xe9, 0xf7), // elev-2
-    line: Color::Rgb(0xcf, 0xd3, 0xe5),    // neutral-300
-    rule: Color::Rgb(0xe4, 0xe7, 0xf5),    // neutral-200
-    text: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
-    body: Color::Rgb(0x3f, 0x42, 0x4d),    // neutral-800
-    code: Color::Rgb(0x29, 0x2b, 0x31),    // neutral-900
-    context: Color::Rgb(0x67, 0x6b, 0x7c), // neutral-650
-    value: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
-    label: Color::Rgb(0x67, 0x6b, 0x7c),   // neutral-650
-    dim: Color::Rgb(0x75, 0x79, 0x8c),     // neutral-600
-    quiet: Color::Rgb(0x59, 0x5d, 0x6c),   // neutral-700
-    mark: Color::Rgb(0x56, 0x7e, 0xa7),    // accent-600
-    mark_idle: Color::Rgb(0xcf, 0xd3, 0xe5), // neutral-300
-    band: Color::Rgb(0xc1, 0xd7, 0xee),    // accent-300
-    accent_text: Color::Rgb(0x40, 0x61, 0x81), // accent-700
-    speaker_you: Color::Rgb(0x40, 0x61, 0x81),  // accent-700
-    speaker_agent: Color::Rgb(0x59, 0x5d, 0x6c), // neutral-700
-    gauge_fill: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
-    gauge_track: Color::Rgb(0x93, 0x97, 0xab),  // neutral-500
-    glyph_done: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
-    glyph_running: Color::Rgb(0x56, 0x7e, 0xa7), // accent-600
-    glyph_pending: Color::Rgb(0x93, 0x97, 0xab), // neutral-500
-    hunk_header: Color::Rgb(0x56, 0x7e, 0xa7),  // accent-600
-    modal_line: Color::Rgb(0x56, 0x7e, 0xa7),   // accent-600
-    diff_box: Color::Rgb(0xe9, 0xeb, 0xf9),     // elev-1
-    add: Color::Rgb(0x0a, 0x75, 0x20),
-    // rgba(10,117,32,.16) over diff_box #e9ebf9 -> #c5d8d6
-    add_bg: Color::Rgb(0xc5, 0xd8, 0xd6),
-    add_code: Color::Rgb(0x09, 0x41, 0x12),
-    del: Color::Rgb(0xb3, 0x11, 0x24),
-    // rgba(179,17,36,.14) over diff_box #e9ebf9 -> #e1ccdb
-    del_bg: Color::Rgb(0xe1, 0xcc, 0xdb),
-    del_code: Color::Rgb(0x62, 0x14, 0x17),
+    // The ladder inverts: the frame ground is the *lightest* surface and
+    // every other band sinks below it. The one exception is `break_`, which
+    // rises — a separator has to stay visible against the ground it parts.
+    scrim: Color::Rgb(0xae, 0xaa, 0xb7),
+    recess: Color::Rgb(0xbb, 0xb6, 0xc5),
+    break_: Color::Rgb(0xf0, 0xed, 0xf5),
+    ground: Color::Rgb(0xfb, 0xf9, 0xfe),
+    bar_bottom: Color::Rgb(0xce, 0xc9, 0xd8),
+    bar: Color::Rgb(0xe4, 0xe1, 0xeb),
+    panel_title: Color::Rgb(0xce, 0xc6, 0xdf),
+    line: Color::Rgb(0xc9, 0xc5, 0xd2), // neutral-300 (legacy)
+    text: Color::Rgb(0x17, 0x15, 0x1c),
+    body: Color::Rgb(0x32, 0x2e, 0x39),
+    code: Color::Rgb(0x22, 0x1f, 0x28),
+    context: Color::Rgb(0x61, 0x5c, 0x6c),
+    value: Color::Rgb(0x43, 0x3f, 0x4b),
+    label: Color::Rgb(0x52, 0x4d, 0x5b),
+    dim: Color::Rgb(0x61, 0x5c, 0x6c),
+    quiet: Color::Rgb(0x43, 0x3f, 0x4b),
+    mark: Color::Rgb(0x6d, 0x41, 0xa9),      // accent-800
+    mark_idle: Color::Rgb(0x96, 0x90, 0xa3),
+    band: Color::Rgb(0xc6, 0xb1, 0xef),      // band-light
+    accent_text: Color::Rgb(0x56, 0x2c, 0x8b), // accent-900
+    speaker_you: Color::Rgb(0x5c, 0x30, 0x93),
+    speaker_agent: Color::Rgb(0x43, 0x3f, 0x4b),
+    gauge_fill: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
+    gauge_track: Color::Rgb(0x93, 0x8d, 0xa0),
+    glyph_done: Color::Rgb(0x56, 0x2c, 0x8b),    // accent-900
+    glyph_running: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
+    glyph_pending: Color::Rgb(0x96, 0x90, 0xa3),
+    hunk_header: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
+    reverse_bg: Color::Rgb(0x6d, 0x41, 0xa9),  // accent-800
+    reverse_ink: Color::Rgb(0xfb, 0xf9, 0xfe),
+    diff_box: Color::Rgb(0xec, 0xe8, 0xf3),
+    add: Color::Rgb(0x00, 0x73, 0x24),
+    add_row: Color::Rgb(0xd9, 0xe4, 0xd9),
+    add_code: Color::Rgb(0x00, 0x49, 0x14),
+    del: Color::Rgb(0xb0, 0x0a, 0x1d),
+    del_row: Color::Rgb(0xe9, 0xd7, 0xda),
+    del_code: Color::Rgb(0x69, 0x04, 0x0d),
 };
 
 /// Which fixed `Palette` a session renders with — selected once at startup

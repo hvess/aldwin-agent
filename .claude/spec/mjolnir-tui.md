@@ -2,7 +2,8 @@
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
-**Status:** active — two known gaps, see Progress below
+**Status:** active — one known gap, see Progress below (the 2026-09-03
+colour-transport gap is closed by the 2026-09-06 entry)
 **Scope:** crates/tui
 **Owner:** Maximilian
 **Last Updated:** 2026-09-02
@@ -2276,6 +2277,67 @@ closing this needs neutral steps between `#9397ab` and `#cfd3e5` and ground
 steps between `#161826` and `#232532`, which the documented ramp does not
 have. That is a design-system change first, `palette.rs` second.
 
+**Progress (2026-09-06, Turn 13 — borderless rebuild, new grid, generated
+palette):** Closes the colour-transport gap above, and supersedes the
+2026-09-03 grid entry. The design system was re-synced from the bound copy
+in the "Design system tokens discussion" project (see `.claude/design/`),
+which is the live token layer — the standalone design-system project is
+stale and its `updatedAt` does not move when the bound copy is edited, so
+neither the file list nor the timestamp there is evidence of currency.
+
+Three decisions landed, all of them structural:
+
+1. **Nothing inside a frame is stroked.** Every rule, pane divider and box
+   outline is gone; a band's step on the new seven-rung ground ladder
+   (`--color-ground-0…6`) is the boundary. That ended the long argument
+   with the medium recorded in the earlier entries — `─` rows floating
+   mid-cell, `▁`/`▔` glyph risk, `BorderType::QuadrantOutside` at half a
+   cell, and finally `SGR 4` underlines with `underline_color`. All of it
+   is deleted. A background colour is exact in a cell grid in a way a
+   hairline never was, and the handoff says so directly: separators are "a
+   single `Style::bg` on a one-row rect, so nothing here needs
+   approximating". `ui/mod.rs`'s `hairline` helper, `Row`'s `bordered`/
+   `field` machinery and `Row::border` are all gone; `row::rule_row` became
+   `row::band_row`, and `Row::boxed` became `Row::field`.
+2. **The grid moved**: label column 12 → 8 cells, body column 17 → 13.
+   `--body-col` was deleted upstream on purpose — cell 13 is a consequence
+   of margin + label + gutter, and `cells.css` carries a standing
+   instruction not to restate it. `grid.rs` already derived `CONTENT_INDENT`
+   that way, so only `LABEL_COL_WIDTH` changed.
+3. **The palette is generated, not picked** — one hue (300°), lightness in
+   even OKLCH steps, chroma falling as lightness rises. This is what closes
+   the colour-transport gap: the missing neutral and ground steps the entry
+   above was blocked on now exist by construction, so the eleven-field local
+   deviation in `palette.rs` is deleted and every value is the token's own
+   again. Seven roles were added (`recess`, `break_`, `panel_title`,
+   `scrim`, `reverse_bg`/`reverse_ink`, and the `add_row`/`del_row` fills);
+   `modal_line` was removed with its token, and `rule` with the concept.
+
+Two bugs fell out of the port, both of which the design system had itself
+found and fixed upstream in the same turn:
+
+- The decision panel's title row was painted `band` — the *selection*
+  colour, an accent fill. That is exactly the treatment the system rejected
+  ("read as a filled accent band and broke the guide's rule"); its own
+  bundle had the identical bug. It is `panel_title` now, a lift at the top
+  of the ladder, which leaves the selection band the only accent fill in
+  the frame besides the gauge. Its right-flush badge moved from the
+  gauge-fill step (2.2:1 on that field) to the `you` step (3.8:1).
+- A markdown `---` still rendered as a 20-cell run of `─`, a glyph that is
+  not in the design system's closed vocabulary at all. It is a `break_`
+  band now, the same treatment a turn break gets.
+
+The diff-row alpha arithmetic is also gone: the system ships resolved solid
+row fills (`--tui-add-row`/`--tui-del-row`) beside the rgba tints, so
+nothing is hand-blended between the source and `palette.rs` any more. And
+because a quoted diff has no edges left to lose, the whole "a clamped panel
+must not leave a box unclosed" hazard is structurally absent rather than
+defended against — `MIN_BOX_ROWS` dropped 4 → 2 and `boxed`'s budget no
+longer reserves two rows for edges.
+
+379 workspace tests pass; `render.snap` was regenerated and contains no
+box-drawing glyph anywhere.
+
 
 ## References
 
@@ -2292,18 +2354,24 @@ Both live on `claude.ai/design` and are read with the `DesignSync` tool
 have it). See `.claude/CLAUDE.md`'s Design System section for the working
 notes on fetching and rendering them.
 
-- **Mjolnir Design System** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
-  — the token layer. `styles.css` imports
-  `tokens/{fonts,palette,semantic,cells,typography,elevation,motion,base}.css`.
-  `tokens/semantic.css` is the source `palette.rs`'s 31 `--tui-*` fields
-  mirror one-to-one. `tokens/cells.css` is the source of the grid: cell
-  9×20px, frame 120×36 cells, `--margin-x: 27px` (3 cells), `--label-col:
-  108px` (12), `--label-gutter: 18px` (2), `--body-col: 153px` (cell 17),
-  `--bar-top-h: 60px` (3 rows), `--bar-bottom-h: 101px` (5 rows). The
-  project `readme.md` carries the fixed glyph vocabulary and the voice rules.
-- **Agent TUI v2** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
-  — the handoff bundle: `Agent TUI v2.dc.html`, `Agent TUI v2 Light.dc.html`,
-  and a revision log. The authority for layout, and the newer of the two:
-  where it and the token project disagree, this one wins. Cell positions
-  exist *only* here, as pixel values in inline styles — see the 2026-09-03
+A local copy is checked in at `.claude/design/` — `HANDOFF.md`, `SYNC.md`
+and `tokens/{cells,palette,semantic}.css`, with provenance and the
+two-project distinction in `IMPORT.md`. Read that before re-fetching.
+
+- **"Design system tokens discussion"** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
+  — the handoff bundle (`Agent TUI v2.dc.html`, `Agent TUI v2 Light.dc.html`,
+  a revision log) **and the live token layer**, bound in under
+  `_ds/mjolnir-design-system-4ea574fb-…/`. `tokens/semantic.css` there is
+  what `palette.rs`'s `--tui-*` fields mirror one-to-one. `tokens/cells.css`
+  is the grid: cell 9×20px, frame 120×36 cells, `--margin-x: 27px` (3
+  cells), `--label-col: 72px` (8), `--label-gutter: 18px` (2) — body text
+  therefore lands on cell 13, with **no `--body-col` token**, deliberately —
+  `--bar-top-h: 60px` (3 rows), `--bar-bottom-h: 100px` (5 rows). Its
+  `SYNC.md` is the change record. Cell positions exist *only* in the
+  `.dc.html`, as pixel values in inline styles — see the 2026-09-03
   Progress entry for why reading it without measuring it is not enough.
+- **Mjolnir Design System** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
+  — the *source* project, and currently **stale**. Its guideline cards,
+  components, UI kits and `SKILL.md` still state pre-Turn-13 rules; `SYNC.md`
+  lists exactly what was never pushed back to it. Do not read values from
+  here without checking them against the bound copy above.

@@ -16,19 +16,27 @@ use crate::palette::Palette;
 ///   one deliberate exception is a selectable option row, which the
 ///   reference renders flush to the frame's left edge so its `▌` mark sits
 ///   in cell 0 (see `decision::option_rows`).
-/// * `LABEL_COL_WIDTH` — `--label-col: 108px` = 12 cells, the speaker /
-///   meta-label column.
+/// * `LABEL_COL_WIDTH` — `--label-col: 72px` = 8 cells, the speaker /
+///   meta-label column. It "carries every left-hand word in the system —
+///   speaker, step, field name, file name".
 /// * `LABEL_GUTTER` — `--label-gutter: 18px` = 2 cells.
-/// * `CONTENT_INDENT` — `--body-col: 153px` = 17 cells from the frame
-///   edge, which is exactly `MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER`;
-///   body text in a turn always starts here.
+/// * `CONTENT_INDENT` — cell 13, where body text in a turn always starts.
 ///
-/// An earlier pass used 10/2 with no margin at all, so every transcript row
-/// started 5 cells left of where the grid puts it — reported directly as
-/// "the chat rows themselves appear misaligned and do not follow the
-/// cell/grid system."
+/// There is deliberately no `--body-col` token to check `CONTENT_INDENT`
+/// against: the design system removed it, because cell 13 is a
+/// *consequence* of the three values above rather than an independent
+/// fact, and a fourth statement of it could only ever drift from them.
+/// `cells.css` says so in place: "Do not add one; it would be a fourth
+/// statement of a position the other three already fix." Deriving it here
+/// the same way is what keeps this file honest against that.
+///
+/// The label column was 12 cells (and the body column 17) until the design
+/// system's Turn 13 grid rework. An earlier pass than that used 10/2 with
+/// no margin at all, so every transcript row started 5 cells left of where
+/// the grid puts it — reported directly as "the chat rows themselves appear
+/// misaligned and do not follow the cell/grid system."
 pub(super) const MARGIN_X: usize = 3;
-const LABEL_COL_WIDTH: usize = 12;
+const LABEL_COL_WIDTH: usize = 8;
 const LABEL_GUTTER: usize = 2;
 pub(super) const CONTENT_INDENT: usize = MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER;
 

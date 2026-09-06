@@ -1,15 +1,15 @@
 //! The one filled-row primitive every surface in the UI is built from.
 //!
-//! A card row, a diff row inside its bordered box, a selectable option row
-//! flush to the frame's left edge and a blank spacer are all the same
+//! A card row, a diff row inside its recessed field, a selectable option
+//! row flush to the frame's left edge and a blank spacer are all the same
 //! shape:
 //!
 //! ```text
-//! │← margin →│B│← pad →│ content … fill │B│← margin →│
-//!  surround        bg                        surround
+//! │← margin →│← pad →│ content … fill │← margin →│
+//!  surround      bg                     surround
 //! ```
 //!
-//! Four numbers (margin, border, pad, bg) describe every one of them.
+//! Three numbers (margin, pad, bg) describe every one of them.
 //! Before this they were eight separate functions — `filled_line`,
 //! `flush_line`, `boxed_line`, `card_line`, `card_padding_line`,
 //! `card_rule`, `card_footer_line`, `diff_box_border` — each re-deriving
@@ -37,44 +37,41 @@ pub(super) struct Row {
     /// how far a box sits in from the surface it is quoted inside.
     margin:   usize,
     surround: Color,
-    /// Whether the edge columns just inside the margin are a drawn `│`
-    /// border (`InlineDiff.jsx`: `border: 1px solid var(--tui-line)`)
-    /// rather than more fill.
-    bordered: bool,
     /// Cells of `bg` between the edge and the content — the reference's
     /// `padding: 0 27px` on every card row.
     pad:      usize,
     /// The surface this row fills, edge to edge.
     bg:       Color,
-    /// The surface the *box* is made of, which [`Row::with_fill`] leaves
-    /// alone. A diff row swaps `bg` for an `add_bg`/`del_bg` tint, but the
-    /// `│` sides it keeps belong to the box, not to the row: in the
-    /// reference the tint is a background on the row *inside* a
-    /// `border: 1px solid var(--tui-line)`, so the border never takes it.
-    /// Drawing the sides on `bg` instead tinted them green or red, which
-    /// was reported directly as "the borders are not aligned with the
-    /// background at all."
-    field:    Color,
 }
 
 impl Row {
     /// A card/panel content row: the grid's `MARGIN_X` padding on both
     /// sides, filled edge to edge in `bg`, no border.
     pub fn card(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, bordered: false, pad: MARGIN_X, bg, field: bg }
+        Self { margin: 0, surround: Color::Reset, pad: MARGIN_X, bg }
     }
 
     /// A row with no padding at all, content starting in cell 0 — the one
     /// row type the reference deliberately runs flush to the frame's own
     /// left edge, so a selectable option's `▌` mark lands in cell 0.
     pub fn flush(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, bordered: false, pad: 0, bg, field: bg }
+        Self { margin: 0, surround: Color::Reset, pad: 0, bg }
     }
 
-    /// A row inside a real drawn one-cell box — `│` sides, square corners
-    /// from [`Row::border`].
-    pub fn boxed(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, bordered: true, pad: 0, bg, field: bg }
+    /// A row inside a sunk field — a quoted diff or a command block. It has
+    /// no outline: the design system's Turn 13 rebuild replaced the inline
+    /// diff's `border: 1px solid var(--tui-line)` with "a recessed field,
+    /// no outline", so the only thing marking the field's extent is the
+    /// step between its own ground and the surface it is quoted on.
+    ///
+    /// That also removes the whole class of bug the drawn box had. The
+    /// sides used to need a `field` colour held separate from `bg`, so a
+    /// tinted diff row would not tint the border it sat inside — reported
+    /// as "the borders are not aligned with the background at all" — and a
+    /// clamped panel had to be checked for a box left unclosed. Neither
+    /// exists when there is nothing to close.
+    pub fn field(bg: Color) -> Self {
+        Self { margin: 0, surround: Color::Reset, pad: 0, bg }
     }
 
     /// Holds the row off each edge by `cells`, painting that strip in
@@ -97,9 +94,9 @@ impl Row {
         Self { pad: cells, ..self }
     }
 
-    /// The same geometry over a different fill — a diff row keeps its box's
-    /// `│` sides and margins but swaps the field they sit on for a semantic
-    /// `add_bg`/`del_bg` tint. `field` is deliberately not swapped; see it.
+    /// The same geometry over a different fill — a diff row keeps its
+    /// field's margins but swaps the surface it sits on for the semantic
+    /// `add_row`/`del_row` fill.
     pub fn with_fill(self, bg: Color) -> Self {
         Self { bg, ..self }
     }
@@ -113,7 +110,7 @@ impl Row {
     /// Paints this row's own fill onto every span that didn't already ask
     /// for a background of its own.
     ///
-    /// Spans that *do* carry one (a diff row's `add_bg` tint) are left
+    /// Spans that *do* carry one (a diff row's `add_row` fill) are left
     /// exactly as they are, which is what lets a caller mix a semantic tint
     /// into an otherwise-plain row. Before this, carrying the fill was the
     /// caller's job on every span — an obligation three separate call sites
@@ -130,9 +127,9 @@ impl Row {
             .collect()
     }
 
-    /// Cells left for content once margins, borders and padding are taken.
+    /// Cells left for content once margins and padding are taken.
     fn avail(self, width: u16) -> usize {
-        (width as usize).saturating_sub(2 * self.margin).saturating_sub(2 * usize::from(self.bordered)).saturating_sub(2 * self.pad)
+        (width as usize).saturating_sub(2 * self.margin).saturating_sub(2 * self.pad)
     }
 
     /// Wraps `spans` to fit and returns one fully-built row per wrapped
@@ -161,18 +158,8 @@ impl Row {
         self.assemble(Vec::new(), ctx)
     }
 
-    /// The box's top (`┌─…─┐`) or bottom (`└─…─┘`) edge. Its dash run is
-    /// `avail` wide — the same number [`Row::build`] wraps content to, so
-    /// an edge can never come out a different width from the sides.
-    pub fn border(self, top: bool, ctx: Ctx) -> Line<'static> {
-        let (left, right) = if top { ('┌', '┐') } else { ('└', '┘') };
-        let bar = format!("{left}{}{right}", "─".repeat(self.avail(ctx.width)));
-        let margin = || Span::styled(" ".repeat(self.margin), Style::default().bg(self.surround));
-        Line::from(vec![margin(), Span::styled(bar, Style::default().fg(ctx.pal.line).bg(self.field)), margin()])
-    }
-
-    /// A single row split left/right — the same shape `KeyHints.jsx` and
-    /// `Modal.jsx`'s footer use (key hints on the left, a fact flush
+    /// A single row split left/right — the same shape a key-hint row and a
+    /// panel footer use (key hints on the left, a fact flush
     /// right). Both halves are caller-styled: the panel's title band puts
     /// its badge in `hunk_header` where the footer puts its note in `dim`,
     /// and a single hardcoded colour here got one of the two wrong.
@@ -203,34 +190,26 @@ impl Row {
         Line::from(spans)
     }
 
-    /// Wraps already-fitted `content` in this row's margins, borders,
-    /// padding and fill, out to the column's full width.
+    /// Wraps already-fitted `content` in this row's margins, padding and
+    /// fill, out to the column's full width.
     fn assemble(self, content: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
         let width = ctx.width as usize;
         let content = self.on_field(content);
         let content_width: usize = content.iter().map(|s| s.content.width()).sum();
-        let border = usize::from(self.bordered);
-        let leading = self.margin + border + self.pad;
-        let fill = width.saturating_sub(leading).saturating_sub(content_width).saturating_sub(border + self.margin);
+        let leading = self.margin + self.pad;
+        let fill = width.saturating_sub(leading).saturating_sub(content_width).saturating_sub(self.margin);
 
-        let mut spans = Vec::with_capacity(content.len() + 6);
+        let mut spans = Vec::with_capacity(content.len() + 4);
         let surround = Style::default().bg(self.surround);
-        let edge = Style::default().fg(ctx.pal.line).bg(self.field);
         let field = Style::default().bg(self.bg);
         if self.margin > 0 {
             spans.push(Span::styled(" ".repeat(self.margin), surround));
-        }
-        if self.bordered {
-            spans.push(Span::styled("│", edge));
         }
         if self.pad > 0 {
             spans.push(Span::styled(" ".repeat(self.pad), field));
         }
         spans.extend(content);
         spans.push(Span::styled(" ".repeat(fill), field));
-        if self.bordered {
-            spans.push(Span::styled("│", edge));
-        }
         if self.margin > 0 {
             spans.push(Span::styled(" ".repeat(self.margin), surround));
         }
@@ -238,10 +217,19 @@ impl Row {
     }
 }
 
-/// A full-width flat rule inside a card/panel — the design system's own
-/// revision log settled every freestanding rule as flat and single-colour,
-/// not a fading gradient (see `Palette::rule`). Not a `Row`: it fills the
-/// column edge to edge with no margin, padding or content of its own.
-pub(super) fn rule_row(fg: Color, bg: Color, ctx: Ctx) -> Line<'static> {
-    Line::from(Span::styled("─".repeat(ctx.width as usize), Style::default().fg(fg).bg(bg)))
+/// A full-width band of `bg`, one row tall and carrying no glyph — the
+/// design system's replacement for every freestanding rule. Turn 13 settled
+/// separators as "a full row of a different ground, never a rule", and this
+/// is that row: the tonal step between the band and what sits either side
+/// of it *is* the boundary, so there is nothing to draw into the cells.
+///
+/// Painted as spaces rather than left empty because a `Line` shorter than
+/// the column would leave the cells past its end unstyled, and the
+/// render-snapshot suite asserts every painted cell carries a palette
+/// colour rather than the terminal's own default.
+///
+/// Not a `Row`: it fills the column edge to edge with no margin, padding or
+/// content of its own.
+pub(super) fn band_row(bg: Color, ctx: Ctx) -> Line<'static> {
+    Line::from(Span::styled(" ".repeat(ctx.width as usize), Style::default().bg(bg)))
 }

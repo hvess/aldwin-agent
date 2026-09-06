@@ -188,22 +188,26 @@ fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Colo
 }
 
 /// Renders one diff line, prefixed with its old/new line-number gutter.
-/// Added/removed lines get their semantic `add_bg`/`del_bg` tint (which
+/// Added/removed lines get their semantic `add_row`/`del_row` fill (which
 /// wins over `diff_box`, the surface the quoted diff sits on) so a change
-/// reads as a coloured row at a glance, not just a leading +/- character —
-/// `InlineDiff.jsx`'s own row treatment; context lines get the plain
-/// `diff_box` fill and `context` text colour, since only the changed lines'
-/// brighter tint should compete for attention.
+/// reads as a coloured row at a glance, not just a leading +/- character;
+/// context lines get the plain `diff_box` fill and `context` text colour,
+/// since only the changed lines should compete for attention.
+///
+/// Those fills are the design system's *resolved solids*, not its
+/// `--tui-add-bg`/`--tui-del-bg` rgba tints — a terminal cell has no alpha,
+/// and the system ships the opaque pair for exactly this case (see
+/// `palette.rs`).
 ///
 /// Sign and code text are two different tokens in the source
 /// (`--tui-add`/`--tui-del` for the sign, `--tui-add-code`/`--tui-del-code`
 /// for the code itself) — kept as separate spans rather than one combined
-/// colour so both read exactly as `InlineDiff.jsx` does.
+/// colour so both read as the source does.
 fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let (marker, sign_fg, code_fg, bg) = match line.kind {
-        Kind::Added => ("+ ", pal.add, pal.add_code, pal.add_bg),
-        Kind::Removed => ("- ", pal.del, pal.del_code, pal.del_bg),
+        Kind::Added => ("+ ", pal.add, pal.add_code, pal.add_row),
+        Kind::Removed => ("- ", pal.del, pal.del_code, pal.del_row),
         Kind::Context => ("  ", pal.diff_box, pal.context, pal.diff_box),
     };
     let spans = vec![
@@ -211,9 +215,8 @@ fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
         Span::styled(marker.to_string(), Style::default().fg(sign_fg).bg(bg)),
         Span::styled(line.text.clone(), Style::default().fg(code_fg).bg(bg)),
     ];
-    // The tinted rows keep the box's own `│` sides but swap the field they
-    // sit on, which is what `Row`'s "spans carry their own bg" contract is
-    // for.
+    // A changed row swaps the field it sits on, which is what `Row`'s
+    // "spans carry their own bg" contract is for.
     row.with_fill(bg).build(spans, ctx)
 }
 
@@ -229,13 +232,17 @@ pub(super) struct Budget {
     pub max_rows:         Option<usize>,
 }
 
-/// A quoted diff as `InlineDiff.jsx`'s own real bordered box: top edge, one
-/// row per shown line, bottom edge.
+/// A quoted diff as the design system's recessed field: one row per shown
+/// line, on the field's own ground, with no outline. The step between that
+/// ground and the surface the diff is quoted on is the whole boundary — see
+/// the note on borders in `super`.
 ///
-/// Everything `budget` leaves out is replaced in place by an in-box marker,
-/// so the box always closes. Before this, a diff too tall for its panel was
-/// cut by `decision::clamp_panel`'s blind row budget, which chopped the box
-/// mid-way and left a `┌───┐` with no `└───┘` on screen.
+/// Everything `budget` leaves out is replaced in place by a marker row
+/// rather than by truncation, so the field still says what it dropped. That
+/// used to also be what kept the box *closed* when `decision::clamp_panel`
+/// cut it — a chopped box left a `┌───┐` with no `└───┘` on screen. There
+/// is no longer an edge to lose, but the marker is still the honest thing
+/// to show.
 pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let shown = if budget.collapse_context { collapse_context(body) } else { body.iter().map(Shown::Line).collect() };
     // Indented to [`CODE_COLUMN`] so a note lines up with the code it
@@ -251,22 +258,18 @@ pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Ve
         }
     }
 
-    // Two of the budget go to the box's own edges, and at least one more to
-    // the marker whenever anything is dropped. The count is of rendered
-    // rows, which is one per diff line except where a line was wide enough
-    // to wrap.
+    // The whole budget is the field's own rows now that it has no edges to
+    // pay for — one is still reserved for the marker whenever anything is
+    // dropped. The count is of rendered rows, which is one per diff line
+    // except where a line was wide enough to wrap.
     if let Some(max) = budget.max_rows {
-        let body_budget = max.saturating_sub(2);
-        if rows.len() > body_budget {
-            let keep = body_budget.saturating_sub(1);
+        if rows.len() > max {
+            let keep = max.saturating_sub(1);
             let hidden = rows.len() - keep;
             rows.truncate(keep);
             rows.extend(marker(format!("⋯ {hidden} more line{} not shown ⋯", if hidden == 1 { "" } else { "s" })));
         }
     }
 
-    let mut out = vec![row.border(true, ctx)];
-    out.append(&mut rows);
-    out.push(row.border(false, ctx));
-    out
+    rows
 }

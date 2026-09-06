@@ -45,13 +45,11 @@ pub(super) fn input_height(input: &str) -> u16 {
 /// anywhere in `StatusInfo`, so neither is fabricated here.
 pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
-    // `TopBar.jsx`'s `border-bottom: 1px solid var(--tui-line)`, drawn as
-    // the underline of the bar's own last row — see the note on borders in
-    // `super`. Content sits on row 1, clear of it.
+    // No rule under the bar. It is "its own ground, a step off the
+    // transcript" — the whole 3-row band is `bar`, and the step down to
+    // the transcript's `ground` beneath it is the boundary. Content still
+    // sits on row 1, centred in the band.
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
-    if let Some(last) = area.height.checked_sub(1) {
-        frame.render_widget(super::hairline(pal.line, pal.bar), Rect { y: area.y + last, height: 1, ..area });
-    }
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
     let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
 

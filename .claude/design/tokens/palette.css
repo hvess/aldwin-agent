@@ -1,0 +1,82 @@
+/* Palette, resolved to explicit hex because a terminal needs RGB.
+
+   The ramps are GENERATED, not picked. One hue — 300° — carries the whole
+   system: the neutrals are that hue at a chroma low enough to read as grey, and
+   the accent is the same hue at full chroma. Nothing in a frame is foreign to
+   anything else, and there is no second hue anywhere except the diff pair.
+
+   Lightness climbs in even perceptual steps. That is load-bearing now: since
+   Turn 13 no band inside a frame is stroked, so the steps themselves are what
+   separate one band from the next. Changing a step's lightness removes a
+   boundary.
+
+   This replaces the earlier Nocturne cool-indigo neutrals and both accents that
+   preceded it — harbor teal #30b5aa, and the dusty azure #84aed9 before that.
+   All three are gone; do not reintroduce them. */
+:root{
+  /* ---- Ground ladder ---------------------------------------------------
+     Seven steps, from the desk outside the window up to a panel title row.
+     A band's identity IS its step; see semantic.css for the roles. */
+  --color-ground-0:#0c0a11;   /* desk, outside the terminal window */
+  --color-ground-1:#0f0b15;   /* recessed field — below the frame ground */
+  --color-ground-2:#1e1a26;   /* turn break / section break row */
+  --color-ground-3:#27232f;   /* the frame ground */
+  --color-ground-4:#36313f;   /* composer and bottom bar — one step above */
+  --color-ground-5:#474251;   /* top bar, overlay panel — one step above that */
+  --color-ground-6:#5d576b;   /* panel title row — the top of the ladder */
+
+  --color-bg:var(--color-ground-3);
+  --color-surface:var(--color-ground-5);
+  --color-raised:var(--color-ground-4);
+  --color-recess:var(--color-ground-1);
+  --color-desk:var(--color-ground-0);
+
+  --color-text:#f4f2f9;
+  --color-accent:#be9df7;   /* hue 300 at full chroma — the one accent */
+  --color-accent-2:#a081d5;
+
+  /* Neutrals: hue 300, chroma low enough to read as grey. */
+  --color-neutral-100:#f4f2f9;
+  --color-neutral-200:#e3dfeb;
+  --color-neutral-300:#c9c5d2;
+  --color-neutral-400:#b1adbb;
+  --color-neutral-500:#9a95a4;
+  --color-neutral-600:#7c778a;
+  --color-neutral-700:#5d576a;
+  --color-neutral-800:#474251;
+  --color-neutral-900:#322e39;
+
+  /* Accent: the same hue at full chroma. Spans both themes — the light theme
+     draws its marks from 800/900, the dark theme from 200/400. */
+  --color-accent-100:#efe7fd;
+  --color-accent-200:#dfd1fb;
+  --color-accent-300:#ceb6fb;
+  --color-accent-400:#be9df7;
+  --color-accent-500:#a081d5;
+  --color-accent-600:#8d6dbe;
+  --color-accent-700:#7f64ab;
+  --color-accent-800:#6d41a9;
+  --color-accent-900:#562c8b;
+
+  /* The selection band is a real accent fill now, not a faint tint, so each
+     theme needs its own value rather than a ramp step. */
+  --color-band-dark:#604788;
+  --color-band-light:#c6b1ef;
+
+  /* Diff pairs. Dark theme values; the light theme re-points them.
+     Added is a true green (hue 145) and removed a warm red (hue 24). Against a
+     hue-300 accent the added green sits 155 degrees away — the widest
+     separation the system has had, so a tinted row can never read as a mark.
+     Each pair carries a sign colour, a code colour for text on that row, a
+     tint, and a row fill. The inline diff has its own ground, because it is a
+     band and not a box. */
+  --color-diff-ground:#3a3648;
+  --color-diff-add:#5ed476;
+  --color-diff-add-bg:rgba(94,212,118,.24);
+  --color-diff-add-row:#3d4b42;
+  --color-diff-add-code:#9ceaa7;
+  --color-diff-del:#f66d67;
+  --color-diff-del-bg:rgba(246,109,103,.14);
+  --color-diff-del-row:#4b3a42;
+  --color-diff-del-code:#ffa8a0;
+}

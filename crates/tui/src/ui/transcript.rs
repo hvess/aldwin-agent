@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use super::diff;
 use super::grid::{elide, justified_line, with_label_column, Ctx};
 use super::markdown::{self, Segment};
-use super::row::Row;
+use super::row::{band_row, Row};
 use super::wrap::wrap_line;
 use mjolnir_permissions::PromptPayload;
 
@@ -44,16 +44,22 @@ fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
         }
         if !lines.is_empty() {
             // A fresh `UserMessage`/`AssistantText` starts a new
-            // conversational turn and gets a real `rule` row between it and
-            // whatever came before — `readme.md`: "turns are parted by a
-            // flat rule one step more muted than the frame's borders," not
-            // just blank space. Tool activity/retry/error/notice entries
-            // continue the current turn rather than starting a new one, so
-            // they only get the plain blank row a turn's own internal
-            // groups get in the reference.
+            // conversational turn and gets a turn break between it and
+            // whatever came before. That break is a *band*, not a rule: the
+            // design system's Turn 13 rebuild replaced every freestanding
+            // rule with "one full-width row of the composer's tone", and
+            // says of the terminal case that "in a terminal that is a
+            // single `Style::bg` on a one-row rect, so nothing here needs
+            // approximating". So this is a row of `break_` with no glyph in
+            // it at all — the tonal step off the transcript ground is the
+            // whole separator.
+            //
+            // Tool activity/retry/error/notice entries continue the current
+            // turn rather than starting a new one, so they only get the
+            // plain blank row a turn's own internal groups get.
             if matches!(entry, LogEntry::UserMessage { .. } | LogEntry::AssistantText { .. }) {
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled("─".repeat(ctx.width as usize), Style::default().fg(ctx.pal.rule))));
+                lines.push(band_row(ctx.pal.break_, ctx));
                 lines.push(Line::default());
             } else {
                 lines.push(Line::default());
@@ -215,7 +221,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             let summary = if *approved { diff::stat_spans(&body, ctx) } else { vec![Span::styled("denied", Style::default().fg(pal.del))] };
             let mut content = vec![tool_line("edit", &path.map(|p| diff::strip_prefix(&p)).unwrap_or_default(), *approved, summary, ctx)];
             if *approved {
-                content.extend(diff::boxed(&body, diff::Budget { collapse_context: true, max_rows: None }, Row::boxed(pal.diff_box), ctx.body()));
+                content.extend(diff::boxed(&body, diff::Budget { collapse_context: true, max_rows: None }, Row::field(pal.diff_box), ctx.body()));
             }
             with_label_column(content, None)
         }
@@ -308,7 +314,7 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
             // scrolls, so nothing here has to fit a fixed band.
             Segment::Code { lang, body: diff_text } if lang.eq_ignore_ascii_case("diff") => {
                 let (_, parsed) = diff::parse_body(&diff_text);
-                lines.extend(diff::boxed(&diff::number_lines(parsed), diff::Budget::default(), Row::boxed(pal.diff_box), body));
+                lines.extend(diff::boxed(&diff::number_lines(parsed), diff::Budget::default(), Row::field(pal.diff_box), body));
             }
             // A real code-block box, with a dim language label instead of
             // the fence's own literal ` ``` ` markers, on `diff_box` — the
@@ -318,24 +324,30 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
             // `base16-ocean` pair from the app theme, so the surface
             // follows the palette like every other one.
             //
-            // Bordered, and by the same `Row::boxed` the diff uses. The two
-            // are the *same* component in the design system — one quoted
-            // block on one nested surface — but this one used to render as
-            // a borderless field, so a code fence and a diff fence sitting
-            // in the same reply read as two unrelated treatments: "the diff
-            // boxes in the chat ... are completely different from the diff
-            // box seen in the permissions dialog."
+            // Built from the same `Row::field` the diff uses. The two are
+            // the *same* component in the design system — one quoted block
+            // on one nested surface — and they must not diverge again: this
+            // one once rendered as a bare field while the diff had a drawn
+            // box, so a code fence and a diff fence in the same reply read
+            // as two unrelated treatments ("the diff boxes in the chat ...
+            // are completely different from the diff box seen in the
+            // permissions dialog"). Now neither is stroked and both are the
+            // same recessed field, so they agree by construction.
+            //
+            // The blank first and last rows are the field's own: they give
+            // the step off the surrounding ground a full row to read
+            // against at the top and bottom, which is what the drawn edge
+            // used to do.
             Segment::Code { lang, body: code } => {
-                let row = Row::boxed(pal.diff_box).pad(1);
+                let row = Row::field(pal.diff_box).pad(1);
                 let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.push(row.border(true, body));
                 lines.extend(row.text(&label, pal.label, body));
                 lines.push(row.blank(body));
                 for code_line in highlight::highlight_lines(&lang, &code, pal.theme) {
                     let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.diff_box))).collect();
                     lines.extend(row.build(spans, body));
                 }
-                lines.push(row.border(false, body));
+                lines.push(row.blank(body));
             }
         }
     }

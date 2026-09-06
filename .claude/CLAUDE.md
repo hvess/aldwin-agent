@@ -16,42 +16,63 @@ Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, fou
 
 ## Design System
 
-The TUI's visual design is not invented locally — it is imported. Two
-projects on `claude.ai/design`, both readable via the `DesignSync` tool
-(authenticate with `/design-login` first):
+The TUI's visual design is not invented locally — it is imported. A local
+copy of everything below lives in `.claude/design/` (see its `IMPORT.md`);
+read that first, and re-sync with `DesignSync` (authenticate with
+`/design-login`) only when you need something it doesn't carry.
 
-- **Mjolnir Design System** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
-  The token layer and its `readme.md`. `styles.css` imports
-  `tokens/{fonts,palette,semantic,cells,typography,elevation,motion,base}.css`.
-  `semantic.css` holds the `--tui-*` roles that `crates/tui/src/palette.rs`
-  mirrors one-to-one; `cells.css` holds the grid. The readme carries the
-  fixed glyph vocabulary (`▌ ● ◐ ○ ✔ ▶ █ + -` — if a mark is needed and it
-  is not in that table, do not draw one) and the Content Fundamentals
-  (third-person "The agent", lowercase labels, sentence-case prose).
-- **Agent TUI v2** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
-  The authoritative handoff bundle and the more recent of the two:
-  `Agent TUI v2.dc.html`, `Agent TUI v2 Light.dc.html`, plus a revision log.
-  Where this and the token project disagree, **this one wins** — it records
-  later decisions (e.g. the top bar carries no accent mark).
+There are two projects on `claude.ai/design`, and **which one is live is
+not obvious**:
 
-Three things about using them, each learned the hard way:
+- **"Design system tokens discussion"** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
+  `type: PROJECT_TYPE_PROJECT`. Holds the five `.dc.html` frames *and a
+  bound copy of the design system* under
+  `_ds/mjolnir-design-system-4ea574fb-…/`. **That bound copy is the current
+  token layer.** Its `SYNC.md` is the change record and carries an explicit
+  "Not applied — outside this copy" table.
+- **"Mjolnir Design System"** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
+  `type: PROJECT_TYPE_DESIGN_SYSTEM`. The *source* project, and currently
+  **stale**: its 18 guideline cards, components, UI kits, `templates/` and
+  `SKILL.md` all still state pre-Turn-13 rules.
 
-1. **`DesignSync` is main-session only.** Subagents do not have the tool.
+Five things about using them, each learned the hard way:
+
+1. **`list_projects` only returns design-system projects.** The discussion
+   project — the live one — never appears in it. Address it by UUID.
+2. **A stale `updatedAt` proves nothing.** Editing the bound `_ds/` copy
+   does not touch the source project, so `4ea574fb-…` can sit at an old
+   date while the design moves underneath it.
+3. **`DesignSync` is main-session only.** Subagents do not have the tool.
    Fetch the files yourself and hand over paths, not project URLs.
-2. **Measure the handoff HTML; reading it is not enough.** Neither the token
+4. **Measure the handoff HTML; reading it is not enough.** Neither the token
    CSS nor the component prose states cell positions. They exist only as
    pixel values in the HTML's inline styles, and have to be divided by the
    cell size in `cells.css` (9×20px; the frame is 120×36 cells) to become
    grid coordinates. A design pass that skipped this step produced a layout
    that was wrong in every column while matching every colour exactly.
-3. **Render it before trusting your reading of it.** Headless Chromium
+5. **Render it before trusting your reading of it.** Headless Chromium
    works, but under snap confinement it silently no-ops writes outside
    `/root` — copy the input there and write screenshots there too, or you
    get a reported success and no file.
 
+The glyph vocabulary is fixed and closed: `▌ ● ◐ ○ ✔ ▶ █ + -`. If a mark is
+needed and it is not in that table, do not draw one — `─` and the box-
+drawing set are *not* in it. The Content Fundamentals hold too:
+third-person "The agent", lowercase labels, sentence-case prose.
+
+Two rules that now govern every layout decision (Turn 13):
+
+- **Nothing inside a frame is stroked.** Every boundary is a step on the
+  seven-rung ground ladder (`--color-ground-0…6`). No `Block::bordered()`,
+  no rule rows, no underline attributes — a band is a rect with its own
+  `Style::bg`.
+- **The grid is 3-cell margin, 8-cell label column, 2-cell gutter**, so
+  body text lands on cell 13. There is deliberately no `--body-col` token;
+  derive it, never restate it.
+
 `.claude/spec/mjolnir-tui.md`'s Progress entries record what was measured
-and what it corrected; read the 2026-09-03 grid entry before touching
-layout in `crates/tui/src/ui.rs`.
+and what it corrected; read the 2026-09-06 entry before touching layout in
+`crates/tui/src/ui/`.
 
 ## Key Constraints (non-negotiable)
 

@@ -6,7 +6,7 @@ ratatui frontend — renders the core event stream, submits commands, approval g
 colour-transport gap is closed by the 2026-09-06 entry)
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-02
+**Last Updated:** 2026-09-06
 
 **Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
 audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed
@@ -2437,6 +2437,19 @@ changed:
    size and one weight throughout and that "hierarchy is color and
    position". This is LLM-authored prose rather than frame chrome, so it is
    arguably a different domain, but it is a deviation either way.
+
+**Progress (2026-09-06, thinking flag outlives its turn):** Found while
+wiring Proton's Lumo in as an OpenAI-compatible provider (see
+`.claude/spec/archive/mjolnir-llm.md`'s entry of the same date), not by a
+TUI change. `App::thinking` was cleared only by `Event::ThinkingEnd` and
+`HistoryCleared`, so a stream that died mid-thinking — transport error,
+idle timeout, anything that ends a turn without the closing event — left
+the spinner reading "thinking" indefinitely, describing work that had
+stopped. `Event::TurnEnded` now clears it alongside `turn_active` and
+`awaiting_turn`, which is where the invariant belongs: no turn running
+means nothing is thinking. Pre-existing and provider-independent, but
+`lumo-max` reasons on nearly every turn, which is what made it visible.
+Covered by `a_turn_ending_mid_thinking_clears_the_flag` in `app.rs`.
 
 
 ## References

@@ -5,7 +5,7 @@ V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, 
 **Status:** archived — implemented, tested, audited
 **Scope:** mjolnir-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-09-06
 
 **Completed:** 2026-08-29 — `be6cd75`. Known, accepted (not a spec
 deviation): `build_request` clones the full conversation history per turn,
@@ -43,6 +43,50 @@ and `build_request_max_tokens_gives_headroom_above_the_thinking_budget`
 (renamed from the old budget_tokens-comparing version) confirms
 `max_tokens` sizing is unaffected. All 49 `mjolnir-llm` tests pass,
 workspace build/test/clippy clean.
+
+**Post-archive fix (2026-09-06, first live OpenAI-compatible endpoint —
+Proton Lumo):** `OpenAiCompatibleClient` had only ever been run against
+the local mock server and a Mistral probe, both of which put `usage` in
+the same SSE chunk as `finish_reason`. Proton's Lumo
+(`https://lumo-api.proton.me/ai/v1/chat/completions`, models `lumo-lite`
+and `lumo-max`) sends it in a *trailing, choice-less* chunk after that
+one, so the assembler's emit-StepEnded-at-finish_reason rule reported
+`usage { 0, 0 }` for every turn on that backend — the client returns the
+moment it sees StepEnded, so the usage chunk was never read. Fixed in
+`wire_openai.rs`: `Assembler::end_step` emits StepEnded immediately when
+usage is already known (Mistral's ordering, unchanged) and otherwise
+holds the stop reason until a usage chunk arrives or the stream ends;
+`Assembler::finish` flushes a held-back step with zero usage.
+`client_openai.rs` calls `finish()` in the one arm every stream-ending
+condition reaches (`[DONE]`, closed connection, idle timeout, framing
+error), so a turn that completed but never reported usage yields
+StepEnded instead of a retry or a `StreamInterrupted`. Accepted cost: on
+a backend that sends `finish_reason` and then neither usage, `[DONE]`,
+nor a close, StepEnded now waits out the 60s idle timeout rather than
+firing instantly — no observed backend behaves that way. Second gap the same live run exposed: `lumo-max` streams its thinking as
+`delta.reasoning` fragments interleaved with content, a field the adapter
+had no place for, so a reasoning model ran silent — no thinking
+indicator, just a pause. `WireDelta` now carries `reasoning`, and the
+assembler brackets it: the first non-empty fragment emits ThinkingStart,
+and the first text delta, tool call, or `finish_reason` after it emits
+ThinkingEnd. The text itself is discarded, matching `wire.rs`'s existing
+treatment of Anthropic's ThinkingDelta — core's vocabulary has
+ThinkingStart/ThinkingEnd and no thinking-text event, and this fix does
+not invent one. Also corrected the `base_url` comment in `annotated.rs`
+(both provider constants): it is the full chat-completions URL, used
+verbatim as the request endpoint, not a prefix the client appends a path
+to. Coverage: four assembler tests (trailing-usage ordering for text and for
+tool calls, the reasoning bracket, and a `finish_reason` closing an open
+one), two client tests over captured Lumo frames, and
+`crates/llm/tests/live_lumo.rs` — two
+`#[ignore]`d live tests (text turn, tool turn) run with `LUMO_API_KEY`
+set, retargetable at any OpenAI-compatible endpoint via `LUMO_BASE_URL` /
+`LUMO_MODEL`. Both pass against the live API: text streams, usage lands
+non-zero, and a `get_weather` tool call comes back parsed. All 55
+`mjolnir-llm` tests plus the workspace suite pass, clippy clean. One
+downstream fix this surfaced, recorded in `.claude/spec/mjolnir-tui.md`:
+`App::thinking` was never cleared by `TurnEnded`, so a stream dying
+mid-thinking left the spinner claiming the agent was still thinking.
 
 ## Why
 

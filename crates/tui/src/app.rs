@@ -589,10 +589,17 @@ impl App {
             }
             Event::StepEnded { .. } => {}
             Event::RetryAttempt { info, .. } => self.push(LogEntry::RetryAttempt { info }),
+            // `thinking` is cleared here, not only on ThinkingEnd: a stream
+            // that dies mid-thinking (transport error, idle timeout) never
+            // sends the closing event, and a spinner still reading "thinking"
+            // after the turn is over describes work that isn't happening.
+            // Reachable on any provider, but routine on a reasoning model —
+            // Lumo's `lumo-max` thinks on nearly every turn.
             Event::TurnEnded { reason, .. } => {
                 self.status.running_tools.clear();
                 self.turn_active = false;
                 self.awaiting_turn = false;
+                self.thinking = false;
                 self.push(LogEntry::TurnEnded { reason: reason.into() });
             }
             Event::PromptRequested { call_id, payload } => {
@@ -1536,6 +1543,17 @@ mod tests {
         assert!(app.thinking);
         assert!(app.log.is_empty());
         app.apply_event(Event::ThinkingEnd { turn_id: TurnId(1), step_id: StepId(1) });
+        assert!(!app.thinking);
+    }
+
+    /// A stream that dies while the model is thinking never sends
+    /// ThinkingEnd, so the turn ending has to clear the flag itself — or the
+    /// spinner keeps claiming the agent is thinking after the turn is over.
+    #[test]
+    fn a_turn_ending_mid_thinking_clears_the_flag() {
+        let mut app = app();
+        app.apply_event(Event::ThinkingStart { turn_id: TurnId(1), step_id: StepId(1) });
+        app.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::Error("stream closed".into()) });
         assert!(!app.thinking);
     }
 

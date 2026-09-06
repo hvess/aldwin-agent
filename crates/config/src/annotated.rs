@@ -86,7 +86,9 @@ pub const PROVIDER_HEADER: &str = "\
 # Mjolnir provider settings.
 #   provider:                  anthropic | openai-compatible
 #   model:                     the model id to use for every request
-#   base_url:                  only used when provider is openai-compatible
+#   base_url:                  only used when provider is openai-compatible, and
+#                              it is the full chat-completions URL, not a prefix
+#                              — e.g. https://host/v1/chat/completions
 #   api_key_env:               the NAME of an environment variable holding your
 #                              API key — Mjolnir never reads or stores the key
 #                              itself here, only this variable's name. Export it
@@ -99,7 +101,9 @@ pub const PROVIDER: &str = "\
 # Mjolnir provider settings.
 #   provider:                  anthropic | openai-compatible
 #   model:                     the model id to use for every request
-#   base_url:                  only used when provider is openai-compatible
+#   base_url:                  only used when provider is openai-compatible, and
+#                              it is the full chat-completions URL, not a prefix
+#                              — e.g. https://host/v1/chat/completions
 #   api_key_env:               the NAME of an environment variable holding your
 #                              API key — Mjolnir never reads or stores the key
 #                              itself here, only this variable's name. Export it

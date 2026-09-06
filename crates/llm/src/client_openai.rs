@@ -145,6 +145,16 @@ impl LlmClient for OpenAiCompatibleClient {
                             }
                         }
                         AttemptOutcome::Failed(message) => {
+                            // The assembler holds StepEnded back when
+                            // finish_reason arrives before usage does; every
+                            // way a stream can end reaches this arm, so this
+                            // is where that turn gets completed. Only a
+                            // stream that ended *without* a finish_reason
+                            // falls through to the failure paths below.
+                            if let Some(event) = assembler.finish() {
+                                yield event;
+                                return;
+                            }
                             if !emitted_any && should_retry(attempt) {
                                 yield LlmEvent::RetryAttempt {
                                     info: RetryInfo { provider: PROVIDER_NAME.into(), status: None, message, attempt },
@@ -216,6 +226,54 @@ mod tests {
         let events: Vec<LlmEvent> = events.into_iter().map(|e| e.unwrap()).collect();
         assert!(matches!(&events[0], LlmEvent::TextDelta { text } if text == "hi"));
         assert!(matches!(&events[1], LlmEvent::StepEnded { .. }));
+    }
+
+    /// Frames copied from a live `lumo-api.proton.me/ai/v1` stream: usage
+    /// trails `finish_reason` in its own choice-less chunk. The trailing
+    /// `[DONE]` is never read — usage completes the step first — but is kept
+    /// so the fixture stays the shape the wire actually has.
+    fn lumo_sse() -> String {
+        [
+            r#"data:{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello","reasoning":null}}]}"#,
+            r#"data:{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning":null},"finish_reason":"stop"}]}"#,
+            r#"data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":7,"prompt_tokens":77,"total_tokens":84}}"#,
+            "data:[DONE]",
+            "",
+        ]
+        .join("\n\n")
+    }
+
+    #[tokio::test]
+    async fn lumo_trailing_usage_lands_on_step_ended() {
+        let server = test_server::spawn(vec![Canned::Sse(lumo_sse())]);
+        let client = client_at(&server, Duration::from_secs(5));
+        let messages = vec![];
+        let events: Vec<LlmEvent> = client.stream(request(&messages)).collect::<Vec<_>>().await.into_iter().map(|e| e.unwrap()).collect();
+
+        let [LlmEvent::TextDelta { text }, LlmEvent::StepEnded { outcome }] = &events[..] else {
+            panic!("expected TextDelta then StepEnded, got {events:?}")
+        };
+        assert_eq!(text, "Hello");
+        assert_eq!(outcome.usage.input_tokens, 77);
+        assert_eq!(outcome.usage.output_tokens, 7);
+    }
+
+    /// A stream that ends after `finish_reason` without ever sending usage is
+    /// a finished turn, not a dropped connection — it must not retry. Ends on
+    /// the literal `data:[DONE]` (no space, as Lumo writes it), which is the
+    /// same client arm a bare connection close, an idle timeout and a framing
+    /// error all reach.
+    #[tokio::test]
+    async fn stream_ending_after_finish_reason_completes_instead_of_retrying() {
+        let sse = [r#"data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}"#, "data:[DONE]", ""].join("\n\n");
+        let server = test_server::spawn(vec![Canned::Sse(sse), Canned::Sse(success_sse())]);
+        let client = client_at(&server, Duration::from_secs(5));
+        let messages = vec![];
+        let events: Vec<LlmEvent> = client.stream(request(&messages)).collect::<Vec<_>>().await.into_iter().map(|e| e.unwrap()).collect();
+
+        assert!(!events.iter().any(|e| matches!(e, LlmEvent::RetryAttempt { .. })), "got {events:?}");
+        let [LlmEvent::TextDelta { .. }, LlmEvent::StepEnded { outcome }] = &events[..] else { panic!("got {events:?}") };
+        assert_eq!(outcome.usage.input_tokens, 0);
     }
 
     #[tokio::test]

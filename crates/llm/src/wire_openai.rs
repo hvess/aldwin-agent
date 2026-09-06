@@ -173,6 +173,13 @@ pub struct WireChoice {
 pub struct WireDelta {
     #[serde(default)]
     pub content:    Option<String>,
+    /// Lumo (and other reasoning backends) stream thinking text here, in the
+    /// same deltas as content. Core's event vocabulary has no thinking *text*
+    /// — only ThinkingStart/ThinkingEnd, matching how `wire.rs` drops
+    /// Anthropic's ThinkingDelta — so this is used for its presence, and its
+    /// text is deliberately discarded.
+    #[serde(default)]
+    pub reasoning:  Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<WireToolCallDelta>>,
 }
@@ -239,7 +246,16 @@ struct ToolBuffer {
 }
 
 /// Turns a sequence of `WireChunk`s from one HTTP attempt into
-/// `mjolnir_core::LlmEvent`s. Tool-call deltas are buffered by
+/// `mjolnir_core::LlmEvent`s.
+///
+/// One assembler drives exactly one attempt, and the contract spans two
+/// methods: feed every chunk to [`Assembler::handle`], then call
+/// [`Assembler::finish`] once the stream stops for any reason. StepEnded can
+/// come out of either — `handle` emits it as soon as usage is known, and
+/// `finish` releases one that was still waiting for usage that never came.
+/// Skipping `finish` silently loses the end of such a turn.
+///
+/// Tool-call deltas are buffered by
 /// `tool_calls[].index` and flushed once, in index order, when
 /// `finish_reason` is `"tool_calls"`; any other terminal `finish_reason`
 /// (`"stop"`, `"length"`, ...) maps to `StopReason::EndTurn` — same
@@ -250,6 +266,11 @@ struct ToolBuffer {
 pub struct Assembler {
     tool_buffers: HashMap<usize, ToolBuffer>,
     usage:        Option<WireUsage>,
+    /// Set when `finish_reason` arrived before any usage did — see
+    /// [`Assembler::end_step`].
+    pending_stop: Option<StopReason>,
+    /// Whether a ThinkingStart has been emitted without its ThinkingEnd.
+    in_reasoning: bool,
 }
 
 impl Assembler {
@@ -260,21 +281,42 @@ impl Assembler {
     pub fn handle(&mut self, chunk: WireChunk) -> Result<Vec<mjolnir_core::LlmEvent>, WireError> {
         use mjolnir_core::LlmEvent;
 
+        let mut events = Vec::new();
+
         if let Some(usage) = chunk.usage {
             self.usage = Some(usage);
+            // Proton's Lumo puts usage in a trailing, choice-less chunk
+            // *after* the one carrying `finish_reason`; a StepEnded held back
+            // by that ordering can now be emitted with real token counts.
+            if let Some(stop) = self.pending_stop.take() {
+                events.push(self.step_ended(stop));
+            }
         }
 
         let Some(choice) = chunk.choices.into_iter().next() else {
-            return Ok(vec![]);
+            return Ok(events);
         };
 
-        let mut events = Vec::new();
-        if let Some(text) = choice.delta.content {
-            if !text.is_empty() {
-                events.push(LlmEvent::TextDelta { text });
-            }
+        let reasoning = choice.delta.reasoning.filter(|r| !r.is_empty());
+        let text = choice.delta.content.filter(|t| !t.is_empty());
+        let tool_calls = choice.delta.tool_calls.unwrap_or_default();
+
+        // Thinking is bracketed, not transcribed: the first reasoning
+        // fragment opens it and the first non-reasoning thing — text, a tool
+        // call, or the finish_reason — closes it.
+        if reasoning.is_some() && !self.in_reasoning {
+            events.push(LlmEvent::ThinkingStart);
+            self.in_reasoning = true;
         }
-        for tc in choice.delta.tool_calls.into_iter().flatten() {
+        if self.in_reasoning && (text.is_some() || !tool_calls.is_empty() || choice.finish_reason.is_some()) {
+            events.push(LlmEvent::ThinkingEnd);
+            self.in_reasoning = false;
+        }
+
+        if let Some(text) = text {
+            events.push(LlmEvent::TextDelta { text });
+        }
+        for tc in tool_calls {
             let buf = self.tool_buffers.entry(tc.index).or_default();
             if let Some(id) = tc.id {
                 buf.id = Some(id);
@@ -305,13 +347,34 @@ impl Assembler {
                         call: ToolCall { id: buf.id.unwrap_or_default(), name: buf.name.unwrap_or_default(), input },
                     });
                 }
-                events.push(self.step_ended(StopReason::ToolUse));
+                self.end_step(StopReason::ToolUse, &mut events);
             }
-            Some(_) => events.push(self.step_ended(StopReason::EndTurn)),
+            Some(_) => self.end_step(StopReason::EndTurn, &mut events),
             None => {}
         }
 
         Ok(events)
+    }
+
+    /// Emits StepEnded now if usage is already known (Mistral puts it in the
+    /// same chunk as `finish_reason`), otherwise holds the stop reason until
+    /// a trailing usage chunk arrives or the stream ends. Holding it is what
+    /// makes token counts land for backends that report usage last; without
+    /// it every step from such a backend reports zero.
+    fn end_step(&mut self, stop_reason: StopReason, events: &mut Vec<mjolnir_core::LlmEvent>) {
+        if self.usage.is_some() {
+            events.push(self.step_ended(stop_reason));
+        } else {
+            self.pending_stop = Some(stop_reason);
+        }
+    }
+
+    /// Called when the stream ends for any reason — `[DONE]`, a closed
+    /// connection, an idle timeout, a framing error. A held-back StepEnded is
+    /// a *complete* turn whose usage chunk never came, so it flushes (with
+    /// zero usage) rather than surfacing as a stream failure.
+    pub fn finish(&mut self) -> Option<mjolnir_core::LlmEvent> {
+        self.pending_stop.take().map(|stop| self.step_ended(stop))
     }
 
     fn step_ended(&self, stop_reason: StopReason) -> mjolnir_core::LlmEvent {
@@ -357,7 +420,7 @@ mod tests {
         let mut a = Assembler::new();
         let out = a
             .handle(chunk(
-                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
+                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"},"index":0}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
             ))
             .unwrap();
         let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { outcome }] = &out[..] else {
@@ -380,7 +443,7 @@ mod tests {
             .is_empty());
         let out = a
             .handle(chunk(
-                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":":\"f.rs\"}"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
+                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":":\"f.rs\"}"},"index":0}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
             ))
             .unwrap();
         let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { .. }] = &out[..] else { panic!("expected two events, got {out:?}") };
@@ -429,9 +492,74 @@ mod tests {
     #[test]
     fn an_unmapped_finish_reason_falls_back_to_end_turn() {
         let mut a = Assembler::new();
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#)).unwrap();
-        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded") };
+        // No usage anywhere in this stream, so StepEnded waits for the end of
+        // it — the mapping is what's under test, not the timing.
+        assert!(a.handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#)).unwrap().is_empty());
+        let Some(LlmEvent::StepEnded { outcome }) = a.finish() else { panic!("expected StepEnded") };
         assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
+    }
+
+    /// Proton's Lumo shape, captured live: `finish_reason` lands in one
+    /// chunk and `usage` in a later, choice-less one. Emitting StepEnded at
+    /// the first would report zero tokens for every turn.
+    #[test]
+    fn usage_arriving_after_finish_reason_still_reaches_step_ended() {
+        let mut a = Assembler::new();
+        assert_eq!(a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#)).unwrap().len(), 1);
+        assert!(a
+            .handle(chunk(r#"{"choices":[{"index":0,"delta":{"role":null,"content":null},"finish_reason":"stop"}]}"#))
+            .unwrap()
+            .is_empty());
+        let out = a
+            .handle(chunk(r#"{"choices":[],"usage":{"prompt_tokens":77,"completion_tokens":7,"total_tokens":84}}"#))
+            .unwrap();
+        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded, got {out:?}") };
+        assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
+        assert_eq!(outcome.usage.input_tokens, 77);
+        assert_eq!(outcome.usage.output_tokens, 7);
+        assert!(a.finish().is_none(), "the step was already ended; nothing left to flush");
+    }
+
+    #[test]
+    fn tool_use_step_deferred_for_usage_keeps_its_stop_reason() {
+        let mut a = Assembler::new();
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{}"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
+            ))
+            .unwrap();
+        assert!(matches!(&out[..], [LlmEvent::ToolUseRequested { .. }]), "StepEnded should be held back, got {out:?}");
+        let out = a.handle(chunk(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#)).unwrap();
+        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded, got {out:?}") };
+        assert!(matches!(outcome.stop_reason, StopReason::ToolUse));
+        assert_eq!(outcome.usage.input_tokens, 3);
+    }
+
+    /// `lumo-max` streams thinking as `delta.reasoning` alongside content.
+    /// Core has no thinking-text event, so the fragments bracket into
+    /// ThinkingStart/ThinkingEnd and the text itself is dropped.
+    #[test]
+    fn reasoning_deltas_bracket_into_thinking_start_and_end() {
+        let mut a = Assembler::new();
+        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"17*"}}]}"#)).unwrap();
+        assert!(matches!(&out[..], [LlmEvent::ThinkingStart]), "got {out:?}");
+        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"23"}}]}"#)).unwrap();
+        assert!(out.is_empty(), "thinking opens once, got {out:?}");
+        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"391","reasoning":null}}]}"#)).unwrap();
+        let [LlmEvent::ThinkingEnd, LlmEvent::TextDelta { text }] = &out[..] else { panic!("got {out:?}") };
+        assert_eq!(text, "391");
+        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"!"}}]}"#)).unwrap();
+        assert!(matches!(&out[..], [LlmEvent::TextDelta { .. }]), "thinking closes once, got {out:?}");
+    }
+
+    #[test]
+    fn a_finish_reason_closes_an_open_thinking_bracket() {
+        let mut a = Assembler::new();
+        a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"reasoning":"hmm"}}]}"#)).unwrap();
+        let out = a
+            .handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#))
+            .unwrap();
+        assert!(matches!(&out[..], [LlmEvent::ThinkingEnd, LlmEvent::StepEnded { .. }]), "got {out:?}");
     }
 
     #[test]

@@ -1,0 +1,22 @@
+# Mjolnir provider settings.
+#   provider:                  anthropic | openai-compatible
+#   model:                     the model id to use for every request
+#   base_url:                  only used when provider is openai-compatible, and
+#                              it is the full chat-completions URL, not a prefix
+#                              — e.g. https://host/v1/chat/completions
+#   api_key_env:               the NAME of an environment variable holding your
+#                              API key — Mjolnir never reads or stores the key
+#                              itself here, only this variable's name. Export it
+#                              before starting Mjolnir.
+#   extended_thinking_budget:  token budget for extended thinking. Omit to use
+#                              mjolnir-llm's built-in default.
+#
+# Project scope: this file overrides ~/.mjolnir/provider.yaml for this
+# directory only. Delete it to fall back to the global Anthropic provider.
+# Models: lumo-lite (262144 ctx) | lumo-max (131072 ctx).
+version: 1
+provider: openai-compatible
+model: lumo-max
+base_url: https://lumo-api.proton.me/ai/v1/chat/completions
+api_key_env: LUMO_API_KEY
+extended_thinking_budget: 8192

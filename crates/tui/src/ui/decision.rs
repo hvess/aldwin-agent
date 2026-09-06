@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use super::diff;
 use super::grid::{elide, Ctx, MARGIN_X};
 use super::row::{band_row, Row};
-use crate::app::{App, DecisionOption, GrantSummary, GrantUnit, PatternScope, PendingFront};
+use crate::app::{App, GrantSummary, GrantUnit, PatternScope, PendingFront};
 use crate::palette::Palette;
 
 /// Maximum rows the panel is allowed to claim, derived from the frame's
@@ -259,7 +259,7 @@ const COMMAND_BLOCK_PAD: usize = 2;
 ///
 /// No rule along the panel's top edge either — the step off the transcript
 /// is the whole boundary (see `super::draw`).
-fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
+pub(super) fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
     Row::card(ctx.pal.panel_title).split(
         vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.accent_text))],
         vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.speaker_you))],
@@ -272,17 +272,36 @@ fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
 /// column the panel used to need, per the design system's revision log on
 /// the permission screen: "the keys that were on the rows moved into the
 /// footer."
-fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
+pub(super) fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
+    key_hints(&[("↑↓", "to move"), (&format!("1-{option_count}"), "to pick"), ("⏎", "to confirm")], ctx)
+}
+
+/// `KeyHints.jsx`'s pair convention itself: the key in the accent mark
+/// colour, its verb muted, pairs parted by the `--group-gap` the bars use.
+/// Shared so a second panel cannot invent a second spelling of the same
+/// footer.
+pub(super) fn key_hints(pairs: &[(&str, &str)], ctx: Ctx) -> Vec<Span<'static>> {
+    const GROUP_GAP: usize = 6;
     let key = Style::default().fg(ctx.pal.mark);
     let verb = Style::default().fg(ctx.pal.quiet);
-    vec![
-        Span::styled("↑↓", key),
-        Span::styled(" to move      ", verb),
-        Span::styled(format!("1-{option_count}"), key),
-        Span::styled(" to pick      ", verb),
-        Span::styled("⏎", key),
-        Span::styled(" to confirm", verb),
-    ]
+    let mut spans = Vec::new();
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" ".repeat(GROUP_GAP), verb));
+        }
+        spans.push(Span::styled(k.to_string(), key));
+        spans.push(Span::styled(format!(" {v}"), verb));
+    }
+    spans
+}
+
+/// One row of a numbered list, reduced to what the row draws: the name and
+/// the line beside it saying what picking it does. Both the permission
+/// panel's decisions and the model picker's catalogue rows arrive here as
+/// this, so the two lists cannot drift into two different controls.
+pub(super) struct OptionRow {
+    pub label:  String,
+    pub detail: String,
 }
 
 /// The numbered, keyboard-navigable list of choices — one row per
@@ -297,7 +316,7 @@ fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
 /// too narrow to seat it without wrapping every row: the labels alone still
 /// resolve the list, and the panel body above already states the rule in
 /// full.
-fn option_rows(options: &[DecisionOption], selected: usize, ctx: Ctx) -> Vec<Line<'static>> {
+pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> Vec<Line<'static>> {
     // Cells 0-5 are the mark and number columns (see the span layout
     // below); `DETAIL_GAP` parts the label column from the detail one, and
     // `MARGIN_X` keeps the longest detail off the frame's right edge.
@@ -397,6 +416,10 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     if options.is_empty() {
         return Vec::new();
     }
+    // The panel's own list, reduced to what a row actually draws — the
+    // shape `super::picker` renders too, so both lists are one control.
+    let rows: Vec<OptionRow> =
+        options.iter().map(|o| OptionRow { label: o.label.clone(), detail: o.detail.clone() }).collect();
     let card = Row::card(pal.bar);
     // The separator above the options list. The design system's permission
     // screen replaced the old accent rule here with "one row of the
@@ -416,7 +439,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     let (body, badge_text, tail) = match app.pending_front() {
         PendingFront::Approval(pending) => {
             let mut tail = options_rule();
-            tail.extend(option_rows(&options, app.decision_selected, ctx));
+            tail.extend(option_rows(&rows, app.decision_selected, ctx));
             tail.extend(queue_note(app.pending_approvals.len()));
             // Everything the budget has left once the tail is reserved goes
             // to the card, which sizes its own diff box against it — that
@@ -440,7 +463,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
                 None => Vec::new(),
             };
             tail.extend(options_rule());
-            tail.extend(option_rows(&options, app.decision_selected, ctx));
+            tail.extend(option_rows(&rows, app.decision_selected, ctx));
             tail.extend(queue_note(app.pending_prompts.len()));
             let view = PromptView::of(&pending.payload);
             (prompt_card(&pending.payload, Vec::new(), ctx), view.badge, tail)

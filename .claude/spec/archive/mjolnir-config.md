@@ -90,7 +90,7 @@ Mjolnir's persistent state — permission grants, context-file decisions, provid
 - **Read:** Domain-typed accessors per scope: `project_permissions()`, `global_permissions()`, `project_provider()`, `global_provider()`, `project_mcp()`, `global_mcp()`, `global_tui()`, `project_context_files()`. Each returns a typed snapshot of one (scope, domain) layer. Permissions returns the raw allow and deny lists separately. No merged view — that is the consumer's job.
 - **Write:** Domain-typed mutators per scope: `add_grant`, `remove_grant`, `set_provider`, `add_mcp_server`, etc. Each persists atomically and invalidates the in-memory snapshot. Session-scope writes are not accepted — the session layer lives in mjolnir-permissions and never touches disk. All writes round-trip through the same schema validation as the loader.
 - **Reload All:** Re-reads every existing layer. Called by the cli crate's `/reload-config` handler. On failure returns an error and retains the previous snapshot.
-- **Init Global If Empty:** Creates `~/.mjolnir/` and writes the four annotated files if the directory does not exist. Returns Created | AlreadyPresent | PartiallyPresent. PartiallyPresent is refuse-to-start.
+- **Init Global If Empty:** Creates `~/.mjolnir/` and writes the annotated files if the directory does not exist. Returns Created | AlreadyPresent | PartiallyPresent. PartiallyPresent is refuse-to-start. As of 2026-09-06 that is three files, not four — `provider.yaml` is not among them (see the post-archive note below), and is not required for AlreadyPresent either.
 
 ## Decisions
 
@@ -136,6 +136,27 @@ Mjolnir's persistent state — permission grants, context-file decisions, provid
 - Textual content of the annotated YAML files — ownership is in scope; the prose is its own deliverable.
 - Session-scope persistence — the session layer is in-memory and owned by mjolnir-permissions.
 - TUI rendering of config errors, the `/reload-config` command itself, in-process command dispatch — mjolnir-tui and cli.
+
+**Post-archive fix (2026-09-06, init stopped guessing a provider):**
+`init_global_if_empty` seeded `provider.yaml` with `anthropic` /
+`claude-sonnet-5`. Every other annotated file has a meaningful *empty*
+value — no grants, no MCP servers, no theme override — so writing one states
+nothing on the developer's behalf. A provider does not: the seeded file
+named a host, a model and a key variable nobody chose, and because init runs
+before mjolnir-cli's first-run check (`global_provider().is_err()`), it had
+silently answered the provider question on every machine since the feature
+shipped — the first-run screen's provider step had never once been shown.
+
+Init now writes `permissions.yaml`, `mcp.yaml` and `tui.yaml` only, and
+`provider.yaml` is dropped from the required-file check that produces
+`PartiallyPresent`: a global directory without one is an unanswered question
+(or a developer who deleted the file to be asked again), not a half-deleted
+config dir. The other three are written together, so any of *them* missing
+still is. `annotated::PROVIDER` is deleted with it; `PROVIDER_HEADER`
+remains, since `set_provider` still writes that header above whatever first
+run or `/model` chooses. Covered by
+`init_writes_no_provider_so_the_question_is_still_open`.
+
 
 ## References
 

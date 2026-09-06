@@ -1662,3 +1662,92 @@ fn wrapped_assistant_prose_keeps_the_left_inset_on_every_row() {
     assert!(insets.len() > 1, "expected the long line to wrap onto multiple rows, got insets {insets:?}");
     assert!(insets.iter().all(|&i| i == insets[0]), "every wrapped row must share the same left inset, got {insets:?}");
 }
+
+// ── The model picker's panel ─────────────────────────────────────────────
+
+/// An `App` with a catalogue, as mjolnir-cli's bootstrap hands one in.
+fn app_with_catalogue() -> App {
+    app().with_catalogue(crate::first_run::sample_providers(), Some("bravo".into()))
+}
+
+fn picking(app: &mut App) {
+    app.input = "/model".into();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter));
+}
+
+/// The panel takes the composer's band exactly as a pending decision does —
+/// there is nothing to type into while a list is waiting on an answer.
+#[test]
+fn the_picker_replaces_the_composer_and_lists_every_provider() {
+    let mut app = app_with_catalogue();
+    picking(&mut app);
+    let out = rendered(&mut app, 120, 36);
+    for provider in crate::first_run::sample_providers() {
+        assert!(out.contains(&provider.id), "the whole catalogue is on offer: {} missing", provider.id);
+    }
+    assert!(!out.contains("Ask anything"), "the composer is not drawn while the picker is open: {out:?}");
+}
+
+/// The row the session is running on says so, so it stays findable once the
+/// cursor has moved off it.
+#[test]
+fn the_running_provider_is_marked_current_on_its_row() {
+    let mut app = app_with_catalogue();
+    picking(&mut app);
+    let out = rendered(&mut app, 120, 36);
+    assert!(out.contains("· current"), "the row in use is named as such: {out:?}");
+}
+
+/// Taking a provider narrows the same control to that provider's models,
+/// and the panel's badge names whose catalogue is on screen.
+#[test]
+fn taking_a_provider_shows_its_models_and_names_it() {
+    let mut app = app_with_catalogue();
+    picking(&mut app);
+    app.handle_key(ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter));
+    let out = rendered(&mut app, 120, 36);
+    assert!(out.contains("bravo-large"), "the chosen provider's models: {out:?}");
+    assert!(out.contains("bravo-small"), "{out:?}");
+    assert!(out.contains("bravo"), "the badge names the catalogue being shown: {out:?}");
+}
+
+/// The transcript recedes behind the picker for the same reason it recedes
+/// behind a permission panel: the panel is the one live surface.
+#[test]
+fn the_transcript_fades_behind_the_picker() {
+    let mut app = app_with_catalogue();
+    app.log.push(LogEntry::AssistantText { text: "a line of history".into() });
+    let backend = TestBackend::new(120, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let before = terminal.backend().buffer().clone();
+    let history = find_row(&before, "a line of history");
+    let lit = before[(CONTENT_INDENT as u16, history)].fg;
+
+    picking(&mut app);
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let after = terminal.backend().buffer().clone();
+    assert_ne!(after[(CONTENT_INDENT as u16, history)].fg, lit, "the history behind the panel must recede");
+}
+
+#[test]
+#[ignore = "visual aid; run with --ignored to eyeball the picker"]
+fn dump_picker() {
+    let mut app = app_with_catalogue();
+    app.log.push(LogEntry::AssistantText { text: "a line of history".into() });
+    picking(&mut app);
+    for stage in 0..2 {
+        if stage == 1 {
+            app.handle_key(ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter));
+        }
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        println!("\n=== stage {stage} ===");
+        for y in 0..24 {
+            let row: String = (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+            println!("{y:2}|{row}|");
+        }
+    }
+}

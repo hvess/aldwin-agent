@@ -446,28 +446,36 @@ impl Config {
 
     // ── First launch ─────────────────────────────────────────────────────
 
-    /// Create `~/.mjolnir/` and write the four annotated global files if the
+    /// Create `~/.mjolnir/` and write the annotated global files if the
     /// directory does not exist. Idempotent — a directory that already
     /// exists is inspected for completeness rather than touched.
+    ///
+    /// **`provider.yaml` is deliberately not among them.** Every other file
+    /// here has a meaningful empty value — no grants, no MCP servers, no
+    /// theme override — so writing one states nothing on the developer's
+    /// behalf. A provider does not: any file this could write would name a
+    /// host, a model and a key variable nobody chose. It used to write
+    /// `anthropic` / `claude-sonnet-5`, and because that ran *before* the
+    /// first-run screen's own check (`global_provider().is_err()`), the
+    /// provider question was never once asked — the seed had already
+    /// answered it. Leaving the file absent is what makes "no provider is
+    /// configured" a real state, and it is the state first run exists to
+    /// resolve.
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
         let dir = self.inner.global_dir.clone();
 
         if !dir.exists() {
             let permissions_path = dir.join("permissions.yaml");
-            let provider_path    = dir.join("provider.yaml");
             let mcp_path         = dir.join("mcp.yaml");
             let tui_path         = dir.join("tui.yaml");
 
             fsio::write_atomic_text(&permissions_path, annotated::PERMISSIONS)?;
-            fsio::write_atomic_text(&provider_path, annotated::PROVIDER)?;
             fsio::write_atomic_text(&mcp_path, annotated::MCP)?;
             fsio::write_atomic_text(&tui_path, annotated::TUI)?;
 
             *self.inner.global_permissions.write().expect("lock poisoned") =
                 fsio::read_versioned(&permissions_path, PERMISSIONS_VERSION)?
                     .expect("just wrote a file matching this schema");
-            *self.inner.global_provider.write().expect("lock poisoned") =
-                Some(load_provider(&provider_path)?.expect("just wrote a file matching this schema"));
             *self.inner.global_mcp.write().expect("lock poisoned") =
                 fsio::read_versioned(&mcp_path, MCP_VERSION)?
                     .expect("just wrote a file matching this schema");
@@ -478,7 +486,12 @@ impl Config {
             return Ok(InitOutcome::Created);
         }
 
-        let required = ["permissions.yaml", "provider.yaml", "mcp.yaml", "tui.yaml"];
+        // `provider.yaml` is not required: an existing directory without one
+        // is a developer who has not answered the provider question yet (or
+        // who deleted the file to be asked again), which first run handles.
+        // The other three are written together at init, so any of them
+        // missing really is a half-deleted config directory.
+        let required = ["permissions.yaml", "mcp.yaml", "tui.yaml"];
         let missing: Vec<&'static str> =
             required.iter().copied().filter(|f| !dir.join(f).is_file()).collect();
 
@@ -589,16 +602,33 @@ mod tests {
         assert!(!global_dir.exists());
 
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
-        for f in ["permissions.yaml", "provider.yaml", "mcp.yaml", "tui.yaml"] {
+        for f in ["permissions.yaml", "mcp.yaml", "tui.yaml"] {
             assert!(global_dir.join(f).is_file(), "missing {f}");
         }
 
         // In-memory snapshot reflects what was just written, not stale defaults.
         assert_eq!(config.global_permissions(), PermissionsConfig::empty());
-        assert!(config.global_provider().unwrap().has_valid_api_key_env());
 
         // Idempotent: a second call sees everything already there.
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::AlreadyPresent);
+    }
+
+    /// A fresh global directory names no provider at all — the one question
+    /// init must not answer on the developer's behalf. Seeding one is what
+    /// made first run's provider step unreachable: it ran first, so the
+    /// screen's own "no provider is configured" test was never true, and
+    /// every developer silently got the seeded default.
+    #[test]
+    fn init_writes_no_provider_so_the_question_is_still_open() {
+        let (_project, global, config) = fresh();
+        assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
+        assert!(!global.path().join(".mjolnir").join("provider.yaml").exists(), "init must not guess a provider");
+        assert!(config.global_provider().is_err(), "which is what first run reads to know the question is unanswered");
+        assert_eq!(
+            config.init_global_if_empty().unwrap(),
+            InitOutcome::AlreadyPresent,
+            "and a directory without one is complete, not half-deleted"
+        );
     }
 
     #[test]

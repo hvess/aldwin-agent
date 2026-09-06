@@ -2574,6 +2574,79 @@ reference specifies. 454 workspace tests pass; clippy clean over the
 changed crates.
 
 
+**Progress (2026-09-06, the model selector):** Reported directly: "The
+model selector doesn't work at all, it doesn't appear in the onboarding and
+when trying to do it via slash commands it says the model is already
+selected when it isn't." Both halves were real, and the first had a cause
+outside this crate.
+
+*Onboarding.* `Store::init_global_if_empty` seeded `~/.mjolnir/provider.yaml`
+with `anthropic` / `claude-sonnet-5`, and it ran **before** the first-run
+screen's own test for whether the question was open
+(`config.global_provider().is_err()`, `bootstrap.rs`). The seed had always
+already answered it, so the provider step had never once been shown to
+anyone — every developer silently got the seeded default. Init no longer
+writes that file: the other three global files have meaningful empty values
+(no grants, no servers, no theme override) and state nothing on anyone's
+behalf, while any `provider.yaml` names a host, a model and a key variable
+nobody chose. `provider.yaml` is correspondingly dropped from init's
+required-file check — a directory without one is an unanswered question,
+not a half-deleted config dir.
+
+*The model step.* First run asked for a provider and wrote that provider's
+catalogue default, so a model was never chosen at all. There is now a
+`model` step between `provider` and `access`, listing the chosen provider's
+own models (`ProviderChoice` carries them; the caller still hands over
+display halves only). `←` reopens the previous question, since the model
+step is the provider step narrowed and a wrong provider must not mean
+quitting the screen.
+
+*Three sections in 36 rows.* The frame does not scroll, and three full
+lists do not fit it — measured, not guessed: with the catalogue expanded
+the body needs 31 of its 30 rows. So a step the developer has *passed*
+collapses to the single row that answered it, and the model section is not
+drawn at all until a provider is settled (its list is that provider's own).
+Every step now fits with rows to spare, pinned by
+`the_expanded_screen_still_fits_the_frame`, which asserts it on each step
+rather than only the first.
+
+*"Already selected".* The message is `slash.rs`'s `already on …`, reached
+when the argument names the provider you are already on — `/model lumo` in
+a project whose `provider.yaml` pins `lumo/lumo-max`. It was truthful about
+the file and useless as an answer: a developer typing that is reaching for
+a list. Bare `/model` now opens one. `App::submit` reads that one
+submission rather than forwarding it and opens a two-stage picker
+(providers, then that provider's models) in the bottom band, on the
+permission panel's own shape — a risen title row, prose, the recessed rule,
+numbered flush option rows, key hints — because that panel is the system's
+one in-session modal and a second control invented here would read as a
+different application. `option_rows` and the key-hint builder are now shared
+by both.
+
+The picker **answers by typing the command**: committing submits
+`/model <provider>/<model>` exactly as if the developer had typed it, so
+mjolnir-cli's interceptor stays the only thing that decides which scope the
+write lands in and what is reported. Per mjolnir-cli.md the CLI owns the
+dispatch table; a picker that wrote `provider.yaml` itself would be a second
+implementation of `/model` in the frontend, free to disagree with the first.
+It opens on the row the session is running on and marks it `· current`, and
+a pending decision still outranks it in both key routing and the band.
+
+Verified end to end against the real binary in a sandboxed `HOME`: a fresh
+first run wrote `google` / `gemini-2.5-flash` with the right endpoint and
+key variable from the three lists, and `/model` → ⏎ → ↓ → ⏎ in a project
+pinned to Lumo rewrote that project's `provider.yaml` to `lumo-lite`,
+endpoint and key variable intact.
+
+Not fixed, and worth knowing: a *bare model id* is still written onto
+whatever endpoint is configured, so `/model claude-opus-5` in a Lumo
+project saves `openai-compatible` + Lumo's `base_url` + `claude-opus-5` and
+reports success — a config that fails at the host on the next start. The
+catalogue is a seed rather than a ceiling (`mjolnir-llm`'s own note), so
+refusing an unlisted id is not obviously right; the picker sidesteps it,
+and the text form still does not.
+
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

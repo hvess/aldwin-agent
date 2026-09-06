@@ -97,25 +97,6 @@ pub const PROVIDER_HEADER: &str = "\
 #                              mjolnir-llm's built-in default.
 ";
 
-pub const PROVIDER: &str = "\
-# Mjolnir provider settings.
-#   provider:                  anthropic | openai-compatible
-#   model:                     the model id to use for every request
-#   base_url:                  only used when provider is openai-compatible, and
-#                              it is the full chat-completions URL, not a prefix
-#                              — e.g. https://host/v1/chat/completions
-#   api_key_env:               the NAME of an environment variable holding your
-#                              API key — Mjolnir never reads or stores the key
-#                              itself here, only this variable's name. Export it
-#                              before starting Mjolnir.
-#   extended_thinking_budget:  token budget for extended thinking. Omit to use
-#                              mjolnir-llm's built-in default.
-version: 1
-provider: anthropic
-model: claude-sonnet-5
-api_key_env: ANTHROPIC_API_KEY
-";
-
 pub const MCP_HEADER: &str = "\
 # Mjolnir MCP server registry.
 # Each entry under servers needs a unique name and one of:
@@ -165,9 +146,6 @@ mod tests {
         let permissions: PermissionsConfig = serde_yaml_ng::from_str(PERMISSIONS).unwrap();
         assert_eq!(permissions, PermissionsConfig::empty());
 
-        let provider: ProviderConfig = serde_yaml_ng::from_str(PROVIDER).unwrap();
-        assert!(provider.has_valid_api_key_env());
-
         let mcp: McpConfig = serde_yaml_ng::from_str(MCP).unwrap();
         assert_eq!(mcp, McpConfig::empty());
 
@@ -187,7 +165,7 @@ mod tests {
     /// test only ever exercises the full constants.
     #[test]
     fn a_headers_own_comment_block_matches_the_full_constants_leading_text() {
-        for (header, full) in [(PERMISSIONS_HEADER, PERMISSIONS), (PROVIDER_HEADER, PROVIDER), (MCP_HEADER, MCP), (TUI_HEADER, TUI)] {
+        for (header, full) in [(PERMISSIONS_HEADER, PERMISSIONS), (MCP_HEADER, MCP), (TUI_HEADER, TUI)] {
             assert!(full.starts_with(header), "header text has drifted from the full constant's own leading comment block:\nheader: {header:?}\nfull:   {full:?}");
         }
     }

@@ -13,8 +13,26 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::app::App;
+use crate::first_run::ProviderChoice;
 use crate::palette::Theme;
 use crate::ui;
+
+/// What the session needs to know about *where* it is running, beyond the
+/// model id the status line already shows: the catalogue bare `/model`
+/// offers, and which of its rows the session is actually on.
+///
+/// A struct rather than two more positional parameters — `run` already
+/// takes five, and these two are one fact about the session.
+pub struct SessionProvider {
+    /// Display halves only, in catalogue order (see
+    /// [`crate::first_run::ProviderChoice`]). Empty means no picker: bare
+    /// `/model` is then forwarded to mjolnir-cli, which reports rather than
+    /// picks.
+    pub catalogue:        Vec<ProviderChoice>,
+    /// The catalogue id of the row `provider.yaml` resolves to, or `None`
+    /// for an endpoint the catalogue has never seen.
+    pub current_provider: Option<String>,
+}
 
 /// Runs the TUI to completion: sets up the terminal, drives the event loop
 /// multiplexing crossterm input and core events on one `tokio::select!` (per
@@ -44,7 +62,14 @@ use crate::ui;
 /// fixed `palette::Palette` every draw uses for the whole session; see
 /// `palette.rs`'s module doc comment for why this is a one-time, explicit
 /// choice rather than a runtime-switchable global.
-pub async fn run(events: mpsc::Receiver<Event>, commands: mpsc::Sender<Command>, model_name: String, permissions: Arc<Engine>, theme: Theme) -> io::Result<()> {
+pub async fn run(
+    events: mpsc::Receiver<Event>,
+    commands: mpsc::Sender<Command>,
+    model_name: String,
+    permissions: Arc<Engine>,
+    theme: Theme,
+    session: SessionProvider,
+) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
@@ -52,7 +77,7 @@ pub async fn run(events: mpsc::Receiver<Event>, commands: mpsc::Sender<Command>,
     let mut terminal = Terminal::new(backend)?;
     let guard = TerminalGuard::new();
 
-    let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme).await;
+    let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme, session).await;
     guard.restore()?;
 
     result
@@ -104,8 +129,10 @@ async fn run_loop(
     model_name: String,
     permissions: Arc<Engine>,
     theme: Theme,
+    session: SessionProvider,
 ) -> io::Result<()> {
-    let mut app = App::new(model_name, permissions).with_theme(theme);
+    let mut app =
+        App::new(model_name, permissions).with_theme(theme).with_catalogue(session.catalogue, session.current_provider);
     let mut input = EventStream::new();
     // Drives the "working"/"thinking" spinner's animation frame — a plain
     // redraw timer, not tied to any core event, since there'd otherwise be

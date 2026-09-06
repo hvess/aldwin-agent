@@ -13,6 +13,7 @@
 //! | [`diff`] | unified-diff parsing and its bordered-box rendering |
 //! | [`transcript`] | the conversation log and the welcome hero |
 //! | [`decision`] | the pending-approval / permission panel and its resolved cards |
+//! | [`picker`] | the model picker's panel — what bare `/model` opens |
 //! | [`chrome`] | the top bar, the status line and the composer |
 //!
 //! The one discipline that spans all of them: a row is wrapped exactly
@@ -28,6 +29,7 @@ mod diff;
 pub(crate) mod first_run;
 mod grid;
 mod markdown;
+pub(crate) mod picker;
 mod row;
 mod transcript;
 mod wrap;
@@ -74,6 +76,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let panel_height = decision::row_count(&panel_lines, area.width) as u16;
     let pending = panel_height > 0;
 
+    // The model picker takes the same band on the same terms — it is a
+    // question waiting on an answer, and there is nothing to type into
+    // while it is open. A pending decision outranks it: that one is the
+    // agent blocked on the developer, and `App::handle_key` routes keys the
+    // same way round, so what is on screen is always what the next key
+    // resolves.
+    let picker_lines = if pending { Vec::new() } else { picker::panel_lines(app, ctx) };
+    let picker_height = decision::row_count(&picker_lines, area.width) as u16;
+    let picking = picker_height > 0;
+
     // Three bands: a 3-row identity bar, the conversation log, and the
     // bottom bar. No border rows between them — see the note on borders
     // further down this file for why the surface change is the edge.
@@ -108,7 +120,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // underline of the row above the band. There is no edge now, and
     // leaving the row reserved put a stray `bar` row *below* the footer,
     // since the panel's content renders from the top of its rect.
-    let bottom_height = if pending { panel_height } else { input_height + 4 };
+    let bottom_height = if pending {
+        panel_height
+    } else if picking {
+        picker_height
+    } else {
+        input_height + 4
+    };
     let [top_bar_area, log_area, bottom_area] =
         Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(bottom_height)]).areas(area);
 
@@ -153,6 +171,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // panel takes the full band and announces itself with its own
         // ground plus the risen title row inside it.
         decision::draw_panel(frame, bottom_area, panel_lines, pal);
+    } else if picking {
+        // Same treatment as a pending decision, for the same reason: the
+        // panel is the one live surface while it is open.
+        fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
+        decision::draw_panel(frame, bottom_area, picker_lines, pal);
     } else {
         // blank / composer / blank / status / blank — the reference's own
         // five rows, on its own ground one step off the transcript. No

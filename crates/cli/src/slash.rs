@@ -26,8 +26,8 @@ enum Intercepted {
 /// `match` in `intercept` below by hand; six entries doesn't earn a
 /// data-driven dispatch table yet.
 const HELP_TEXT: &str = "commands: /help (this list), /clear (clear conversation context), /exit (end the session), \
-     /model [provider/]model (pick where the model runs, and which one), /reload-config (reload config files from disk), \
-     /theme light|dark (switch color theme)";
+     /model (pick from the provider and model lists), /model [provider/]model (set it directly), \
+     /reload-config (reload config files from disk), /theme light|dark (switch color theme)";
 
 /// `/model`'s own usage line, quoted by every branch that rejects an
 /// argument so the developer never has to go and find `/help`.
@@ -161,6 +161,13 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// model id and so does this. `mjolnir_llm::PROVIDERS`' model lists are
 /// suggestions, and the notice says so by listing them as "known".
 ///
+/// **The bare form opens a list.** mjolnir-tui reads `/model` with no
+/// argument before it reaches here and opens the picker, which answers by
+/// submitting `/model <provider>/<model>` — this function still does every
+/// write, and still decides which scope it lands in. What reaches the branch
+/// below is the bare form on a session with no catalogue to show, which
+/// reports where the developer stands instead.
+///
 /// **It does not take effect now.** The `LlmClient` was constructed at
 /// startup and handed to the agent loop, which owns it for the life of the
 /// process; there is no way to swap it under a running turn. So this
@@ -247,7 +254,12 @@ async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, e
     next.version = mjolnir_config::PROVIDER_VERSION;
 
     if next == current {
-        let _ = events.send(Event::Notice { message: format!("already on {}", qualified(&current, known)) }).await;
+        // Never a dead end. Naming the provider you are already on is the
+        // most likely way to reach this branch, and it is what a developer
+        // types when they are reaching for a list of models — so the notice
+        // says where the list is rather than stopping at "already on".
+        let message = format!("already on {} · /model with no argument opens the list", qualified(&current, known));
+        let _ = events.send(Event::Notice { message }).await;
         return;
     }
 

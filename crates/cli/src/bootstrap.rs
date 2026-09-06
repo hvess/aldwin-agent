@@ -35,6 +35,24 @@ impl LlmClient for AnyLlmClient {
 
 const CHANNEL_CAPACITY: usize = 64;
 
+/// The display halves of the whole catalogue, in catalogue order — what
+/// first run's provider step and the session's `/model` picker both list.
+/// mjolnir-tui is handed ids and purposes and nothing else: it renders the
+/// list, it does not know what an endpoint or a key variable is, and it
+/// does not depend on this crate or on mjolnir-llm to find out.
+fn catalogue_choices() -> Vec<mjolnir_tui::ProviderChoice> {
+    mjolnir_llm::PROVIDERS
+        .iter()
+        .map(|p| {
+            mjolnir_tui::ProviderChoice::new(
+                p.id,
+                p.purpose,
+                p.models.iter().map(|m| mjolnir_tui::ModelChoice::new(m.id, m.purpose)).collect(),
+            )
+        })
+        .collect()
+}
+
 /// The `provider.yaml` a first-run answer writes: everything but the model
 /// comes straight off the catalogue row the developer picked, and the model
 /// is that provider's own default (`/model` changes it afterwards).
@@ -42,11 +60,14 @@ const CHANNEL_CAPACITY: usize = 64;
 /// `provider.yaml` deliberately has no field a plaintext key could go in
 /// (see `ProviderConfig`), so this writes the key variable's *name* and the
 /// developer exports the key themselves.
-fn first_run_provider_config(provider: &mjolnir_llm::Provider) -> ProviderConfig {
+fn first_run_provider_config(provider: &mjolnir_llm::Provider, model: Option<&str>) -> ProviderConfig {
     ProviderConfig {
         version:                  PROVIDER_VERSION,
         provider:                 provider.kind,
-        model:                    provider.default_model().to_string(),
+        // The developer's own answer, and the provider's default only when
+        // the model step could not be asked (a catalogue row with no models
+        // — which the real catalogue never has).
+        model:                    model.unwrap_or_else(|| provider.default_model()).to_string(),
         base_url:                 provider.base_url.map(String::from),
         api_key_env:              provider.api_key_env.to_string(),
         extended_thinking_budget: None,
@@ -105,10 +126,7 @@ pub async fn run() -> Result<(), StartupError> {
         // nothing else — it renders the list, it does not know what an
         // endpoint or a key variable is, and it does not depend on this
         // crate or on mjolnir-llm to find out.
-        let choices = mjolnir_llm::PROVIDERS
-            .iter()
-            .map(|p| mjolnir_tui::ProviderChoice::new(p.id, p.purpose))
-            .collect::<Vec<_>>();
+        let choices = catalogue_choices();
         // `None` means the developer quit without answering. Nothing is
         // written and no session opens — a first run that was dismissed must
         // not fall back to defaults, least of all for the access question.
@@ -122,7 +140,9 @@ pub async fn run() -> Result<(), StartupError> {
         // provider the developer already configured alone.
         if let Some(id) = answers.provider.as_deref() {
             let picked = mjolnir_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
-            config.set_provider(Scope::Global, first_run_provider_config(picked)).map_err(StartupError::FirstRunWrite)?;
+            config
+                .set_provider(Scope::Global, first_run_provider_config(picked, answers.model.as_deref()))
+                .map_err(StartupError::FirstRunWrite)?;
         }
         // Again, answered only when it was asked. `add_grant` only ever adds,
         // so writing an unasked answer into a directory that already has a
@@ -187,7 +207,14 @@ pub async fn run() -> Result<(), StartupError> {
     let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), session_model, event_tx.clone()));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
-    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme).await;
+    // The picker opens on the row the session is actually running on, which
+    // is `effective_provider` — the file that supplies the setting, not the
+    // global one it may be shadowing.
+    let session = mjolnir_tui::SessionProvider {
+        catalogue:        catalogue_choices(),
+        current_provider: mjolnir_llm::identify(&effective_provider).map(|p| p.id.to_string()),
+    };
+    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme, session).await;
 
     // The TUI dropped its command sender on return, closing tui_cmd_rx;
     // the interceptor then drops agent_cmd_tx, closing the core's command
@@ -232,5 +259,38 @@ mod tests {
         assert_eq!(merged.len(), 2);
         let fs = merged.iter().find(|s| s.name == "fs").unwrap();
         assert!(matches!(&fs.transport, McpTransport::Stdio { command, .. } if command == "project-fs-server"));
+    }
+
+    /// The developer's own model answer is what gets written — the
+    /// provider's catalogue default is the fallback for the case the model
+    /// step could not be asked at all, not the normal path.
+    #[test]
+    fn first_run_writes_the_model_that_was_chosen() {
+        let anthropic = mjolnir_llm::provider("anthropic").expect("a catalogue provider");
+        let chosen = first_run_provider_config(anthropic, Some("claude-opus-5"));
+        assert_eq!(chosen.model, "claude-opus-5");
+        assert_eq!(chosen.api_key_env, anthropic.api_key_env, "the endpoint and key still come from the provider row");
+
+        let unasked = first_run_provider_config(anthropic, None);
+        assert_eq!(unasked.model, anthropic.default_model());
+    }
+
+    /// Every catalogue row reaches the TUI with its models on it — a row
+    /// handed over without them would open a picker with an empty second
+    /// list, and first run would fall back to the default it exists to stop
+    /// choosing silently.
+    #[test]
+    fn every_catalogue_row_carries_its_models_to_the_frontend() {
+        let choices = catalogue_choices();
+        assert_eq!(choices.len(), mjolnir_llm::PROVIDERS.len());
+        for (choice, provider) in choices.iter().zip(mjolnir_llm::PROVIDERS) {
+            assert_eq!(choice.id, provider.id);
+            assert_eq!(
+                choice.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+                provider.models.iter().map(|m| m.id).collect::<Vec<_>>(),
+                "{} must offer the same models the catalogue lists",
+                provider.id
+            );
+        }
     }
 }

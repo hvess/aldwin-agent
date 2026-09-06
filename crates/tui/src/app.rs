@@ -431,6 +431,22 @@ pub struct App {
     /// so both can be exercised in tests without a channel.
     pub outbox: Vec<Command>,
 
+    /// The provider catalogue the model picker offers, in display order,
+    /// with each row's models on it — the display halves only (an id and a
+    /// purpose), exactly as first run takes them. Empty unless the caller
+    /// supplied one (`App::with_catalogue`), in which case bare `/model`
+    /// stays a plain command and mjolnir-cli reports on it as before.
+    pub catalogue: Vec<crate::first_run::ProviderChoice>,
+    /// The catalogue id of the provider this session is actually running
+    /// on, when it is one the catalogue knows — what the picker opens on
+    /// and marks as current. `None` for a hand-written endpoint, which is
+    /// a real configuration and not an error.
+    pub current_provider: Option<String>,
+    /// Open only while the picker is on screen: it takes every key and the
+    /// bottom band draws it instead of the composer, the same way a pending
+    /// decision does.
+    pub picker: Option<crate::picker::ModelPicker>,
+
     /// Which fixed color `Palette` this session renders with — resolved
     /// once from `tui.yaml`'s `theme` field (`Theme::from_config`) before
     /// the first draw and never changed afterward (see `palette.rs`'s
@@ -476,8 +492,26 @@ impl App {
             tick: 0,
             pending_tool_names: HashMap::new(),
             outbox: Vec::new(),
+            catalogue: Vec::new(),
+            current_provider: None,
+            picker: None,
             theme: crate::palette::Theme::default(),
         }
+    }
+
+    /// Builder-style, for the same reason `with_theme` is: the catalogue is
+    /// something only mjolnir-cli's bootstrap has, and every other caller
+    /// (tests, `examples/preview.rs`) wants the same empty default it
+    /// already had. Without one, bare `/model` is forwarded to the
+    /// interceptor and reports where the developer stands, as it always did.
+    ///
+    /// `current_provider` is the catalogue id of the row the session is
+    /// running on — the model half comes from `status.model_name`, which
+    /// this same bootstrap already sets.
+    pub fn with_catalogue(mut self, catalogue: Vec<crate::first_run::ProviderChoice>, current_provider: Option<String>) -> Self {
+        self.catalogue = catalogue;
+        self.current_provider = current_provider;
+        self
     }
 
     /// Builder-style override for `theme` — kept separate from `App::new`'s
@@ -670,6 +704,15 @@ impl App {
             return;
         }
 
+        // After decisions, never before: a permission prompt is the agent
+        // waiting on an answer, and it takes the band (and the keys) even
+        // with the picker open underneath. The picker is still there when
+        // the prompt resolves.
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => self.insert_char('\n'),
             (KeyCode::Enter, _) => self.submit(),
@@ -755,12 +798,62 @@ impl App {
         }
     }
 
+    /// Bare `/model`, with no argument — the one submission this side reads
+    /// rather than forwards. The command is still mjolnir-cli's: the picker
+    /// answers by *typing* it (`/model provider/model`) once both halves are
+    /// chosen, so the interceptor remains the only thing that decides which
+    /// `provider.yaml` a choice lands in. What is intercepted here is how
+    /// the question is asked, not what the answer does.
+    ///
+    /// An argument (`/model anthropic/claude-opus-5`) is left alone — a
+    /// developer who names a model is not asking to be shown a list — and so
+    /// is the bare form when no catalogue was handed in, which then reports
+    /// where the developer stands exactly as before.
+    const PICKER_COMMAND: &'static str = "/model";
+
+    fn open_picker(&mut self) -> bool {
+        let Some(picker) =
+            crate::picker::ModelPicker::open(self.catalogue.clone(), self.current_provider.as_deref(), &self.status.model_name)
+        else {
+            return false;
+        };
+        self.picker = Some(picker);
+        true
+    }
+
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        let Some(picker) = self.picker.as_mut() else { return };
+        match picker.handle_key(key.code, key.modifiers) {
+            crate::picker::PickerOutcome::Stay => {}
+            crate::picker::PickerOutcome::Close => self.picker = None,
+            crate::picker::PickerOutcome::Chosen { provider, model } => {
+                self.picker = None;
+                // Exactly what the developer would have typed, submitted the
+                // way they would have submitted it — including the log entry,
+                // so the transcript records the choice above the notice that
+                // answers it.
+                let argument = if model.is_empty() { provider } else { format!("{provider}/{model}") };
+                self.submit_text(format!("{} {argument}", Self::PICKER_COMMAND));
+            }
+        }
+    }
+
     fn submit(&mut self) {
         if self.input.trim().is_empty() {
             return;
         }
+        if self.input.trim() == Self::PICKER_COMMAND && self.open_picker() {
+            self.input.clear();
+            self.cursor = 0;
+            return;
+        }
         let text = std::mem::take(&mut self.input);
         self.cursor = 0;
+        self.submit_text(text);
+    }
+
+    /// The tail every submission shares, typed or picked.
+    fn submit_text(&mut self, text: String) {
         // Set for every submission, slash command included: this side can't
         // know which ones mjolnir-cli's interceptor will handle itself, and
         // it doesn't need to — whatever the interceptor sends back (a
@@ -1891,5 +1984,104 @@ mod tests {
         app.handle_key(press(KeyCode::Char('3'))); // resolves call-1
         app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: path_like_tool_prompt("./crates/core/src/agent.rs") });
         assert_eq!(app.decision_pattern_scope, PatternScope::Broad, "a fresh prompt must start on the default unit, regardless of the previous one's toggle");
+    }
+
+    // ── Bare `/model` opens the picker ───────────────────────────────────
+
+    fn app_with_catalogue() -> App {
+        app().with_catalogue(crate::first_run::sample_providers(), Some("bravo".into()))
+    }
+
+    /// Bare `/model` is the one submission this side reads rather than
+    /// forwards — it opens the list, and nothing reaches the interceptor
+    /// until a row is taken.
+    #[test]
+    fn bare_model_opens_the_picker_and_submits_nothing() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.picker.is_some(), "the picker is open");
+        assert_eq!(app.input, "", "and the draft is spent");
+        assert!(app.outbox.is_empty(), "nothing is submitted until a model is picked");
+        assert!(app.log.is_empty(), "and nothing is logged either");
+    }
+
+    /// A developer who names a model is not asking to be shown a list.
+    #[test]
+    fn model_with_an_argument_is_forwarded_untouched() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model anthropic/claude-opus-5");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.picker.is_none());
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/model anthropic/claude-opus-5".into() }]);
+    }
+
+    /// With no catalogue there is no list to open, so the command goes to
+    /// mjolnir-cli, which reports where the developer stands.
+    #[test]
+    fn bare_model_without_a_catalogue_is_forwarded_as_before() {
+        let mut app = app();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.picker.is_none());
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/model".into() }]);
+    }
+
+    /// The picker answers by typing the command: the write, the scope it
+    /// lands in and what is reported all stay mjolnir-cli's, exactly as if
+    /// the developer had typed it — and the transcript records the choice
+    /// above the notice that answers it.
+    #[test]
+    fn picking_a_model_submits_the_command_a_developer_would_have_typed() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter)); // open
+        app.handle_key(press(KeyCode::Enter)); // take `bravo`, its models open
+        app.handle_key(press(KeyCode::Down));
+        app.handle_key(press(KeyCode::Enter)); // take `bravo-small`
+        assert!(app.picker.is_none(), "answering closes the picker");
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/model bravo/bravo-small".into() }]);
+        assert!(matches!(app.log.last(), Some(LogEntry::UserMessage { text }) if text == "/model bravo/bravo-small"));
+    }
+
+    /// Esc from the first list closes it, writing nothing — the session
+    /// keeps the model it started on.
+    #[test]
+    fn esc_closes_the_picker_without_submitting_anything() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+        app.handle_key(press(KeyCode::Esc));
+        assert!(app.picker.is_none());
+        assert!(app.outbox.is_empty());
+    }
+
+    /// Keys go to the picker, not the composer, while it is open — a
+    /// keystroke that both moved a selection and typed a character would
+    /// leave a draft behind the panel nobody can see.
+    #[test]
+    fn keys_reach_the_picker_rather_than_the_composer_while_it_is_open() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+        type_str(&mut app, "hello");
+        assert_eq!(app.input, "", "nothing is typed into a composer that is not on screen");
+    }
+
+    /// A permission prompt outranks the picker: the agent is blocked on the
+    /// developer, and the panel that is drawn must be the one the next key
+    /// resolves.
+    #[test]
+    fn a_pending_decision_takes_keys_back_from_the_picker() {
+        let mut app = app_with_catalogue();
+        type_str(&mut app, "/model");
+        app.handle_key(press(KeyCode::Enter));
+        app.apply_event(Event::PromptRequested {
+            call_id: "call-1".into(),
+            payload: path_like_tool_prompt("./src/main.rs"),
+        });
+        app.handle_key(press(KeyCode::Down));
+        assert_eq!(app.decision_selected, 1, "the decision list is what moved");
+        assert!(app.picker.is_some(), "and the picker is still there once the prompt is answered");
     }
 }

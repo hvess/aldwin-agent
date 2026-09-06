@@ -29,6 +29,7 @@ mod first_run;
 mod highlight;
 mod log;
 mod palette;
+mod picker;
 mod run;
 mod scroll;
 mod ui;
@@ -36,9 +37,9 @@ mod version;
 
 pub use app::App;
 pub use log::{LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
-pub use first_run::{run as run_first_run, AccessTier, Answers as FirstRunAnswers, ProviderChoice};
+pub use first_run::{run as run_first_run, AccessTier, Answers as FirstRunAnswers, ModelChoice, ProviderChoice};
 pub use palette::Theme;
-pub use run::run;
+pub use run::{run, SessionProvider};
 pub use scroll::ScrollState;
 pub use version::{GIT_HASH, VERSION, VERSION_FULL};
 

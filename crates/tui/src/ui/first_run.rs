@@ -56,7 +56,8 @@ const MORE_PURPOSE: &str = "the full provider list";
 /// sentence says. The design's `access` copy also promised "/access changes
 /// it later"; there is no `/access`, so that clause is dropped rather than
 /// shipped false — the same call the model step's prose used to require.
-const PROVIDER_PROSE: &str = "Where the model runs. /model picks a model once the session starts.";
+const PROVIDER_PROSE: &str = "Where the model runs. /model changes it once the session starts.";
+const MODEL_PROSE: &str = "Which model this provider answers with.";
 const ACCESS_PROSE: &str = "Which actions run without asking.";
 
 pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
@@ -104,22 +105,62 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar)), row);
 }
 
+/// Whether a step's own rows are still on screen, or have collapsed to the
+/// single row carrying its answer.
+///
+/// A step the developer has already passed shows what it was answered with
+/// and nothing else. That is not only tidier: the frame is 36 rows and does
+/// not scroll, and three full lists — the expanded provider catalogue
+/// included — do not fit in it. Collapsing an answered list is what buys the
+/// model step its rows, and it is measured by
+/// `the_expanded_screen_still_fits_the_frame`.
+fn answered(state: &FirstRun, step: Step) -> bool {
+    match (state.position(step), state.position(state.step())) {
+        (Some((at, _)), Some((now, _))) => at < now,
+        _ => false,
+    }
+}
+
 fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
     let mut lines = vec![Line::default(), wordmark(ctx), Line::default(), positioning_line(ctx)];
     lines.extend(section_gap(ctx));
 
     if let Some((n, m)) = state.position(Step::Provider) {
         let visible = state.visible_providers();
-        let mut rows: Vec<Line<'static>> = visible
-            .iter()
-            .enumerate()
-            .map(|(i, choice)| option_row(&choice.id, &choice.purpose, i == state.provider, ctx))
-            .collect();
-        if state.shows_more() {
-            rows.push(more_row(state.provider == visible.len(), ctx));
-        }
+        let rows: Vec<Line<'static>> = if answered(state, Step::Provider) {
+            state.chosen_provider().map(|p| vec![option_row(&p.id, &p.purpose, false, ctx)]).unwrap_or_default()
+        } else {
+            let mut rows: Vec<Line<'static>> = visible
+                .iter()
+                .enumerate()
+                .map(|(i, choice)| option_row(&choice.id, &choice.purpose, i == state.provider, ctx))
+                .collect();
+            if state.shows_more() {
+                rows.push(more_row(state.provider == visible.len(), ctx));
+            }
+            rows
+        };
         lines.extend(step_section("provider", (n, m), state.step() == Step::Provider, PROVIDER_PROSE, rows, ctx));
         lines.extend(section_gap(ctx));
+    }
+
+    // Drawn only once a provider is settled — before that there is no list
+    // to draw, since the models on offer are that provider's own.
+    if let Some((n, m)) = state.position(Step::Model) {
+        if state.step() != Step::Provider {
+            let rows: Vec<Line<'static>> = if answered(state, Step::Model) {
+                state.chosen_model().map(|c| vec![option_row(&c.id, &c.purpose, false, ctx)]).unwrap_or_default()
+            } else {
+                state
+                    .visible_models()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, choice)| option_row(&choice.id, &choice.purpose, i == state.model, ctx))
+                    .collect()
+            };
+            lines.extend(step_section("model", (n, m), state.step() == Step::Model, MODEL_PROSE, rows, ctx));
+            lines.extend(section_gap(ctx));
+        }
     }
 
     if let Some((n, m)) = state.position(Step::Access) {
@@ -275,7 +316,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, ctx: Ctx) {
         ]
     };
     let mut left = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
-    for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose")].into_iter().enumerate() {
+    for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose"), ("←", "back")].into_iter().enumerate() {
         if i > 0 {
             left.push(Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar_bottom)));
         }
@@ -368,8 +409,8 @@ mod tests {
         let provider = find_row(&buffer, "provider");
         let access = find_row(&buffer, "access");
         assert!(provider < access, "provider is step 1");
-        assert_eq!(row_text(&buffer, provider + 1).trim_end(), format!("{}step 1/2", " ".repeat(MARGIN_X)).trim_end());
-        assert!(row_text(&buffer, access + 1).contains("step 2/2"), "{:?}", row_text(&buffer, access + 1));
+        assert_eq!(row_text(&buffer, provider + 1).trim_end(), format!("{}step 1/3", " ".repeat(MARGIN_X)).trim_end());
+        assert!(row_text(&buffer, access + 1).contains("step 3/3"), "{:?}", row_text(&buffer, access + 1));
     }
 
     /// `step n/m` is exactly the label column's 8 cells, so it never
@@ -379,7 +420,7 @@ mod tests {
         let buffer = render(&FirstRun::default(), 120, 36);
         let row = row_text(&buffer, find_row(&buffer, "provider") + 1);
         let counter: String = row.chars().skip(MARGIN_X).take(8).collect();
-        assert_eq!(counter, "step 1/2");
+        assert_eq!(counter, "step 1/3");
         assert!(row.chars().skip(MARGIN_X + 8).take(2).all(|c| c == ' '), "the 2-cell gutter must stay blank: {row:?}");
     }
 
@@ -389,7 +430,7 @@ mod tests {
     fn each_step_states_its_purpose_and_promises_only_commands_that_exist() {
         let out = text(&render(&FirstRun::default(), 120, 36));
         assert!(out.contains("Where the model runs."), "{out:?}");
-        assert!(out.contains("/model picks a model"), "{out:?}");
+        assert!(out.contains("/model changes it"), "{out:?}");
         assert!(out.contains("Which actions run without asking."), "{out:?}");
         assert!(!out.contains("/access"), "there is no /access command, so the frame must not promise one: {out:?}");
     }
@@ -491,23 +532,86 @@ mod tests {
     }
 
     /// The whole screen has to fit the design's 36 rows with the list
-    /// expanded, which is the tallest it ever gets.
+    /// expanded, which is the tallest it ever gets — on *every* step, since
+    /// which lists are drawn in full changes as the form advances.
     #[test]
     fn the_expanded_screen_still_fits_the_frame() {
-        let state = FirstRun { expanded: true, ..Default::default() };
-        let buffer = render(&state, 120, 36);
-        let last_access = find_row(&buffer, "reads and any command run");
-        assert!(last_access < 36 - FOOTER_ROWS, "the last option row must clear the footer, not be clipped by it");
+        for index in 0..3 {
+            let state = FirstRun { expanded: true, index, ..Default::default() };
+            let buffer = render(&state, 120, 36);
+            let last_access = find_row(&buffer, "reads and any command run");
+            assert!(
+                last_access < 36 - FOOTER_ROWS,
+                "on step {index} the last option row must clear the footer, not be clipped by it"
+            );
+        }
         assert_eq!(SAMPLE_CURATED, 3, "the sample is shaped like the real catalogue");
+    }
+
+    /// The model step's list is the chosen provider's own, so there is
+    /// nothing to draw until a provider is taken — and once it is, the
+    /// question that produced it collapses to the row that answered it.
+    #[test]
+    fn the_model_step_appears_once_a_provider_is_taken_and_the_provider_list_collapses() {
+        let before = text(&render(&FirstRun::default(), 120, 36));
+        assert!(!before.contains("alpha-large"), "no model list before a provider is settled: {before:?}");
+
+        let state = FirstRun { index: 1, ..Default::default() };
+        let buffer = render(&state, 120, 36);
+        let out = text(&buffer);
+        assert!(out.contains("alpha-large"), "the chosen provider's models: {out:?}");
+        assert!(out.contains("step 2/3"), "{out:?}");
+        assert!(!out.contains("bravo"), "the answered provider question is down to its answer: {out:?}");
+        assert!(!out.contains("the full provider list"), "and to nothing else: {out:?}");
+        assert!(out.contains("alpha"), "which is still on screen, so the answer stays visible: {out:?}");
+    }
+
+    /// Only the step taking keys carries a selection band — an answered
+    /// step shows what it was answered with, quietly.
+    #[test]
+    fn only_the_live_lists_carry_a_selection_band() {
+        let state = FirstRun { index: 1, ..Default::default() };
+        let buffer = render(&state, 120, 36);
+        let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
+        assert_eq!(banded.len(), 2, "the live model list and the access list ahead of it");
+        assert!(row_text(&buffer, banded[0]).contains("alpha-large"), "{:?}", row_text(&buffer, banded[0]));
+        assert!(row_text(&buffer, banded[1]).contains("ask"));
+    }
+
+    /// The model list follows the provider selection rather than being
+    /// fixed at construction — it is that provider's catalogue.
+    #[test]
+    fn the_model_list_is_the_selected_providers_own() {
+        let state = FirstRun { index: 1, provider: 2, ..Default::default() };
+        let out = text(&render(&state, 120, 36));
+        assert!(out.contains("charlie-large"), "{out:?}");
+        assert!(!out.contains("alpha-large"), "another provider's models are not on offer here: {out:?}");
+    }
+
+    /// The footer names `←`, because the model step is the provider step
+    /// narrowed and a developer who picked the wrong provider needs a way
+    /// back that is not quitting the screen.
+    #[test]
+    fn the_footer_names_the_key_that_reopens_the_previous_question() {
+        let out = text(&render(&FirstRun::default(), 120, 36));
+        assert!(out.contains("← back"), "{out:?}");
     }
 
     #[test]
     #[ignore = "visual aid; run with --ignored to eyeball the screen"]
     fn dump() {
-        let buffer = render(&FirstRun::default(), 120, 36);
-        for y in 0..36 {
-            let banded = (0..120).any(|x| buffer[(x, y)].bg == DARK.band);
-            println!("{y:2}|{}|{}", row_text(&buffer, y), if banded { " <- selected" } else { "" });
+        for state in [
+            FirstRun::default(),
+            FirstRun { expanded: true, ..Default::default() },
+            FirstRun { index: 1, ..Default::default() },
+            FirstRun { index: 2, model: 1, ..Default::default() },
+        ] {
+            println!("\n=== step {:?} ===", state.step());
+            let buffer = render(&state, 120, 36);
+            for y in 0..36 {
+                let banded = (0..120).any(|x| buffer[(x, y)].bg == DARK.band);
+                println!("{y:2}|{}|{}", row_text(&buffer, y), if banded { " <- selected" } else { "" });
+            }
         }
     }
 

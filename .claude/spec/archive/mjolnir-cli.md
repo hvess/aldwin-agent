@@ -161,6 +161,34 @@ md`'s entry of the same date — `add_grant` only ever adds, so an unasked
 answer could only widen an allow list the developer had already settled.
 
 
+**Post-archive addition (2026-09-06, the model selector):** Reported: the
+selector "doesn't appear in the onboarding", and `/model` "says the model is
+already selected when it isn't". Three changes here; the screens and the
+picker are in `.claude/spec/mjolnir-tui.md`'s entry of the same date, and
+the reason onboarding never appeared is in `mjolnir-config.md`'s (init
+seeded `provider.yaml`, so `needs_provider` was never true).
+
+* `catalogue_choices()` is now the one place `mjolnir_llm::PROVIDERS` is
+  mapped into `mjolnir_tui::ProviderChoice` — used by both first run and the
+  session, and carrying each row's models, since first run now asks which
+  model too. `first_run_provider_config` takes that answer;
+  the catalogue default is the fallback for a row that offers no models, not
+  the normal path.
+* `mjolnir_tui::run` takes a `SessionProvider` — the catalogue, plus the
+  catalogue id of the row `provider.yaml` actually resolves to (from
+  `identify(&effective_provider)`, the file that supplies the setting rather
+  than the global one it may be shadowing). That is what the picker opens on
+  and marks as current.
+* Bare `/model` is read by the TUI and opens that picker, which answers by
+  submitting `/model <provider>/<model>`. `handle_model` is unchanged and
+  still does every write: the frontend owns how the question is asked and
+  nothing about what the answer does, so there is no second implementation
+  of the command to disagree with this one. The bare form still reaches
+  `handle_model` when no catalogue was handed in, and reports as before —
+  and its "already on …" now says where the list is rather than dead-ending,
+  which is the message the report was about.
+
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

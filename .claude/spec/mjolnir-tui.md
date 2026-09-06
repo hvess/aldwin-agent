@@ -2646,6 +2646,66 @@ catalogue is a seed rather than a ceiling (`mjolnir-llm`'s own note), so
 refusing an unlisted id is not obviously right; the picker sidesteps it,
 and the text form still does not.
 
+**Progress (2026-09-06, the model switch actually switches):** Two reports,
+one about each half of the same round above. "When switching models, I
+notice the top and bottom bars are not reflected with the new model name",
+and "when there is no `.mjolnir` directory in the current path mjolnir is
+invoked from, the onboarding screen does not allow for a model to be
+selected."
+
+*The bars.* They were honest: `/model` persisted a choice it could not
+apply, and both bars read `status.model_name`, a string fixed at startup.
+The notice said "this session keeps …, restart to use it," which is a
+frontend explaining a limitation of its own wiring rather than a limitation
+of the problem. `Agent<C, D>` does own its client for the life of the
+process — but it does not have to own the *same* client. It is now handed a
+`ClientHandle` (mjolnir-cli's `bootstrap`), an `Arc<RwLock<Arc<AnyLlmClient>>>`
+whose `LlmClient::stream` resolves the inner client once, when a request
+starts, and holds it for that request: a swap landing mid-turn cannot pull
+the client out from under a stream already running, and the next turn picks
+up the new one. Core is untouched by any of this — still generic over
+`C: LlmClient`, still knowing nothing about providers.
+
+`/model` therefore builds the new client *before* it writes anything
+(`slash::ModelSwitch`), so a provider whose `api_key_env` is not exported
+fails at the command instead of at the developer's next start, and leaves
+neither the session nor `provider.yaml` moved. On success it sends
+`Event::ModelChanged { provider, model }` — the same "a layer above core has
+no other vehicle to reach the TUI" shape as `Notice` and `ThemeChanged` —
+and `App` sets `status.model_name` and `current_provider` from it, so both
+bars and the picker's `· current` row follow on the next draw. The session
+model is now state the interceptor advances (`slash::Session`) rather than
+a startup constant; the notice it prints is "now on …", with no restart to
+promise.
+
+*The onboarding.* The provider and model steps were gated on
+`global_provider().is_err()`, so a developer who had ever configured a
+provider anywhere never saw them again — and entering a new directory, the
+one moment they are deciding what this project runs on, offered `access`
+alone. Both steps are now always on the screen that opens, and they open on
+what is already configured (`Configured` → `FirstRun::preselect`, which also
+expands the catalogue when the configured row sits behind `more` — a
+selection the developer cannot see would be worse than none). Confirming
+costs three keystrokes and writes nothing: the answer is compared against
+what supplies the setting, and only a *changed* one is written.
+
+Where it is written changed with it. A true first run still writes global —
+a project-scope file would leave every other directory unconfigured. But
+once a global default exists, an answer given while onboarding a directory
+is about that directory, and lands in its own `.mjolnir/provider.yaml`
+beside the `permissions.yaml` the same screen is already writing. Picking a
+model for one project must not silently move the default everywhere.
+
+Verified end to end against the real binary in a sandboxed `HOME`: a true
+first run wrote the global file from the three lists; a second directory
+showed the lists opened on that global answer, and `↑` on the model step
+wrote *that project's* `provider.yaml` while the global one stayed put;
+confirming all three rows unchanged left only `permissions.yaml` behind.
+Then `/model claude-opus-5` in a running session repainted row 2 (the top
+bar's model) and row 35 (the status line) to the new name in the same frame
+as the notice — the pty capture only rewrote the cells that changed, which
+is exactly the two places the old code could not reach.
+
 
 ## References
 

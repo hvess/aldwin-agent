@@ -691,6 +691,18 @@ impl App {
                 self.awaiting_turn = false;
                 self.theme = crate::palette::Theme::from_config(Some(&theme));
             }
+            // `/model` — the interceptor rebuilt the session's client before
+            // sending this (see `Event::ModelChanged` in mjolnir-core), so
+            // by the time it lands the next turn really will run on this
+            // model. Both bars read `status.model_name` on every draw, so
+            // they follow on the very next redraw; `current_provider` is
+            // updated in step because it is the other half of the same fact
+            // — it decides which row the picker opens on.
+            Event::ModelChanged { provider, model } => {
+                self.awaiting_turn = false;
+                self.status.model_name = model;
+                self.current_provider = provider;
+            }
         }
     }
 
@@ -1733,6 +1745,29 @@ mod tests {
         assert_eq!(app.theme, crate::palette::Theme::Light);
         app.apply_event(Event::ThemeChanged { theme: "dark".into() });
         assert_eq!(app.theme, crate::palette::Theme::Dark);
+    }
+
+    /// `/model` swaps the client the session runs on, so the model name the
+    /// bars read has to move with it — it used to be a startup string
+    /// nothing could update, which left both bars naming a model the
+    /// session had already left.
+    #[test]
+    fn model_changed_moves_the_name_both_bars_read() {
+        let mut app = app();
+        assert_eq!(app.status.model_name, "claude-sonnet-5");
+        app.apply_event(Event::ModelChanged { provider: Some("google".into()), model: "gemini-2.5-flash".into() });
+        assert_eq!(app.status.model_name, "gemini-2.5-flash");
+        assert_eq!(app.current_provider.as_deref(), Some("google"), "the picker opens on the row the session moved to");
+    }
+
+    /// An endpoint the catalogue does not know still moves the model name;
+    /// it just has no row for the picker to open on.
+    #[test]
+    fn model_changed_without_a_catalogue_provider_still_names_the_model() {
+        let mut app = app();
+        app.apply_event(Event::ModelChanged { provider: None, model: "qwen3-coder".into() });
+        assert_eq!(app.status.model_name, "qwen3-coder");
+        assert_eq!(app.current_provider, None);
     }
 
     /// Mirrors `Theme::from_config`'s own "unrecognized means dark"

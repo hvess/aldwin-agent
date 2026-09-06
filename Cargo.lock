@@ -1359,6 +1359,7 @@ dependencies = [
 name = "mjolnir-cli"
 version = "0.1.14"
 dependencies = [
+ "async-stream",
  "clap",
  "futures",
  "mjolnir-config",

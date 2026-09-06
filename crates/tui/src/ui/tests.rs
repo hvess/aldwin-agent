@@ -363,6 +363,20 @@ fn status_line_shows_the_model_name_without_a_permission_summary() {
     assert!(!out.contains("edit:deny"));
 }
 
+/// Both bars name the model, and both are drawn from `status.model_name` on
+/// every frame — so a `/model` swap mid-session has to change both of them
+/// and leave neither showing what the process booted with.
+#[test]
+fn both_bars_follow_a_model_swap() {
+    let mut app = app();
+    app.log.push(LogEntry::UserMessage { text: "hi".into() });
+    app.apply_event(mjolnir_core::Event::ModelChanged { provider: Some("google".into()), model: "gemini-2.5-flash".into() });
+
+    let out = rendered(&mut app, 100, 20);
+    assert_eq!(out.matches("gemini-2.5-flash").count(), 2, "the top bar and the status line both name it: {out}");
+    assert!(!out.contains("claude-sonnet-5"), "nothing may still be showing the model the session left: {out}");
+}
+
 /// The status line replaces the removed sidebar as the place activity
 /// (thinking/working), in-flight tools, and a running message count are
 /// surfaced — per explicit developer direction that this information

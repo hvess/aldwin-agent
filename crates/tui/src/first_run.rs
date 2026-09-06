@@ -148,6 +148,22 @@ pub enum Step {
     Access,
 }
 
+/// Where the developer already stands when the screen opens.
+///
+/// The provider and model lists open on this rather than on their first
+/// row, so the screen shown to someone who has already configured a
+/// provider is a screen they can confirm rather than one that would move
+/// them somewhere else if they simply pressed `⏎`. Empty on a true first
+/// run, where there is nothing to stand on and the lists open at the top.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Configured {
+    /// The catalogue id of the configured provider, when the catalogue
+    /// knows it — `None` for a `provider.yaml` pointed at an endpoint of
+    /// the developer's own, which no row on this screen represents.
+    pub provider: Option<String>,
+    pub model:    Option<String>,
+}
+
 /// What first run answered. Returned to the bootstrap, which writes it.
 ///
 /// Both fields are optional, and both mean the same thing when absent: the
@@ -155,6 +171,10 @@ pub enum Step {
 /// alone. An `AccessTier` here that the developer never chose would be a
 /// permission answered by inertia, which is the one thing this screen exists
 /// to prevent.
+///
+/// Present is not the same as *changed*: the provider step opens on
+/// [`Configured`], so an answer that matches what is already on disk is the
+/// developer confirming it. The caller compares before it writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answers {
     /// The chosen provider's id — the caller looks the rest up in the
@@ -265,6 +285,35 @@ impl FirstRun {
         }
         let curated = curated.min(providers.len());
         Self { providers, curated, expanded: false, steps, index: 0, provider: 0, model: 0, access: 0, finished: None }
+    }
+
+    /// Opens the two lists on where the developer already stands (see
+    /// [`Configured`]). Builder-style rather than a fifth parameter to
+    /// `new`, because a true first run has nothing to pass and every test
+    /// of the lists themselves wants the top row.
+    ///
+    /// A provider behind the `more` row expands the list on the way in:
+    /// a selection the developer cannot see would be worse than none, and
+    /// `more` exists to shorten a first look at the catalogue, not to hide
+    /// the row they are already using.
+    ///
+    /// Anything the catalogue does not know is ignored rather than
+    /// approximated — a `provider.yaml` pointed at an endpoint of the
+    /// developer's own has no row here, and a model id that has moved on
+    /// since it was written has none either.
+    pub fn preselect(mut self, configured: &Configured) -> Self {
+        let Some(id) = configured.provider.as_deref() else { return self };
+        let Some(index) = self.providers.iter().position(|p| p.id == id) else { return self };
+        self.provider = index;
+        if index >= self.curated {
+            self.expanded = true;
+        }
+        if let Some(model) = configured.model.as_deref() {
+            if let Some(at) = self.visible_models().iter().position(|m| m.id == model) {
+                self.model = at;
+            }
+        }
+        self
     }
 
     /// Which question is taking arrow keys.
@@ -452,6 +501,7 @@ pub async fn run(
     curated: usize,
     ask_provider: bool,
     ask_access: bool,
+    configured: Configured,
 ) -> io::Result<Option<Answers>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -460,7 +510,7 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
     let guard = Guard;
 
-    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider, ask_access).await;
+    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider, ask_access, configured).await;
     drop(guard);
     restore()?;
     result
@@ -473,8 +523,9 @@ async fn run_loop(
     curated: usize,
     ask_provider: bool,
     ask_access: bool,
+    configured: Configured,
 ) -> io::Result<Option<Answers>> {
-    let mut state = FirstRun::new(providers, curated, ask_provider, ask_access);
+    let mut state = FirstRun::new(providers, curated, ask_provider, ask_access).preselect(&configured);
     let mut events = EventStream::new();
     let pal = theme.palette();
 
@@ -551,6 +602,61 @@ mod tests {
 
     fn key(state: &mut FirstRun, code: KeyCode) -> bool {
         state.handle_key(code, KeyModifiers::NONE)
+    }
+
+    /// A screen opened for the access question in a directory that already
+    /// has a provider still asks the other two — but it opens them where
+    /// the developer already is, so `⏎⏎⏎` confirms rather than moves.
+    #[test]
+    fn the_lists_open_on_what_is_already_configured() {
+        let configured = Configured { provider: Some("bravo".into()), model: Some("bravo-small".into()) };
+        let state = FirstRun::default().preselect(&configured);
+        assert_eq!(state.chosen_provider().map(|p| p.id.as_str()), Some("bravo"));
+        assert_eq!(state.chosen_model().map(|m| m.id.as_str()), Some("bravo-small"));
+    }
+
+    /// A provider behind `more` is revealed on the way in — a selection the
+    /// developer cannot see would be worse than none.
+    #[test]
+    fn a_configured_provider_behind_more_expands_the_list() {
+        let configured = Configured { provider: Some("foxtrot".into()), model: None };
+        let state = FirstRun::default().preselect(&configured);
+        assert!(state.expanded, "the row has to be on screen to be a selection");
+        assert!(!state.shows_more(), "there is nothing left for `more` to reveal");
+        assert_eq!(state.chosen_provider().map(|p| p.id.as_str()), Some("foxtrot"));
+        assert_eq!(state.chosen_model().map(|m| m.id.as_str()), Some("foxtrot-large"), "an unknown model opens that provider's list at the top");
+    }
+
+    /// A `provider.yaml` pointed at an endpoint of the developer's own has
+    /// no row here, and a model id no longer in the catalogue has none
+    /// either — neither may be approximated onto a neighbouring row.
+    #[test]
+    fn nothing_the_catalogue_knows_leaves_the_lists_at_the_top() {
+        for configured in [
+            Configured::default(),
+            Configured { provider: None, model: Some("bravo-small".into()) },
+            Configured { provider: Some("not-a-provider".into()), model: Some("bravo-small".into()) },
+        ] {
+            let state = FirstRun::default().preselect(&configured);
+            assert_eq!(state.provider, 0, "{configured:?}");
+            assert_eq!(state.model, 0, "{configured:?}");
+            assert!(!state.expanded, "{configured:?}");
+        }
+    }
+
+    /// Confirming the preselected rows answers with them — the caller
+    /// compares the answer against what is on disk and writes nothing when
+    /// they match, so this has to be the same pair it opened on.
+    #[test]
+    fn confirming_the_preselection_answers_with_it() {
+        let configured = Configured { provider: Some("charlie".into()), model: Some("charlie-small".into()) };
+        let mut state = FirstRun::default().preselect(&configured);
+        for _ in 0..state.steps.len() {
+            key(&mut state, KeyCode::Enter);
+        }
+        let answers = state.finished.clone().flatten().expect("committed");
+        assert_eq!(answers.provider.as_deref(), Some("charlie"));
+        assert_eq!(answers.model.as_deref(), Some("charlie-small"));
     }
 
     /// `ask` is preselected, and it must be `ask` specifically: it is the

@@ -81,6 +81,19 @@ pub enum Event {
     /// set_tui`) before emitting this, so a value the developer picked
     /// mid-session survives their next launch too, not just this one.
     ThemeChanged { theme: String },
+
+    /// `/model` swapped the client the session is running on. Same "a layer
+    /// above core has no other vehicle" reasoning as `Notice` and
+    /// `ThemeChanged`: core is generic over `C: LlmClient` and has no idea
+    /// its client is swappable, so mjolnir-cli's interceptor rebuilds the
+    /// client behind the trait and announces the result here.
+    ///
+    /// `model` is the bare model id, the same value the session started
+    /// with (`StatusInfo::model_name`); `provider` is the catalogue id of
+    /// the row it belongs to, or `None` when `provider.yaml` points at an
+    /// endpoint the catalogue does not know — the model picker opens on
+    /// that pair, so both halves have to travel together.
+    ModelChanged { provider: Option<String>, model: String },
 }
 
 // ── Commands (accepted downward) ─────────────────────────────────────────────

@@ -38,12 +38,49 @@ const MODEL_USAGE: &str = "usage: /model [provider/]model";
 /// can't drift apart.
 const VALID_THEMES: [&str; 2] = ["dark", "light"];
 
+/// How `/model` moves a *running* session onto another model.
+///
+/// `Agent<C, D>` takes its client by value for the life of the process, and
+/// core is generic over `C: LlmClient` — it has no notion of a provider, let
+/// alone of one being replaced. So the client the agent was handed is a
+/// holder that can be rebuilt behind the trait, and this is the one thing
+/// the interceptor needs to know about it (see `bootstrap::ClientHandle`).
+///
+/// Rebuilding can fail the same way startup can — the new provider's
+/// `api_key_env` may not be exported — which is why this returns a result
+/// rather than swapping blind. A failed swap leaves the session on the
+/// client it already had.
+pub trait ModelSwitch: Send + Sync {
+    fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String>;
+}
+
+/// The running session, as `/model` has to see it: what it is on right now,
+/// and how to move it.
+///
+/// The two belong together because they change together. `model` used to be
+/// a string captured at startup and never updated, which was correct only
+/// while the session could not change model at all; now a successful swap is
+/// precisely what makes the old value stale, so whatever performs the swap
+/// has to be holding the field it invalidates.
+pub struct Session {
+    /// `provider/model`, as [`qualified`] renders it — what the next turn
+    /// will actually run on.
+    model:  String,
+    switch: Box<dyn ModelSwitch>,
+}
+
+impl Session {
+    pub fn new(model: String, switch: Box<dyn ModelSwitch>) -> Self {
+        Self { model, switch }
+    }
+}
+
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
 /// the core, per mjolnir-cli.md: "the core's only input is Submit, Cancel,
 /// ApproveTool — it has no slash-command semantics." Runs synchronously in
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
-async fn intercept(command: Command, config: &Config, session_model: &str, events: &mpsc::Sender<Event>) -> Intercepted {
+async fn intercept(command: Command, config: &Config, session: &mut Session, events: &mpsc::Sender<Event>) -> Intercepted {
     let Command::Submit { text } = &command else { return Intercepted::Forward(command) };
     let Some(rest) = text.trim_start().strip_prefix('/') else { return Intercepted::Forward(command) };
 
@@ -79,11 +116,11 @@ async fn intercept(command: Command, config: &Config, session_model: &str, event
         // Same shape as `/theme`: bare reports where the developer stands,
         // an argument changes it.
         "model" => {
-            handle_model(None, config, session_model, events).await;
+            handle_model(None, config, session, events).await;
             Intercepted::Handled
         }
         other if other.starts_with("model ") => {
-            handle_model(Some(other["model ".len()..].trim()), config, session_model, events).await;
+            handle_model(Some(other["model ".len()..].trim()), config, session, events).await;
             Intercepted::Handled
         }
         other => {
@@ -168,20 +205,30 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// below is the bare form on a session with no catalogue to show, which
 /// reports where the developer stands instead.
 ///
-/// **It does not take effect now.** The `LlmClient` was constructed at
-/// startup and handed to the agent loop, which owns it for the life of the
-/// process; there is no way to swap it under a running turn. So this
-/// persists the choice and says plainly that the running session keeps the
-/// model it started with — unlike `/theme`, which really does apply on the
-/// next redraw.
-async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, events: &mpsc::Sender<Event>) {
+/// **It takes effect now.** The client is rebuilt on the new provider
+/// *before* anything is written, and the session moves onto it — the same
+/// way `/theme` really does apply on the next redraw. Two things follow from
+/// that order. A provider whose `api_key_env` is not exported fails here
+/// rather than at the developer's next start, and nothing is persisted when
+/// it does: a `provider.yaml` that cannot boot is not an improvement on
+/// being told no. And the notice names what the *next turn* will run on,
+/// which is now the same thing the top bar and status line show — they read
+/// `Event::ModelChanged`, sent below.
+async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session, events: &mpsc::Sender<Event>) {
     // Whichever scope actually supplies the setting is the one that gets
     // written: writing global while a project `provider.yaml` shadows it
     // would report a change the next start would ignore.
+    //
+    // The global layer is kept even when the project one shadows it, because
+    // the resolved config the new client is built from overlays the two —
+    // `base_url` and `extended_thinking_budget` fall back to global (see
+    // `mjolnir_llm::resolve`), so building from the project file alone would
+    // hand the session a client the next start would not reproduce.
+    let global = config.global_provider();
     let (scope, current) = match config.project_provider() {
         Some(project) => (mjolnir_config::Scope::Project, project),
-        None => match config.global_provider() {
-            Ok(global) => (mjolnir_config::Scope::Global, global),
+        None => match &global {
+            Ok(global) => (mjolnir_config::Scope::Global, global.clone()),
             Err(e) => {
                 let _ = events.send(Event::Notice { message: format!("no provider is configured: {e}") }).await;
                 return;
@@ -263,23 +310,39 @@ async fn handle_model(arg: Option<&str>, config: &Config, session_model: &str, e
         return;
     }
 
-    match config.set_provider(scope, next.clone()) {
-        Ok(()) => {
-            let where_ = match scope {
-                mjolnir_config::Scope::Project => "this project's provider.yaml",
-                mjolnir_config::Scope::Global => "the global provider.yaml",
-            };
-            let now = qualified(&next, mjolnir_llm::identify(&next));
-            let message = format!(
-                "{now} saved to {where_} — this session keeps {session_model}, since the client it started with cannot be \
-                 swapped mid-run. Restart to use it."
-            );
-            let _ = events.send(Event::Notice { message }).await;
-        }
-        Err(e) => {
-            let _ = events.send(Event::Notice { message: format!("failed to save the model: {e}") }).await;
-        }
+    // What the session would actually run on, resolved the same way startup
+    // resolves it — the file just chosen over the layer below it.
+    let resolved = match scope {
+        mjolnir_config::Scope::Project => mjolnir_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next)),
+        mjolnir_config::Scope::Global => mjolnir_llm::resolve(None, &next),
+    };
+    let now = qualified(&next, mjolnir_llm::identify(&next));
+
+    // Before the write, not after: a provider the session cannot actually
+    // reach must not be left on disk for the next start to fail on.
+    if let Err(e) = session.switch.switch(&resolved) {
+        let message = format!("cannot switch to {now}: {e} · this session is still on {}, and nothing was saved", session.model);
+        let _ = events.send(Event::Notice { message }).await;
+        return;
     }
+
+    let where_ = match scope {
+        mjolnir_config::Scope::Project => "this project's provider.yaml",
+        mjolnir_config::Scope::Global => "the global provider.yaml",
+    };
+    let message = match config.set_provider(scope, next.clone()) {
+        Ok(()) => format!("now on {now} · saved to {where_}"),
+        // The swap already happened, so the session really is on the new
+        // model — it is only the next start that will not be.
+        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", qualified(&current, mjolnir_llm::identify(&current))),
+    };
+    let _ = events.send(Event::Notice { message }).await;
+    session.model = now;
+    // The bare model id, not the qualified name: it is what the session
+    // started with in `StatusInfo::model_name`, and the picker matches the
+    // provider half against catalogue ids separately.
+    let changed = Event::ModelChanged { provider: mjolnir_llm::identify(&next).map(|p| p.id.to_string()), model: next.model.clone() };
+    let _ = events.send(changed).await;
 }
 
 /// The catalogue row `name` names, case-insensitively.
@@ -350,11 +413,11 @@ pub async fn run_interceptor(
     mut incoming: mpsc::Receiver<Command>,
     forward: mpsc::Sender<Command>,
     config: Config,
-    session_model: String,
+    mut session: Session,
     events: mpsc::Sender<Event>,
 ) {
     while let Some(command) = incoming.recv().await {
-        match intercept(command, &config, &session_model, &events).await {
+        match intercept(command, &config, &mut session, &events).await {
             Intercepted::Forward(command) => {
                 if forward.send(command).await.is_err() {
                     break;
@@ -372,11 +435,43 @@ pub async fn run_interceptor(
 mod tests {
     use super::*;
 
-    /// What the process booted with. Every notice that says what the running
-    /// session is still using must name *this*, not whatever the last
-    /// `/model` call wrote — those are different once the command has been
-    /// used twice in one session.
+    use std::sync::{Arc, Mutex};
+
+    /// What the process booted on — where every test's session starts.
     const SESSION_MODEL: &str = "anthropic/claude-sonnet-5";
+
+    /// A `ModelSwitch` that records what it was asked to build rather than
+    /// building it: no key variable to export, no HTTP client, and the
+    /// resolved configs available to assert on afterwards.
+    #[derive(Clone, Default)]
+    struct FakeSwitch {
+        seen:       Arc<Mutex<Vec<mjolnir_llm::ProviderConfig>>>,
+        /// Set to stand in for the one failure a real swap has: a provider
+        /// whose `api_key_env` is not exported.
+        fails_with: Option<String>,
+    }
+
+    impl ModelSwitch for FakeSwitch {
+        fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String> {
+            if let Some(e) = &self.fails_with {
+                return Err(e.clone());
+            }
+            self.seen.lock().unwrap().push(config.clone());
+            Ok(())
+        }
+    }
+
+    fn session() -> Session {
+        Session::new(SESSION_MODEL.into(), Box::new(FakeSwitch::default()))
+    }
+
+    /// A session whose switch records, and the record itself — for the tests
+    /// that care about what the client was actually rebuilt on.
+    fn recording_session() -> (Session, Arc<Mutex<Vec<mjolnir_llm::ProviderConfig>>>) {
+        let switch = FakeSwitch::default();
+        let seen = switch.seen.clone();
+        (Session::new(SESSION_MODEL.into(), Box::new(switch)), seen)
+    }
 
     fn config() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         let project = tempfile::tempdir().unwrap();
@@ -390,7 +485,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "hello".into() };
-        let result = intercept(cmd, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Forward(Command::Submit { text }) if text == "hello"));
     }
 
@@ -399,7 +494,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::PromptResponse { call_id: "call-1".into(), payload: serde_json::Value::Null };
-        let result = intercept(cmd, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Forward(Command::PromptResponse { .. })));
     }
 
@@ -408,7 +503,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/nope".into() };
-        let result = intercept(cmd, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/nope")),
@@ -420,7 +515,7 @@ mod tests {
     async fn help_lists_every_known_command() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => {
@@ -436,7 +531,7 @@ mod tests {
     async fn exit_is_recognised_as_the_quit_command() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Quit));
     }
 
@@ -444,7 +539,7 @@ mod tests {
     async fn clear_is_translated_and_forwarded_to_core_not_handled_locally() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), &tx).await;
         assert!(
             matches!(result, Intercepted::Forward(Command::ClearHistory)),
             "core owns ConversationLog, so /clear must reach it as ClearHistory rather than being swallowed like /help"
@@ -455,7 +550,7 @@ mod tests {
     async fn quit_is_not_recognised_only_exit_is() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled), "/quit must not be a recognised command");
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/quit")),
@@ -468,7 +563,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
-        let result = intercept(cmd, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
         assert!(matches!(rx.recv().await, Some(Event::PermissionsChanged { .. })));
@@ -487,7 +582,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
-        intercept(cmd, &config, SESSION_MODEL, &tx).await;
+        intercept(cmd, &config, &mut session(), &tx).await;
 
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains(&bad_path.display().to_string()), "message was: {message}"),
@@ -501,7 +596,7 @@ mod tests {
     async fn theme_with_no_argument_reports_the_current_default() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/theme".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("current theme: dark"), "message was: {message}"),
@@ -514,7 +609,7 @@ mod tests {
     async fn theme_light_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme light".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
 
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
@@ -529,7 +624,7 @@ mod tests {
     async fn theme_argument_is_case_insensitive() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme LIGHT".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/theme LIGHT".into() }, &cfg, &mut session(), &tx).await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "light", "must normalize to lowercase"),
@@ -541,11 +636,11 @@ mod tests {
     async fn theme_back_to_dark_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme light".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), &tx).await;
         let _ = rx.recv().await;
         let _ = rx.recv().await;
 
-        intercept(Command::Submit { text: "/theme dark".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/theme dark".into() }, &cfg, &mut session(), &tx).await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "dark"),
@@ -558,7 +653,7 @@ mod tests {
     async fn theme_invalid_value_is_rejected_not_persisted_and_no_theme_changed_sent() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme neon".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/theme neon".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("neon"), "message was: {message}"),
@@ -587,10 +682,16 @@ mod tests {
             .unwrap();
     }
 
+    /// The next `Notice`, stepping over the `ModelChanged` a successful swap
+    /// leaves behind — the tests that care about that event assert on it
+    /// directly, and the rest are reading the message.
     async fn notice(rx: &mut mpsc::Receiver<Event>) -> String {
-        match rx.recv().await {
-            Some(Event::Notice { message }) => message,
-            other => panic!("expected a Notice, got {other:?}"),
+        loop {
+            match rx.recv().await {
+                Some(Event::Notice { message }) => return message,
+                Some(Event::ModelChanged { .. }) => continue,
+                other => panic!("expected a Notice, got {other:?}"),
+            }
         }
     }
 
@@ -599,7 +700,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/model".into() }, &cfg, SESSION_MODEL, &tx).await;
+        let result = intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), &tx).await;
         assert!(matches!(result, Intercepted::Handled));
 
         let message = notice(&mut rx).await;
@@ -616,7 +717,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("anthropic/claude-opus-5"), "{message}");
@@ -625,18 +726,53 @@ mod tests {
         assert_eq!(saved.provider, mjolnir_config::ProviderKind::Anthropic, "the provider must be untouched");
     }
 
-    /// The command has to say that nothing changed *now*, because nothing
-    /// did: the client was built at startup and belongs to the agent loop.
+    /// The change is what the session runs on from here — the client is
+    /// rebuilt on it, and the bars are told so they stop naming the model
+    /// the process happened to boot with.
     #[tokio::test]
-    async fn changing_the_model_says_the_running_session_keeps_the_old_one() {
+    async fn changing_the_model_moves_the_running_session_onto_it() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("this session keeps anthropic/claude-sonnet-5"), "{message}");
-        assert!(message.contains("Restart"), "{message}");
+        assert!(message.contains("now on anthropic/claude-opus-5"), "{message}");
+        assert!(!message.contains("Restart"), "nothing needs restarting any more: {message}");
+
+        let built = seen.lock().unwrap().clone();
+        assert_eq!(built.len(), 1, "the client is rebuilt exactly once");
+        assert_eq!(built[0].model, "claude-opus-5");
+        assert_eq!(built[0].kind, mjolnir_config::ProviderKind::Anthropic);
+
+        match rx.recv().await {
+            Some(Event::ModelChanged { provider, model }) => {
+                assert_eq!(model, "claude-opus-5", "the bars show the bare model id, as they did at startup");
+                assert_eq!(provider.as_deref(), Some("anthropic"), "the picker opens on the row it belongs to");
+            }
+            other => panic!("expected ModelChanged, got {other:?}"),
+        }
+    }
+
+    /// The one failure a swap has is the one startup has: the new provider's
+    /// key variable is not exported. Nothing is written when it happens — a
+    /// `provider.yaml` the next start cannot boot on is not an improvement
+    /// on being told no.
+    #[tokio::test]
+    async fn a_client_that_cannot_be_built_leaves_the_session_and_the_file_alone() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let switch = FakeSwitch { fails_with: Some("GOOGLE_API_KEY is not set".into()), ..Default::default() };
+        let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
+        let (tx, mut rx) = mpsc::channel(8);
+        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session, &tx).await;
+
+        let message = notice(&mut rx).await;
+        assert!(message.contains("GOOGLE_API_KEY is not set"), "the reason has to survive verbatim: {message}");
+        assert!(message.contains("still on anthropic/claude-sonnet-5"), "{message}");
+        assert!(rx.try_recv().is_err(), "a failed swap must not tell the bars anything changed");
+        assert_eq!(cfg.global_provider().unwrap().model, "claude-sonnet-5", "nothing may be written on a failed swap");
     }
 
     /// `provider/model` moves both halves — endpoint and key variable
@@ -646,7 +782,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("google/gemini-2.5-flash"), "{message}");
@@ -664,7 +800,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model google/".into() }, &cfg, &mut session(), &tx).await;
 
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap().model, mjolnir_llm::provider("google").unwrap().default_model());
@@ -677,7 +813,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, &mut session(), &tx).await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
@@ -695,7 +831,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("openai/gpt-5"), "{message}");
@@ -712,10 +848,10 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
         let _ = notice(&mut rx).await;
 
-        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session(), &tx).await;
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-opus-5"), "{message}");
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
@@ -728,12 +864,12 @@ mod tests {
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), &tx).await;
         let _ = notice(&mut rx).await;
         let bare = cfg.global_provider().unwrap();
 
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
-        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, &mut session(), &tx).await;
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap(), bare);
     }
@@ -745,7 +881,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, &mut session(), &tx).await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
@@ -760,7 +896,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("unknown provider \"gogle\""), "{message}");
@@ -776,7 +912,7 @@ mod tests {
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         with_provider(&cfg, mjolnir_config::Scope::Project, "google");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("this project's provider.yaml"), "{message}");
@@ -791,30 +927,42 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-sonnet-5"), "{message}");
         assert!(!message.contains("Restart"), "nothing changed, so nothing needs restarting: {message}");
     }
 
-    /// Two `/model` calls in one session: the second must still name what
-    /// the *process* booted with, not what the first call wrote. Reading the
-    /// current setting off disk for this would have been wrong the moment
-    /// the command was used twice.
+    /// Two `/model` calls in one session: the second moves off what the
+    /// first one set, not off what the process booted with. The session
+    /// model is state that each swap advances — a fixed startup string was
+    /// only ever right while the session could not change model at all.
     #[tokio::test]
-    async fn the_session_model_reported_is_the_one_the_process_started_with() {
+    async fn each_swap_advances_what_the_session_is_running() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
-        assert!(notice(&mut rx).await.contains("this session keeps anthropic/claude-sonnet-5"));
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
+        assert!(notice(&mut rx).await.contains("now on anthropic/claude-opus-5"));
+        let _ = rx.recv().await; // ModelChanged
 
-        intercept(Command::Submit { text: "/model lumo/lumo-max".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model lumo/lumo-max".into() }, &cfg, &mut session, &tx).await;
+        assert!(notice(&mut rx).await.contains("now on lumo/lumo-max"));
+        let _ = rx.recv().await; // ModelChanged
+
+        let built = seen.lock().unwrap().clone();
+        assert_eq!(built.iter().map(|c| c.model.as_str()).collect::<Vec<_>>(), ["claude-opus-5", "lumo-max"]);
+
+        // And a third that cannot be built names the *second* as where the
+        // session still is.
+        let switch = FakeSwitch { fails_with: Some("no key".into()), ..Default::default() };
+        session = Session::new(session.model.clone(), Box::new(switch));
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, &tx).await;
         let message = notice(&mut rx).await;
-        assert!(message.contains("this session keeps anthropic/claude-sonnet-5"), "{message}");
-        assert!(!message.contains("keeps anthropic/claude-opus-5"), "the first call's write is not what the session is running: {message}");
+        assert!(message.contains("still on lumo/lumo-max"), "{message}");
     }
 
     /// A hand-written endpoint is not a catalogue provider, and must not be
@@ -835,7 +983,7 @@ mod tests {
         )
         .unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("model: qwen3-coder"), "{message}");
@@ -847,7 +995,7 @@ mod tests {
     async fn model_with_no_provider_configured_says_so_rather_than_panicking() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, SESSION_MODEL, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
         assert!(notice(&mut rx).await.contains("no provider is configured"));
     }
 
@@ -858,7 +1006,7 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, SESSION_MODEL.into(), event_tx));
+        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), event_tx));
 
         tui_tx.send(Command::Submit { text: "/nope".into() }).await.unwrap();
         tui_tx.send(Command::Submit { text: "hi".into() }).await.unwrap();
@@ -882,7 +1030,7 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, SESSION_MODEL.into(), event_tx));
+        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), event_tx));
 
         tui_tx.send(Command::Submit { text: "/exit".into() }).await.unwrap();
 

@@ -2837,6 +2837,81 @@ frames.
 still read none of it — each restates its palette inline — so the two can
 drift again with no error anywhere, and only a measurement catches it.
 
+**Progress (2026-09-07, transcript padding + the scroll rewrite):** Two
+reports from live use, one cosmetic and one not.
+
+*"The chat doesn't have any top and bottom padding and it means the text
+touches the top and bottom bars, the designs do not do this."* True: the
+body band handed its entire inner rect to the log, so the first turn sat in
+the row immediately under the identity bar and the last in the row
+immediately above the composer band. `ui::LOG_PAD_ROWS` now holds one row of
+the transcript's own ground back at each end — a blank row, per `cells.css`'s
+"spacing inside a frame is blank rows, never padding", not an inset with a
+tone of its own. The bottom bar already opens with a blank row, so the gap
+under the last turn reads as two and the gap under the top bar as one, which
+is what the reference frames do. `INTRO_ROWS` dropped 8 → 7 in the same
+change: the welcome hero's eighth row was its own hand-rolled trailing gap
+to the composer, and with the band spacing *every* transcript it became a
+second blank row where `14d` has one.
+
+*"Scrolling is very broken and unnatural. The performance is poor and
+scrolling up and down is very difficult."* Three separate causes:
+
+1. **The transcript was rendered three times per frame.** `build_lines` ran
+   once for `Paragraph::line_count` (which re-wrapped everything to produce
+   the row count) and again for `Paragraph::render` (which re-wrapped
+   everything again and threw away every row above `offset`) — on top of the
+   build itself, which re-parses every diff and re-highlights every code
+   fence through syntect. At the spinner's 120ms redraw cadence, plus once
+   per keystroke that moved the offset. Measured on a 2400-row session at
+   120×36: **83.8 ms/frame**. The event loop could not keep up with held
+   arrow keys, which is what "difficult" meant.
+
+   The fix has two halves. The builders now emit rows that are *already one
+   screen row each* — the four arms that were relying on the log
+   `Paragraph`'s own wrapper (`RetryAttempt`, `TurnEnded`, `Error`, `Notice`,
+   plus a slash-command echo) wrap to the body column themselves via
+   `transcript::body_lines`, and the hero elides its `cwd` — so `draw_log`
+   slices `rows[offset .. offset + height]` with no `Wrap` at all and the
+   count is just `rows.len()`. And `App::transcript_rows` caches that `Vec`
+   across frames, keyed on `(render_epoch, log.len(), width, height, theme)`,
+   with `App::invalidate_transcript` called from `push`, `apply_event` and
+   `resolve_decision`. Same session, same size: **0.47 ms/frame**, ~180×.
+
+   This retires the discipline the 2026-08-29 scrolling-fix and
+   wrapped-row-scroll-math entries below installed — "count with ratatui's
+   own wrapper so the count and the render can't disagree". It was right
+   given a second wrapper existed; deleting the second wrapper is better,
+   because the equivalence is now structural rather than maintained. The
+   obligation it replaces is on the builders: **an over-wide row is
+   truncated now, not wrapped**, so every arm of `render_entry` must fit its
+   own column. `a_transcript_row_is_a_screen_row_…` asserts exactly that,
+   width by width.
+
+   It also fixed a real defect in passing. A long `Notice` at 52 columns used
+   to wrap to a continuation row flush against the frame's *left edge* — the
+   `wrap.rs` failure — visible in the checked-in snapshot before this change
+   and gone from it after.
+
+2. **A disengaged offset was never clamped.** `line_down`/`page_down` clamp
+   against the `max_offset` of the moment, but that maximum *shrinks* when
+   the viewport grows — a wider terminal rewraps into fewer rows, a resolved
+   permission panel hands its band back to the log — and nothing pulled the
+   offset back down with it. The transcript scrolled off the top of its own
+   viewport into blank ground, and the only way back was holding Up once per
+   row of growth. `ScrollState::set_viewport_height` now clamps on the
+   not-following path too. Clamping, not jumping: `following` stays off.
+
+3. **The wheel did nothing.** Mouse capture stays off — the 2026 note below
+   is right that capture costs native text selection outright, and for this
+   harness that trade is not worth a wheel binding. But it was a false
+   dilemma: `run.rs` now sends **DECSET 1007** (alternate scroll mode), and
+   the terminal translates wheel notches into cursor-key presses on its own.
+   The wheel reaches `App::handle_key` as ordinary `KeyCode::Up`/`Down`, so
+   there is no second scroll path to keep in step with the first, and
+   selection is untouched. Best-effort in both directions: a terminal that
+   doesn't implement the private mode ignores it.
+
 
 ## References
 

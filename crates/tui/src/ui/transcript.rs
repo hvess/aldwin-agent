@@ -3,9 +3,9 @@
 //! them.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -22,11 +22,14 @@ use crate::log::{LogEntry, ToolActivityStatus};
 
 /// Builds every line the log panel's *inner* area can show, at `ctx.width`
 /// × `height` (the panel's inner rect — see `super::draw` on why this must
-/// be the inner, not outer, rect). Shared by [`draw_log`] (renders it) and
-/// [`row_count`] (counts its wrapped rows for scroll math), so the two can
-/// never disagree about what the log contains. An empty log shows the
-/// welcome hero instead of any entries — the two are mutually exclusive, so
-/// there's no "separate the banner from the first real entry" case.
+/// be the inner, not outer, rect). An empty log shows the welcome hero
+/// instead of any entries — the two are mutually exclusive, so there's no
+/// "separate the banner from the first real entry" case.
+///
+/// Every line this returns is **already one screen row**: no caller wraps
+/// afterwards, so `lines.len()` *is* the row count and row `n` of the result
+/// is row `n` on screen. See [`rows`] for why that equivalence is the whole
+/// point.
 fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
     if app.log.is_empty() {
         return hero_lines(app, height, ctx);
@@ -75,8 +78,37 @@ fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// Renders the log panel: `block` onto `outer`, its content onto `inner`
-/// (already computed once by `super::draw`).
+/// Every screen row of the transcript at `width` × `height`, top to bottom.
+///
+/// One row per element, by construction: nothing downstream wraps, so
+/// `rows(..).len()` is exactly the number of terminal rows the transcript
+/// occupies and `ScrollState::offset` indexes straight into it.
+///
+/// That equivalence used to be established the other way round — the
+/// builders emitted logical lines, `draw_log` handed them to a
+/// `Paragraph::wrap`, and the row count came from `Paragraph::line_count`
+/// running the same wrapper a second time. It was correct (see
+/// mjolnir-tui.md's 2026-08-29 scrolling-fix and wrapped-row-scroll-math
+/// notes for the two bugs that got it there) but it cost a full re-wrap of
+/// the entire transcript on every count *and* on every draw, on top of the
+/// build itself — three passes over the whole conversation per frame, at the
+/// spinner's 120ms cadence and again on every keystroke. On a long session
+/// that is what made scrolling feel like it was fighting back.
+///
+/// Wrapping in the builders instead makes the count free and the render
+/// O(viewport): `draw_log` slices the rows it can show and hands over
+/// exactly those. It also closes the divergence the old discipline could
+/// only ever *document*, since there is no longer a second wrapper to
+/// disagree with the first. The obligation moves to the builders: every arm
+/// of [`render_entry`] must emit rows that already fit their column, because
+/// an over-wide one is now truncated rather than wrapped.
+pub(crate) fn rows(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
+    build_lines(app, Ctx::new(app.theme.palette(), width), height)
+}
+
+/// Renders the log panel: `block` onto `outer`, and the slice of `rows`
+/// starting at `offset` that fits `inner` (both already computed once by
+/// `super::draw`).
 ///
 /// **No scrollbar.** The design system lists scrollbars under "Deliberately
 /// absent", beside tabs, breadcrumbs and "any control that needs a mouse",
@@ -87,34 +119,30 @@ fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
 /// so the live end of the conversation is always the thing on screen, and
 /// the design's answer to "where am I" is that you are at the bottom unless
 /// you moved.
-pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, app: &App) {
-    let ctx = Ctx::new(app.theme.palette(), inner.width);
-    let lines = build_lines(app, ctx, inner.height);
-    // `scroll.offset` is in *wrapped screen rows* (see [`row_count`]), so it
-    // must go through `Paragraph::scroll`, which advances the same wrapping
-    // line-composer `Paragraph::line_count` uses internally — not a
-    // `.skip()` on `lines` beforehand, which would count in logical
-    // (pre-wrap) rows instead and drift out of sync the moment anything
-    // wraps.
-    let offset = app.scroll.offset.min(u16::MAX as usize) as u16;
-
+pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, rows: &[Line<'static>], offset: usize) {
     frame.render_widget(block, outer);
-    frame.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).scroll((offset, 0)), inner);
+    // A plain slice, and no `Wrap`: `rows` is already one screen row per
+    // entry, so the visible window is `offset .. offset + height` and there
+    // is nothing for a wrapper to do. `offset` is clamped by
+    // `ScrollState::set_viewport_height` every frame, so the range is always
+    // in bounds; `get` rather than an index anyway, since a panic here would
+    // take the whole session down over an off-by-one.
+    let end = rows.len().min(offset.saturating_add(inner.height as usize));
+    let visible = rows.get(offset..end).unwrap_or(&[]).to_vec();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 
-/// The number of terminal rows the log panel's inner area needs to fully
-/// render at `width` × `height` — what `ScrollState` actually compares
-/// against viewport height, wrapping included. Delegates to ratatui's own
-/// `Paragraph::line_count`, which runs the exact same word-wrapper
-/// [`draw_log`]'s render path uses, rather than re-deriving wrap behaviour
-/// by hand — see mjolnir-tui.md's 2026-08-29 scrolling-fix and
-/// wrapped-row-scroll-math Progress notes for the two incidents this
-/// discipline exists to prevent from recurring. `height` only matters for
-/// the empty-log hero path (it bottom-anchors the hero); the non-empty
-/// path's row count is width-only.
-pub(crate) fn row_count(app: &App, width: u16, height: u16) -> usize {
-    let lines = build_lines(app, Ctx::new(app.theme.palette(), width), height);
-    Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).line_count(width)
+/// One hand-composed row's worth of spans, wrapped to the turn body column
+/// and then laid out under the label column — in that order, which is this
+/// module's whole discipline (see its own doc comment) and now also the
+/// thing that keeps [`rows`]'s one-line-per-screen-row invariant true for
+/// the status-ish entries below. Each of them carries arbitrary text — a
+/// provider's retry message, a tool error, a slash command's notice — so
+/// "it's short enough" was never a property any of them actually had; they
+/// simply used to be wrapped by the log's `Paragraph` afterwards, which
+/// stranded the continuation row against the frame's left edge.
+fn body_lines(spans: Vec<Span<'static>>, label: Option<(&str, Color)>, ctx: Ctx) -> Vec<Line<'static>> {
+    with_label_column(wrap_line(Line::from(spans), ctx.body().width as usize), label)
 }
 
 fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
@@ -130,7 +158,10 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         // conversational content.
         LogEntry::UserMessage { text } => {
             if is_command(text) {
-                return text.lines().map(|l| Line::from(Span::styled(format!("> {l}"), Style::default().fg(pal.dim)))).collect();
+                return text
+                    .lines()
+                    .flat_map(|l| wrap_line(Line::from(Span::styled(format!("> {l}"), Style::default().fg(pal.dim))), ctx.width as usize))
+                    .collect();
             }
             let style = Style::default().fg(pal.text);
             let content: Vec<Line<'static>> =
@@ -181,11 +212,14 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         // inventing a colour outside that fixed vocabulary.
         LogEntry::RetryAttempt { info } => {
             let status = info.status.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string());
-            let line = Line::from(vec![
-                Span::styled("retry ", Style::default().fg(pal.label).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} · attempt {} · {status}: {}", info.provider, info.attempt, info.message), Style::default().fg(pal.dim)),
-            ]);
-            with_label_column(vec![line], None)
+            body_lines(
+                vec![
+                    Span::styled("retry ", Style::default().fg(pal.label).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{} · attempt {} · {status}: {}", info.provider, info.attempt, info.message), Style::default().fg(pal.dim)),
+                ],
+                None,
+                ctx,
+            )
         }
         // While pending (`resolution: None`), a decision renders nothing at
         // all here — the decision panel (`super::decision`, a fixed
@@ -226,23 +260,25 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         LogEntry::ApprovalCard { resolution: None, .. } | LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
-            let line = match reason {
+            let spans = match reason {
                 TurnEndReasonKind::EndTurn => return vec![],
-                TurnEndReasonKind::Cancelled => Line::from(Span::styled("— turn cancelled —", Style::default().fg(pal.dim))),
-                TurnEndReasonKind::Error(message) => Line::from(Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim))),
+                TurnEndReasonKind::Cancelled => vec![Span::styled("— turn cancelled —", Style::default().fg(pal.dim))],
+                TurnEndReasonKind::Error(message) => vec![Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim))],
             };
-            with_label_column(vec![line], None)
+            body_lines(spans, None, ctx)
         }
-        LogEntry::Error { message } => with_label_column(
-            vec![Line::from(vec![
+        LogEntry::Error { message } => body_lines(
+            vec![
                 Span::styled("error: ", Style::default().fg(pal.del).add_modifier(Modifier::BOLD)),
                 Span::styled(message.clone(), Style::default().fg(pal.del)),
-            ])],
+            ],
             None,
+            ctx,
         ),
-        LogEntry::Notice { message } => with_label_column(
-            vec![Line::from(vec![Span::styled("notice: ", Style::default().fg(pal.quiet)), Span::styled(message.clone(), Style::default().fg(pal.dim))])],
+        LogEntry::Notice { message } => body_lines(
+            vec![Span::styled("notice: ", Style::default().fg(pal.quiet)), Span::styled(message.clone(), Style::default().fg(pal.dim))],
             None,
+            ctx,
         ),
     }
 }
@@ -426,7 +462,11 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     let mut content: Vec<Line<'static>> = Vec::with_capacity(INTRO_ROWS);
     content.push(super::first_run::wordmark(ctx));
     content.push(Line::default());
-    content.push(field("in", vec![Span::styled(status.cwd.clone().unwrap_or_default(), Style::default().fg(pal.value))]));
+    // Elided, not wrapped — `INTRO_ROWS` below promises one row per fact,
+    // and a deep checkout is the one value here that routinely outruns the
+    // body column.
+    let cwd = elide(&status.cwd.clone().unwrap_or_default(), ctx.body().width as usize);
+    content.push(field("in", vec![Span::styled(cwd, Style::default().fg(pal.value))]));
     content.push(field("provider", provider));
     content.push(field("access", access));
     content.push(Line::default());
@@ -436,15 +476,20 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
         Span::styled("/", Style::default().fg(pal.quiet)),
         Span::styled(" for commands.", Style::default().fg(pal.dim)),
     ]));
-    content.push(Line::default());
     debug_assert_eq!(content.len(), INTRO_ROWS, "INTRO_ROWS must match what intro_content builds");
     content
 }
 
 /// Rows [`intro_content`] always renders. Fixed, not derived: every row is
 /// one line whatever the model name or directory is, since each is elided
-/// or simply allowed to run to the frame's edge rather than wrapped.
-pub(super) const INTRO_ROWS: usize = 8;
+/// rather than wrapped.
+///
+/// Was 8 until the transcript band got its own blank row at each end
+/// (`super::LOG_PAD_ROWS`). The eighth was this screen's own trailing gap to
+/// the composer, hand-rolled here because nothing else provided one; the
+/// band now spaces *every* transcript off the bars, so keeping it too put
+/// two blank rows under the hero where `14d` has one.
+pub(super) const INTRO_ROWS: usize = 7;
 
 /// One `label: state` pair in the hero's access row. No filled chip — the
 /// design system's own rule is that the accent is "a mark or a line, never

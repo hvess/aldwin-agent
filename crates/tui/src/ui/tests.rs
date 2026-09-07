@@ -104,6 +104,45 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
     panic!("row containing {needle:?} not found");
 }
 
+/// Reported directly: "the chat doesn't have any top and bottom padding and
+/// it means the text touches the top and bottom bars, the designs do not do
+/// this". The transcript band used to hand its whole inner rect to the log,
+/// so the first turn sat in the row immediately under the identity bar and
+/// the last one in the row immediately above the composer band.
+///
+/// The fix is `ui::LOG_PAD_ROWS`: a blank row of the transcript's own ground
+/// at each end of the band. Asserted as "the bars' neighbouring rows carry
+/// nothing", with enough content in the log to fill the viewport several
+/// times over — so a row left empty here is the padding doing its job, not
+/// simply a short conversation not reaching that far.
+#[test]
+fn the_transcript_never_touches_the_bars() {
+    let mut app = app();
+    for i in 0..60 {
+        app.log.push(LogEntry::AssistantText { text: format!("line-{i} of a conversation long enough to overflow the band") });
+    }
+    let (width, height) = (60u16, 20u16);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let row = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
+    // The band runs from just under the top bar to just above the bottom
+    // bar's own five rows.
+    let (first, last) = (super::TOP_BAR_ROWS, height - 5 - 1);
+    assert_eq!(row(first).trim(), "", "the row under the identity bar is the transcript's top padding: {:?}", row(first));
+    assert_eq!(row(last).trim(), "", "and the row above the composer band is its bottom padding: {:?}", row(last));
+    // One row, not a gap of unspecified size: the transcript still fills
+    // everything between the two pad rows. (Which of those rows is blank
+    // depends on where the turn separators fall, so the assertion is that
+    // the band as a whole is still carrying content, not that any one row
+    // is.)
+    assert!((first + 1..last).any(|y| !row(y).trim().is_empty()), "the padding is one row at each end, not an empty band");
+    assert_eq!(buffer[(0, first)].bg, DARK.ground, "padding is the transcript's own ground, not a third tone between the bands");
+    assert_eq!(buffer[(0, last)].bg, DARK.ground);
+}
+
 /// The chrome bars are parted from the transcript by their *tone*, not by
 /// anything drawn between them.
 ///
@@ -343,6 +382,74 @@ fn log_row_count_uses_the_bordered_panels_inner_width_not_the_outer_width() {
     let out = rendered(&mut app, 100, 12);
 
     assert!(out.contains(tail), "the wrapped tail must be visible under auto-follow when scroll math is measured against the panel's inner width");
+}
+
+/// The invariant the whole scroll path now rests on: a row of
+/// `transcript::rows` is a row on screen, so `offset` indexes straight into
+/// it and `total_lines()` is just its length.
+///
+/// Both facts used to be produced by a *second* pass — `Paragraph::wrap` at
+/// render time and `Paragraph::line_count` for the count — which is what the
+/// long doc comments in `scroll.rs` and `app.rs` were guarding, and what
+/// made every frame re-wrap the whole conversation three times over. This
+/// asserts the equivalence directly, on content deliberately full of the
+/// things that used to need that second wrapper: long prose, a long notice,
+/// a long error.
+#[test]
+fn a_transcript_row_is_a_screen_row_so_the_scroll_offset_indexes_straight_into_it() {
+    let mut app = app();
+    app.log.push(LogEntry::AssistantText { text: "prose ".repeat(60) });
+    app.log.push(LogEntry::Notice { message: "n".to_string() + &"otice ".repeat(30) });
+    app.log.push(LogEntry::Error { message: "e".to_string() + &"rror ".repeat(30) });
+    app.log.push(LogEntry::AssistantText { text: "MARKER-ROW".into() });
+
+    let (width, height) = (60u16, 24u16);
+    // One draw to settle `render_width`/`render_height` and the following
+    // offset, which is what the count below is measured against.
+    let _ = rendered(&mut app, width, height);
+    let rows = app.transcript_rows().to_vec();
+    assert_eq!(app.total_lines(), rows.len(), "the count is the row list's own length, not a second measurement of it");
+    for (i, row) in rows.iter().enumerate() {
+        let w: usize = row.spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
+        assert!(w <= app.render_width as usize, "row {i} is {w} cells wide on a {}-cell column — nothing wraps it now, so it would be truncated", app.render_width);
+    }
+
+    // Scroll one row up from the bottom and read the frame back: the row
+    // that appears at the top of the band must be exactly `rows[offset]`.
+    app.scroll.line_up();
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let top_of_band: String = (0..width).map(|x| buffer[(x, super::TOP_BAR_ROWS + 1)].symbol().to_string()).collect();
+    let expected: String = rows[app.scroll.offset].spans.iter().map(|s| s.content.to_string()).collect();
+    assert_eq!(top_of_band.trim_end(), expected.trim_end(), "the first drawn row must be rows[offset] exactly");
+}
+
+/// A `Notice` or an `Error` carries arbitrary text — a slash command's
+/// answer, a provider's failure message — so neither was ever "short enough
+/// not to wrap". They used to be handed to the log's `Paragraph` unwrapped
+/// and broken by it, which is the failure `wrap.rs` exists to prevent: the
+/// wrapper knows nothing about the label-column inset already applied, so
+/// the continuation row came out flush against the frame's left edge. Now
+/// they wrap to the body column first, like every other row does.
+#[test]
+fn a_long_notice_wraps_under_the_body_column_not_against_the_frame_edge() {
+    let mut app = app();
+    app.log.push(LogEntry::Notice { message: "wrapme ".repeat(30) });
+    let (width, height) = (60u16, 20u16);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let first = find_row(&buffer, "notice:");
+    let rows: Vec<String> = (first..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+    let continuation: Vec<&String> = rows.iter().skip(1).take_while(|r| r.contains("wrapme")).collect();
+    assert!(!continuation.is_empty(), "the notice must actually wrap at this width: {rows:?}");
+    for row in continuation {
+        assert_eq!(row.len() - row.trim_start().len(), CONTENT_INDENT, "every wrapped row keeps the body column's inset: {row:?}");
+    }
 }
 
 /// Regression test for the 2026-08-31 status-line correction: the old

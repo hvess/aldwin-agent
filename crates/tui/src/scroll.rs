@@ -6,10 +6,10 @@
 /// `max_offset` is what made scrolling a near-total no-op before
 /// `total_lines` existed — a handful of entries routinely render to far
 /// more rows than the viewport, so `max_offset` stayed 0 long after there
-/// was real content below the fold. `offset` itself must land on
-/// `ui::draw_log` via `Paragraph::scroll`, not a `.skip()` on the
-/// unwrapped line list — see that function's doc comment for why the two
-/// aren't interchangeable once anything wraps.
+/// was real content below the fold. `offset` indexes straight into
+/// `ui::transcript_rows`, which is one screen row per element by
+/// construction — see that function's doc comment for how that invariant is
+/// established, and for the three-passes-per-frame wrapping it replaced.
 ///
 /// Auto-follows new content while `following` is true; scrolling up
 /// disengages it, and jumping to the bottom (End / `G`) re-engages it — see
@@ -36,7 +36,19 @@ impl ScrollState {
         self.viewport_height = height.max(1);
         if self.following {
             self.offset = self.max_offset(total_len);
+            return;
         }
+        // A *disengaged* offset still has to stay reachable. It only ever
+        // moves down under `line_down`/`page_down`, which clamp against the
+        // `max_offset` of the moment — but that maximum shrinks whenever the
+        // viewport grows (a wider terminal rewraps the transcript into fewer
+        // rows; a resolved permission panel hands its band back to the log),
+        // and nothing was pulling the offset back with it. The transcript
+        // then scrolled off the top of its own viewport into blank space,
+        // and getting back to the conversation meant holding Up for as many
+        // presses as the terminal had grown by — the "scrolling up and down
+        // is very difficult" half of the report.
+        self.offset = self.offset.min(self.max_offset(total_len));
     }
 
     fn max_offset(&self, total_len: usize) -> usize {
@@ -137,6 +149,27 @@ mod tests {
         let mut s = ScrollState { viewport_height: 5, offset: 2, following: false };
         s.set_viewport_height(3, 10);
         assert_eq!(s.offset, 2);
+    }
+
+    /// The other half of the pair above: an offset that was legal for a
+    /// small viewport is *past the end* once the viewport grows, and left
+    /// alone it parks the transcript off the top of its own log area with
+    /// nothing on screen and no fast way back.
+    #[test]
+    fn a_disengaged_offset_past_the_new_end_is_pulled_back_to_it() {
+        let mut s = ScrollState { viewport_height: 3, offset: 7, following: false };
+        s.set_viewport_height(8, 10);
+        assert_eq!(s.offset, 2, "the last row must stay reachable when the viewport grows under a scrolled-up offset");
+        assert!(!s.following, "clamping is not the same as jumping to the bottom — following stays off");
+    }
+
+    /// Same clamp, driven by content rather than by size: `/clear` and a
+    /// history rewrite both shrink the log out from under an offset.
+    #[test]
+    fn a_disengaged_offset_past_a_shrunken_log_is_pulled_back_to_it() {
+        let mut s = ScrollState { viewport_height: 5, offset: 40, following: false };
+        s.set_viewport_height(5, 10);
+        assert_eq!(s.offset, 5);
     }
 
     #[test]

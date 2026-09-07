@@ -45,10 +45,17 @@ pub(super) fn max_height(frame_height: u16) -> usize {
     (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI + PANEL_CHROME) as usize).max(6)
 }
 
-/// Wrapped-row count of `lines` at `width` — the same
-/// `Paragraph::line_count` technique `transcript::row_count` uses, so the
-/// height `super::draw` reserves and what [`draw_panel`] actually renders
-/// can never disagree.
+/// Wrapped-row count of `lines` at `width`, measured with the same
+/// `Paragraph::line_count` that [`draw_panel`]'s own `Wrap` composes with, so
+/// the height `super::draw` reserves and what actually renders can never
+/// disagree.
+///
+/// The transcript used to be counted this way too and no longer is — it
+/// pre-wraps instead, so its rows *are* screen rows (see
+/// `super::transcript::rows`). The panel keeps the two-pass shape on purpose:
+/// it is a bounded band rebuilt only while a decision is open, so the second
+/// wrap costs nothing measurable, and `clamp_panel`'s budget arithmetic is
+/// written against a wrapping `Paragraph`.
 pub(super) fn row_count(lines: &[Line<'static>], width: u16) -> usize {
     Paragraph::new(Text::from(lines.to_vec())).wrap(Wrap { trim: false }).line_count(width)
 }

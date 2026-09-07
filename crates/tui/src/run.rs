@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Write;
 use std::sync::Arc;
 
 use mjolnir_core::{Command, Event};
@@ -49,13 +50,14 @@ pub struct SessionProvider {
 /// selection outright, reported directly as "text selection has been
 /// disabled (or is simply not working)". For a harness whose whole premise
 /// is that the developer reads and reasons about the transcript, being able
-/// to select and copy out of it beats a wheel binding that
-/// PageUp/PageDown/arrow-key scrolling already covers.
+/// to select and copy out of it beats a wheel binding.
 ///
-/// Nothing is sent to enable capture, so nothing needs disabling on the way
-/// out — but `restore_terminal` still emits `DisableMouseCapture` anyway, as
-/// a cheap belt-and-braces reset of a mode this process may have inherited
-/// or a previous build may have left on in the same terminal.
+/// [`ALTERNATE_SCROLL`] is how the wheel comes back anyway, without that
+/// trade. Nothing else is sent to enable capture, so nothing else needs
+/// disabling on the way out — but `restore_terminal` still emits
+/// `DisableMouseCapture` anyway, as a cheap belt-and-braces reset of a mode
+/// this process may have inherited or a previous build may have left on in
+/// the same terminal.
 ///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
 /// `Theme::from_config` — mjolnir-cli's bootstrap does this) selects which
@@ -73,6 +75,10 @@ pub async fn run(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    // Best-effort: a terminal that doesn't know the mode ignores the
+    // sequence, and one that does gives the wheel back without costing
+    // selection. Not worth failing the session over either way.
+    let _ = stdout.write_all(ALTERNATE_SCROLL_ON).and_then(|()| stdout.flush());
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let guard = TerminalGuard::new();
@@ -114,12 +120,32 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// DECSET 1007, *alternate scroll mode*: while the alternate screen is up,
+/// the terminal translates wheel notches into cursor-key presses instead of
+/// scrolling its own (empty) scrollback.
+///
+/// This is what makes the wheel scroll the transcript **without** taking the
+/// mouse away from the terminal — the reason `run`'s doc comment gives for
+/// leaving capture off. The events arrive as ordinary `KeyCode::Up`/`Down`
+/// and land in `App::handle_key` beside the arrow keys themselves, so there
+/// is no second scroll path to keep in step with the first, and a wheel
+/// notch moves whatever a press of the same key would.
+///
+/// Not a crossterm `Command` — crossterm models mouse *capture* (1000/1002/
+/// 1006) and has nothing for 1007, so it goes out as the literal sequence.
+/// xterm, VTE, kitty, Alacritty, WezTerm, iTerm2 and Windows Terminal all
+/// implement it; a terminal that doesn't simply ignores an unknown private
+/// mode, which is why both writes below are best-effort.
+const ALTERNATE_SCROLL_ON: &[u8] = b"\x1b[?1007h";
+const ALTERNATE_SCROLL_OFF: &[u8] = b"\x1b[?1007l";
+
 fn restore_terminal() -> io::Result<()> {
     let raw = disable_raw_mode();
+    let scroll = io::stdout().write_all(ALTERNATE_SCROLL_OFF).and_then(|()| io::stdout().flush());
     let mouse = execute!(io::stdout(), DisableMouseCapture);
     let alt = execute!(io::stdout(), LeaveAlternateScreen);
     let cursor = execute!(io::stdout(), Show);
-    raw.and(mouse).and(alt).and(cursor)
+    raw.and(scroll).and(mouse).and(alt).and(cursor)
 }
 
 async fn run_loop(

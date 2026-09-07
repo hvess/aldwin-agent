@@ -454,6 +454,36 @@ pub struct App {
     /// state). Defaults to `Theme::Dark` via `App::new`; `run.rs` overrides
     /// it with `App::with_theme` once config is available.
     pub theme: crate::palette::Theme,
+
+    /// Bumped by [`App::invalidate_transcript`] whenever anything the
+    /// transcript renders from changes. Half of `transcript`'s cache key;
+    /// the other half is `log.len()`, which catches the one mutation path
+    /// that doesn't go through a method on this type (a test pushing
+    /// straight onto the public `log`).
+    render_epoch: u64,
+    /// The transcript's rendered rows for the last `(epoch, len, width,
+    /// height, theme)` they were built at — see [`App::transcript_rows`].
+    transcript:   Option<TranscriptCache>,
+}
+
+/// Every screen row of the transcript, plus the state it was built from.
+///
+/// Building those rows means re-rendering the whole conversation: every
+/// markdown line re-wrapped, every diff re-parsed, every code fence
+/// re-highlighted through syntect. That used to happen three times per frame
+/// (a count, then a render, each re-wrapping on top of the build) and once
+/// more on every keystroke that moved the scroll offset — at the spinner's
+/// 120ms redraw cadence, on a session with a few long replies in it, that is
+/// the whole reason scrolling felt sluggish and unresponsive. None of those
+/// inputs change between two frames of an idle session, so the work is done
+/// once and reused until one of them actually does.
+struct TranscriptCache {
+    epoch:  u64,
+    len:    usize,
+    width:  u16,
+    height: u16,
+    theme:  crate::palette::Theme,
+    rows:   Vec<ratatui::text::Line<'static>>,
 }
 
 impl App {
@@ -496,6 +526,8 @@ impl App {
             current_provider: None,
             picker: None,
             theme: crate::palette::Theme::default(),
+            render_epoch: 0,
+            transcript: None,
         }
     }
 
@@ -534,7 +566,21 @@ impl App {
 
     fn push(&mut self, entry: LogEntry) {
         self.log.push(entry);
-        self.scroll.on_content_grew(self.total_lines());
+        self.invalidate_transcript();
+        let total = self.total_lines();
+        self.scroll.on_content_grew(total);
+    }
+
+    /// Declares that the next reader of [`App::transcript_rows`] must
+    /// rebuild rather than reuse. Called from every path that mutates
+    /// something the transcript renders from: `push`, `apply_event` (which
+    /// covers streaming deltas, tool-status updates and `/clear`) and
+    /// `resolve_decision` (which back-fills a resolution onto an entry
+    /// already in the log). Deliberately coarse — an unnecessary rebuild
+    /// costs one frame's work, a missed one shows the developer a stale
+    /// conversation.
+    fn invalidate_transcript(&mut self) {
+        self.render_epoch = self.render_epoch.wrapping_add(1);
     }
 
     /// Total rendered terminal rows across the whole log, wrapping
@@ -552,12 +598,44 @@ impl App {
     /// line — rendered as more screen rows than it counted as, so
     /// `ScrollState`'s offset drifted out of sync with what was actually
     /// on screen and clipped content at the bottom of the log area (see
-    /// mjolnir-tui.md's 2026-08-29 scrolling-fix Progress note). Delegates
-    /// to `ui::log_row_count`, which counts the exact same wrapped rows
-    /// `ui::draw_log` renders, using ratatui's own wrapper rather than a
-    /// hand-kept approximation.
-    pub fn total_lines(&self) -> usize {
-        crate::ui::log_row_count(self, self.render_width, self.render_height)
+    /// mjolnir-tui.md's 2026-08-29 scrolling-fix Progress note). It is now
+    /// exactly `transcript_rows().len()`, since those rows *are* the screen
+    /// rows — there is no longer a separate counting pass that could drift
+    /// from the rendering one.
+    pub fn total_lines(&mut self) -> usize {
+        self.transcript_rows().len()
+    }
+
+    /// Every screen row of the transcript at the current render size,
+    /// rebuilt only when something it depends on has changed — see
+    /// [`TranscriptCache`] for why that matters.
+    ///
+    /// The key is every input `ui::transcript_rows` reads: the log (via
+    /// `render_epoch` and its length), the render size, and the theme. It
+    /// deliberately does *not* cover the welcome hero's own inputs (`status`,
+    /// `current_provider`), which is why the empty-log case skips the cache
+    /// outright: the hero is eight rows and free to rebuild, and caching it
+    /// would mean a permission or model change didn't show up until the next
+    /// log entry.
+    pub fn transcript_rows(&mut self) -> &[ratatui::text::Line<'static>] {
+        let fresh = self.log.is_empty()
+            || !matches!(&self.transcript, Some(c) if c.epoch == self.render_epoch
+                && c.len == self.log.len()
+                && c.width == self.render_width
+                && c.height == self.render_height
+                && c.theme == self.theme);
+        if fresh {
+            let rows = crate::ui::transcript_rows(self, self.render_width, self.render_height);
+            self.transcript = Some(TranscriptCache {
+                epoch: self.render_epoch,
+                len: self.log.len(),
+                width: self.render_width,
+                height: self.render_height,
+                theme: self.theme,
+                rows,
+            });
+        }
+        &self.transcript.as_ref().expect("populated immediately above when stale").rows
     }
 
     fn active_step_calls(&mut self, step_id: StepId) -> Option<&mut Vec<ToolActivityEntry>> {
@@ -568,6 +646,11 @@ impl App {
     }
 
     pub fn apply_event(&mut self, event: Event) {
+        // Coarse on purpose — see `invalidate_transcript`. Most events touch
+        // the log, several mutate an entry already in it (a streaming
+        // `TextDelta`, a `ToolCompleted` flipping a call's glyph), and the
+        // handful that don't cost one rebuild each.
+        self.invalidate_transcript();
         match event {
             Event::TurnStarted { turn_id } => {
                 self.status.turn = Some(turn_id.0);
@@ -741,10 +824,14 @@ impl App {
             (KeyCode::Home, _) => self.cursor = 0,
             (KeyCode::End, _) => {
                 self.cursor = self.input.chars().count();
-                self.scroll.jump_to_bottom(self.total_lines());
+                let total = self.total_lines();
+                self.scroll.jump_to_bottom(total);
             }
             (KeyCode::PageUp, _) => self.scroll.page_up(),
-            (KeyCode::PageDown, _) => self.scroll.page_down(self.total_lines()),
+            (KeyCode::PageDown, _) => {
+                let total = self.total_lines();
+                self.scroll.page_down(total);
+            }
             // Within a multi-line draft, Up/Down move the cursor between its
             // lines first; only once there's no further line to move to
             // (a single-line draft, or already at the draft's first/last
@@ -762,7 +849,8 @@ impl App {
             }
             (KeyCode::Down, _) => {
                 if !self.move_cursor_vertical(1) {
-                    self.scroll.line_down(self.total_lines());
+                    let total = self.total_lines();
+                    self.scroll.line_down(total);
                 }
             }
             (KeyCode::Char(c), _) => self.insert_char(c),
@@ -1136,6 +1224,11 @@ impl App {
     /// own list to start unselected at the top — see the field's own doc
     /// comment on `App`.
     fn resolve_decision(&mut self, outcome: DecisionOutcome) {
+        // Both arms below back-fill a `resolution` onto an entry already in
+        // the log, which changes what it renders without changing the log's
+        // length — the one mutation shape the cache key's length half cannot
+        // see on its own.
+        self.invalidate_transcript();
         self.decision_selected = 0;
         self.decision_pattern_scope = PatternScope::default();
         match outcome {
@@ -1277,7 +1370,8 @@ mod tests {
             app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
         }
         app.render_width = 80;
-        app.scroll.set_viewport_height(5, app.total_lines());
+        let total = app.total_lines();
+        app.scroll.set_viewport_height(5, total);
         let before = app.scroll.offset;
         app.handle_key(press(KeyCode::Up));
         assert!(app.scroll.offset < before, "Up must scroll the log when there's no draft line to navigate to");

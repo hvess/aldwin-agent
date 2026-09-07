@@ -22,6 +22,12 @@
 //! about the insets already applied and would strand continuation rows flush
 //! against the frame edge. See mjolnir-tui.md's Progress notes for the two
 //! bugs that discipline exists to prevent from recurring.
+//!
+//! In the transcript that is now load-bearing rather than merely tidy: the
+//! log's own `Paragraph` no longer wraps *at all*, so a builder that hands
+//! it an over-wide row gets that row truncated rather than folded. See
+//! [`transcript::rows`] for why the second wrapper went away and what it
+//! bought.
 
 mod chrome;
 mod decision;
@@ -46,11 +52,30 @@ use crate::app::App;
 use crate::palette;
 use grid::Ctx;
 
-pub(crate) use transcript::row_count as log_row_count;
+pub(crate) use transcript::rows as transcript_rows;
 
 /// `--bar-top-h: 60px` — 3 cells. The reference's `1px` border below it is
 /// not a fourth row; see the note on borders further down this file.
 pub(super) const TOP_BAR_ROWS: u16 = 3;
+
+/// Blank rows held back at the top and bottom of the transcript band, so
+/// conversation text never sits flush against a chrome bar.
+///
+/// `cells.css`: "spacing inside a frame is blank rows, never padding" — so
+/// this is a row of the transcript's own ground, not an inset with a
+/// different tone, and it is taken out of the band's *inner* rect while the
+/// band itself still fills edge to edge. The reference frames space the
+/// transcript off both bars this way; mjolnir had the body band running
+/// straight into them, reported directly as "the chat doesn't have any top
+/// and bottom padding and it means the text touches the top and bottom
+/// bars".
+///
+/// One row, not more: the bottom bar already opens with a blank row of its
+/// own (`BottomBar.jsx`'s blank/composer/blank/status/blank), so the gap
+/// under the last turn reads as two rows while the gap under the top bar
+/// reads as one — which is what the reference does, the top bar being the
+/// denser edge.
+const LOG_PAD_ROWS: u16 = 1;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let pal = app.theme.palette();
@@ -147,12 +172,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // in this call graph — see mjolnir-tui.md's scrolling-fix and
     // wrapped-row-scroll-math Progress notes for the two real bugs that came
     // from exactly this kind of divergence before.
-    let log_inner = log_block.inner(log_area);
+    let log_inner = pad_rows(log_block.inner(log_area), LOG_PAD_ROWS);
     app.render_width = log_inner.width;
     app.render_height = log_inner.height;
-    app.scroll.set_viewport_height(log_inner.height as usize, app.total_lines());
+    // Built once per frame and cached across frames (see
+    // `App::transcript_rows`), then measured, scrolled and rendered off that
+    // one `Vec` — the count is `rows.len()`, so there is no second pass that
+    // could disagree with what is drawn.
+    let total = app.total_lines();
+    app.scroll.set_viewport_height(log_inner.height as usize, total);
+    let offset = app.scroll.offset;
+    let rows = app.transcript_rows();
 
-    transcript::draw_log(frame, log_area, log_inner, log_block, app);
+    transcript::draw_log(frame, log_area, log_inner, log_block, rows, offset);
 
     if pending {
         // The transcript recedes while a decision is open — the reference
@@ -212,6 +244,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 // The one thing this now depends on is the ladder keeping its spacing —
 // `palette.css`: "Changing a step's lightness removes a boundary." See
 // `palette.rs`.
+
+/// Holds `n` rows back at the top and bottom of `area`. Saturating on both
+/// counts: a terminal short enough that the padding would consume the whole
+/// band keeps at least one usable row and simply loses the gap, rather than
+/// producing a zero-height rect nothing can render into.
+fn pad_rows(area: Rect, n: u16) -> Rect {
+    let taken = n.saturating_mul(2);
+    if area.height <= taken {
+        return area;
+    }
+    Rect { y: area.y + n, height: area.height - taken, ..area }
+}
 
 /// Composites every already-drawn cell in `area` toward its own background
 /// at `alpha`, the way CSS `opacity` would. Each cell fades toward *its

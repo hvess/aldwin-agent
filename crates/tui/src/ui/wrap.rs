@@ -1,21 +1,26 @@
 //! Word-wrapping for one logical line, done *before* anything is inset or
 //! filled.
 //!
-//! This exists instead of leaning on the log paragraph's own
-//! `Wrap { trim: false }` (`transcript::draw_log`) because `Wrap` has no
-//! concept of the label-column inset `grid::with_label_column` applies
-//! afterward, nor of the padding/border columns `row::Row` adds: it treats
-//! one logical `Line`'s spans as a single continuous run of styled
-//! graphemes, so a wrapped continuation row it produced came out flush
-//! against the panel edge instead of under the rest of the turn's content
-//! (reported as: "the first line of text is correctly in line, but when the
-//! text wraps onto a second line, it doesn't respect the padding").
+//! This exists instead of leaning on a `Paragraph`'s own
+//! `Wrap { trim: false }` because `Wrap` has no concept of the label-column
+//! inset `grid::with_label_column` applies afterward, nor of the
+//! padding/border columns `row::Row` adds: it treats one logical `Line`'s
+//! spans as a single continuous run of styled graphemes, so a wrapped
+//! continuation row it produced came out flush against the panel edge
+//! instead of under the rest of the turn's content (reported as: "the first
+//! line of text is correctly in line, but when the text wraps onto a second
+//! line, it doesn't respect the padding").
 //!
 //! Wrapping here means every row handed downstream is already ≤ its column
-//! width and already fully inset and filled on its own — `Wrap` downstream
-//! never has to split anything, so the wrap happens exactly once. Both
-//! `Row` and the prose path depend on that discipline; see `mjolnir-tui.md`'s
-//! Progress notes for the two bugs it exists to prevent from recurring.
+//! width and already fully inset and filled on its own, so the wrap happens
+//! exactly once. Both `Row` and the prose path depend on that discipline;
+//! see `mjolnir-tui.md`'s Progress notes for the bugs it exists to prevent
+//! from recurring.
+//!
+//! For the transcript there is no longer any downstream wrapper to fall back
+//! on at all — `transcript::draw_log` renders a plain slice of already-sized
+//! rows — so a builder that skips this step gets truncation, not a
+//! badly-placed fold.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};

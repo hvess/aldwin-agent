@@ -79,7 +79,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x26
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   idle  claude-sonnet-5  -  0 messages^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x36 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
+ 18|   idle  claude-sonnet-5  -  0 m…      ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x30 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark empty 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -207,7 +207,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  /theme light and then keep going              |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x6 Reset/Rgb(54, 49, 63)/0x1 Rgb(244, 242, 249)/Rgb(54, 49, 63)/0x5 Reset/Rgb(54, 49, 63)/0x1 Rgb(244, 242, 249)/Rgb(54, 49, 63)/0x3 Reset/Rgb(54, 49, 63)/0x1 Rgb(244, 242, 249)/Rgb(54, 49, 63)/0x4 Reset/Rgb(54, 49, 63)/0x1 Rgb(244, 242, 249)/Rgb(54, 49, 63)/0x4 Reset/Rgb(54, 49, 63)/0x1 Rgb(244, 242, 249)/Rgb(54, 49, 63)/0x5 Reset/Rgb(54, 49, 63)/0x14
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   idle  claude-sonnet-5  T3 S2  3 mess^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x36 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
+ 18|   idle  claude-sonnet-5  T3 S2        ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x30 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark conversation 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -335,7 +335,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x26
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   idle  claude-sonnet-5  -  1 message ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x35 Reset/Rgb(54, 49, 63)/0x1 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
+ 18|   idle  claude-sonnet-5  -  1 m…      ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x30 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark markdown 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -463,7 +463,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x26
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   idle  claude-sonnet-5  -  1 message ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x35 Reset/Rgb(54, 49, 63)/0x1 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
+ 18|   idle  claude-sonnet-5  -  1 m…      ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x30 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark fenced_diff 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -570,7 +570,7 @@
  19|                                                                                |Reset/Rgb(54, 49, 63)/0x80
  20|   ▶  Ask Mjolnir anything                                                      |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x54
  21|                                                                                |Reset/Rgb(54, 49, 63)/0x80
- 22|   ◐ running 2 tools…  claude-sonnet-5  T4 S1  tools: read, shell^c to cancel   |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x2 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x49 Rgb(201, 197, 210)/Rgb(54, 49, 63)/0x4 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x2 Rgb(201, 197, 210)/Rgb(54, 49, 63)/0x5 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x12 Reset/Rgb(54, 49, 63)/0x3
+ 22|   ◐ running 2 tools…  claude-sonnet-5  T4 S1  tools: read…      ^c to cancel   |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x2 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x49 Rgb(201, 197, 210)/Rgb(54, 49, 63)/0x4 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x1 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x12 Reset/Rgb(54, 49, 63)/0x3
  23|                                                                                |Reset/Rgb(54, 49, 63)/0x80
 === Dark tools 52x20
   0|                                                    |Reset/Rgb(71, 66, 81)/0x52
@@ -591,7 +591,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x26
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   ◐ running 2 tools…  claude-sonnet-^c to cancel   |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x2 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x32 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x12 Reset/Rgb(54, 49, 63)/0x3
+ 18|   ◐ running 2 tools…  claude-…      ^c to cancel   |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x2 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x26 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x12 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark tools 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -1359,7 +1359,7 @@
  15|                                                    |Reset/Rgb(54, 49, 63)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(54, 49, 63)/0x3 Rgb(190, 157, 247)/Rgb(54, 49, 63)/0x3 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x20 Reset/Rgb(54, 49, 63)/0x26
  17|                                                    |Reset/Rgb(54, 49, 63)/0x52
- 18|   idle  claude-sonnet-5  T9 S3  22 mes^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x36 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
+ 18|   idle  claude-sonnet-5  T9 S3        ^c to exit   |Reset/Rgb(54, 49, 63)/0x3 Rgb(177, 173, 187)/Rgb(54, 49, 63)/0x30 Reset/Rgb(54, 49, 63)/0x6 Rgb(154, 149, 164)/Rgb(54, 49, 63)/0x10 Reset/Rgb(54, 49, 63)/0x3
  19|                                                    |Reset/Rgb(54, 49, 63)/0x52
 === Dark long 160x44
   0|                                                                                                                                                                |Reset/Rgb(71, 66, 81)/0x160
@@ -1487,7 +1487,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x26
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   idle  claude-sonnet-5  -  0 messages^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x36 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
+ 18|   idle  claude-sonnet-5  -  0 m…      ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x30 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light empty 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160
@@ -1615,7 +1615,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  /theme light and then keep going              |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x6 Reset/Rgb(224, 219, 234)/0x1 Rgb(14, 12, 18)/Rgb(224, 219, 234)/0x5 Reset/Rgb(224, 219, 234)/0x1 Rgb(14, 12, 18)/Rgb(224, 219, 234)/0x3 Reset/Rgb(224, 219, 234)/0x1 Rgb(14, 12, 18)/Rgb(224, 219, 234)/0x4 Reset/Rgb(224, 219, 234)/0x1 Rgb(14, 12, 18)/Rgb(224, 219, 234)/0x4 Reset/Rgb(224, 219, 234)/0x1 Rgb(14, 12, 18)/Rgb(224, 219, 234)/0x5 Reset/Rgb(224, 219, 234)/0x14
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   idle  claude-sonnet-5  T3 S2  3 mess^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x36 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
+ 18|   idle  claude-sonnet-5  T3 S2        ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x30 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light conversation 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160
@@ -1743,7 +1743,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x26
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   idle  claude-sonnet-5  -  1 message ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x35 Reset/Rgb(224, 219, 234)/0x1 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
+ 18|   idle  claude-sonnet-5  -  1 m…      ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x30 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light markdown 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160
@@ -1871,7 +1871,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x26
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   idle  claude-sonnet-5  -  1 message ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x35 Reset/Rgb(224, 219, 234)/0x1 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
+ 18|   idle  claude-sonnet-5  -  1 m…      ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x30 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light fenced_diff 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160
@@ -1978,7 +1978,7 @@
  19|                                                                                |Reset/Rgb(224, 219, 234)/0x80
  20|   ▶  Ask Mjolnir anything                                                      |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x54
  21|                                                                                |Reset/Rgb(224, 219, 234)/0x80
- 22|   ◐ running 2 tools…  claude-sonnet-5  T4 S1  tools: read, shell^c to cancel   |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x2 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x49 Rgb(42, 40, 46)/Rgb(224, 219, 234)/0x4 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x2 Rgb(42, 40, 46)/Rgb(224, 219, 234)/0x5 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x12 Reset/Rgb(224, 219, 234)/0x3
+ 22|   ◐ running 2 tools…  claude-sonnet-5  T4 S1  tools: read…      ^c to cancel   |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x2 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x49 Rgb(42, 40, 46)/Rgb(224, 219, 234)/0x4 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x1 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x12 Reset/Rgb(224, 219, 234)/0x3
  23|                                                                                |Reset/Rgb(224, 219, 234)/0x80
 === Light tools 52x20
   0|                                                    |Reset/Rgb(211, 206, 221)/0x52
@@ -1999,7 +1999,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x26
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   ◐ running 2 tools…  claude-sonnet-^c to cancel   |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x2 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x32 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x12 Reset/Rgb(224, 219, 234)/0x3
+ 18|   ◐ running 2 tools…  claude-…      ^c to cancel   |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x2 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x26 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x12 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light tools 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160
@@ -2767,7 +2767,7 @@
  15|                                                    |Reset/Rgb(224, 219, 234)/0x52
  16|   ▶  Ask Mjolnir anything                          |Reset/Rgb(224, 219, 234)/0x3 Rgb(75, 31, 126)/Rgb(224, 219, 234)/0x3 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x20 Reset/Rgb(224, 219, 234)/0x26
  17|                                                    |Reset/Rgb(224, 219, 234)/0x52
- 18|   idle  claude-sonnet-5  T9 S3  22 mes^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x36 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
+ 18|   idle  claude-sonnet-5  T9 S3        ^c to exit   |Reset/Rgb(224, 219, 234)/0x3 Rgb(57, 55, 61)/Rgb(224, 219, 234)/0x30 Reset/Rgb(224, 219, 234)/0x6 Rgb(72, 70, 77)/Rgb(224, 219, 234)/0x10 Reset/Rgb(224, 219, 234)/0x3
  19|                                                    |Reset/Rgb(224, 219, 234)/0x52
 === Light long 160x44
   0|                                                                                                                                                                |Reset/Rgb(211, 206, 221)/0x160

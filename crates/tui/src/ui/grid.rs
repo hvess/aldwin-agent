@@ -172,6 +172,45 @@ pub(super) fn elide(text: &str, max: usize) -> String {
     out
 }
 
+/// Truncates a run of *styled* spans to `max` display cells, appending the
+/// system's own `…` in the style of the span it had to cut.
+///
+/// The span-level counterpart of [`elide`], for a group built from several
+/// differently-toned facts rather than one string — the status line's
+/// activity/model/turn/tools run. Same rule as `elide`: `max == 0` yields
+/// nothing at all rather than a bare `…`, which on a column that narrow is a
+/// cell spent saying nothing.
+pub(super) fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|s| s.content.width()).sum();
+    if total <= max {
+        return spans;
+    }
+    if max == 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
+    let mut used = 0;
+    for span in spans {
+        let w = span.content.width();
+        // `< max`, not `<= max - 1`: the last cell is reserved for the `…`.
+        if used + w < max {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        // The span that overruns is cut mid-way; `elide` would append a
+        // second `…`, so the budget is taken here and the glyph added once.
+        let keep = elide(&span.content, max - used);
+        if !keep.is_empty() {
+            out.push(Span::styled(keep, span.style));
+        } else {
+            out.push(Span::styled("…", span.style));
+        }
+        return out;
+    }
+    out
+}
+
 /// Right-flushes `right` against `left` within `width` columns —
 /// `ToolLine.jsx`'s own shape (glyph/name/target on the left, a result
 /// summary flush to the right edge). Falls back to a single-space gap

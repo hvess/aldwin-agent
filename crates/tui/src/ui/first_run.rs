@@ -289,10 +289,18 @@ pub(super) fn wordmark(ctx: Ctx) -> Line<'static> {
     ])
 }
 
+/// Elided rather than left to be clipped by the frame's edge. On a narrow
+/// terminal it used to end mid-word with nothing marking it — the same
+/// silent-truncation fault the identity bar had, on a line whose whole
+/// content is one sentence.
 fn positioning_line(ctx: Ctx) -> Line<'static> {
+    let room = (ctx.width as usize).saturating_sub(MARGIN_X * 2);
     Line::from(vec![
         Span::raw(" ".repeat(MARGIN_X)),
-        Span::styled("The leverage of a model, without handing over the keys.", Style::default().fg(ctx.pal.dim)),
+        Span::styled(
+            elide("The leverage of a model, without handing over the keys.", room),
+            Style::default().fg(ctx.pal.dim),
+        ),
     ])
 }
 
@@ -392,11 +400,21 @@ fn draw_footer(frame: &mut Frame, area: Rect, ctx: Ctx) {
         }
         left.extend(key(k, verb));
     }
-    let used: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    // The config location is a path, so it goes whole or not at all — the
+    // same rule the identity bar applies to the version. It used to be
+    // pushed on regardless, which at 44 columns ran the key hints straight
+    // into it and then clipped the path itself: `↑↓ chooseconfig → ~/.mjol`.
+    // The key hints are what a footer is for, so they are what survives.
     let width = area.width as usize;
-    let gap = width.saturating_sub(used).saturating_sub(CONFIG_LOCATION.chars().count()).saturating_sub(MARGIN_X);
+    let used: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let config = if width.saturating_sub(used).saturating_sub(MARGIN_X) >= CONFIG_LOCATION.chars().count() + GROUP_GAP {
+        CONFIG_LOCATION
+    } else {
+        ""
+    };
+    let gap = width.saturating_sub(used).saturating_sub(config.chars().count()).saturating_sub(MARGIN_X);
     left.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar_bottom)));
-    left.push(Span::styled(CONFIG_LOCATION.to_string(), Style::default().fg(pal.dim).bg(pal.bar_bottom)));
+    left.push(Span::styled(config.to_string(), Style::default().fg(pal.dim).bg(pal.bar_bottom)));
     left.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom)));
 
     frame.render_widget(Paragraph::new(Line::from(left)).style(Style::default().bg(pal.bar_bottom)), row);
@@ -431,12 +449,18 @@ mod tests {
         buffer.content.iter().map(|c| c.symbol()).collect::<Vec<_>>().join("")
     }
 
+    /// Reads the buffer's *own* width and height rather than the design's
+    /// 120×36. These were hardcoded, which was fine while every test
+    /// rendered at the frame size and panicked with an out-of-bounds index
+    /// the moment one rendered narrower.
     fn row_text(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
-        (0..120).map(|x| buffer[(x, y)].symbol()).collect()
+        (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect()
     }
 
     fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
-        (0..36u16).find(|y| row_text(buffer, *y).contains(needle)).unwrap_or_else(|| panic!("no row containing {needle:?}"))
+        (0..buffer.area.height)
+            .find(|y| row_text(buffer, *y).contains(needle))
+            .unwrap_or_else(|| panic!("no row containing {needle:?}"))
     }
 
     /// Byte offset converted to a *cell* offset: `▌` is three bytes, so
@@ -762,6 +786,36 @@ mod tests {
             if !cwd.is_empty() && !row.contains(&cwd) {
                 assert!(row.contains('…'), "a shortened path must say so: {width} -> {row:?}");
             }
+        }
+    }
+
+    /// The footer had the identity bar's defect too, and the screenshots of
+    /// the *bar* are what showed it: at 44 columns it read
+    /// `↑↓ chooseconfig → ~/.mjol`, the key hints running into the config
+    /// location and the path then clipped. The location is a path, so it
+    /// goes whole or not at all; the key hints are what a footer is for, so
+    /// they are what survives.
+    ///
+    /// The positioning line is checked here for the same reason — it was
+    /// ending mid-word at the frame's edge with nothing marking it.
+    #[test]
+    fn the_footer_and_the_positioning_line_never_clip_silently() {
+        for width in [36u16, 44, 52, 60, 80, 120] {
+            let buffer = render(&FirstRun::default(), width, 36);
+            let read = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
+
+            let footer = read(36 - FOOTER_ROWS + 1);
+            assert!(footer.contains("⏎ continue"), "the keys always survive: {width} -> {footer:?}");
+            if let Some(at) = footer.find("config →") {
+                assert!(footer[at..].trim_end().ends_with("~/.mjolnir/"), "a clipped path reads as a path: {width} -> {footer:?}");
+                let left_end = footer[..at].trim_end().chars().count();
+                assert!(footer[..at].chars().count() - left_end >= GROUP_GAP, "groups too close at {width}: {footer:?}");
+            }
+            assert!(footer.chars().count() <= width as usize, "{width} -> {footer:?}");
+
+            let line = read(find_row(&buffer, "The leverage"));
+            let full = "The leverage of a model, without handing over the keys.";
+            assert!(line.contains(full) || line.contains('…'), "a shortened sentence must say so: {width} -> {line:?}");
         }
     }
 

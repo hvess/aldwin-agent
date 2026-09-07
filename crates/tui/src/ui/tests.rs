@@ -1599,6 +1599,41 @@ fn the_top_bar_groups_never_collide_and_never_clip_silently() {
     }
 }
 
+/// The status line has the identity bar's shape and had the same defect one
+/// row down. It reserved the `^c to exit` hint's exact width, so the hint
+/// itself never clipped — but the activity group still filled to the seam,
+/// and at 52 columns the row read `0 messages^c to exit`, one fact running
+/// straight into the next.
+///
+/// Found by screenshotting the *top* bar at the widths its own collision
+/// lives at, which put this row in the same frame.
+///
+/// Unlike the top bar's version, the activity group is elided rather than
+/// dropped: a shortened `tools: rea…` is still true, and saying what is
+/// happening right now is this row's whole job.
+#[test]
+fn the_status_line_keeps_a_gap_before_its_key_hint() {
+    for width in [36u16, 44, 52, 60, 80, 120] {
+        let mut app = app();
+        let backend = TestBackend::new(width, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let y = find_row(&buffer, "^c to");
+        let row: String = (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+
+        let at = row.find("^c to").expect("the hint");
+        assert!(row[at..].starts_with("^c to exit"), "the hint is never clipped: {width} -> {row:?}");
+        let left_end = row[..at].trim_end().chars().count();
+        let gap = row[..at].chars().count() - left_end;
+        assert!(gap >= GROUP_GAP, "only {gap} cells before the hint at {width}: {row:?}");
+        assert!(row.chars().count() <= width as usize, "{width} -> {row:?}");
+        // The activity group leads the row and is never dropped whole — the
+        // one thing this line exists to say.
+        assert!(row.trim_start().starts_with("idle"), "{width} -> {row:?}");
+    }
+}
+
 #[test]
 fn a_fresh_session_shows_the_empty_state_before_any_log_entries() {
     let mut app = app();

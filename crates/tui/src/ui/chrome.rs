@@ -3,14 +3,14 @@
 //! directly rather than returning rows — none of it participates in the
 //! log's scroll or the panel's row budget.
 
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::grid::{elide, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
+use super::grid::{elide, truncate_spans, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use crate::app::{cursor_line_col, App, RunningTool};
 use crate::palette::Palette;
 use crate::log::LogEntry;
@@ -285,12 +285,30 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // anything running" state `App::cancel_or_quit` acts on, or the hint
     // promises one thing and the key does the other.
     let hint = if app.turn_active || app.awaiting_turn { "^c to cancel" } else { "^c to exit" };
-    let [left_area, right_area] = Layout::horizontal([Constraint::Min(1), Constraint::Length(hint.width() as u16 + MARGIN_X as u16)]).areas(area);
-    frame.render_widget(Paragraph::new(Line::from(spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(hint, Style::default().fg(pal.dim)))).alignment(Alignment::Right).block(Block::new().padding(Padding::right(MARGIN_X as u16))),
-        right_area,
-    );
+
+    // Composed as one line, for the reason the identity bar above is: two
+    // rects sized independently cannot keep a gap between them. This row
+    // reserved the hint's exact width so the hint never clipped, but the
+    // left group still filled to the seam — at 52 columns it read
+    // `0 messages^c to exit`, one fact running into the next with nothing
+    // between them. Found by screenshotting the bar at the widths the
+    // collision actually lives at, one row below the one being fixed.
+    //
+    // The activity group is elided rather than dropped: unlike a version
+    // number, a shortened `tools: rea…` is still true, and this row's whole
+    // job is to say what is happening right now.
+    let width = area.width as usize;
+    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(hint.width());
+    let mut line = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
+    let spans = truncate_spans(spans, budget);
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    line.extend(spans);
+    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(hint.width());
+    line.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar_bottom)));
+    line.push(Span::styled(hint, Style::default().fg(pal.dim).bg(pal.bar_bottom)));
+    line.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom)));
+
+    frame.render_widget(Paragraph::new(Line::from(line)).style(Style::default().bg(pal.bar_bottom)), area);
 }
 
 /// Every word `cli::slash::intercept` actually dispatches on, `/`-prefixed

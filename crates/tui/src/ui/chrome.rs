@@ -4,14 +4,15 @@
 //! log's scroll or the panel's row budget.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::grid::{Ctx, CONTENT_INDENT, MARGIN_X};
+use super::grid::{elide, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use crate::app::{cursor_line_col, App, RunningTool};
+use crate::palette::Palette;
 use crate::log::LogEntry;
 
 /// The harness name, and nothing else — "the name is the brand, and a pip
@@ -64,42 +65,103 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     // sits on row 1, centred in the band.
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
-    let [left_area, right_area] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(content_row);
+    let width = area.width as usize;
+    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
+
+    // Laid out by `identity_bar_row`, which first run's bar shares — see it
+    // for why the two groups are measured together and what each gives up
+    // when they do not both fit.
+    //
+    // Three tokens on the right, not one: the reference's right group is
+    // `quiet` for the model, `dim` for the `·` separators, and `text` for
+    // the last fact in the group — rendering the whole group in a single
+    // `label` flattened a deliberate three-step hierarchy into one tone. One
+    // space each side of the `·`: these are facts *within* one group, and
+    // `--group-gap` is what parts this group from the identity one.
+    let model = app.status.model_name.clone();
+    let version = format!("v{}", app.status.version);
+    let cwd = app.status.cwd.clone().unwrap_or_default();
+
+    let row = identity_bar_row(
+        width,
+        &cwd,
+        pal.quiet,
+        vec![
+            vec![
+                Span::styled(model.clone(), on_bar(pal.quiet)),
+                Span::styled(" · ", on_bar(pal.dim)),
+                Span::styled(version, on_bar(pal.text)),
+            ],
+            vec![Span::styled(model, on_bar(pal.quiet))],
+            Vec::new(),
+        ],
+        pal,
+    );
+    frame.render_widget(Paragraph::new(row).style(Style::default().bg(pal.bar)), content_row);
+}
+
+/// The identity bar's one content row, composed whole.
+///
+/// Both bars that draw it — the session's and first run's — go through here,
+/// because their doc comments already promised the two "must not disagree"
+/// and they had drifted: each was laying its own groups out by hand.
+///
+/// The two groups are measured **together**. They used to be two independent
+/// half-width rects that could not see each other, so each filled to its own
+/// boundary: below ~56 cells the working directory ran straight into the
+/// model name with no gap at all, and above that both were cut at the seam
+/// with nothing marking it — a bar reading `~/Projects/mjolnir-harnes` and
+/// `v0.1.`, neither of which is a true statement. Composing one line is what
+/// makes `--group-gap` guaranteed rather than incidental.
+///
+/// `right` is the right-hand group in descending order of preference. The
+/// first candidate that still leaves the working directory a readable
+/// stretch wins; if none does, the group is dropped. The asymmetry is
+/// deliberate: a right-hand **fact goes whole or not at all**, because a
+/// clipped `v0.1.` is not a version and would be read as one, while the cwd
+/// is **elided**, because `…` states plainly that a path was shortened. Pass
+/// an empty `Vec` as the last candidate to allow dropping the group.
+pub(super) fn identity_bar_row(
+    width: usize,
+    cwd: &str,
+    cwd_fg: Color,
+    right: Vec<Vec<Span<'static>>>,
+    pal: &Palette,
+) -> Line<'static> {
+    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
+    let field = Style::default().bg(pal.bar);
+
+    // What the identity group must keep before the right-hand one starts
+    // giving anything up. An elided path shorter than this says nothing
+    // useful — `~/P…` is not a location.
+    const MIN_CWD: usize = 12;
+    let wanted = cwd.width().min(MIN_CWD);
+    // Cells the cwd would have left, if the right group took `right_w`.
+    let room_for = |right_w: usize| width.saturating_sub(CONTENT_INDENT + GROUP_GAP + MARGIN_X + right_w);
+    let group_width = |g: &Vec<Span<'static>>| -> usize { g.iter().map(|s| s.content.width()).sum() };
+
+    let chosen = right
+        .into_iter()
+        .find(|candidate| room_for(group_width(candidate)) >= wanted)
+        .unwrap_or_default();
+    let right_w = group_width(&chosen);
 
     // "mjolnir   ~/src/gateway" — the directory starts on the body column,
     // cell 13, like every other left-hand word in the system. That is a pad
-    // derived from the brand's own width, not a gap: `--group-gap`'s six
-    // cells part two *unrelated* groups (`5b`'s `review changes` / `3
-    // files`, and the footer's key hints), and the identity bar is not
-    // that — the reference's own `4a`/`5a`/`5c`/`5d` bars all put the cwd
-    // three cells after a seven-letter name, which is cell 13 exactly.
-    // Facts *within* one group ride the tighter ` · ` rhythm — see the
-    // right group below. The working directory is real, always-available
-    // process state, not fabricated; a git branch/dirty marker would need a
-    // new capability (shelling out to git at runtime) this crate doesn't
-    // have, so the identity group stops at cwd rather than showing a branch
-    // it has no way to know.
-    let mut left_spans = vec![Span::styled(BRAND, Style::default().fg(pal.text))];
-    if let Some(cwd) = &app.status.cwd {
-        left_spans.push(Span::raw(" ".repeat(brand_pad())));
-        left_spans.push(Span::styled(cwd.clone(), Style::default().fg(pal.quiet)));
+    // derived from the brand's own width, not a gap; see `grid::GROUP_GAP`.
+    let cwd = elide(cwd, room_for(right_w));
+    let mut spans = vec![Span::styled(" ".repeat(MARGIN_X), field), Span::styled(BRAND, on_bar(pal.text))];
+    if !cwd.is_empty() {
+        spans.push(Span::styled(" ".repeat(brand_pad()), field));
+        spans.push(Span::styled(cwd.clone(), on_bar(cwd_fg)));
     }
-    frame.render_widget(Paragraph::new(Line::from(left_spans)).block(Block::new().padding(Padding::left(MARGIN_X as u16))), left_area);
 
-    // Three tokens, not one: the reference's right group is `quiet` for the
-    // model, `dim` for the `·` separators, and `text` for the last fact in
-    // the group — rendering the whole group in a single `label` flattened a
-    // deliberate three-step hierarchy into one tone. One space each side of
-    // the `·`, not two: these are facts *within* one group, and the wider
-    // six-cell gap is reserved for parting groups from each other.
-    let right = Paragraph::new(Line::from(vec![
-        Span::styled(app.status.model_name.clone(), Style::default().fg(pal.quiet)),
-        Span::styled(" · ", Style::default().fg(pal.dim)),
-        Span::styled(format!("v{}", app.status.version), Style::default().fg(pal.text)),
-    ]))
-    .alignment(Alignment::Right)
-    .block(Block::new().padding(Padding::right(MARGIN_X as u16)));
-    frame.render_widget(right, right_area);
+    let used = MARGIN_X + BRAND.width() + if cwd.is_empty() { 0 } else { brand_pad() + cwd.width() };
+    let gap = width.saturating_sub(used).saturating_sub(right_w).saturating_sub(MARGIN_X);
+    spans.push(Span::styled(" ".repeat(gap), field));
+    spans.extend(chosen);
+    spans.push(Span::styled(" ".repeat(MARGIN_X), field));
+    Line::from(spans)
 }
 
 /// A `RunningTool`'s display name — `name` comes from a `ToolUseRequested`

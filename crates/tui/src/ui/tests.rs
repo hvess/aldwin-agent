@@ -8,7 +8,7 @@
 use super::chrome::{highlight_command_tokens, input_height};
 use super::decision::GRANT_RULE_MAX;
 use super::draw;
-use super::grid::{Ctx, CONTENT_INDENT, MARGIN_X};
+use super::grid::{Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use super::markdown::{parse_inline, render_line as render_markdown_line};
 use super::transcript::intro_content;
 
@@ -1551,6 +1551,52 @@ fn the_top_bar_reports_the_running_builds_version() {
     app.status.version = "9.9.9".into();
     let out = rendered(&mut app, 110, 40);
     assert!(out.contains("v9.9.9"), "the top bar must show the running build's version, not a hardcoded one: {out:?}");
+}
+
+/// The top bar's two groups are measured together, so they can never touch
+/// and neither is ever clipped without saying so.
+///
+/// They used to be two independent half-width rects that could not see each
+/// other, and each filled to its own boundary. Below ~56 columns the working
+/// directory ran straight into the model name with no gap at all
+/// (`~/Projects/mjolnir-harnesclaude-sonnet-5`), and above that both were
+/// cut at the seam with nothing marking it — a bar reading
+/// `~/Projects/mjolnir-harnes` and `v0.1.`, neither of which is true. A
+/// clipped path still reads as a path and a clipped version still reads as a
+/// version, which is what made it worth fixing rather than tolerating.
+#[test]
+fn the_top_bar_groups_never_collide_and_never_clip_silently() {
+    for width in [36u16, 44, 52, 56, 60, 68, 76, 80, 84, 110, 120, 160] {
+        let mut app = app();
+        app.status.version = "9.9.9".into();
+        let backend = TestBackend::new(width, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
+
+        assert!(row.starts_with("   mjolnir"), "the brand always renders, on the margin: {width} -> {row:?}");
+
+        // A version is shown whole or not at all — never a prefix of one.
+        if let Some(at) = row.find('v') {
+            assert!(row[at..].starts_with("v9.9.9"), "a partial version would be read as a real one: {width} -> {row:?}");
+        }
+
+        // Where both groups are present they are parted by at least
+        // `--group-gap`. The model name is the right group's first word.
+        if let Some(at) = row.find("claude-sonnet-5") {
+            let left_end = row[..at].trim_end().chars().count();
+            let gap = row[..at].chars().count() - left_end;
+            assert!(gap >= GROUP_GAP, "only {gap} cells part the two groups at {width}: {row:?}");
+        }
+
+        // Nothing runs into the right margin, and a shortened path says so.
+        assert!(row.chars().count() <= width as usize, "{width} -> {row:?}");
+        let cwd = app.status.cwd.clone().unwrap_or_default();
+        if !cwd.is_empty() && !row.contains(&cwd) {
+            assert!(row.contains('…'), "a shortened path must carry the elision glyph: {width} -> {row:?}");
+        }
+    }
 }
 
 #[test]

@@ -38,8 +38,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
-use super::chrome::{brand_pad, BRAND};
-use super::grid::{elide, Ctx, MARGIN_X, OPTION_LABEL_COL, STEP_CONTENT_COL, STEP_MARK_COL};
+use super::grid::{elide, Ctx, GROUP_GAP, MARGIN_X, OPTION_LABEL_COL, STEP_CONTENT_COL, STEP_MARK_COL};
 use super::row::band_row;
 use crate::first_run::{AccessTier, FirstRun, Step};
 use crate::palette::Palette;
@@ -47,12 +46,6 @@ use crate::palette::Palette;
 /// Rows the top bar and the footer take. The body gets the rest.
 const TOP_BAR_ROWS: u16 = 3;
 const FOOTER_ROWS: u16 = 3;
-
-/// `--group-gap`: 6 cells part two unrelated groups inside a bar — here,
-/// the footer's two key hints. Deliberately *not* what sits between the
-/// brand and the working directory; that is a pad to the body column (see
-/// `chrome::brand_pad`).
-const GROUP_GAP: usize = 6;
 
 /// Where the harness's answers land. Stated plainly rather than implied,
 /// per the design system's Content Fundamentals. A directory, not a single
@@ -119,25 +112,18 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
 fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     let Some(row) = area.height.checked_sub(2).map(|_| Rect { y: area.y + 1, height: 1, ..area }) else { return };
-    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
 
+    // Composed by `chrome::identity_bar_row`, which the session bar also
+    // uses — this comment used to say the two "must not disagree" while both
+    // laid their groups out by hand, and they had drifted. The right group
+    // here is the version alone; it is dropped whole on a frame too narrow
+    // to hold it beside a readable path, never clipped into something that
+    // still reads as a version number.
     let cwd = crate::app::current_dir_display().unwrap_or_default();
     let version = format!("v{}", crate::version::VERSION);
-    let mut spans = vec![
-        Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar)),
-        Span::styled(BRAND, on_bar(pal.text)),
-        // The cwd lands on the body column, cell 13 — not `--group-gap`
-        // away. See `chrome::brand_pad`; the session bar draws the same
-        // thing, and the two must not disagree.
-        Span::styled(" ".repeat(brand_pad()), Style::default().bg(pal.bar)),
-        Span::styled(cwd.clone(), on_bar(pal.dim)),
-    ];
-    let used = MARGIN_X + BRAND.chars().count() + brand_pad() + cwd.chars().count();
-    let gap = (area.width as usize).saturating_sub(used).saturating_sub(version.chars().count()).saturating_sub(MARGIN_X);
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar)));
-    spans.push(Span::styled(version, on_bar(pal.dim)));
-    spans.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar)));
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar)), row);
+    let right = vec![vec![Span::styled(version, Style::default().fg(pal.dim).bg(pal.bar))], Vec::new()];
+    let line = super::chrome::identity_bar_row(area.width as usize, &cwd, pal.dim, right, pal);
+    frame.render_widget(Paragraph::new(line).style(Style::default().bg(pal.bar)), row);
 }
 
 /// Where a step stands relative to the one taking keys.
@@ -744,6 +730,39 @@ mod tests {
         assert!(row.chars().count() == 60, "one row, not wrapped: {row:?}");
         assert!(row.contains("alpha"), "the name survives: {row:?}");
         assert!(!row.contains("ALPHA_API_KEY"), "the purpose does not fit and is elided rather than wrapped: {row:?}");
+    }
+
+    /// First run's top bar shares `chrome::identity_bar_row` with the
+    /// session's, so it inherits the same guarantees: the two groups are
+    /// parted by at least `--group-gap`, the version is shown whole or
+    /// dropped, and a shortened path carries `…`.
+    ///
+    /// It had the same defect before they were unified — its own hand-rolled
+    /// layout let the working directory run into the version — and no test
+    /// covered it, because the frames are authored at 120 columns and it is
+    /// only visible below about 56.
+    ///
+    /// The cwd here is the *real* process directory (`current_dir_display`),
+    /// not a fixture, so this asserts the invariants rather than an exact
+    /// row — which is the right shape for it either way.
+    #[test]
+    fn the_top_bar_groups_never_collide_and_never_clip_silently() {
+        let version = format!("v{}", crate::version::VERSION);
+        for width in [36u16, 44, 52, 60, 80, 120] {
+            let buffer = render(&FirstRun::default(), width, 36);
+            let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
+
+            assert!(row.starts_with("   mjolnir"), "the brand always renders: {width} -> {row:?}");
+            if let Some(at) = row.find('v') {
+                assert!(row[at..].starts_with(&version), "a partial version reads as a real one: {width} -> {row:?}");
+                let left_end = row[..at].trim_end().chars().count();
+                assert!(row[..at].chars().count() - left_end >= GROUP_GAP, "groups too close at {width}: {row:?}");
+            }
+            let cwd = crate::app::current_dir_display().unwrap_or_default();
+            if !cwd.is_empty() && !row.contains(&cwd) {
+                assert!(row.contains('…'), "a shortened path must say so: {width} -> {row:?}");
+            }
+        }
     }
 
     /// The footer names the two keys the reference names, and states where

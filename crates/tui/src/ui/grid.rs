@@ -45,6 +45,18 @@ pub(super) const CONTENT_INDENT: usize = MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTT
 /// access list and the command list are one control, so they share it.
 pub(super) const OPTION_LABEL_COL: usize = 16;
 
+/// `--group-gap` — 6 cells, what parts two *unrelated* groups inside a bar:
+/// the identity group from the model group in the top bar, `review changes`
+/// from `3 files` in the review bar, one key hint from the next in a footer.
+///
+/// Deliberately *not* what sits between the brand and the working directory
+/// — those are one group, and the three cells there are a pad to the body
+/// column (see `chrome::brand_pad`). Facts *within* a group ride the tighter
+/// ` · ` rhythm instead. Mjolnir shipped six cells in the identity group for
+/// three weeks on a misreading of the handoff prose; see `.claude/design/
+/// HANDOFF.md`'s "the gap here is not `--group-gap`" note.
+pub(super) const GROUP_GAP: usize = 6;
+
 /// `--step-mark-col` — 10 cells, the field a first-run step's glyph sits
 /// in. Derived, not stated: the glyph is at the margin and the step's *name*
 /// is at the body column, so this field is exactly what separates them.

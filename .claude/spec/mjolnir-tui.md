@@ -2912,6 +2912,117 @@ scrolling up and down is very difficult."* Three separate causes:
    selection is untouched. Best-effort in both directions: a terminal that
    doesn't implement the private mode ignores it.
 
+**Progress (2026-09-07, the render budget, measured end to end):** The entry
+above was written from an in-process benchmark. Reported next: "CPU usage is
+pinned to 100 when scrolling and even pinned around 30 when idle." That is a
+different claim from the one that benchmark answered, and it needed a real
+process to test, so a measurement rig was built and is worth recording:
+
+- **A fake streaming provider** — a ~50-line OpenAI-compatible SSE endpoint
+  that streams a realistic reply (long prose plus a fenced Rust block) token
+  by token at a settable rate, with `provider.yaml`'s `base_url` pointed
+  straight at it. This is the only way to exercise the streaming path at all
+  without a real key, and streaming turned out to be where the cost was.
+- **A pty harness** — `script` with its stdin held open by a fifo, so the
+  binary sees a terminal and does not exit on EOF, driven by writing
+  keystrokes into the fifo and sampling `utime+stime` from
+  `/proc/<pid>/stat`.
+
+Four ways this rig lied before it stopped, all worth recording:
+
+- Without the fifo the session sees EOF on stdin and exits, so it measures
+  0% no matter what.
+- With no `provider.yaml` it measures the *first-run wizard*, not the
+  session. First run has no spinner ticker and idles at 0% however badly the
+  session behaves.
+- `pkill -f <server>.py` matches the shell running it, so the launcher
+  killed itself, and the "server" that answered afterwards was a corpse
+  returning nothing. A stream that never streamed also reads as ~0%.
+- **The sample window has to sit inside the stream.** At 60 tok/s the reply
+  finished in ~2.4s but the window was 6s, so two thirds of every streaming
+  figure was idle time averaged in. Dropping the rate to 25 tok/s makes the
+  reply ~11s, and the window then lands wholly inside it. This
+  under-reported every streaming number by about 2.5x — in the same
+  direction for every build, so the comparisons held, but the absolute
+  figures did not.
+
+Measured on the build before the entry above, 8 turns at 120x40: **82.7%
+idle, 89.2% scrolling, 100.8% streaming.** That is the report, reproduced —
+and both of the developer's figures are *conservative*, since they grow with
+the transcript and this was a short one. The transcript cache from the entry
+above had already taken idle and scrolling to 0.7% / 4.3%, but streaming
+stayed pinned and rose with the session (58% at four turns, 95% at eight).
+Three findings, in the order they were confirmed:
+
+1. **A streamed token invalidated the whole conversation.** `apply_event`
+   bumped one epoch for any event, so each `TextDelta` -- one per token --
+   threw away every rendered row in the session and rebuilt all of them,
+   re-parsing every diff and re-highlighting every fence. Isolating the draw
+   from the rebuild in-process: 2.9 / 5.2 / 10.1 ms of rebuild per token at
+   93 / 189 / 381 rows, against a flat 0.45 ms of draw. Linear in the
+   session, which is what "pinned" meant.
+
+   `ui::Transcript` now keeps rows **per log entry**, beside a copy of the
+   entry they were built from, and re-renders only entries whose value
+   changed. The key is the entry compared with `==`, not a fingerprint: a
+   fingerprint is a second statement of what "changed" means and can
+   disagree with the first, and `String`'s comparison short-circuits on
+   length, which is exactly the streaming case. Rebuild cost went flat --
+   0.76 / 0.98 / 1.02 ms at 189 / 381 / 957 rows.
+
+   It also retires the invalidation flag entirely. Nothing declares "the
+   transcript changed" any more; `sync` asks the data. That was the right
+   trade twice over -- the flag had to be set from `push`, `apply_event`
+   *and* `resolve_decision`, and a fourth mutation site added later would
+   have shown a stale conversation with nothing to catch it.
+
+2. **One `terminal.draw` per event.** At 60 tokens/second that is 60 frames
+   a second of full-frame work to paint a difference no one can see; on a
+   fast model it is several hundred. `run_loop` now coalesces on a 16ms
+   floor (`MIN_FRAME`), with a `sleep_until` select arm so a burst that goes
+   quiet inside the window still paints promptly, and a keystroke -- which
+   never arrives at 60Hz -- still draws immediately. The spinner interval
+   also moved to `MissedTickBehavior::Delay`; under `Burst` a slow frame
+   made tokio replay every missed tick back to back, so falling behind
+   produced a run of catch-up frames with nothing new in them.
+
+3. **Closed code fences were re-highlighted forever.** Once 1 and 2 landed,
+   the entry still being streamed into was the only thing re-rendered -- but
+   it was re-rendered whole, so every fence that reply had already *closed*
+   went back through syntect on every frame: 0.28 ms per fence per frame,
+   about half of what a streaming frame still cost. `highlight_lines` is now
+   memoised on exactly its three arguments (it is a pure function of them),
+   which took a fence from 0.28 ms to 0.017 ms.
+
+**Result.** Both builds on the corrected rig — 6 turns, 25 tok/s, the sample
+window wholly inside the stream:
+
+| | before | after |
+|---|---|---|
+| streaming a reply | 75.2% | **5.5%** |
+| idle | 16.4% | **0.6%** |
+| scrolling | 86.2% | **2.8%** |
+
+And, which is the point of finding 1, it no longer scales: the same figures
+hold at sixteen turns as at eight, where before they rose with every turn.
+
+Both new invariants are pinned by tests that were checked against a
+deliberately reintroduced bug before being trusted:
+`an_incrementally_synced_transcript_equals_one_built_from_scratch` walks
+every mutation shape the session performs (a streamed append, a push, a
+resolution back-filled in place, a tool completing, a shortened log) and
+compares against a second `App` built from the same log -- it fails the
+moment the value is dropped from the cache key; and
+`a_streamed_delta_re_renders_one_entry_not_the_whole_transcript` times an
+append on a 40-turn transcript against one on a 2-turn transcript, which
+goes to an 11x ratio the moment invalidation goes back to whole-log.
+
+**What is deliberately still re-rendered:** the one entry currently being
+streamed into, at the frame rate rather than per token. It is the only entry
+in the log whose value is still changing, so it is the only one that cannot
+be rendered once and kept. Asking "did anything else change?" over a 40-turn
+transcript measures 0.001 ms.
+
 
 ## References
 

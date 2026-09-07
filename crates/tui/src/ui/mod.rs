@@ -52,7 +52,7 @@ use crate::app::App;
 use crate::palette;
 use grid::Ctx;
 
-pub(crate) use transcript::rows as transcript_rows;
+pub(crate) use transcript::Transcript;
 
 /// `--bar-top-h: 60px` — 3 cells. The reference's `1px` border below it is
 /// not a fourth row; see the note on borders further down this file.
@@ -175,16 +175,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let log_inner = pad_rows(log_block.inner(log_area), LOG_PAD_ROWS);
     app.render_width = log_inner.width;
     app.render_height = log_inner.height;
-    // Built once per frame and cached across frames (see
-    // `App::transcript_rows`), then measured, scrolled and rendered off that
-    // one `Vec` — the count is `rows.len()`, so there is no second pass that
-    // could disagree with what is drawn.
+    // Measured, scrolled and rendered off one cache, synced once (see
+    // `App::sync_transcript`) — the count is the row list's own length, so
+    // there is no second pass that could disagree with what is drawn, and
+    // only the viewport is ever materialised.
     let total = app.total_lines();
     app.scroll.set_viewport_height(log_inner.height as usize, total);
-    let offset = app.scroll.offset;
-    let rows = app.transcript_rows();
+    let visible = app.transcript_slice(app.scroll.offset, log_inner.height as usize);
 
-    transcript::draw_log(frame, log_area, log_inner, log_block, rows, offset);
+    transcript::draw_log(frame, log_area, log_inner, log_block, visible);
 
     if pending {
         // The transcript recedes while a decision is open — the reference

@@ -384,8 +384,130 @@ fn log_row_count_uses_the_bordered_panels_inner_width_not_the_outer_width() {
     assert!(out.contains(tail), "the wrapped tail must be visible under auto-follow when scroll math is measured against the panel's inner width");
 }
 
-/// The invariant the whole scroll path now rests on: a row of
-/// `transcript::rows` is a row on screen, so `offset` indexes straight into
+/// The incremental cache must be invisible: what it serves after a mutation
+/// has to equal what a cache built from scratch would serve.
+///
+/// This is the assertion that makes `Transcript::sync`'s "compare the entry
+/// with `==`" safe to rely on. It walks the mutation shapes the session
+/// actually performs — a streaming append to the last entry, a push, a
+/// resolution back-filled onto an entry already in the log, a tool call
+/// flipping from running to done, and a `/clear` that shortens the log —
+/// and after each one compares the incrementally-synced rows against a
+/// freshly-built `App` holding the identical log.
+#[test]
+fn an_incrementally_synced_transcript_equals_one_built_from_scratch() {
+    use crate::log::{ToolActivityEntry, ToolActivityStatus};
+
+    let (width, height) = (100u16, 24u16);
+    let text = |rows: &[ratatui::text::Line<'static>]| -> Vec<String> {
+        rows.iter().map(|l| l.spans.iter().map(|s| s.content.to_string()).collect()).collect()
+    };
+    // Rebuilds a second `App` from the same log, so its cache has never seen
+    // any of the intermediate states the first one went through.
+    let from_scratch = |log: &Vec<LogEntry>| -> Vec<String> {
+        let mut fresh = app();
+        fresh.log = log.clone();
+        let _ = rendered(&mut fresh, width, height);
+        text(&fresh.transcript_slice(0, usize::MAX))
+    };
+
+    let mut app = app();
+    let _ = rendered(&mut app, width, height);
+
+    let mut step = |app: &mut App, what: &str| {
+        let _ = rendered(app, width, height);
+        assert_eq!(text(&app.transcript_slice(0, usize::MAX)), from_scratch(&app.log), "incremental and from-scratch transcripts diverged after {what}");
+    };
+
+    app.log.push(LogEntry::UserMessage { text: "refactor the retry logic".into() });
+    step(&mut app, "a first push");
+
+    app.log.push(LogEntry::AssistantText { text: String::new() });
+    for chunk in ["Here ", "is ", "the ", "plan.\n\n```rust\nfn f() {}\n```\n\nDone."] {
+        let Some(LogEntry::AssistantText { text }) = app.log.last_mut() else { unreachable!() };
+        text.push_str(chunk);
+        step(&mut app, "a streamed delta");
+    }
+
+    app.log.push(LogEntry::ToolActivity {
+        step_id: mjolnir_core::StepId(1),
+        calls: vec![ToolActivityEntry { call_id: "c1".into(), name: "bash".into(), status: ToolActivityStatus::Running }],
+    });
+    step(&mut app, "a dispatched tool");
+
+    let Some(LogEntry::ToolActivity { calls, .. }) = app.log.last_mut() else { unreachable!() };
+    calls[0].status = ToolActivityStatus::Completed { is_error: false, summary: "412 lines".into() };
+    step(&mut app, "a tool completing");
+
+    app.log.push(LogEntry::PermissionPrompt {
+        call_id: "c2".into(),
+        payload: PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false },
+        resolution: None,
+    });
+    step(&mut app, "a pending prompt");
+
+    let Some(LogEntry::PermissionPrompt { resolution, .. }) = app.log.last_mut() else { unreachable!() };
+    *resolution = Some(crate::log::PromptResolution { allowed: true, label: "allowed once".into() });
+    step(&mut app, "that prompt resolving in place");
+
+    app.log.truncate(2);
+    step(&mut app, "a log that shrank");
+
+    app.log.clear();
+    step(&mut app, "/clear");
+}
+
+/// The property the incremental cache exists for: a streamed token must
+/// re-render *its own entry*, not the conversation.
+///
+/// Measured rather than asserted structurally, because the structure is
+/// exactly what a future refactor would break silently. Appending to the
+/// last entry is timed against a transcript twenty times longer than the
+/// same append on a short one; if invalidation ever goes back to being
+/// whole-log, the ratio tracks the length. The bound is deliberately loose
+/// (8x for a 20x transcript) — this must fail on a regression to O(log), not
+/// on a slow CI box.
+#[test]
+fn a_streamed_delta_re_renders_one_entry_not_the_whole_transcript() {
+    use std::time::Instant;
+
+    let reply = format!("Here is the plan. {}\n\n```rust\nfn f(x: u32) -> u32 {{ x + 1 }}\n```\n", "prose ".repeat(40));
+    let append = |app: &mut App| {
+        let Some(LogEntry::AssistantText { text }) = app.log.last_mut() else { unreachable!() };
+        text.push_str("token ");
+    };
+
+    let elapsed_for = |turns: usize| -> f64 {
+        let mut app = app();
+        for i in 0..turns {
+            app.log.push(LogEntry::UserMessage { text: format!("question {i}") });
+            app.log.push(LogEntry::AssistantText { text: reply.clone() });
+        }
+        let _ = rendered(&mut app, 100, 24);
+        // Warm, then measure: the first sync after a resize renders every
+        // entry by definition, which is not what this is about.
+        for _ in 0..20 {
+            append(&mut app);
+            let _ = app.total_lines();
+        }
+        let t = Instant::now();
+        for _ in 0..200 {
+            append(&mut app);
+            let _ = app.total_lines();
+        }
+        t.elapsed().as_secs_f64()
+    };
+
+    let short = elapsed_for(2);
+    let long = elapsed_for(40);
+    assert!(
+        long < short * 8.0,
+        "a delta on a 40-turn transcript took {long:.4}s against {short:.4}s on a 2-turn one — a streamed token is re-rendering the whole log again"
+    );
+}
+
+/// The invariant the whole scroll path now rests on: a row of the
+/// transcript is a row on screen, so `offset` indexes straight into
 /// it and `total_lines()` is just its length.
 ///
 /// Both facts used to be produced by a *second* pass — `Paragraph::wrap` at
@@ -407,7 +529,7 @@ fn a_transcript_row_is_a_screen_row_so_the_scroll_offset_indexes_straight_into_i
     // One draw to settle `render_width`/`render_height` and the following
     // offset, which is what the count below is measured against.
     let _ = rendered(&mut app, width, height);
-    let rows = app.transcript_rows().to_vec();
+    let rows = app.transcript_slice(0, usize::MAX);
     assert_eq!(app.total_lines(), rows.len(), "the count is the row list's own length, not a second measurement of it");
     for (i, row) in rows.iter().enumerate() {
         let w: usize = row.spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();

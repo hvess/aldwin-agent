@@ -308,7 +308,7 @@ pub(crate) const LIGHT: Palette = Palette {
 /// Which fixed `Palette` a session renders with — selected once at startup
 /// (`Theme::from_config`, `App::theme`), switchable live via `/theme`; see
 /// this module's doc comment for why this isn't a runtime-global.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Theme {
     #[default]
     Dark,

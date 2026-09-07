@@ -27,49 +27,45 @@ use crate::log::{LogEntry, ToolActivityStatus};
 /// "separate the banner from the first real entry" case.
 ///
 /// Every line this returns is **already one screen row**: no caller wraps
-/// afterwards, so `lines.len()` *is* the row count and row `n` of the result
-/// is row `n` on screen. See [`rows`] for why that equivalence is the whole
-/// point.
-fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
-    if app.log.is_empty() {
-        return hero_lines(app, height, ctx);
+/// afterwards, so `lines.len()` *is* the row count and row `n` of the block
+/// is row `n` of it on screen. See [`Transcript`] for why that equivalence
+/// is the whole point.
+///
+/// `first` says this is the first entry in the log that rendered anything at
+/// all, which is what decides whether the block opens with a separator. It
+/// is *not* `index == 0`: an entry can render to nothing (a routine
+/// `TurnEnded` is folded into the status line's activity indicator instead
+/// of getting its own row), and a silent entry must not leave a blank one
+/// behind.
+fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
+    let rendered = render_entry(entry, ctx);
+    if rendered.is_empty() {
+        return Vec::new();
     }
-    let mut lines: Vec<Line> = Vec::new();
-    for entry in app.log.iter() {
-        // An entry can render to nothing at all (a routine `TurnEnded` is
-        // folded into the status line's own activity indicator instead of
-        // getting its own log row), so the blank separator is keyed on
-        // whether anything has actually been pushed yet, not on the entry's
-        // index — otherwise a silent entry would still claim a blank row.
-        let rendered = render_entry(entry, ctx);
-        if rendered.is_empty() {
-            continue;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if !first {
+        // A fresh `UserMessage`/`AssistantText` starts a new conversational
+        // turn and gets a turn break between it and whatever came before.
+        // That break is a *band*, not a rule: the design system's Turn 13
+        // rebuild replaced every freestanding rule with "one full-width row
+        // of the composer's tone", and says of the terminal case that "in a
+        // terminal that is a single `Style::bg` on a one-row rect, so
+        // nothing here needs approximating". So this is a row of `break_`
+        // with no glyph in it at all — the tonal step off the transcript
+        // ground is the whole separator.
+        //
+        // Tool activity/retry/error/notice entries continue the current turn
+        // rather than starting a new one, so they only get the plain blank
+        // row a turn's own internal groups get.
+        if matches!(entry, LogEntry::UserMessage { .. } | LogEntry::AssistantText { .. }) {
+            lines.push(Line::default());
+            lines.push(band_row(ctx.pal.break_, ctx));
+            lines.push(Line::default());
+        } else {
+            lines.push(Line::default());
         }
-        if !lines.is_empty() {
-            // A fresh `UserMessage`/`AssistantText` starts a new
-            // conversational turn and gets a turn break between it and
-            // whatever came before. That break is a *band*, not a rule: the
-            // design system's Turn 13 rebuild replaced every freestanding
-            // rule with "one full-width row of the composer's tone", and
-            // says of the terminal case that "in a terminal that is a
-            // single `Style::bg` on a one-row rect, so nothing here needs
-            // approximating". So this is a row of `break_` with no glyph in
-            // it at all — the tonal step off the transcript ground is the
-            // whole separator.
-            //
-            // Tool activity/retry/error/notice entries continue the current
-            // turn rather than starting a new one, so they only get the
-            // plain blank row a turn's own internal groups get.
-            if matches!(entry, LogEntry::UserMessage { .. } | LogEntry::AssistantText { .. }) {
-                lines.push(Line::default());
-                lines.push(band_row(ctx.pal.break_, ctx));
-                lines.push(Line::default());
-            } else {
-                lines.push(Line::default());
-            }
-        }
-        lines.extend(rendered);
     }
+    lines.extend(rendered);
     // No spinner row is appended here — per explicit developer feedback, an
     // active turn used to get an animated "thinking…"/"working…" row both
     // here (trailing the log) *and* in the status line right above the
@@ -78,37 +74,164 @@ fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// Every screen row of the transcript at `width` × `height`, top to bottom.
+/// The transcript's screen rows, kept **one log entry at a time**.
 ///
-/// One row per element, by construction: nothing downstream wraps, so
-/// `rows(..).len()` is exactly the number of terminal rows the transcript
-/// occupies and `ScrollState::offset` indexes straight into it.
+/// Two properties, and the second is the reason this is a struct rather than
+/// a function.
 ///
+/// **A row here is a row on screen.** Nothing downstream wraps, so
+/// [`Transcript::len`] is exactly the number of terminal rows the
+/// conversation occupies and `ScrollState::offset` indexes straight into it.
 /// That equivalence used to be established the other way round — the
-/// builders emitted logical lines, `draw_log` handed them to a
-/// `Paragraph::wrap`, and the row count came from `Paragraph::line_count`
-/// running the same wrapper a second time. It was correct (see
-/// mjolnir-tui.md's 2026-08-29 scrolling-fix and wrapped-row-scroll-math
-/// notes for the two bugs that got it there) but it cost a full re-wrap of
-/// the entire transcript on every count *and* on every draw, on top of the
-/// build itself — three passes over the whole conversation per frame, at the
-/// spinner's 120ms cadence and again on every keystroke. On a long session
-/// that is what made scrolling feel like it was fighting back.
-///
-/// Wrapping in the builders instead makes the count free and the render
-/// O(viewport): `draw_log` slices the rows it can show and hands over
-/// exactly those. It also closes the divergence the old discipline could
-/// only ever *document*, since there is no longer a second wrapper to
+/// builders emitted logical lines, the log's `Paragraph` wrapped them, and
+/// the count came from `Paragraph::line_count` running the same wrapper a
+/// second time (see mjolnir-tui.md's 2026-08-29 notes for the two bugs that
+/// got it there). Correct, but it meant three passes over the whole
+/// conversation per frame. Wrapping in the builders makes the count free and
+/// the render O(viewport), and closes the divergence the old discipline
+/// could only ever *document*, since there is no second wrapper left to
 /// disagree with the first. The obligation moves to the builders: every arm
 /// of [`render_entry`] must emit rows that already fit their column, because
 /// an over-wide one is now truncated rather than wrapped.
-pub(crate) fn rows(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
-    build_lines(app, Ctx::new(app.theme.palette(), width), height)
+///
+/// **A rebuild costs one entry, not the conversation.** Caching the whole
+/// flat row list was still wrong in the one place it mattered most: a
+/// streaming reply appends to the *last* log entry once per token, and each
+/// append invalidated everything — so every token re-parsed every diff and
+/// re-highlighted every code fence in the session through syntect. Measured
+/// on a real session against a local streaming endpoint: **58% of a core at
+/// four turns, 95% at eight**, rising linearly with the transcript, which is
+/// what "pinned to 100 while it answers" actually was. In-process it splits
+/// as 2.9 / 5.2 / 10.1 ms per token at 93 / 189 / 381 rows, against a flat
+/// 0.45 ms for the draw itself.
+///
+/// So each entry keeps its own rows beside a copy of the entry they were
+/// built from, and [`Transcript::sync`] re-renders only the entries whose
+/// value actually changed. The key is the entry itself compared with `==`,
+/// not a fingerprint derived from it: a fingerprint is a second statement of
+/// what "changed" means and can silently disagree with the first, and
+/// `String`'s own comparison already short-circuits on length, which is the
+/// case that matters here.
+#[derive(Default)]
+pub(crate) struct Transcript {
+    /// What `blocks` was built against. A change to any of it rebuilds
+    /// everything — these are the inputs `Ctx` and the hero read, and none
+    /// of them changes at a rate worth being incremental about.
+    width:  u16,
+    height: u16,
+    theme:  Option<crate::palette::Theme>,
+    /// Parallel to `App::log`, in the same order.
+    blocks: Vec<CachedBlock>,
+    /// `starts[i]` is the screen row `blocks[i]` begins on; one longer than
+    /// `blocks`, so the last element is the total row count.
+    starts: Vec<usize>,
+    /// The welcome hero, which stands in for the entries when the log is
+    /// empty. Never cached across syncs — it is seven rows, and it reads
+    /// `App::status`, which changes on its own schedule.
+    hero:   Vec<Line<'static>>,
 }
 
-/// Renders the log panel: `block` onto `outer`, and the slice of `rows`
-/// starting at `offset` that fits `inner` (both already computed once by
-/// `super::draw`).
+struct CachedBlock {
+    /// The value `rows` was rendered from. Cloned, so the comparison next
+    /// sync is against what was actually drawn rather than against a summary
+    /// of it.
+    entry: LogEntry,
+    /// Whether it rendered as the first entry to produce anything — the
+    /// other half of `block_rows`' input, and it can change without `entry`
+    /// changing (an earlier entry falling silent), so it is part of the key.
+    first: bool,
+    rows:  Vec<Line<'static>>,
+}
+
+impl Transcript {
+    /// Brings the cache up to date with `app` at `width` × `height`,
+    /// re-rendering only what changed. Cheap enough to call every frame, and
+    /// it must be: it is the one place that knows what the transcript
+    /// currently is.
+    pub(crate) fn sync(&mut self, app: &App, width: u16, height: u16) {
+        let theme = app.theme;
+        if self.width != width || self.height != height || self.theme != Some(theme) {
+            self.blocks.clear();
+            self.width = width;
+            self.height = height;
+            self.theme = Some(theme);
+        }
+        let ctx = Ctx::new(theme.palette(), width);
+
+        if app.log.is_empty() {
+            self.blocks.clear();
+            self.starts.clear();
+            self.hero = hero_lines(app, height, ctx);
+            return;
+        }
+        self.hero = Vec::new();
+        // A shorter log means entries were dropped (`/clear`, a history
+        // rewrite); the tail of the cache describes rows that no longer
+        // exist.
+        self.blocks.truncate(app.log.len());
+
+        let mut first = true;
+        for (i, entry) in app.log.iter().enumerate() {
+            let hit = matches!(self.blocks.get(i), Some(b) if b.first == first && b.entry == *entry);
+            if !hit {
+                let block = CachedBlock { entry: entry.clone(), first, rows: block_rows(entry, first, ctx) };
+                match self.blocks.get_mut(i) {
+                    Some(slot) => *slot = block,
+                    None => self.blocks.push(block),
+                }
+            }
+            first &= self.blocks[i].rows.is_empty();
+        }
+
+        self.starts.clear();
+        self.starts.reserve(self.blocks.len() + 1);
+        let mut acc = 0;
+        self.starts.push(acc);
+        for block in &self.blocks {
+            acc += block.rows.len();
+            self.starts.push(acc);
+        }
+    }
+
+    /// Total screen rows — what `ScrollState` measures its offset against.
+    pub(crate) fn len(&self) -> usize {
+        if self.blocks.is_empty() {
+            return self.hero.len();
+        }
+        self.starts.last().copied().unwrap_or(0)
+    }
+
+    /// The `count` rows starting at `offset`, or fewer at the end. Owned,
+    /// because the rows come from several blocks and a viewport is at most a
+    /// terminal's height — copying forty `Line`s is not worth a lifetime.
+    pub(crate) fn slice(&self, offset: usize, count: usize) -> Vec<Line<'static>> {
+        if self.blocks.is_empty() {
+            let end = self.hero.len().min(offset.saturating_add(count));
+            return self.hero.get(offset..end).unwrap_or(&[]).to_vec();
+        }
+        // The last block that starts at or before `offset`. Blocks that
+        // render to nothing share a start with their neighbour; landing on
+        // one is harmless, since the walk below simply steps past it.
+        let mut i = self.starts.partition_point(|&s| s <= offset).saturating_sub(1).min(self.blocks.len());
+        let mut row = offset.saturating_sub(self.starts.get(i).copied().unwrap_or(0));
+        // Reserve for what is actually there, not for what was asked for —
+        // `count` is a caller's upper bound and may be far past the end.
+        let mut out = Vec::with_capacity(count.min(self.len().saturating_sub(offset)));
+        while out.len() < count && i < self.blocks.len() {
+            let rows = &self.blocks[i].rows;
+            while row < rows.len() && out.len() < count {
+                out.push(rows[row].clone());
+                row += 1;
+            }
+            i += 1;
+            row = 0;
+        }
+        out
+    }
+}
+
+/// Renders the log panel: `block` onto `outer`, and `visible` — the rows
+/// `super::draw` already sliced out of the [`Transcript`] — onto `inner`.
 ///
 /// **No scrollbar.** The design system lists scrollbars under "Deliberately
 /// absent", beside tabs, breadcrumbs and "any control that needs a mouse",
@@ -119,16 +242,10 @@ pub(crate) fn rows(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
 /// so the live end of the conversation is always the thing on screen, and
 /// the design's answer to "where am I" is that you are at the bottom unless
 /// you moved.
-pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, rows: &[Line<'static>], offset: usize) {
+pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block<'static>, visible: Vec<Line<'static>>) {
     frame.render_widget(block, outer);
-    // A plain slice, and no `Wrap`: `rows` is already one screen row per
-    // entry, so the visible window is `offset .. offset + height` and there
-    // is nothing for a wrapper to do. `offset` is clamped by
-    // `ScrollState::set_viewport_height` every frame, so the range is always
-    // in bounds; `get` rather than an index anyway, since a panic here would
-    // take the whole session down over an off-by-one.
-    let end = rows.len().min(offset.saturating_add(inner.height as usize));
-    let visible = rows.get(offset..end).unwrap_or(&[]).to_vec();
+    // No `Wrap`: these rows are already one screen row each, so there is
+    // nothing for a wrapper to do and a `Paragraph` is just a blitter here.
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 

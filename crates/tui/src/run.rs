@@ -1,6 +1,7 @@
 use std::io;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mjolnir_core::{Command, Event};
 use mjolnir_permissions::Engine;
@@ -165,24 +166,39 @@ async fn run_loop(
     // no way to animate anything between events (per explicit developer
     // feedback that waiting for the next turn gave no loading/progress
     // feedback at all).
-    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(120));
+    //
+    // `Delay`, not the default `Burst`: a tick that arrives while the loop
+    // is busy must not queue up behind the ones after it. `Burst` replays
+    // every missed tick back to back the moment the loop is free, so one
+    // slow frame turns into a run of catch-up frames that have nothing new
+    // to draw — the loop falls behind and then thrashes trying not to be.
+    let mut ticker = tokio::time::interval(SPINNER_TICK);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     terminal.draw(|f| ui::draw(f, &mut app))?;
+    let mut last_draw = Instant::now();
+    let mut dirty = false;
 
     loop {
+        // A pending redraw needs a wakeup of its own: a burst that goes
+        // quiet inside the frame window would otherwise leave its last
+        // change unpainted until some unrelated event arrived. Disabled
+        // while nothing is pending, so an idle session waits on real input.
+        let flush_at = last_draw + MIN_FRAME;
+
         tokio::select! {
             biased;
 
             ev = events.recv() => {
                 match ev {
-                    Some(event) => app.apply_event(event),
+                    Some(event) => { app.apply_event(event); dirty = true; }
                     None => break, // core shut down
                 }
             }
 
             input_event = input.next() => {
                 match input_event {
-                    Some(Ok(CtEvent::Key(key))) => app.handle_key(key),
+                    Some(Ok(CtEvent::Key(key))) => { app.handle_key(key); dirty = true; }
                     // Mouse events never arrive (capture is off — see
                     // `run`'s doc comment); resize is picked up on the next
                     // draw naturally; paste events aren't handled in V0.
@@ -191,7 +207,9 @@ async fn run_loop(
                 }
             }
 
-            _ = ticker.tick() => app.tick(),
+            _ = ticker.tick() => { app.tick(); dirty = true; }
+
+            _ = tokio::time::sleep_until(flush_at.into()), if dirty => {}
         }
 
         for command in app.outbox.drain(..) {
@@ -202,8 +220,29 @@ async fn run_loop(
             break;
         }
 
-        terminal.draw(|f| ui::draw(f, &mut app))?;
+        // Coalesced, not one draw per event. A streaming reply arrives as
+        // one `TextDelta` per token — hundreds a second on a fast model —
+        // and drawing each one spends a frame's work to paint a difference
+        // no one can see. Bounded to `MIN_FRAME`, the extra deltas fold into
+        // the next frame instead, and the `sleep_until` branch above
+        // guarantees the last one is still painted promptly.
+        if dirty && last_draw.elapsed() >= MIN_FRAME {
+            terminal.draw(|f| ui::draw(f, &mut app))?;
+            last_draw = Instant::now();
+            dirty = false;
+        }
     }
 
     Ok(())
 }
+
+/// How often the spinner advances a frame. Also the longest the loop will
+/// sit on an unpainted change, since a tick both animates and redraws.
+const SPINNER_TICK: Duration = Duration::from_millis(120);
+
+/// The floor on the gap between two redraws — 60fps. Not a target: the loop
+/// draws as soon as something changes and it has been this long, so an idle
+/// session draws 8 times a second (the spinner) and a keystroke paints
+/// immediately. It is only a ceiling on how fast a *burst* can drive the
+/// renderer, and a terminal cannot show more than this anyway.
+const MIN_FRAME: Duration = Duration::from_millis(16);

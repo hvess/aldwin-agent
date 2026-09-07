@@ -56,6 +56,24 @@ pub use version::{GIT_HASH, VERSION, VERSION_FULL};
 pub use app::{PendingApproval as __PreviewPendingApproval, PendingPrompt as __PreviewPendingPrompt, RunningTool as __PreviewRunningTool};
 #[doc(hidden)]
 pub use ui::draw as __preview_draw;
+/// The desk a fixture draws its frame on — `--tui-scrim` for that theme.
+///
+/// `scrim` is the one palette role a real terminal has no use for (a
+/// terminal has no outside), so the HTML fixtures are its only consumer and
+/// it would otherwise be reachable only from inside the crate. It was a
+/// literal in `examples/snapshot.rs` until an audit caught the literal
+/// still carrying the Turn 14 light desk `#a39fac` two turns after the
+/// token moved to `#cfcad9` — with a comment claiming it was "the same
+/// value `Palette::scrim` carries". Reading the palette is what makes that
+/// claim true.
+#[doc(hidden)]
+pub fn __preview_scrim_hex(theme: Theme) -> String {
+    match theme.palette().scrim {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        other => unreachable!("scrim is always an Rgb palette value, got {other:?}"),
+    }
+}
+
 /// Same, for the first-run screen. It runs its own terminal loop
 /// (`first_run::run`) rather than being a mode inside `App`, so the
 /// snapshot harness cannot reach it through `__preview_draw` and needs the

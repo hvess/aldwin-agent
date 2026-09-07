@@ -1,7 +1,30 @@
 //! Syntax highlighting for fenced code blocks in assistant text, via
-//! `syntect`'s bundled syntax/theme dumps (see `ui::split_code_fences` for
-//! where the fence is actually found and stripped). Runs entirely offline —
-//! no network, no user-supplied grammar/theme files.
+//! `syntect`'s bundled syntax dumps (see `ui::split_code_fences` for where
+//! the fence is actually found and stripped). Runs entirely offline — no
+//! network, no user-supplied grammar/theme files.
+//!
+//! # The colours are the design system's, not syntect's
+//!
+//! syntect ships themes as well as grammars, and this module used to load
+//! one: the `base16-ocean` pair, dark and light. That made a fenced block
+//! the single region of the frame carrying hues the design system never
+//! chose — every other cell reads a `--tui-*` role, and a code block read
+//! base16.
+//!
+//! The design system closed that at its Turn 15 by defining five syntax
+//! roles ([`Palette::syn_keyword`] and its four siblings) and two rules
+//! about them: no syntax role may outrank the accent mark, and there are
+//! exactly five — everything else in a block stays [`Palette::code`] and a
+//! comment drops to [`Palette::dim`].
+//!
+//! So syntect is kept for what it is good at, parsing, and the theme is
+//! *built* from the palette rather than loaded ([`theme`]). A `Theme` is
+//! only a default style plus a list of scope-selector → style rules, which
+//! is exactly the mapping the five roles need; building it means the scope
+//! matcher, the caching highlighter and the specificity scoring all still
+//! come from syntect, while no colour can enter a frame that
+//! `palette.rs` did not put there. Pinned by
+//! `every_highlighted_colour_is_one_of_the_seven_roles`.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -9,9 +32,11 @@ use std::sync::{Mutex, OnceLock};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, Style as SynStyle, Theme as SynTheme, ThemeSet};
+use syntect::highlighting::{
+    Color as SynColor, FontStyle, Style as SynStyle, StyleModifier, Theme as SynTheme, ThemeItem, ThemeSettings,
+};
 
-use crate::palette::Theme;
+use crate::palette::{Palette, Theme};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
@@ -20,21 +45,136 @@ fn syntax_set() -> &'static SyntaxSet {
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-/// The `base16-ocean` pair, both bundled with syntect — matched siblings,
-/// so a code block's token colors keep the same relationships in either app
-/// theme instead of two unrelated schemes trading places. This used to be
-/// pinned to the dark half regardless, "in the absence of any way to detect
-/// the terminal's actual background"; `Theme` is that way — the developer
-/// states it outright in `tui.yaml` (see `palette::Theme::from_config`) —
-/// so the block no longer has to sit on a fixed-dark surface in a light
-/// session to keep dark-tuned syntax colors legible.
+/// Scope selectors for the five syntax roles, plus the two deliberate
+/// *demotions*. Read as a table of "which token kinds are a category".
+///
+/// Resolution is syntect's, not ours: when several selectors match a scope
+/// stack the most specific one wins, so a two-atom selector overrides a
+/// one-atom selector without the order of this list mattering. That is what
+/// makes the demotions work — `keyword.operator` beats `keyword`, so `=`
+/// and `&` stay code-coloured while `let` and `use` do not.
+///
+/// Three mappings that look wrong until you read the scopes a grammar
+/// actually emits (dumped from `SyntaxSet` while writing this):
+///
+/// * **`storage.type` is a keyword, not a type.** Rust's `let` and its
+///   `u32` are *both* `storage.type.rust`; the grammar does not distinguish
+///   them, so no selector can. Colouring the pair as keywords is what every
+///   editor does and what the alternative — colouring `let` as a type —
+///   plainly is not. Named types still land in [`Palette::syn_type`],
+///   because they come through `entity.name.*` and `support.type`.
+/// * **A macro name is a call.** `format!` is `support.macro`, which is a
+///   name being invoked; `syn_call` is "the name in a call or definition",
+///   so it belongs there rather than in the fallthrough.
+/// * **Nothing needs to say `punctuation`.** Punctuation carries no scope
+///   the five selectors match, so it falls through to [`Palette::code`] on
+///   its own. The only punctuation that needed naming is the operator kind
+///   the grammars file under `keyword`.
+const SYNTAX_SCOPES: [(&str, Role); 7] = [
+    ("keyword, storage, constant.language, variable.language", Role::Keyword),
+    // Demotion: an operator is punctuation the grammars happen to file
+    // under `keyword`. The design system's rule is that punctuation is not
+    // a category.
+    ("keyword.operator", Role::Code),
+    (
+        "entity.name.function, entity.name.macro, support.function, support.macro, variable.function",
+        Role::Call,
+    ),
+    (
+        "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.trait, \
+         entity.name.union, entity.name.namespace, support.type, support.class",
+        Role::Type,
+    ),
+    ("string", Role::String),
+    ("constant.numeric", Role::Number),
+    // Demotion: a comment is not one of the five, and drops below body text
+    // rather than taking a colour of its own.
+    ("comment", Role::Comment),
+];
+
+/// Which palette field a matched scope resolves to. An indirection only so
+/// [`SYNTAX_SCOPES`] can be a `const` table naming roles rather than a
+/// runtime list of colours; [`Role::of`] is the whole of it.
+#[derive(Debug, Clone, Copy)]
+enum Role {
+    Keyword,
+    Call,
+    Type,
+    String,
+    Number,
+    Code,
+    Comment,
+}
+
+impl Role {
+    fn of(self, pal: &Palette) -> Color {
+        match self {
+            Role::Keyword => pal.syn_keyword,
+            Role::Call => pal.syn_call,
+            Role::Type => pal.syn_type,
+            Role::String => pal.syn_string,
+            Role::Number => pal.syn_number,
+            Role::Code => pal.code,
+            Role::Comment => pal.dim,
+        }
+    }
+}
+
+/// The syntect theme for one app theme, built from that theme's palette —
+/// see this module's doc comment for why it is built rather than loaded.
+///
+/// Everything a fenced block can be is here: a default foreground of
+/// [`Palette::code`] for the majority of a block that is not one of the
+/// five categories, and one rule per row of [`SYNTAX_SCOPES`]. No
+/// background (`ui.rs` paints the block's surface) and no font style, since
+/// the design system carries hierarchy in colour and position and asks for
+/// bold nowhere.
 fn theme(theme: Theme) -> &'static SynTheme {
     static DARK: OnceLock<SynTheme> = OnceLock::new();
     static LIGHT: OnceLock<SynTheme> = OnceLock::new();
-    let load = |name: &str| ThemeSet::load_defaults().themes[name].clone();
+    let build = |which: Theme| {
+        let pal = which.palette();
+        SynTheme {
+            name: Some(format!("mjolnir-{which:?}")),
+            author: None,
+            settings: ThemeSettings { foreground: Some(syn_color(pal.code)), ..ThemeSettings::default() },
+            scopes: SYNTAX_SCOPES
+                .iter()
+                .map(|(selectors, role)| ThemeItem {
+                    // Every selector here is a literal in this file, so a
+                    // parse failure is a typo in the table above and not a
+                    // condition a session can be in.
+                    scope: selectors.parse().expect("SYNTAX_SCOPES selector parses"),
+                    style: StyleModifier {
+                        foreground: Some(syn_color(role.of(pal))),
+                        background: None,
+                        font_style: None,
+                    },
+                })
+                .collect(),
+        }
+    };
     match theme {
-        Theme::Dark => DARK.get_or_init(|| load("base16-ocean.dark")),
-        Theme::Light => LIGHT.get_or_init(|| load("base16-ocean.light")),
+        Theme::Dark => DARK.get_or_init(|| build(Theme::Dark)),
+        Theme::Light => LIGHT.get_or_init(|| build(Theme::Light)),
+    }
+}
+
+/// A palette colour as syntect sees it, opaque.
+///
+/// Every field of a [`Palette`] is a `Color::Rgb` by construction, so the
+/// arm below it is unreachable. It is a mid grey rather than a panic
+/// because a theme colour is not worth taking a session down over, and
+/// rather than a palette value because this function has no theme to pick
+/// one from — a caller reaching it is already outside the design system,
+/// which is what `Color::Reset`, the only other thing that could arrive
+/// here, means. The render snapshot's
+/// `every_painted_cell_uses_a_palette_colour_never_the_terminals_own` is
+/// what keeps `Reset` out of a frame in the first place.
+fn syn_color(c: Color) -> SynColor {
+    match c {
+        Color::Rgb(r, g, b) => SynColor { r, g, b, a: 0xff },
+        _ => SynColor { r: 0x80, g: 0x80, b: 0x80, a: 0xff },
     }
 }
 
@@ -157,6 +297,85 @@ mod tests {
         }
         // And the very first one, long since evicted, is still right.
         assert_eq!(highlight_lines("rust", &sample(0), Theme::Dark), highlight_uncached("rust", &sample(0), Theme::Dark));
+    }
+
+    /// The gap this module was rewritten to close: a fenced block used to
+    /// be the one region of the frame painted from syntect's own
+    /// `base16-ocean` themes, so it carried hues the design system never
+    /// chose. Nothing else caught it —
+    /// `render_snapshot.rs`'s `every_painted_cell_uses_a_palette_colour_never_the_terminals_own`
+    /// only rules out `Color::Reset`, and an arbitrary `Rgb` passes it.
+    ///
+    /// Seven colours are reachable and no eighth is: the five syntax roles,
+    /// `code` for everything that is not a category, and `dim` for a
+    /// comment. Asserted across several languages so a grammar emitting an
+    /// unexpected scope shows up here rather than on screen.
+    #[test]
+    fn every_highlighted_colour_is_one_of_the_seven_roles() {
+        let samples = [
+            (
+                "rust",
+                "// c\nuse std::fmt;\npub struct Cfg { pub n: u32 }\nfn go() -> Result<(), String> {\n    \
+                 let s: String = format!(\"x{}\", 1.5);\n    Cfg::new(&s).run();\n    Ok(())\n}\n",
+            ),
+            (
+                "python",
+                "# c\nimport os\nclass A(dict):\n    def f(self, x: int) -> str:\n        \
+                 return f\"{x}\" + str(os.getcwd())\n",
+            ),
+            ("bash", "# c\nset -e\nfor f in *.rs; do\n  echo \"$f\" | grep -c 3\ndone\n"),
+            ("json", "{\"a\": [1, 2.5, true, null], \"b\": \"s\"}\n"),
+            ("yaml", "# c\nkey: value\nlist:\n  - 1\n  - \"two\"\n"),
+        ];
+        for theme in [Theme::Dark, Theme::Light] {
+            let pal = theme.palette();
+            let allowed =
+                [pal.syn_keyword, pal.syn_call, pal.syn_type, pal.syn_string, pal.syn_number, pal.code, pal.dim];
+            for (lang, body) in samples {
+                for span in highlight_lines(lang, body, theme).iter().flatten() {
+                    let fg = span.style.fg.expect("every highlighted span carries a foreground");
+                    assert!(allowed.contains(&fg), "{lang} in {theme:?}: {:?} painted {fg:?}, not a palette role", span.content);
+                }
+            }
+        }
+    }
+
+    /// The five roles are a mapping, not a decoration: the tokens a reader
+    /// picks a block apart by have to actually land on them. Pinned per
+    /// role, because a scope-selector edit that silently stops matching
+    /// leaves the block still rendering — just flat, in `code`, which
+    /// `every_highlighted_colour_is_one_of_the_seven_roles` would happily
+    /// accept.
+    #[test]
+    fn each_syntax_role_claims_the_tokens_it_names() {
+        let code = "// c\nfn go() {\n    let s: String = fmt(\"x\", 12);\n}\n";
+        let pal = Theme::Dark.palette();
+        let lines = highlight_lines("rust", code, Theme::Dark);
+        let colour_of = |needle: &str| {
+            lines
+                .iter()
+                .flatten()
+                .find(|s| s.content.trim() == needle)
+                .unwrap_or_else(|| panic!("no span for {needle:?}"))
+                .style
+                .fg
+                .unwrap()
+        };
+        assert_eq!(colour_of("fn"), pal.syn_keyword, "a keyword");
+        assert_eq!(colour_of("let"), pal.syn_keyword, "storage.type is a keyword — see SYNTAX_SCOPES");
+        assert_eq!(colour_of("go"), pal.syn_call, "a definition's name");
+        assert_eq!(colour_of("String"), pal.syn_type, "a named type");
+        assert_eq!(colour_of("12"), pal.syn_number, "a numeric literal");
+        assert_eq!(colour_of("="), pal.code, "an operator is punctuation, not a category");
+        assert_eq!(colour_of("s"), pal.code, "an identifier is not a category");
+        assert!(
+            lines[0].iter().all(|s| s.style.fg == Some(pal.dim)),
+            "a comment drops below body text, not into a colour of its own"
+        );
+        assert!(
+            lines.iter().flatten().any(|s| s.content.contains('x') && s.style.fg == Some(pal.syn_string)),
+            "a string literal"
+        );
     }
 
     #[test]

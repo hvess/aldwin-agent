@@ -2,8 +2,11 @@
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
-**Status:** active — one known gap, see Progress below (the 2026-09-03
-colour-transport gap is closed by the 2026-09-06 entry)
+**Status:** active — one known gap here, plus one open upstream defect: the
+design system's `.tui-light` `--tui-reverse-bg` disagrees with its own frame,
+so the light wordmark renders a rung too dark. See the 2026-09-07 audit entry;
+do not "fix" it in `palette.rs`. (The 2026-09-03 colour-transport gap is closed
+by the 2026-09-06 entry; the syntax ramp by the 2026-09-07 Turn 15 entry.)
 **Scope:** crates/tui
 **Owner:** Maximilian
 **Last Updated:** 2026-09-07
@@ -3163,6 +3166,148 @@ it on every Home/End. It also caught `rows as u16` being cast before its
 clamp rather than after — harmless today, since the truncated value happens
 to land back in range, but wrong on its own terms.
 
+**Progress (2026-09-07, Turn 15 — the light theme rebuilt, shallower):** The
+design system moved again and this crate was behind. Only the light half
+changed; the dark snapshot is byte-identical before and after.
+
+The upstream change is *depth*, not hue. Turn 14's light theme spanned 19:1
+from `#0e0c12` ink to a `#faf7ff` ground with a `#a39fac` desk — nothing in it
+failed a contrast floor, it simply read as harsh beside the dark theme, which
+separates bands by a step and lets the ends stay soft. It now runs `#241f2b` to
+`#f7f5fa` with the seven ground rungs inside 10% of each other. **That is the
+decision, not an oversight**: hierarchy is carried by the step between rungs,
+so darkening a value here to "add contrast" undoes it. The narrowest light rung
+(1.037:1, bar to break) is still wider than the dark one's (1.011:1, scrim to
+recess), and `dim` holds 5.14:1 on the recessed field, the darkest band inside
+a frame and the binding one there.
+
+Two structural consequences, both of which broke a test that was pinning the
+old arrangement, which is what those tests are for:
+
+1. **The light ground rungs are renumbered by lightness**, so the ladder is now
+   `ground`, `bar_bottom`, `bar`, `break_`, `recess`, `panel_title`, `scrim`.
+   The turn break was the second-lightest band and is now the fourth, below
+   both chrome bands. `both_ground_ladders_are_strictly_ordered_and_have_no_repeated_rung`
+   was re-ordered to match; the invariant it asserts is unchanged.
+2. **`step_done` now sits *below* the mark, not above it.** The design system
+   has said since Turn 14 that a settled first-run step recedes by going darker
+   than the accent mark while a finished tool call recedes by going lighter —
+   but Turn 14's values put both above it, so the prose and the palette
+   disagreed. Turn 15's `--color-accent-light-*` ramp fixed the values, and
+   `the_two_done_glyph_roles_coincide_in_dark_and_straddle_the_mark_in_light`
+   (renamed) now asserts that the two straddle the mark.
+
+Upstream also stopped writing light values as literals: `.tui-light` is
+thirty-eight `var()` references into new `--color-{ground,ink,accent,neutral,diff}-light-*`
+ramps, so every `LIGHT` field in `palette.rs` names its rung the way the `DARK`
+fields already did.
+
+Verified the way this project's `CLAUDE.md` requires rather than by reading
+prose: `Agent TUI v2 Light.dc.html` was fetched and its `:root{--t-*}` block
+measured against the bound copy's `.tui-light`. All thirty-eight roles agree,
+which is the one direction nothing else checks — the frames restate their whole
+palette inline and read no token file.
+
+**The syntax ramp, closed in the same pass.** Turn 15 also added five syntax
+roles (`--tui-syn-keyword|call|type|string|number` in both themes) with two
+rules: no syntax role may outrank the accent mark, and there are exactly five —
+everything else in a code block stays `--tui-code` and a comment drops to
+`--tui-dim`. `highlight.rs` was loading syntect's bundled `base16-ocean` pair,
+which made a fenced block the one region of the frame carrying hues the design
+system never chose. Nothing caught it: `every_painted_cell_uses_a_palette_colour_never_the_terminals_own`
+only rules out `Color::Reset`, and a syntect `Rgb` passes.
+
+syntect is kept for parsing and the *theme is now built from the palette*
+rather than loaded. A syntect `Theme` is only a default style plus a list of
+scope-selector → style rules, which is exactly the mapping five roles need, so
+the scope matcher, the caching highlighter and the specificity scoring all
+still come from syntect while no colour can enter a frame that `palette.rs` did
+not put there.
+
+The scope table was written against scopes dumped from the grammars, not
+guessed, and three of its rows are only right for that reason:
+
+- **`storage.type` is a keyword, not a type.** Rust's `let` and its `u32` are
+  *both* `storage.type.rust` — the grammar does not distinguish them, so no
+  selector can. Named types still land on `syn_type`, via `entity.name.*` and
+  `support.type`.
+- **`keyword.operator` is demoted to `--tui-code`.** An operator is
+  punctuation the grammars file under `keyword`, and punctuation is not a
+  category. syntect scores the more specific selector higher, so this beats the
+  bare `keyword` rule without the table's order mattering.
+- **A macro name is a call.** `format!` is `support.macro`, a name being
+  invoked.
+
+Two tests, deliberately a pair: `every_highlighted_colour_is_one_of_the_seven_roles`
+(five languages × both themes, no eighth colour reachable) and
+`each_syntax_role_claims_the_tokens_it_names`. The second exists because the
+first would happily accept a selector edit that silently stops matching and
+renders the whole block flat in `--tui-code`.
+
+Snapshot effect: code-fence rows only, in both themes; every colour in a
+changed row is now a token value, with no base16 left anywhere.
+
+**Progress (2026-09-07, audit of the round above):** three passes —
+correctness, Rust idiom, integration/spec. The correctness pass was run as
+checks rather than by reading, because the thing being checked is a table of
+120 hex values and reading a table of hex values proves nothing:
+
+- **`palette.rs` against the token layer**, resolving `semantic.css` through
+  `palette.css`'s `var()` chains and parsing both `Palette` consts out of the
+  Rust: all 42 roles × 2 themes agree. The three roles with no Rust field
+  (`--tui-line`, `--tui-add-bg`, `--tui-del-bg`) are the documented deliberate
+  omissions.
+- **`.tui-light` against the light frame's `--t-*` block**: all 35 keys agree.
+- **The render snapshot against the palette**: every colour in both halves is
+  either a palette value or a 45% `fade()` blend of two — 32 distinct in dark,
+  31 in light, none foreign. That is the check that proves no syntect colour
+  survived the highlighter rewrite.
+
+One real defect, one that is not ours, and four smaller misses.
+
+**Not ours, and still open: `--tui-reverse-bg` in `.tui-light` disagrees with
+the frame.** The light frame paints the wordmark
+`background: var(--t-mark)` = `#6b3fb0`; `.tui-light` sets
+`--tui-reverse-bg: var(--color-accent-light-800)` = `#4d2a80`. The design
+system's own README names `reverse-bg` = `mark` as one of five pairings that
+"must hold in every theme, enforced by sharing one palette entry", and records
+that the rule exists *because* this token once drifted from the mark and the
+wordmark silently kept an old value. Turn 15 drifted it again — through ramps
+this time rather than literals. `first_run.rs:288` therefore draws the light
+wordmark one rung too dark, on four snapshot cells. `palette.rs` is faithful to
+the token layer, which is what makes the disagreement visible at all, so it is
+**deliberately not patched locally**: a local deviation would destroy the
+one-to-one property the correctness check above depends on. The fix is one line
+in the design system's `.tui-light`, in both projects, and the pairing check
+belongs in `palette.rs`'s tests once it lands.
+
+Found and fixed:
+
+1. **`examples/snapshot.rs` had the light desk as a hex literal**, `#a39fac` —
+   the Turn 14 scrim, two turns stale — under a comment claiming it was "the
+   same value `Palette::scrim` carries". It was not, and nothing could catch
+   it, because a literal agrees with itself. `scrim` is the one role a real
+   terminal has no use for, so the HTML fixtures are its only consumer and it
+   was unreachable from an example; there is now a `__preview_scrim_hex` beside
+   the other `__preview*` fixture exports, and the fixture reads the palette.
+2. **`ui/transcript.rs` still described the code-block surface as taking its
+   colours from "the matching half of the `base16-ocean` pair".**
+3. `syn_color`'s doc claimed its unreachable fallback was `Palette::code`'s
+   value; it was `DARK.code`'s, which would be wrong in a light session. The
+   fallback is now a plain grey and the comment says why a palette value would
+   be the wrong thing to reach for there.
+4. Idiom: the closure inside `fn theme(theme: Theme)` shadowed the parameter it
+   was being selected by; `ScopeSelectors::from_str(s)` became `s.parse()` and
+   the `FromStr` import went with it.
+
+Also checked and clean: no clippy warning, default or `pedantic`, lands on a
+line this round added — the two that remain are pre-existing. Every `base16`
+mention left in this spec sits inside a dated Progress entry, which is history
+rather than statement; none is in Decisions, Steps, Pitfalls or References.
+`syn_type` is never exercised by the render snapshot and `syn_string` only
+appears to be, because dark `syn_string` and `add_code` are the same `#9ceaa7`
+by design — both roles are covered by `highlight.rs`'s own tests, which is the
+right level for them.
 
 ## References
 

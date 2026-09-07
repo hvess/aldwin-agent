@@ -481,9 +481,9 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
             // the fence's own literal ` ``` ` markers, on `diff_box` — the
             // design system's one nested-quote surface, already carrying
             // the inline diff for the same reason (a quoted block inside
-            // prose). `highlight_lines` picks the matching half of the
-            // `base16-ocean` pair from the app theme, so the surface
-            // follows the palette like every other one.
+            // prose). `highlight_lines` builds its syntect theme from this
+            // theme's palette — the five `--tui-syn-*` roles — so the code
+            // on this surface follows the palette like every other cell.
             //
             // Built from the same `Row::field` the diff uses. The two are
             // the *same* component in the design system — one quoted block

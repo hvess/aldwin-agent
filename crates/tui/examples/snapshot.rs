@@ -122,12 +122,16 @@ fn first_run_state(index: usize) -> mjolnir_tui::__PreviewFirstRun {
 /// screenshot of this lines up cell-for-cell with a screenshot of theirs.
 fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
     let (w, h) = (buf.area.width, buf.area.height);
-    // The desk the frame sits on — `--tui-scrim` for this theme, the same
-    // value `Palette::scrim` carries. It was a fixed near-black, which put
+    // The desk the frame sits on — `--tui-scrim` for this theme, read from
+    // the palette rather than copied. It was a fixed near-black, which put
     // every *light* frame on a dark desk: the one surface a reviewer uses
     // to judge whether the light theme's chrome bands are stepping the
-    // right way was showing the wrong theme's ground.
-    let desk = if theme == "light" { "#a39fac" } else { "#0c0a11" };
+    // right way was showing the wrong theme's ground. It was then a pair of
+    // hex literals, which went stale the moment the light ladder was
+    // regenerated — the desk sat two turns behind at `#a39fac` while the
+    // token said `#cfcad9`, and nothing could catch it, because a literal
+    // agrees with itself.
+    let desk = mjolnir_tui::__preview_scrim_hex(if theme == "light" { Theme::Light } else { Theme::Dark });
     let mut out = format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{scene_name} {theme}</title><style>\
          body{{margin:0;background:{desk};padding:20px}}\

@@ -37,22 +37,24 @@
 
   /* Neutrals: hue 300, chroma low enough to read as grey. */
   --color-neutral-100:#f4f2f9;
+  --color-neutral-150:#ece9f3;   /* code in the transcript */
   --color-neutral-200:#e3dfeb;
   --color-neutral-300:#c9c5d2;
   --color-neutral-400:#b1adbb;
   --color-neutral-500:#9a95a4;
   --color-neutral-600:#7c778a;
   --color-neutral-700:#5d576a;
+  --color-neutral-750:#605a6c;   /* gauge track */
   --color-neutral-800:#474251;
   --color-neutral-900:#322e39;
 
   /* Accent: the same hue at full chroma. The dark theme draws its marks from
-     200/400. The light theme no longer draws from this ramp at all — Turn 14
-     took its accents past accent-900 (#4b1f7e against a #562c8b floor), so
-     `.tui-light` states them as literals. Do not "fix" that by extending the
-     ramp downward: these steps are what the DARK theme is generated from, and
-     adding rungs nothing in the dark theme uses would make the ramp a place
-     to look rather than a thing to read. */
+     200/400. The light theme does not draw from this ramp — it has its own,
+     `--color-accent-light-*` below, because its accents are deeper than
+     anything the dark theme uses. Do not extend this ramp downward to cover
+     them: these steps are what the DARK theme is generated from, and rungs
+     nothing dark uses would make the ramp a place to look up rather than a
+     thing to read. */
   --color-accent-100:#efe7fd;
   --color-accent-200:#dfd1fb;
   --color-accent-300:#ceb6fb;
@@ -66,7 +68,44 @@
   /* The selection band is a real accent fill now, not a faint tint, so each
      theme needs its own value rather than a ramp step. */
   --color-band-dark:#604788;
-  --color-band-light:#c4acf2;
+  --color-band-light:#d8cbf0;
+
+  /* ---- The light scales ------------------------------------------------
+     Turn 15 rebuilt the light theme, and put it on ramps instead of the thirty
+     literals `.tui-light` used to carry. Same hue, same generation rule; what
+     changed is the DEPTH. The old light theme ran ink to #0e0c12 on a #faf7ff
+     ground and a #a39fac desk — a 19:1 span, nearly twice what the dark theme
+     asks of an eye, which is what made it read as harsh beside its pair. It
+     now spans #241f2b to #f7f5fa, and hierarchy comes from the steps between
+     rungs rather than from the distance to the ends.
+
+     Both ladders are ordered strictly by lightness, so a rung number is a
+     position and nothing else. The ground ladder no longer numbers the break
+     row 1 and the composer 2 — they sort where their values put them. */
+  --color-ground-light-0:#f7f5fa;   /* the frame ground — the lightest surface */
+  --color-ground-light-1:#efecf4;   /* composer and bottom bar */
+  --color-ground-light-2:#e8e4ee;   /* top bar, overlay panel */
+  --color-ground-light-3:#e4e0ec;   /* turn break / section break row */
+  --color-ground-light-4:#ded9e6;   /* recessed field */
+  --color-ground-light-5:#d4cee0;   /* panel title row */
+  --color-ground-light-6:#cfcad9;   /* desk, outside the window — the darkest */
+
+  --color-ink-light-0:#241f2b;
+  --color-ink-light-1:#2a2433;
+  --color-ink-light-2:#35303e;
+  --color-ink-light-3:#423c4c;
+  --color-ink-light-4:#514a5c;
+  --color-ink-light-5:#5c5568;
+
+  --color-accent-light-300:#7a58ae;
+  --color-accent-light-400:#7d56b8;
+  --color-accent-light-500:#6b3fb0;
+  --color-accent-light-600:#5f3aa0;
+  --color-accent-light-700:#5d3499;
+  --color-accent-light-800:#4d2a80;
+
+  --color-neutral-light-400:#b8b2c2;
+  --color-neutral-light-500:#9a93a5;
 
   /* Diff pairs. Dark theme values; the light theme re-points them.
      Added is a true green (hue 145) and removed a warm red (hue 24). Against a
@@ -84,4 +123,36 @@
   --color-diff-del-bg:rgba(246,109,103,.14);
   --color-diff-del-row:#4b3a42;
   --color-diff-del-code:#ffa8a0;
+
+  --color-diff-light-ground:#e9e5f0;
+  --color-diff-light-add:#126325;
+  --color-diff-light-add-bg:rgba(18,99,37,.20);
+  --color-diff-light-add-row:#d3ead6;
+  --color-diff-light-add-code:#0d4d18;
+  --color-diff-light-del:#b0122e;
+  --color-diff-light-del-bg:rgba(176,18,46,.14);
+  --color-diff-light-del-row:#f4d2da;
+  --color-diff-light-del-code:#6b0016;
+
+  /* ---- Syntax ------------------------------------------------------------
+     Highlighting is the one place the system carries more than one hue on
+     purpose. Five roles, no more: keyword, call name, type, string, number.
+     They sit at ONE lightness per theme and at the palette's own chroma, so
+     none of them outranks the accent mark — a keyword is a colour a line
+     carries, not a mark the eye is meant to jump to. Keyword keeps the
+     system's 300°; string is the diff green, so a literal and an added line
+     agree; the rest are 265°, 195° and 75°. Anything a highlighter would
+     colour beyond these five stays --tui-code, and comments drop to
+     --tui-dim: an identifier is not a category. */
+  --color-syntax-keyword:#c9a2f7;
+  --color-syntax-call:#8fb8f8;
+  --color-syntax-type:#6fcfd9;
+  --color-syntax-string:#9ceaa7;
+  --color-syntax-number:#e8c184;
+
+  --color-syntax-light-keyword:#7b2fc9;
+  --color-syntax-light-call:#1f56c4;
+  --color-syntax-light-type:#0a5c6d;
+  --color-syntax-light-string:#0f6b23;
+  --color-syntax-light-number:#8a5300;
 }

@@ -31,9 +31,12 @@ not obvious**:
   token layer.** Its `SYNC.md` is the change record and carries an explicit
   "Not applied — outside this copy" table.
 - **"Mjolnir Design System"** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
-  `type: PROJECT_TYPE_DESIGN_SYSTEM`. The *source* project, and currently
-  **stale**: its 18 guideline cards, components, UI kits, `templates/` and
-  `SKILL.md` all still state pre-Turn-13 rules.
+  `type: PROJECT_TYPE_DESIGN_SYSTEM`. The *source* project. **Partly synced
+  on 2026-09-07** — its token layer, `README.md`/`readme.md`, manifest and
+  guideline cards were brought to Turn 15; its `components/`, `_ds_bundle.js`,
+  `ui_kits/` and `templates/` still state pre-Turn-13 rules. `IMPORT.md`'s
+  "The source project is no longer wholly stale" section lists exactly which
+  is which. Still read values from the bound copy, not from here.
 
 Five things about using them, each learned the hard way:
 

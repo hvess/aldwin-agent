@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version  = "0.1.15"
+version  = "0.1.16"
 
 [workspace.dependencies]
 tokio       = { version = "1", features = ["full"] }

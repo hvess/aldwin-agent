@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-cli"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-stream",
  "clap",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-config"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "dirs",
  "serde",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-core"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "futures",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-llm"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-stream",
  "eventsource-stream",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-permissions"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "mjolnir-config",
  "serde",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-tools"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "libc",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "mjolnir-tui"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "crossterm",
  "futures",

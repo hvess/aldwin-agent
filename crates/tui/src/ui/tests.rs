@@ -5,7 +5,7 @@
 //! The companion `tests/render_snapshot.rs` pins every cell and colour of
 //! every scene; these say *why* each fact matters.
 
-use super::chrome::{highlight_command_tokens, input_height};
+use super::chrome::{self, highlight_command_tokens};
 use super::decision::GRANT_RULE_MAX;
 use super::draw;
 use super::grid::{Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
@@ -503,6 +503,53 @@ fn a_streamed_delta_re_renders_one_entry_not_the_whole_transcript() {
     assert!(
         long < short * 8.0,
         "a delta on a 40-turn transcript took {long:.4}s against {short:.4}s on a 2-turn one — a streamed token is re-rendering the whole log again"
+    );
+}
+
+/// The other half of the entry above, and a bug the multi-line composer
+/// introduced before this was pinned.
+///
+/// `Transcript`'s cache used to be keyed on the log band's *height* as well
+/// as its width, so anything that resized the band threw away every
+/// rendered row in the session. The band is resized by the composer
+/// growing — which used to mean an explicit newline, and now means any
+/// keystroke that pushes the draft across a wrap column, i.e. ordinary
+/// typing. Measured at 7.2x the steady-state frame cost on a 40-turn
+/// transcript, rising with the session.
+///
+/// Height is not an input to `block_rows` — no arm of `render_entry` reads
+/// it — so the fix was to drop it from the key. Shaped like its neighbour
+/// above: the same work on a long transcript against a short one, with a
+/// deliberately loose bound so this fails on a return to O(log), not on a
+/// slow CI box.
+#[test]
+fn a_growing_composer_re_renders_nothing_in_the_transcript() {
+    use std::time::Instant;
+
+    let reply = format!("Here is the plan. {}\n\n```rust\nfn f(x: u32) -> u32 {{ x + 1 }}\n```\n", "prose ".repeat(40));
+    let elapsed_for = |turns: usize| -> f64 {
+        let mut app = app();
+        for i in 0..turns {
+            app.log.push(LogEntry::UserMessage { text: format!("question {i}") });
+            app.log.push(LogEntry::AssistantText { text: reply.clone() });
+        }
+        let _ = rendered(&mut app, 100, 30);
+        let t = Instant::now();
+        for i in 0..60 {
+            // One row of draft, then two, then one again — the band grows
+            // and shrinks under the transcript on every pass.
+            app.input = if i % 2 == 0 { "x".into() } else { "x\ny".into() };
+            app.cursor = app.input.chars().count();
+            let _ = rendered(&mut app, 100, 30);
+        }
+        t.elapsed().as_secs_f64()
+    };
+
+    let short = elapsed_for(2);
+    let long = elapsed_for(40);
+    assert!(
+        long < short * 8.0,
+        "a composer height change on a 40-turn transcript took {long:.4}s against {short:.4}s on a 2-turn one — resizing the log band is re-rendering the whole conversation again"
     );
 }
 
@@ -1544,23 +1591,98 @@ fn the_terminal_cursor_is_placed_inside_the_input_box_at_the_draft_cursor() {
     );
 }
 
-/// Regression test for the composer's `▶` prompt glyph (added to match
-/// `Composer.jsx`): it only ever renders on the input's first source
-/// line, so the cursor's own placement math must add its 2-column width
-/// back in for line 0 specifically, not for every line — otherwise
-/// either the first line's cursor lands 2 columns short of the real
-/// caret, or every other line's cursor drifts 2 columns too far right
-/// chasing a glyph that was never drawn there.
+/// The composer's `▶` prompt (from `Composer.jsx`) is a *gutter*, not a
+/// prefix on line 0: the glyph is drawn on the first row only, but all
+/// three of its cells are reserved on every row, so a multi-line draft
+/// keeps one left edge instead of stepping back three columns after its
+/// first line. The caret has to be placed against that same gutter on
+/// every row, or every row but the first drifts three columns left of
+/// the text it is supposed to be sitting in.
 #[test]
-fn moving_the_composer_cursor_accounts_for_the_prompt_glyph_on_the_first_line() {
+fn every_row_of_a_multiline_draft_shares_the_first_rows_left_edge() {
     let mut app = app();
-    app.input = "hi\nbye".into();
-    app.cursor = app.input.len(); // end of "bye", on the second line
+    app.input = "alpha\nbravo".into();
+    app.cursor = app.input.chars().count(); // end of "bravo", on the second line
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let first = find_row(&buffer, "alpha");
+    let second = find_row(&buffer, "bravo");
+    assert_eq!(second, first + 1, "the two source lines are two consecutive rows");
+    // By cell, not by byte: the `▶` ahead of the first row is three bytes
+    // wide and one cell wide, and `str::find` would report the difference
+    // as a column offset that isn't there.
+    let column_of = |y: u16, needle: &str| -> u16 {
+        let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+        let byte = row.find(needle).expect("row carries the text");
+        row[..byte].chars().count() as u16
+    };
+    assert_eq!(column_of(first, "alpha"), column_of(second, "bravo"), "both rows start on the same column");
+
     let pos = terminal.backend().cursor_position();
-    assert_eq!(pos.x, MARGIN_X as u16 + 3, "the second line carries no prompt glyph, so its cursor should sit right after \"bye\" with only the grid's left margin ahead of it");
+    assert_eq!(pos.y, second, "the caret is on the row its line was drawn on");
+    assert_eq!(
+        pos.x,
+        MARGIN_X as u16 + 3 + 5,
+        "and right after \"bravo\": the grid's left margin, the prompt gutter every row reserves, then the five typed chars"
+    );
+}
+
+/// A single line long enough to wrap is several rows, and the caret has
+/// to be on the row the text is actually on. It used to be placed from
+/// the draft's *source* line and column while `Paragraph`'s own `Wrap`
+/// decided the rows, so past the first wrap the two disagreed by a whole
+/// row and grew further apart with every one after it.
+#[test]
+fn the_caret_follows_a_wrapped_draft_onto_its_continuation_row() {
+    let mut app = app();
+    app.input = "wrap ".repeat(30);
+    app.cursor = app.input.chars().count();
+    let backend = TestBackend::new(60, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let first = find_row(&buffer, "wrap");
+    let pos = terminal.backend().cursor_position();
+    assert!(pos.y > first, "a draft this long wraps, so its caret cannot still be on the first row");
+    let caret_row: String = (0..buffer.area.width).map(|x| buffer[(x, pos.y)].symbol().to_string()).collect();
+    assert!(caret_row.contains("wrap"), "and the row it is on has to be one of the draft's: {caret_row:?}");
+}
+
+/// The composer is capped rather than allowed to eat the frame: a pasted
+/// file scrolls inside its band, with the caret kept in view.
+#[test]
+fn a_draft_taller_than_the_composer_scrolls_inside_it_instead_of_taking_the_frame() {
+    let mut app = app();
+    app.input = (0..40).map(|i| format!("line-{i}")).collect::<Vec<_>>().join("\n");
+    app.cursor = app.input.chars().count();
+    let (width, height) = (80u16, 30u16);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let cap = super::chrome::COMPOSER_MAX_ROWS;
+    assert_eq!(chrome::Composer::new(&app.input, width).height(), cap, "the band stops growing at its cap");
+    // The tail of the draft is what is on screen, since that is where the
+    // caret is — and the head of it is not. Asserted row by row: the whole
+    // buffer joined into one string has no row breaks in it, so a `contains`
+    // over that can only ever answer about text that happens to sit on a
+    // single row, which is not what "scrolled out of the band" means.
+    let rows: Vec<String> =
+        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
+    let carrying = |needle: &str| rows.iter().filter(|r| r.contains(needle)).count();
+    let last = find_row(&buffer, "line-39");
+    assert_eq!(terminal.backend().cursor_position().y, last, "the caret sits at the end of the last line it drew");
+    assert_eq!(carrying("line-39"), 1, "the tail of the draft is on screen");
+    for head in ["line-0 ", "line-1 ", "line-20"] {
+        assert_eq!(carrying(head), 0, "the head of a long draft scrolls out of the band, but {head:?} is still on it");
+    }
+    // And the transcript still has most of the frame.
+    assert!(find_row(&buffer, "Ask for a change") < height - cap, "the log keeps its band");
 }
 
 #[test]
@@ -1921,7 +2043,7 @@ fn the_log_panel_has_no_drawn_border_but_is_still_opaque() {
     // `BottomBar.jsx` is 5 rows for an empty draft (blank / composer /
     // blank / status / blank), with its own 1-row rule above it, so the
     // log's last row is 6 up from the frame's last row.
-    let bottom = height - 1 - (1 + input_height("") + 1 + 1 + 1) - 1;
+    let bottom = height - 1 - (1 + chrome::Composer::new("", width).height() + 1 + 1 + 1) - 1;
     for &(x, y) in &[(0, top), (width - 1, top), (0, bottom), (width - 1, bottom)] {
         let cell = &buffer[(x, y)];
         assert_ne!(cell.symbol(), "╭", "the log panel must not draw a border corner");

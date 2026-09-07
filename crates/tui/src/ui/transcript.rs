@@ -114,11 +114,10 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
 /// case that matters here.
 #[derive(Default)]
 pub(crate) struct Transcript {
-    /// What `blocks` was built against. A change to any of it rebuilds
-    /// everything — these are the inputs `Ctx` and the hero read, and none
-    /// of them changes at a rate worth being incremental about.
+    /// What `blocks` was built against — the two inputs `Ctx` carries into
+    /// every builder, and neither changes at a rate worth being incremental
+    /// about. Deliberately *not* the band's height: see [`Transcript::sync`].
     width:  u16,
-    height: u16,
     theme:  Option<crate::palette::Theme>,
     /// Parallel to `App::log`, in the same order.
     blocks: Vec<CachedBlock>,
@@ -150,10 +149,21 @@ impl Transcript {
     /// currently is.
     pub(crate) fn sync(&mut self, app: &App, width: u16, height: u16) {
         let theme = app.theme;
-        if self.width != width || self.height != height || self.theme != Some(theme) {
+        // `width` and `theme` only. `height` is *not* an input to
+        // `block_rows` — no arm of `render_entry` reads it — and keying the
+        // cache on it anyway meant that anything which resized the log band
+        // threw away every rendered row in the session and rebuilt it.
+        //
+        // That band is resized by the composer growing, which used to happen
+        // only on an explicit newline and now happens whenever a draft
+        // wraps: measured at 7.2x the steady-state frame cost on a 40-turn
+        // transcript, rising with the session, on *ordinary typing* across a
+        // wrap column. The hero *is* laid out against `height`, and takes it
+        // as the parameter below — it is rebuilt on every sync regardless,
+        // so it needs no cache key of its own.
+        if self.width != width || self.theme != Some(theme) {
             self.blocks.clear();
             self.width = width;
-            self.height = height;
             self.theme = Some(theme);
         }
         let ctx = Ctx::new(theme.palette(), width);

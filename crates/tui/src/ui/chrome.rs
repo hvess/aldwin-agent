@@ -6,12 +6,13 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, Padding, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::grid::{elide, truncate_spans, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
-use crate::app::{cursor_line_col, App, RunningTool};
+use crate::app::{App, RunningTool};
+use crate::draft;
 use crate::palette::Palette;
 use crate::log::LogEntry;
 
@@ -36,17 +37,70 @@ const SPINNER_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
 /// `▶` plus two spaces — the reference's own composer row is
 /// `<span>▶</span><span>  </span>`, putting the draft's first character in
-/// cell 6 (the grid's 3-cell `MARGIN_X`, the glyph, then the two). Every
-/// cursor placement on line 0 has to add this back, since neither
-/// `cursor_line_col` nor ratatui's `Wrap` has any notion of the prefix.
+/// cell 6 (the grid's 3-cell `MARGIN_X`, the glyph, then the two).
+///
+/// It is a *gutter*, not a one-off prefix: the glyph marks the first row
+/// only, but all three cells are reserved on every row, so a wrapped or
+/// multi-line draft stays on one left edge instead of stepping back three
+/// columns after its first row. That also makes the draft's column one
+/// number rather than two, which is what lets [`draft::Layout`] wrap it and
+/// place the caret from the same measurement.
 const PROMPT_PREFIX_LEN: u16 = 3;
 
-/// Rows the composer itself needs: just the draft's own, since the blank
-/// rows above and below it belong to the bottom bar
-/// (`BottomBar.jsx`'s blank/composer/blank/status/blank), not to the
-/// composer's own padding.
-pub(super) fn input_height(input: &str) -> u16 {
-    input.matches('\n').count() as u16 + 1
+/// The most rows the composer may take, however long the draft is.
+///
+/// Without a ceiling a pasted file simply became the frame: the composer
+/// grew a row per line, the transcript's `Constraint::Min(1)` gave way, and
+/// a 60-line paste left one row of conversation above a wall of draft.
+/// Past this the draft scrolls inside the band instead, keeping the caret
+/// in view (see [`draw_input`]) — the same trade every editor makes.
+pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
+
+/// The draft, wrapped to the composer's column — measured **once** per
+/// frame and used for everything downstream of that measurement.
+///
+/// [`super::draw`] needs the band's height before it can lay the frame out,
+/// and [`draw_input`] needs the rows and the caret; both come off this one
+/// value. They were briefly two `draft::Layout`s built from two
+/// independently-derived widths, equal only because the bottom band happens
+/// to span the whole frame — which is the exact divergence the log panel's
+/// own `log_inner` comment in `super::draw` says must never be reintroduced,
+/// and twice the wrapping work on a draft big enough for that to matter.
+///
+/// Owns its rows rather than borrowing the draft, so holding one does not
+/// borrow `App` and the caller can still hand `draw_input` a `&mut App`.
+pub(super) struct Composer {
+    layout: draft::Layout,
+    /// Cells of text column the draft was wrapped to.
+    width:  u16,
+}
+
+impl Composer {
+    pub(super) fn new(input: &str, frame_width: u16) -> Self {
+        // The frame less the grid's two margins and the prompt gutter every
+        // row reserves.
+        let width = frame_width.saturating_sub(MARGIN_X as u16 * 2).saturating_sub(PROMPT_PREFIX_LEN).max(1);
+        Self { layout: draft::Layout::new(input, width as usize), width }
+    }
+
+    /// Rows the composer itself needs: just the draft's own, since the
+    /// blank rows above and below it belong to the bottom bar
+    /// (`BottomBar.jsx`'s blank/composer/blank/status/blank), not to the
+    /// composer's own padding.
+    ///
+    /// Counted from the draft's *wrapped* rows, not its newlines. A single
+    /// pasted paragraph is one source line and several screen rows, and
+    /// sizing the band by newlines gave it one — so everything past the
+    /// first row was clipped, and the caret was placed on rows that were
+    /// not on screen.
+    ///
+    /// Clamped in `usize` before the cast, not after: a draft of more than
+    /// `u16::MAX` rows is a perfectly ordinary paste of a large file, and
+    /// casting first would wrap it to an arbitrary small number that only
+    /// happens to land back inside the range.
+    pub(super) fn height(&self) -> u16 {
+        self.layout.row_count().clamp(1, COMPOSER_MAX_ROWS as usize) as u16
+    }
 }
 
 /// Persistent 3-row identity bar — `TopBar.jsx`'s "Session" section. Left:
@@ -363,7 +417,7 @@ pub(super) fn highlight_command_tokens(line: &str, ctx: Ctx) -> Line<'static> {
 /// as stray decoration, not something the input needed. `bar_bottom` is its
 /// field; `Composer.jsx` has no surface of its own beyond `BottomBar.jsx`'s
 /// raised ground, and the prompt `▶` and caret carry the accent instead.
-pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer) {
     let pal = app.theme.palette();
     let ctx = Ctx::new(pal, area.width);
     // `MARGIN_X` horizontally (the grid's `padding: 0 27px`), no vertical
@@ -373,12 +427,14 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
     let prompt = || Span::styled("▶  ", Style::default().fg(pal.mark));
+    let gutter = || Span::styled("   ", Style::default().bg(pal.bar_bottom));
 
     // Dim placeholder text when the draft is empty — an empty filled box
     // gave no hint at all that this was where a message goes. While
     // blocked, the placeholder says so instead of inviting a keystroke it
     // would silently drop.
     if app.input.is_empty() {
+        app.composer_top = 0;
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
         let placeholder = Line::from(vec![prompt(), Span::styled(text, Style::default().fg(pal.dim))]);
         frame.render_widget(Paragraph::new(placeholder).block(block), area);
@@ -388,40 +444,52 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    // The frame's one measurement of the draft (see [`Composer`]) — the
+    // same rows the band was sized from. Its column is cached on `App` so
+    // that Up/Down navigate these rows between draws. Wrapping used to be
+    // left to `Paragraph`'s own `Wrap`, which reports nothing about where
+    // it broke, so the caret was placed from the draft's *source* line and
+    // column and drifted away from the text on any row long enough to wrap.
+    let layout = &composer.layout;
+    app.composer_width = composer.width;
+    let (cursor_row, cursor_col) = layout.position(app.cursor);
+
+    // Keep the caret's row inside the band. A draft taller than the band
+    // scrolls under it rather than growing past `COMPOSER_MAX_ROWS`; the
+    // offset only moves when the caret would otherwise leave, so typing in
+    // the middle of a long paste doesn't drag the view around.
+    let height = inner.height.max(1) as usize;
+    let last_top = layout.row_count().saturating_sub(height);
+    let mut top = app.composer_top.min(last_top);
+    top = top.min(cursor_row);
+    top = top.max((cursor_row + 1).saturating_sub(height));
+    app.composer_top = top;
+
     // Live counterpart to the dim styling of an already-submitted slash
     // command in the log — without this, a command only reads as "directed
     // at the harness, not the model" after Enter, not while it's being
-    // typed. The prompt glyph marks the first line only (a multi-line draft
-    // is Mjolnir's own extension beyond the reference's single-line
-    // composer).
-    let lines: Vec<Line> = app
-        .input
-        .split('\n')
-        .enumerate()
-        .map(|(i, l)| {
-            let mut line = highlight_command_tokens(l, ctx);
-            if i == 0 {
-                line.spans.insert(0, prompt());
-            }
+    // typed. The `▶` marks the draft's first row; every other row gets the
+    // same three cells as blank gutter, so the text keeps one left edge.
+    let lines: Vec<Line> = (top..(top + height).min(layout.row_count()))
+        .map(|i| {
+            let mut line = highlight_command_tokens(&layout.row_text(i), ctx);
+            line.spans.insert(0, if i == 0 { prompt() } else { gutter() });
             line
         })
         .collect();
-    frame.render_widget(Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }), area);
+    // No `Wrap`: `layout` already broke the draft into rows that fit this
+    // column, so there is nothing left for a wrapper to do — and a second
+    // wrapper here is exactly what put the caret and the text on different
+    // rows before.
+    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
 
     // No visible cursor at all was a standing complaint. Ratatui doesn't
     // draw one; `set_cursor_position` asks the real terminal cursor to sit
     // there instead. Skipped while a decision is pending (input is blocked
-    // then, and the placeholder says so). `cursor_line_col` counts by
-    // source line, not wrapped screen row, so a single logical line long
-    // enough to wrap past the box's width would place the cursor past the
-    // visible text — clamped to `inner`'s last column/row below so it never
-    // lands outside the box, rather than fixing the underlying wrap
-    // mismatch.
+    // then, and the placeholder says so).
     if !blocked {
-        let (line, col) = cursor_line_col(&app.input, app.cursor);
-        let prefix = if line == 0 { PROMPT_PREFIX_LEN } else { 0 };
-        let x = (inner.x + prefix + col as u16).min(inner.x + inner.width.saturating_sub(1));
-        let y = (inner.y + line as u16).min(inner.y + inner.height.saturating_sub(1));
+        let x = (inner.x + PROMPT_PREFIX_LEN + cursor_col as u16).min(inner.x + inner.width.saturating_sub(1));
+        let y = (inner.y + (cursor_row - top) as u16).min(inner.y + inner.height.saturating_sub(1));
         frame.set_cursor_position((x, y));
     }
 }

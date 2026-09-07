@@ -14,17 +14,22 @@
 //! scene at four frame sizes in both themes, so a refactor that was meant
 //! to preserve output can be shown to have done so.
 //!
-//! Two things from mjolnir-tui.md's Pitfalls not fully addressed: tool-
+//! One thing from mjolnir-tui.md's Pitfalls is not fully addressed: tool-
 //! activity groups render each call as one bounded summary line (via
 //! `log::summarise`) rather than literally collapsing after a timed delay —
 //! this bounds flooding without needing a redraw timer, but isn't the
-//! spec's literal mechanism. And Shift+Enter's terminal-dependence couldn't
-//! be verified against real kitty/iTerm2/xterm sessions in this sandbox
-//! (no terminal to attach to) — Ctrl+J is wired as a fallback, but that's
-//! reasoning about the failure mode, not empirical testing under those
-//! terminals.
+//! spec's literal mechanism.
+//!
+//! Shift+Enter no longer relies on the terminal happening to report it:
+//! `run.rs` asks for the Kitty keyboard protocol's disambiguation flag
+//! where the terminal says it supports it, which is what makes the key
+//! distinguishable from Enter at all, and `App::handle_key` carries
+//! Alt+Enter and Ctrl+J as fallbacks for terminals that don't. `draft.rs`
+//! owns the multi-line draft those keys produce, along with the bracketed
+//! pastes that produce much larger ones.
 
 mod app;
+mod draft;
 mod first_run;
 mod highlight;
 mod log;

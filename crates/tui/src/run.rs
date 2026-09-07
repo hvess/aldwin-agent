@@ -1,23 +1,47 @@
 use std::io;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mjolnir_core::{Command, Event};
 use mjolnir_permissions::Engine;
-use crossterm::cursor::Show;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{DisableMouseCapture, Event as CtEvent, EventStream};
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use ratatui::crossterm::{execute, ExecutableCommand};
+use ratatui::crossterm::cursor::{Hide, Show};
+use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent, EventStream, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+    EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::crossterm::{execute, queue, ExecutableCommand};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::app::App;
 use crate::first_run::ProviderChoice;
 use crate::palette::Theme;
 use crate::ui;
+
+/// The terminal this session writes to.
+///
+/// The `BufWriter` is not incidental. `io::Stdout` is a `LineWriter` with a
+/// ~1KB buffer and ratatui emits no newlines, so a full-frame repaint —
+/// which is what *every* scroll step is, since each row's content changes —
+/// left the terminal in ~30 separate writes. A terminal composites what has
+/// arrived when its own refresh comes round, so a frame delivered in thirty
+/// pieces is a frame it can draw halfway through: the tearing behind
+/// "scrolling feels jittery". One buffer big enough for a frame makes it
+/// one write.
+type Out = Terminal<CrosstermBackend<BufWriter<io::Stdout>>>;
+
+/// Enough for a full repaint of a large terminal with a style change on
+/// every cell, so a frame is never split across writes by the buffer
+/// filling up mid-paint.
+const OUT_BUFFER: usize = 1 << 20;
 
 /// What the session needs to know about *where* it is running, beyond the
 /// model id the status line already shows: the catalogue bare `/model`
@@ -60,6 +84,20 @@ pub struct SessionProvider {
 /// this process may have inherited or a previous build may have left on in
 /// the same terminal.
 ///
+/// Three other modes are asked for here, all best-effort:
+///
+/// * **Bracketed paste**, so a paste arrives as one `CtEvent::Paste` rather
+///   than as if it had been typed. Without it every newline in a pasted
+///   block was a `KeyCode::Enter` and *submitted the line above it* — the
+///   reported "pasting multi-line text sends the first sentence as a
+///   command".
+/// * **The Kitty keyboard protocol's disambiguation flag**, and only where
+///   the terminal answers that it supports it. This is what makes
+///   Shift+Enter distinguishable from Enter at all; on a terminal without
+///   it the two are the same bytes, and `App::handle_key`'s Alt+Enter and
+///   Ctrl+J fallbacks are the way in.
+/// * **Synchronized output** around each frame (see [`present`]).
+///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
 /// `Theme::from_config` — mjolnir-cli's bootstrap does this) selects which
 /// fixed `palette::Palette` every draw uses for the whole session; see
@@ -74,17 +112,33 @@ pub async fn run(
     session: SessionProvider,
 ) -> io::Result<()> {
     enable_raw_mode()?;
+    // Asked before the alternate screen goes up and before `EventStream`
+    // exists: the query reads the terminal's reply off the same input this
+    // process is about to take over, and the answer decides whether
+    // Shift+Enter can ever be seen. A terminal that doesn't answer is
+    // simply one without the protocol.
+    let enhanced = supports_keyboard_enhancement().unwrap_or(false);
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    let _ = execute!(stdout, EnableBracketedPaste);
+    if enhanced {
+        let _ = execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    }
     // Best-effort: a terminal that doesn't know the mode ignores the
     // sequence, and one that does gives the wheel back without costing
     // selection. Not worth failing the session over either way.
     let _ = stdout.write_all(ALTERNATE_SCROLL_ON).and_then(|()| stdout.flush());
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
-    let guard = TerminalGuard::new();
+    let guard = TerminalGuard::new(enhanced);
 
     let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme, session).await;
+    // Before the guard, not after: the frame the loop last painted is still
+    // sitting in `OUT_BUFFER` at this point, and restoring writes straight
+    // to `io::stdout()`. Left to the `Terminal`'s own drop, that frame would
+    // be flushed *after* the alternate screen had already been left — a
+    // screenful of transcript printed over the developer's shell.
+    let _ = terminal.backend_mut().flush();
     guard.restore()?;
 
     result
@@ -99,24 +153,29 @@ pub async fn run(
 /// `run_loop` — the one path that never reaches `restore()` — and is
 /// necessarily best-effort (errors can't propagate out of `Drop`).
 struct TerminalGuard {
-    armed: bool,
+    armed:    bool,
+    /// Whether the keyboard enhancement flags were actually pushed. Popping
+    /// a stack this process never pushed to would pop whatever the terminal
+    /// was already running with, for whichever program owns the terminal
+    /// next.
+    enhanced: bool,
 }
 
 impl TerminalGuard {
-    fn new() -> Self {
-        Self { armed: true }
+    fn new(enhanced: bool) -> Self {
+        Self { armed: true, enhanced }
     }
 
     fn restore(mut self) -> io::Result<()> {
         self.armed = false;
-        restore_terminal()
+        restore_terminal(self.enhanced)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.armed {
-            let _ = restore_terminal();
+            let _ = restore_terminal(self.enhanced);
         }
     }
 }
@@ -140,17 +199,60 @@ impl Drop for TerminalGuard {
 const ALTERNATE_SCROLL_ON: &[u8] = b"\x1b[?1007h";
 const ALTERNATE_SCROLL_OFF: &[u8] = b"\x1b[?1007l";
 
-fn restore_terminal() -> io::Result<()> {
+fn restore_terminal(enhanced: bool) -> io::Result<()> {
     let raw = disable_raw_mode();
+    let pop = if enhanced { execute!(io::stdout(), PopKeyboardEnhancementFlags) } else { Ok(()) };
+    let paste = execute!(io::stdout(), DisableBracketedPaste);
     let scroll = io::stdout().write_all(ALTERNATE_SCROLL_OFF).and_then(|()| io::stdout().flush());
     let mouse = execute!(io::stdout(), DisableMouseCapture);
     let alt = execute!(io::stdout(), LeaveAlternateScreen);
     let cursor = execute!(io::stdout(), Show);
-    raw.and(scroll).and(mouse).and(alt).and(cursor)
+    raw.and(pop).and(paste).and(scroll).and(mouse).and(alt).and(cursor)
+}
+
+/// Paints one frame as a single atomic update.
+///
+/// Two things wrap ratatui's own draw, and both exist so that a scroll —
+/// the one interaction that changes every row at once — reads as the
+/// content moving rather than as the screen being rewritten:
+///
+/// * **DECSET 2026**, synchronized output. The terminal holds everything
+///   between the two sequences back and composites it in one go, so a frame
+///   can never be shown half-painted. Terminals without it ignore an
+///   unknown private mode, which is why this is best-effort.
+/// * **Hiding the cursor across the paint.** ratatui writes the whole frame
+///   *before* it places the cursor, so on a terminal with no synchronized
+///   output the caret would otherwise be dragged visibly across the frame,
+///   cell by cell, as the rows go out. ratatui's own draw shows it again at
+///   the end, at the position the composer asked for.
+fn present(terminal: &mut Out, app: &mut App) -> io::Result<()> {
+    let _ = queue!(terminal.backend_mut(), BeginSynchronizedUpdate, Hide);
+    terminal.draw(|f| ui::draw(f, app))?;
+    let _ = execute!(terminal.backend_mut(), EndSynchronizedUpdate);
+    Ok(())
+}
+
+/// One crossterm event applied to the app. `false` means the input stream
+/// ended or failed, and with it the session.
+///
+/// A `Resize` needs no handling of its own — ratatui re-reads the terminal
+/// size on the next draw — but it does need the *redraw*, which is why it
+/// is `true` rather than swallowed: the frame it invalidates would
+/// otherwise sit stale until some unrelated event or the next spinner tick
+/// came along.
+fn apply_input(app: &mut App, event: Option<io::Result<CtEvent>>) -> bool {
+    match event {
+        Some(Ok(CtEvent::Key(key))) => app.handle_key(key),
+        Some(Ok(CtEvent::Paste(text))) => app.paste(&text),
+        Some(Ok(CtEvent::Mouse(mouse))) => app.handle_mouse(mouse),
+        Some(Ok(_)) => {}
+        Some(Err(_)) | None => return false,
+    }
+    true
 }
 
 async fn run_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Out,
     mut events: mpsc::Receiver<Event>,
     commands: mpsc::Sender<Command>,
     model_name: String,
@@ -175,9 +277,10 @@ async fn run_loop(
     let mut ticker = tokio::time::interval(SPINNER_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    terminal.draw(|f| ui::draw(f, &mut app))?;
+    present(terminal, &mut app)?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
+    let mut closed = false;
 
     loop {
         // A pending redraw needs a wakeup of its own: a burst that goes
@@ -189,21 +292,23 @@ async fn run_loop(
         tokio::select! {
             biased;
 
+            // Input first, deliberately. With core events polled first, a
+            // streaming reply — one `TextDelta` per token, hundreds a
+            // second — kept this branch permanently ready and `biased`
+            // meant the keyboard was never looked at until the model
+            // stopped talking. Scrolling during a reply was the reported
+            // "laggy": the keys were not slow, they were queued behind the
+            // stream. There is no starvation the other way round, since a
+            // developer cannot type fast enough to hold the loop.
+            input_event = input.next() => {
+                if !apply_input(&mut app, input_event) { break }
+                dirty = true;
+            }
+
             ev = events.recv() => {
                 match ev {
                     Some(event) => { app.apply_event(event); dirty = true; }
                     None => break, // core shut down
-                }
-            }
-
-            input_event = input.next() => {
-                match input_event {
-                    Some(Ok(CtEvent::Key(key))) => { app.handle_key(key); dirty = true; }
-                    // Mouse events never arrive (capture is off — see
-                    // `run`'s doc comment); resize is picked up on the next
-                    // draw naturally; paste events aren't handled in V0.
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => break,
                 }
             }
 
@@ -212,11 +317,47 @@ async fn run_loop(
             _ = tokio::time::sleep_until(flush_at.into()), if dirty => {}
         }
 
+        // Everything else already waiting goes into the *same* frame.
+        //
+        // The loop used to take one event per iteration and then consider
+        // drawing, which made a wheel flick — a burst of thirty-odd
+        // alternate-scroll cursor keys — land as thirty separate scroll
+        // positions the renderer had to walk through in order. The
+        // transcript kept sliding for as long as it took to drain them,
+        // well after the developer had stopped scrolling. Applying the
+        // whole burst before painting makes a flick land where it was
+        // aimed, in one frame.
+        for _ in 0..MAX_INPUT_PER_FRAME {
+            let Some(event) = input.next().now_or_never() else { break };
+            if !apply_input(&mut app, event) {
+                closed = true;
+                break;
+            }
+            dirty = true;
+        }
+        // Both drains are bounded, and for the same reason: a producer that
+        // never goes quiet — a fast provider's deltas, a terminal being
+        // pumped bytes by something else — must not be able to hold the
+        // loop past a frame and move the starvation problem inside it.
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            match events.try_recv() {
+                Ok(event) => {
+                    app.apply_event(event);
+                    dirty = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+
         for command in app.outbox.drain(..) {
             let _ = commands.send(command).await;
         }
 
-        if app.should_quit {
+        if app.should_quit || closed {
             break;
         }
 
@@ -227,7 +368,7 @@ async fn run_loop(
         // the next frame instead, and the `sleep_until` branch above
         // guarantees the last one is still painted promptly.
         if dirty && last_draw.elapsed() >= MIN_FRAME {
-            terminal.draw(|f| ui::draw(f, &mut app))?;
+            present(terminal, &mut app)?;
             last_draw = Instant::now();
             dirty = false;
         }
@@ -246,3 +387,13 @@ const SPINNER_TICK: Duration = Duration::from_millis(120);
 /// immediately. It is only a ceiling on how fast a *burst* can drive the
 /// renderer, and a terminal cannot show more than this anyway.
 const MIN_FRAME: Duration = Duration::from_millis(16);
+
+/// How many core events one frame will absorb before painting what it has.
+/// Generous enough that an ordinary streamed reply is drained whole, small
+/// enough that a runaway producer still yields a frame.
+const MAX_EVENTS_PER_FRAME: usize = 512;
+
+/// The same, for terminal input. A wheel flick is a few dozen
+/// alternate-scroll cursor keys and has to land whole; nothing a developer
+/// can do with a keyboard comes near this.
+const MAX_INPUT_PER_FRAME: usize = 1024;

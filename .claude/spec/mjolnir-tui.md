@@ -3023,6 +3023,146 @@ in the log whose value is still changing, so it is the only one that cannot
 be rendered once and kept. Asking "did anything else change?" over a 40-turn
 transcript measures 0.001 ms.
 
+**Progress (2026-09-07, the event loop, the frame, and a real composer):**
+Two reports. "Scrolling still doesn't feel native — slow/laggy/jittery",
+and "the input field is not multi-line: shift+enter does nothing, and a
+multi-line paste sends the first sentence as a command."
+
+The first was *not* the renderer this time. Measured in-process against
+`TestBackend` at 120x36 — **not** the pty/CPU rig of the entry above, which
+answers a different question and is the more expensive instrument; this one
+only had to price a frame. At 80 and at 600 log entries, release build:
+**0.39 ms/frame idle, 0.47 ms scrolling, 0.67 ms streaming, flat in the size
+of the transcript.** The 16 ms frame budget was never close to full.
+Everything between the developer's hand and that draw was the problem, in
+three places:
+
+1. **Input was starved behind the stream.** The `select!` was `biased` with
+   `events.recv()` first, so while a reply streamed — one `TextDelta` per
+   token, hundreds a second — that branch was permanently ready and the
+   keyboard was never polled until the model stopped talking. Scrolling
+   during a reply was not slow; it was queued. Input is polled first now,
+   which cannot starve the other way round: no one types fast enough to
+   hold the loop.
+2. **A burst was replayed one frame at a time.** The loop took a single
+   event per iteration before considering a draw. A wheel flick is ~30
+   alternate-scroll cursor keys arriving at once, so the transcript walked
+   through thirty scroll positions in sequence and kept sliding long after
+   the developer stopped. Both queues are now drained into the *same*
+   frame — each bounded, so a producer that never goes quiet can't hold the
+   loop past a frame — so a flick lands where it was aimed.
+3. **A frame was delivered in ~30 pieces.** `CrosstermBackend::new(io::
+   stdout())` writes through a `LineWriter` with a ~1KB buffer, and ratatui
+   emits no newlines; a full repaint (which every scroll step is) therefore
+   left in about thirty separate writes, and a terminal composites whatever
+   has arrived when its own refresh comes round. That is the tearing behind
+   "jittery". The backend now wraps a 1 MiB `BufWriter`, and each frame is
+   additionally bracketed in **DECSET 2026** (synchronized output) with the
+   cursor hidden across the paint — ratatui writes the whole frame *before*
+   placing the cursor, so without this the caret was dragged visibly across
+   every row on the way past.
+
+Two scroll behaviours changed with them: the transcript is bottom-anchored
+like `14d`'s body band and the welcome hero already were (short
+conversations sat glued under the identity bar, then jumped down to the
+composer the moment they outgrew the band), and paging keeps two rows of
+overlap instead of swapping the screen for an entirely unfamiliar one.
+`App::handle_mouse` handles wheel events too, at the same three rows a
+notch a terminal's own alternate-scroll translation sends — capture stays
+off (selection is worth more than a wheel binding, per the 2026-09-0x
+report) but a session that inherits reporting from a previous program no
+longer silently drops the wheel.
+
+The composer is now a real multi-line editor, in `draft.rs`. Three separate
+defects were behind one report:
+
+- **No bracketed paste.** The terminal sent a paste as if it had been
+  *typed*, so every newline in it was a `KeyCode::Enter` and submitted the
+  line above it. `EnableBracketedPaste` plus a `CtEvent::Paste` arm fixes
+  it; `draft::sanitize` normalizes CRLF, expands tabs (the one place the
+  harness alters what was pasted — a tab advances the *terminal's* cursor
+  to a stop no cell-grid layout can predict) and drops every other control
+  character, so a pasted escape sequence cannot reach the terminal.
+- **Shift+Enter was unreachable, not unbound.** It was bound all along, but
+  a terminal only reports it distinctly under the Kitty keyboard protocol;
+  without that it is literally the same bytes as Enter. `run.rs` now asks
+  for `DISAMBIGUATE_ESCAPE_CODES` where `supports_keyboard_enhancement()`
+  says the terminal has it (bounded at 2s on a terminal that answers
+  neither that query nor DA1 — in practice immediate), and Alt+Enter joins
+  Ctrl+J as a fallback for the rest. This closes the "couldn't be verified
+  against real terminals" gap the crate doc carried since 2026-08-29: the
+  answer was that reasoning about it was never going to be enough, because
+  the key does not exist on the wire unless you ask for it.
+- **The draft was measured by newlines and drawn by `Paragraph`'s `Wrap`.**
+  Two different ideas of where the rows were: the band was sized from
+  newlines (so a pasted paragraph got one row and everything past it was
+  clipped) and the caret was placed from the *source* line and column (so
+  past the first wrap it drifted a row further away with each one).
+  `draft::Layout` is now the single wrapping, shared by the band's height,
+  the rows drawn, the caret, and Up/Down — which move by visual row, not by
+  source line. The composer caps at 10 rows and scrolls the draft under it
+  rather than eating the frame, and `▶  ` became a *gutter* reserved on
+  every row rather than a prefix on the first, so a wrapped draft keeps one
+  left edge.
+
+Verified under a real pty (`script`, stdin scripted): a three-line
+bracketed paste followed by Enter produces exactly one
+`Command::Submit { text: "first line\nsecond line\nthird" }`, and the
+alternate screen, bracketed paste, alternate scroll and synchronized-update
+modes are all set on entry and cleared on exit.
+
+**What this deliberately did not touch:** first run (`first_run::run`) keeps
+its own terminal setup, and gets none of the above — no buffered writer, no
+synchronized output, no bracketed paste, no keyboard enhancement. It has no
+transcript, no scrolling, no streaming and no text field (its keys are
+digits and arrows), so every one of those buys nothing there; the only thing
+it forgoes is tearing on a repaint that happens at human keypress rate. If
+it ever grows a text field, it needs this list.
+
+**Progress (2026-09-07, audit of the round above):** three passes over the
+change — correctness, Rust idiom, integration/spec. Probes for the first
+pass (tiny frames down to 1x1, an 868k-character paste, wide/emoji
+graphemes, every cursor position at three widths, every arrow key at every
+cursor position in seven drafts) found no panic and no caret outside its
+band. Three real defects came out of it, all now fixed and two of them
+mine:
+
+1. **The multi-line composer re-rendered the whole transcript on ordinary
+   typing.** `Transcript`'s cache was keyed on the log band's height as
+   well as its width. The band is resized by the composer growing — which
+   before this round meant an explicit newline, and after it means *any*
+   keystroke that pushes the draft across a wrap column. Measured at
+   **7.2x the steady-state frame cost on a 40-turn transcript and rising
+   with the session**, which is precisely the failure the 2026-09-07 entry
+   above was written about, reintroduced through a different door. Height
+   is not an input to `block_rows` (no arm of `render_entry` reads it), so
+   it simply came out of the key: 0.290s → 0.042s over 100 frames at 40
+   turns, now identical to the 2-turn figure. Pinned by
+   `a_growing_composer_re_renders_nothing_in_the_transcript`, shaped like
+   its streaming neighbour.
+2. **The draft was wrapped twice per frame, from two independently-derived
+   widths.** `ui::draw` measured it to size the band and `draw_input`
+   measured it again to draw it, agreeing only because the bottom band
+   happens to span the frame — the exact divergence `log_inner`'s own
+   comment says must never be reintroduced. Now one `chrome::Composer`,
+   built only when the composer is actually on screen, passed to
+   `draw_input`. A 1000-line pasted draft went 1.13 → 0.61 ms/frame
+   against a 0.56 ms empty-composer baseline; 20000 lines, 3.97 → 2.43 ms.
+3. **A test assertion that could never fail.** The composer-cap test
+   checked `!buffer_as_one_string.contains("line-0\n")` — the joined
+   buffer has no row breaks in it, so that answered nothing. Rewritten to
+   count rows carrying each needle.
+
+The idiom pass took two things from the project's Rust guidelines:
+`draft::sanitize` returns `Cow<str>` and borrows an ordinary paste back
+untouched rather than copying a whole clipboard to produce the same bytes
+(868k chars: 28 → 1.3 ms), with the fast-path predicate and the rewrite
+sharing one statement of the rule so they cannot drift; and
+`draft::source_line` walks the draft instead of collecting a `Vec<char>` of
+it on every Home/End. It also caught `rows as u16` being cast before its
+clamp rather than after — harmless today, since the truncated value happens
+to land back in range, but wrong on its own terms.
+
 
 ## References
 

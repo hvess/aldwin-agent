@@ -79,14 +79,23 @@ impl ScrollState {
     }
 
     pub fn page_up(&mut self) {
-        self.offset = self.offset.saturating_sub(self.viewport_height);
+        self.offset = self.offset.saturating_sub(self.page());
         self.following = false;
     }
 
     pub fn page_down(&mut self, total_len: usize) {
         let max = self.max_offset(total_len);
-        self.offset = (self.offset + self.viewport_height).min(max);
+        self.offset = (self.offset + self.page()).min(max);
         self.following = self.offset >= max;
+    }
+
+    /// A page, with two rows of overlap — the rows that were at the far
+    /// edge stay on screen as the ones the next page is read against.
+    /// Paging by the *whole* viewport swapped the screen for an entirely
+    /// unfamiliar one and left nothing to place it against, which is why
+    /// every pager does this.
+    fn page(&self) -> usize {
+        self.viewport_height.saturating_sub(2).max(1)
     }
 }
 
@@ -173,11 +182,20 @@ mod tests {
     }
 
     #[test]
-    fn page_up_and_down_move_by_a_full_viewport() {
+    fn page_up_and_down_move_by_a_viewport_less_two_rows_of_overlap() {
         let mut s = ScrollState { viewport_height: 5, offset: 20, following: false };
         s.page_up();
-        assert_eq!(s.offset, 15);
+        assert_eq!(s.offset, 17);
         s.page_down(30);
         assert_eq!(s.offset, 20);
+    }
+
+    /// The overlap must never eat the whole step: on a frame short enough
+    /// that a page is two rows or fewer, paging still has to move.
+    #[test]
+    fn paging_a_tiny_viewport_still_advances() {
+        let mut s = ScrollState { viewport_height: 1, offset: 4, following: false };
+        s.page_up();
+        assert_eq!(s.offset, 3);
     }
 }

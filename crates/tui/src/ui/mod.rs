@@ -133,7 +133,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // While a decision is pending the panel takes those rows instead:
     // "input is disabled while a permission is pending: there is nothing to
     // type into, so the prompt row is not drawn at all."
-    let input_height = chrome::input_height(&app.input);
+    // Measured once for the whole frame, and only when the composer is
+    // actually on screen: a pending decision or the picker takes the band
+    // instead, and wrapping a draft nobody can see is pure cost on a large
+    // one. See `chrome::Composer` for why there is exactly one of these.
+    let composer = (!pending && !picking).then(|| chrome::Composer::new(&app.input, area.width));
     // Three bands, each carrying its own edge inside itself (see the note
     // on borders further down this file). 3 cells for the top bar
     // (`--bar-top-h`), and `BottomBar.jsx`'s blank/composer/blank/status/
@@ -145,12 +149,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // underline of the row above the band. There is no edge now, and
     // leaving the row reserved put a stray `bar` row *below* the footer,
     // since the panel's content renders from the top of its rect.
-    let bottom_height = if pending {
-        panel_height
-    } else if picking {
-        picker_height
-    } else {
-        input_height + 4
+    let bottom_height = match &composer {
+        // The composer's own rows plus `BottomBar.jsx`'s four fixed ones.
+        Some(composer) => composer.height() + 4,
+        None if pending => panel_height,
+        None => picker_height,
     };
     let [top_bar_area, log_area, bottom_area] =
         Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(bottom_height)]).areas(area);
@@ -181,7 +184,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // only the viewport is ever materialised.
     let total = app.total_lines();
     app.scroll.set_viewport_height(log_inner.height as usize, total);
-    let visible = app.transcript_slice(app.scroll.offset, log_inner.height as usize);
+    let mut visible = app.transcript_slice(app.scroll.offset, log_inner.height as usize);
+    // Bottom-anchored, like `14d`'s body band and the welcome hero that
+    // already pads itself to sit on the composer: a conversation shorter
+    // than the band hangs off its *bottom* edge, not its top. Drawn from
+    // the top, the first few turns of a session sat glued under the
+    // identity bar with the gap below them — and then, the moment the
+    // transcript outgrew the band, jumped down to rest on the composer
+    // instead. Nothing is added to the row count: these blank rows are
+    // layout, not transcript, and `ScrollState` must keep measuring the
+    // conversation rather than the space around it.
+    if let Some(pad) = (log_inner.height as usize).checked_sub(visible.len()).filter(|&p| p > 0) {
+        let mut anchored = vec![ratatui::text::Line::default(); pad];
+        anchored.append(&mut visible);
+        visible = anchored;
+    }
 
     transcript::draw_log(frame, log_area, log_inner, log_block, visible);
 
@@ -207,16 +224,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // panel is the one live surface while it is open.
         fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
         decision::draw_panel(frame, bottom_area, picker_lines, pal);
-    } else {
+    } else if let Some(composer) = &composer {
         // blank / composer / blank / status / blank — the reference's own
         // five rows, on its own ground one step off the transcript. No
         // rule above it: the step *is* the boundary, so all five rows are
         // painted `bar_bottom` and the first is simply blank.
         frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_area);
-        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] =
-            Layout::vertical([Constraint::Length(1), Constraint::Length(input_height), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-                .areas(bottom_area);
-        chrome::draw_input(frame, composer_area, app);
+        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] = Layout::vertical([
+            Constraint::Length(1),
+            // The same height the band above was sized from — one
+            // `Composer`, so the two cannot disagree.
+            Constraint::Length(composer.height()),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(bottom_area);
+        chrome::draw_input(frame, composer_area, &mut *app, composer);
         chrome::draw_status_line(frame, status_area, app);
     }
 }

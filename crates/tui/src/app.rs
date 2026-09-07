@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use mjolnir_core::{Command, Event, StepId};
 use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::log::{summarise, LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus};
 use crate::scroll::ScrollState;
@@ -17,24 +17,10 @@ const SUMMARY_MAX_LEN: usize = 80;
 /// clock, the same reason `tick` itself is a counter (see its field doc).
 const DOUBLE_CTRL_C_TICKS: u64 = 16;
 
-/// (line, col) of `cursor` (a char index into `input`, same unit
-/// `App::cursor` is kept in) — both counted in chars, 0-indexed. Shared by
-/// `App::move_cursor_vertical` (cursor navigation) and `ui::draw_input`
-/// (placing the real terminal cursor), so the two can't disagree about
-/// where the cursor visually sits.
-pub(crate) fn cursor_line_col(input: &str, cursor: usize) -> (usize, usize) {
-    let mut line = 0usize;
-    let mut col = 0usize;
-    for c in input.chars().take(cursor) {
-        if c == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
-}
+/// Rows one wheel notch moves the transcript — the same three a terminal's
+/// own alternate-scroll translation sends as cursor keys, so the two paths
+/// into `ScrollState` can't disagree about how far a notch goes.
+const WHEEL_ROWS: usize = 3;
 
 /// `diff` rides along here (not just `call_id`) for the same reason
 /// `PendingPrompt` already carries its own `payload`: `ui::draw`'s decision
@@ -364,6 +350,19 @@ pub struct App {
     pub render_height:    u16,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
+    /// The composer's real text-column width, cached by `ui::chrome`'s own
+    /// draw exactly as `render_width` is — the draft wraps to it, so Up and
+    /// Down have to navigate by it, and key handling runs between draws
+    /// with no render access of its own. Off by at most one stale frame,
+    /// on a resize, until the next draw corrects it.
+    pub composer_width:    u16,
+    /// First visual row of the draft the composer band is showing. A draft
+    /// taller than [`crate::ui::COMPOSER_MAX_ROWS`] scrolls inside its band
+    /// rather than growing without bound — a pasted file would otherwise
+    /// take the whole frame and leave no transcript at all. Maintained by
+    /// the composer's draw, which is the only place that knows both the
+    /// band's height and where the caret is.
+    pub composer_top:      usize,
     /// Queued, not a single slot — parallel tool use can dispatch several
     /// Edit calls in one step, each requesting approval independently (see
     /// `dispatch_tools`' `future::join_all` in mjolnir-core), so more than
@@ -485,6 +484,8 @@ impl App {
             render_height: 24,
             input: String::new(),
             cursor: 0,
+            composer_width: 74,
+            composer_top: 0,
             pending_approvals: VecDeque::new(),
             pending_prompts: VecDeque::new(),
             decision_selected: 0,
@@ -758,39 +759,56 @@ impl App {
         }
 
         match (key.code, key.modifiers) {
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => self.insert_char('\n'),
+            // A new line in the draft, three ways, because no one of them
+            // reaches every terminal. Shift+Enter is what a developer
+            // reaches for, but a terminal only reports it distinctly under
+            // the Kitty keyboard protocol — `run.rs` asks for that at
+            // startup where it is supported, and where it isn't, Shift+Enter
+            // is literally indistinguishable from Enter on the wire. Alt+
+            // Enter is what iTerm2 and Windows Terminal send for
+            // Option/Alt+Return without any protocol extension, and Ctrl+J
+            // (a bare linefeed) gets through everywhere else.
+            (KeyCode::Enter, m) if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => self.insert_char('\n'),
             (KeyCode::Enter, _) => self.submit(),
-            // Shift+Enter's reporting is terminal-dependent (plain xterm
-            // without the Kitty keyboard protocol can't distinguish it from
-            // bare Enter) — Ctrl+J (linefeed) is a fallback that gets
-            // through on terminals where Shift+Enter doesn't.
             (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.insert_char('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.cancel_or_quit(),
             (KeyCode::Backspace, _) => self.backspace(),
             (KeyCode::Delete, _) => self.delete_forward(),
             (KeyCode::Left, _) => self.cursor = self.cursor.saturating_sub(1),
             (KeyCode::Right, _) => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
-            (KeyCode::Home, _) => self.cursor = 0,
-            (KeyCode::End, _) => {
-                self.cursor = self.input.chars().count();
+            // Scoped to the line the caret is on, not to the whole draft —
+            // a draft is now routinely many lines (Shift+Enter, or a
+            // pasted block), and Home jumping to the top of a pasted file
+            // is not what either key means in any other editor. With no
+            // draft to move within, End keeps its other job: putting the
+            // transcript back on the live end of the conversation.
+            (KeyCode::Home, _) => self.cursor = crate::draft::source_line(&self.input, self.cursor).0,
+            (KeyCode::End, _) if self.input.is_empty() => {
                 let total = self.total_lines();
                 self.scroll.jump_to_bottom(total);
             }
+            (KeyCode::End, _) => self.cursor = crate::draft::source_line(&self.input, self.cursor).1,
             (KeyCode::PageUp, _) => self.scroll.page_up(),
             (KeyCode::PageDown, _) => {
                 let total = self.total_lines();
                 self.scroll.page_down(total);
             }
             // Within a multi-line draft, Up/Down move the cursor between its
-            // lines first; only once there's no further line to move to
-            // (a single-line draft, or already at the draft's first/last
-            // line) do they fall through to scrolling the log. Previously
+            // rows first; only once there's no further row to move to
+            // (a single-row draft, or already at the draft's first/last
+            // row) do they fall through to scrolling the log. Previously
             // this — and a separate set of vim-style j/k/G bindings — used
             // "only when the input is empty" as the guard, which silently
             // swallowed the first keystroke of any message starting with
             // j, k, or a capital G instead of inserting it (the vim
             // bindings are gone outright: PageUp/PageDown/Home/End already
             // cover keyboard scrolling without that ambiguity).
+            //
+            // This is also the wheel's path into the log: `run.rs` leaves
+            // the mouse to the terminal and asks it to translate notches
+            // into cursor keys instead (see `ALTERNATE_SCROLL` there), so
+            // every notch arrives here as an ordinary Up/Down and moves
+            // exactly what the key itself would.
             (KeyCode::Up, _) => {
                 if !self.move_cursor_vertical(-1) {
                     self.scroll.line_up();
@@ -807,29 +825,104 @@ impl App {
         }
     }
 
-    /// Moves the cursor to the line `delta` rows away (by source line, not
-    /// wrapped screen row — the input box is short enough that this rarely
-    /// matters, and ratatui's own wrap point isn't available to this pure
-    /// logic layer without threading render width all the way through key
-    /// handling), preserving column where possible. Returns `false` (leaving
-    /// the cursor untouched) when there's no such line — a single-line
-    /// draft, or already at its first/last line — so callers can fall
-    /// through to scrolling the log instead.
+    /// Scrolls the log for a wheel event, for the case where something has
+    /// mouse reporting on after all.
+    ///
+    /// `run.rs` deliberately does not enable capture — the terminal keeps
+    /// the mouse so that click-drag stays native text selection — so in an
+    /// ordinary session these never arrive and the wheel comes through
+    /// `handle_key` as cursor keys instead. But a session can inherit
+    /// reporting from a mode a previous program left on, and a multiplexer
+    /// can be configured to forward it; a dropped wheel event then reads as
+    /// scrolling being broken. Three rows a notch is what a terminal's own
+    /// alternate-scroll translation sends, so both paths move the same
+    /// distance.
+    pub fn handle_mouse(&mut self, event: MouseEvent) {
+        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() {
+            return;
+        }
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                for _ in 0..WHEEL_ROWS {
+                    self.scroll.line_up();
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                let total = self.total_lines();
+                for _ in 0..WHEEL_ROWS {
+                    self.scroll.line_down(total);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A bracketed paste — the clipboard's whole contents at once, newlines
+    /// and all, dropped in at the caret.
+    ///
+    /// Without this the terminal sends a paste as if it had been *typed*,
+    /// so every newline in it arrived as `KeyCode::Enter` and submitted the
+    /// line above it: pasting a five-line block sent five separate
+    /// messages, the first one being whatever had been pasted before the
+    /// first newline. `run.rs` turns on bracketed paste so the terminal
+    /// brackets the block and delivers it here instead.
+    ///
+    /// Ignored while a decision or the picker holds the band, matching
+    /// `handle_key`: there is no composer on screen to paste into, and the
+    /// placeholder says so.
+    pub fn paste(&mut self, text: &str) {
+        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() {
+            return;
+        }
+        self.insert_str(&crate::draft::sanitize(text));
+    }
+
+    /// Moves the cursor to the visual row `delta` away, holding its display
+    /// column where the target row is wide enough. Returns `false` (leaving
+    /// the cursor untouched) when there's no such row — a single-row draft,
+    /// or already at its first/last row — so callers can fall through to
+    /// scrolling the log instead.
+    ///
+    /// By *wrapped* row, not source line: a pasted paragraph is one source
+    /// line and several rows, and moving by source line there skipped the
+    /// rows in between and put the caret somewhere the developer could not
+    /// see it having moved to. `composer_width` is the column the composer
+    /// last drew at.
     fn move_cursor_vertical(&mut self, delta: isize) -> bool {
-        let lines: Vec<&str> = self.input.split('\n').collect();
-        let (line, col) = cursor_line_col(&self.input, self.cursor);
-        let Some(target) = line.checked_add_signed(delta).filter(|&t| t < lines.len()) else { return false };
-        let target_len = lines[target].chars().count();
-        let new_col = col.min(target_len);
-        let idx: usize = lines[..target].iter().map(|l| l.chars().count() + 1).sum::<usize>() + new_col;
-        self.cursor = idx;
-        true
+        let layout = crate::draft::Layout::new(&self.input, self.composer_width as usize);
+        match layout.step_row(self.cursor, delta) {
+            Some(cursor) => {
+                self.cursor = cursor;
+                true
+            }
+            None => false,
+        }
     }
 
     fn insert_char(&mut self, c: char) {
-        let byte_idx = self.input.char_indices().nth(self.cursor).map(|(i, _)| i).unwrap_or(self.input.len());
+        let byte_idx = self.byte_at(self.cursor);
         self.input.insert(byte_idx, c);
         self.cursor += 1;
+    }
+
+    /// Inserts a whole block at the caret in one go. Not a loop over
+    /// `insert_char`: that walks the draft from the start to translate the
+    /// caret's character index into a byte offset, which is quadratic in
+    /// the size of the paste, and a pasted file is exactly the case this
+    /// exists for.
+    fn insert_str(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let byte_idx = self.byte_at(self.cursor);
+        self.input.insert_str(byte_idx, text);
+        self.cursor += text.chars().count();
+    }
+
+    /// The byte offset of character `index`, or the draft's length past the
+    /// end — `App::cursor` counts characters and `String` indexes bytes.
+    fn byte_at(&self, index: usize) -> usize {
+        self.input.char_indices().nth(index).map_or(self.input.len(), |(i, _)| i)
     }
 
     fn backspace(&mut self) {
@@ -1291,20 +1384,145 @@ mod tests {
         }
     }
 
+    /// Where the caret is, in the composer's own terms — the rows it draws,
+    /// not the draft's source lines. Same call `ui::chrome` makes to place
+    /// the real terminal cursor.
+    fn caret(app: &App) -> (usize, usize) {
+        crate::draft::Layout::new(&app.input, app.composer_width as usize).position(app.cursor)
+    }
+
     #[test]
     fn up_and_down_navigate_a_multiline_draft_before_falling_through_to_scroll() {
         let mut app = app();
         type_str(&mut app, "line one\nline two\nline three");
-        // Cursor starts at the end (line 2, col 10 within "line three").
+        // Cursor starts at the end (row 2, col 10 within "line three").
         // "line two" is only 8 chars, so the column clamps on the way up.
         app.handle_key(press(KeyCode::Up));
-        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (1, 8), "Up should clamp to the shorter middle line's length");
+        assert_eq!(caret(&app), (1, 8), "Up should clamp to the shorter middle line's length");
         app.handle_key(press(KeyCode::Up));
-        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (0, 8), "Up again should land on the same column, which the first line can also fit");
+        assert_eq!(caret(&app), (0, 8), "Up again should land on the same column, which the first line can also fit");
         // No line above the first — Up here must not move the cursor
         // further (it falls through to scrolling the log instead).
         app.handle_key(press(KeyCode::Up));
-        assert_eq!(super::cursor_line_col(&app.input, app.cursor), (0, 8));
+        assert_eq!(caret(&app), (0, 8));
+    }
+
+    /// The wrapped-row half of the same rule. A pasted paragraph is one
+    /// source line and several rows; Up from its last row has to reach the
+    /// row above it, not fall straight through to the log — which is what
+    /// moving by source line did.
+    #[test]
+    fn up_and_down_navigate_the_rows_a_wrapped_draft_actually_occupies() {
+        let mut app = app();
+        app.composer_width = 20;
+        type_str(&mut app, "one two three four five six seven eight");
+        let (row, _) = caret(&app);
+        assert!(row > 0, "the draft has to wrap for this test to mean anything");
+        let before = app.scroll.offset;
+        app.handle_key(press(KeyCode::Up));
+        assert_eq!(caret(&app).0, row - 1, "Up must move a wrapped row, not skip the whole source line");
+        assert_eq!(app.scroll.offset, before, "and it must not also scroll the log");
+    }
+
+    /// The reported bug: a multi-line paste arrived as if it had been
+    /// typed, so the newline in it was an Enter and submitted the first
+    /// line as a message of its own.
+    #[test]
+    fn a_multiline_paste_lands_in_the_draft_whole_instead_of_submitting() {
+        let mut app = app();
+        app.paste("first line\nsecond line\nthird");
+        assert_eq!(app.input, "first line\nsecond line\nthird");
+        assert!(app.outbox.is_empty(), "a paste is not a submission");
+        assert!(app.log.is_empty());
+        app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.outbox, vec![Command::Submit { text: "first line\nsecond line\nthird".into() }], "and it submits as one message");
+    }
+
+    #[test]
+    fn a_paste_lands_at_the_caret_and_carries_it_along() {
+        let mut app = app();
+        type_str(&mut app, "ac");
+        app.cursor = 1;
+        app.paste("b");
+        assert_eq!(app.input, "abc");
+        assert_eq!(app.cursor, 2);
+    }
+
+    /// Pasting a windows-clipboard block must not leave a control
+    /// character on the end of every row (see `draft::sanitize`).
+    #[test]
+    fn a_paste_is_normalized_before_it_reaches_the_draft() {
+        let mut app = app();
+        app.paste("a\r\nb\tc");
+        assert_eq!(app.input, "a\nb    c");
+    }
+
+    #[test]
+    fn a_paste_is_dropped_while_a_decision_holds_the_composer() {
+        let mut app = app();
+        app.pending_approvals.push_back(PendingApproval { call_id: "c1".into(), diff: "diff".into() });
+        app.paste("some text");
+        assert_eq!(app.input, "", "there is no composer on screen to paste into");
+    }
+
+    #[test]
+    fn alt_enter_is_a_newline_fallback_for_terminals_that_eat_shift_enter() {
+        let mut app = app();
+        type_str(&mut app, "a");
+        app.handle_key(press_mod(KeyCode::Enter, KeyModifiers::ALT));
+        type_str(&mut app, "b");
+        assert_eq!(app.input, "a\nb");
+        assert!(app.outbox.is_empty());
+    }
+
+    #[test]
+    fn home_and_end_stay_on_the_line_the_caret_is_on() {
+        let mut app = app();
+        type_str(&mut app, "first\nsecond");
+        app.handle_key(press(KeyCode::Home));
+        assert_eq!(app.cursor, 6, "Home goes to the start of the second line, not the top of the draft");
+        app.handle_key(press(KeyCode::End));
+        assert_eq!(app.cursor, 12);
+    }
+
+    /// End keeps its other job on the resting screen: with nothing drafted
+    /// there is no line to move within, and it puts the transcript back on
+    /// the live end of the conversation.
+    #[test]
+    fn end_returns_an_empty_composer_to_the_bottom_of_the_log() {
+        let mut app = app();
+        for i in 0..20 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        let total = app.total_lines();
+        app.scroll.set_viewport_height(5, total);
+        app.scroll.offset = 0;
+        app.scroll.following = false;
+        app.handle_key(press(KeyCode::End));
+        assert!(app.scroll.following);
+        assert_eq!(app.scroll.offset, total - 5);
+    }
+
+    #[test]
+    fn a_wheel_notch_scrolls_the_log_by_three_rows() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = app();
+        for i in 0..40 {
+            app.log.push(LogEntry::AssistantText { text: format!("line-{i}") });
+        }
+        app.render_width = 80;
+        let total = app.total_lines();
+        app.scroll.set_viewport_height(10, total);
+        let before = app.scroll.offset;
+        let wheel = |kind| MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE };
+        app.handle_mouse(wheel(MouseEventKind::ScrollUp));
+        assert_eq!(app.scroll.offset, before - 3);
+        app.handle_mouse(wheel(MouseEventKind::ScrollDown));
+        assert_eq!(app.scroll.offset, before);
+        // Anything that isn't the wheel leaves the transcript alone.
+        app.handle_mouse(wheel(MouseEventKind::Down(MouseButton::Left)));
+        assert_eq!(app.scroll.offset, before);
     }
 
     #[test]

@@ -78,24 +78,6 @@ impl From<TurnEndReason> for TurnEndReasonKind {
     }
 }
 
-/// Rows the welcome hero (`ui::intro_content`) always renders: the tagline,
-/// a blank row, then `model`/`version`/`commit`/`access` fact rows — 6
-/// total. No art any more — the Mjolnir Design System's own "no logo"
-/// rule replaced the traced hammer/wordmark with this plain fact block
-/// (see `ui::intro_content`'s doc comment). Fixed shape, not derived from
-/// any state but the model name (itself always one line), so this is a
-/// hand-kept constant rather than a function.
-///
-/// Not used to compute "the screen row the first real log entry starts
-/// on" — the hero and real log entries are mutually exclusive (see
-/// `ui::build_log_lines`), so there's no such offset to compute. Its only
-/// remaining job is pinning down the hero's exact content-row count in
-/// `intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows`,
-/// hence `#[cfg(test)]`. Update alongside `ui::intro_content` if its shape
-/// ever changes.
-#[cfg(test)]
-pub const INTRO_LINE_COUNT: usize = 6;
-
 /// Truncates a tool result to a one-line summary for a closed
 /// `ToolActivityEntry` — the full content already went into the model's
 /// context; the log just needs enough to glance at.

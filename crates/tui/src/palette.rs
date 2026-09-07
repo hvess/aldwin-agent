@@ -31,22 +31,31 @@
 //! band's *tone* the thing that separates it from its neighbour, so the
 //! seven `--color-ground-0…6` steps are load-bearing structure rather than
 //! decoration. `palette.css` states the consequence directly: "Changing a
-//! step's lightness removes a boundary." The roles that read those steps
-//! are [`Palette::scrim`], [`Palette::recess`], [`Palette::break_`],
-//! [`Palette::ground`], [`Palette::bar_bottom`], [`Palette::bar`] and
-//! [`Palette::panel_title`], in ascending order in the dark theme and
-//! descending in the light one.
+//! step's lightness removes a boundary."
+//!
+//! The seven roles that read those steps are [`Palette::scrim`],
+//! [`Palette::recess`], [`Palette::break_`], [`Palette::ground`],
+//! [`Palette::bar_bottom`], [`Palette::bar`] and [`Palette::panel_title`].
+//! **The two themes do not order them the same way**, which is the thing to
+//! know before changing one. In [`DARK`] that list *is* the ladder, darkest
+//! to lightest — it reads as `--color-ground-0…6` in order. In [`LIGHT`]
+//! since Turn 14 the ground is the lightest surface and every other band
+//! sinks below it, so the ladder is a different sequence entirely:
+//! `ground`, `break_`, `bar_bottom`, `bar`, `recess`, `panel_title`,
+//! `scrim`. A reading of the light theme as "the dark list reversed" is
+//! wrong and was the shape of two of the defects Turn 14 fixed.
 //!
 //! That is also why the previous local contrast deviation is gone. Eleven
 //! fields here used to sit ahead of the tokens, hand-nudged for WCAG
 //! headroom because the hand-tuned palette kept failing at the dim steps.
 //! The upstream ramps are now *generated* — one hue (300°), lightness
 //! climbing in even OKLCH steps, chroma falling as lightness rises — which
-//! is the systematic fix that deviation was standing in for, and the
-//! measurements are recorded upstream (the muted ramp clears 3.3:1 at the
-//! dim step on the chrome bar, the binding band in a dark theme; the light
-//! theme clears 3.0:1 on its recessed field). Every value below is now the
-//! token's own, so this file and the token layer agree again.
+//! is the systematic fix that deviation was standing in for. Both ladders
+//! are strictly monotonic with seven distinct rungs, and the light one's
+//! narrowest rung (1.127:1, ground to break) is wider than the dark one's
+//! (1.011:1, scrim to recess); `dim` holds 5.29:1 on the light theme's
+//! recessed field, the darkest band and the binding one there. Every value
+//! below is the token's own, so this file and the token layer agree again.
 //!
 //! There is deliberately no `line` field. `--tui-line` still exists
 //! upstream but is marked legacy there and scoped to "annotation around a
@@ -154,6 +163,18 @@ pub(crate) struct Palette {
     pub glyph_running: Color,
     /// `--tui-glyph-pending` — a pending hunk/step (`○`).
     pub glyph_pending: Color,
+    /// `--tui-step-done` — a *settled first-run step's* `●`, which is not the
+    /// same role as [`Palette::glyph_done`] even though the two carry the
+    /// same value in [`DARK`].
+    ///
+    /// They part company in [`LIGHT`], and the reason is worth keeping: both
+    /// glyphs have to recede from the accent mark, but they recede in
+    /// opposite directions. A finished tool call sits in a dense run of tool
+    /// rows and falls back by going *lighter* than the mark (`#a17adf`); a
+    /// settled step sits alone beside the answer it produced, which has to
+    /// stay readable, so it falls back by going *darker* (`#6941a1`).
+    /// Spelling both as one field would force one of the two to be wrong.
+    pub step_done: Color,
     pub hunk_header: Color,
     /// `--tui-reverse-bg` / `--tui-reverse-ink` — reverse video, the accent
     /// as ground with the desk as ink. The design system uses this for the
@@ -205,6 +226,7 @@ pub(crate) const DARK: Palette = Palette {
     glyph_done: Color::Rgb(0x7f, 0x64, 0xab),    // accent-700
     glyph_running: Color::Rgb(0xbe, 0x9d, 0xf7), // accent-400
     glyph_pending: Color::Rgb(0x5d, 0x57, 0x6a), // neutral-700
+    step_done: Color::Rgb(0x7f, 0x64, 0xab),     // accent-700 — see the field
     hunk_header: Color::Rgb(0xa0, 0x81, 0xd5),   // accent-500
     reverse_bg: Color::Rgb(0xbe, 0x9d, 0xf7),    // accent-400
     reverse_ink: Color::Rgb(0x0c, 0x0a, 0x11),   // ground-0
@@ -217,51 +239,70 @@ pub(crate) const DARK: Palette = Palette {
     del_code: Color::Rgb(0xff, 0xa8, 0xa0),
 };
 
-/// The design system's `.tui-light` scope — same layout, ramps flipped;
-/// selection band darker than the page, not lighter (per the source's own
-/// note: "on a light ground the selection band must be darker than the
-/// page, not lighter").
+/// The design system's `.tui-light` scope — same roles, same hue, ramps
+/// flipped; selection band darker than the page, not lighter (per the
+/// source's own note: "on a light ground the selection band must be darker
+/// than the page, not lighter").
+///
+/// Turn 14 regenerated every value here, and two of the changes were
+/// corrections rather than adjustments — see the ladder comment below and
+/// [`Palette::step_done`]. The light accents also left the shared accent
+/// ramp: they now sit past `--color-accent-900` (`#562c8b`), so
+/// `.tui-light` states them as literals and the `// accent-800` style of
+/// annotation that the [`DARK`] values carry would be a lie here. Only
+/// `band` still comes from the palette ramp, because `--color-band-light`
+/// exists for that one fill.
 pub(crate) const LIGHT: Palette = Palette {
     theme: Theme::Light,
-    // The ladder inverts: the frame ground is the *lightest* surface and
-    // every other band sinks below it. The one exception is `break_`, which
-    // rises — a separator has to stay visible against the ground it parts.
-    scrim: Color::Rgb(0xae, 0xaa, 0xb7),
-    recess: Color::Rgb(0xbb, 0xb6, 0xc5),
-    break_: Color::Rgb(0xf0, 0xed, 0xf5),
-    ground: Color::Rgb(0xfb, 0xf9, 0xfe),
-    bar_bottom: Color::Rgb(0xce, 0xc9, 0xd8),
-    bar: Color::Rgb(0xe4, 0xe1, 0xeb),
-    panel_title: Color::Rgb(0xce, 0xc6, 0xdf),
-    text: Color::Rgb(0x17, 0x15, 0x1c),
-    body: Color::Rgb(0x32, 0x2e, 0x39),
-    code: Color::Rgb(0x22, 0x1f, 0x28),
-    context: Color::Rgb(0x61, 0x5c, 0x6c),
-    value: Color::Rgb(0x43, 0x3f, 0x4b),
-    label: Color::Rgb(0x52, 0x4d, 0x5b),
-    dim: Color::Rgb(0x61, 0x5c, 0x6c),
-    quiet: Color::Rgb(0x43, 0x3f, 0x4b),
-    mark: Color::Rgb(0x6d, 0x41, 0xa9),      // accent-800
-    mark_idle: Color::Rgb(0x96, 0x90, 0xa3),
-    band: Color::Rgb(0xc6, 0xb1, 0xef),      // band-light
-    accent_text: Color::Rgb(0x56, 0x2c, 0x8b), // accent-900
-    speaker_you: Color::Rgb(0x5c, 0x30, 0x93),
-    speaker_agent: Color::Rgb(0x43, 0x3f, 0x4b),
-    gauge_fill: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
-    gauge_track: Color::Rgb(0x93, 0x8d, 0xa0),
-    glyph_done: Color::Rgb(0x56, 0x2c, 0x8b),    // accent-900
-    glyph_running: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
-    glyph_pending: Color::Rgb(0x96, 0x90, 0xa3),
-    hunk_header: Color::Rgb(0x6d, 0x41, 0xa9), // accent-800
-    reverse_bg: Color::Rgb(0x6d, 0x41, 0xa9),  // accent-800
-    reverse_ink: Color::Rgb(0xfb, 0xf9, 0xfe),
-    diff_box: Color::Rgb(0xec, 0xe8, 0xf3),
-    add: Color::Rgb(0x00, 0x73, 0x24),
-    add_row: Color::Rgb(0xd9, 0xe4, 0xd9),
-    add_code: Color::Rgb(0x00, 0x49, 0x14),
-    del: Color::Rgb(0xb0, 0x0a, 0x1d),
-    del_row: Color::Rgb(0xe9, 0xd7, 0xda),
-    del_code: Color::Rgb(0x69, 0x04, 0x0d),
+    // The ladder inverts *and is monotonic*: the frame ground is the
+    // lightest surface and every other band sinks below it, in the order
+    // written below. There used to be an exception — `break_` rose above
+    // the ground, on the argument that a separator has to stay visible
+    // against what it parts. It does not need to: at `#ede9f6` it is a
+    // full step below `#faf7ff`, and nothing else on the screen is.
+    //
+    // `bar` and `bar_bottom` were also the wrong way round. The top bar sat
+    // *lighter* than the composer, the reverse of the dark theme's
+    // arrangement, so the two chrome bands read as swapped between themes.
+    //
+    // Listed lightest to darkest, which is the ladder's own order here.
+    ground: Color::Rgb(0xfa, 0xf7, 0xff),
+    break_: Color::Rgb(0xed, 0xe9, 0xf6),
+    bar_bottom: Color::Rgb(0xe0, 0xdb, 0xea),
+    bar: Color::Rgb(0xd3, 0xce, 0xdd),
+    recess: Color::Rgb(0xc6, 0xc1, 0xd1),
+    panel_title: Color::Rgb(0xba, 0xb3, 0xc8),
+    scrim: Color::Rgb(0xa3, 0x9f, 0xac),
+    text: Color::Rgb(0x0e, 0x0c, 0x12),
+    body: Color::Rgb(0x1e, 0x1b, 0x23),
+    code: Color::Rgb(0x15, 0x12, 0x19),
+    context: Color::Rgb(0x48, 0x46, 0x4d),
+    value: Color::Rgb(0x2a, 0x28, 0x2e),
+    label: Color::Rgb(0x39, 0x37, 0x3d),
+    dim: Color::Rgb(0x48, 0x46, 0x4d),
+    quiet: Color::Rgb(0x2a, 0x28, 0x2e),
+    mark: Color::Rgb(0x4b, 0x1f, 0x7e),
+    mark_idle: Color::Rgb(0x70, 0x6c, 0x79),
+    band: Color::Rgb(0xc4, 0xac, 0xf2), // band-light
+    accent_text: Color::Rgb(0x4b, 0x1f, 0x7e),
+    speaker_you: Color::Rgb(0x59, 0x2f, 0x8e),
+    speaker_agent: Color::Rgb(0x2a, 0x28, 0x2e),
+    gauge_fill: Color::Rgb(0x7d, 0x56, 0xb8),
+    gauge_track: Color::Rgb(0x6a, 0x67, 0x73),
+    glyph_done: Color::Rgb(0xa1, 0x7a, 0xdf),
+    glyph_running: Color::Rgb(0x4b, 0x1f, 0x7e),
+    glyph_pending: Color::Rgb(0x70, 0x6c, 0x79),
+    step_done: Color::Rgb(0x69, 0x41, 0xa1), // see the field, not glyph_done
+    hunk_header: Color::Rgb(0x7d, 0x56, 0xb8),
+    reverse_bg: Color::Rgb(0x4b, 0x1f, 0x7e),
+    reverse_ink: Color::Rgb(0xfa, 0xf7, 0xff),
+    diff_box: Color::Rgb(0xe6, 0xe2, 0xee),
+    add: Color::Rgb(0x00, 0x69, 0x11),
+    add_row: Color::Rgb(0xc9, 0xe3, 0xc9),
+    add_code: Color::Rgb(0x00, 0x43, 0x00),
+    del: Color::Rgb(0x9e, 0x14, 0x21),
+    del_row: Color::Rgb(0xfa, 0xcf, 0xcb),
+    del_code: Color::Rgb(0x6c, 0x00, 0x03),
 };
 
 /// Which fixed `Palette` a session renders with — selected once at startup
@@ -299,11 +340,15 @@ impl Theme {
 }
 
 /// How much of its own color the transcript keeps while a decision panel is
-/// open — the reference's `opacity:.35` on the conversation column in both
-/// panel scenes of `Agent TUI v2.dc.html`. A terminal cell has no alpha
-/// channel, so the effect is composited here instead (see `fade`): the same
-/// arithmetic the browser does, done ahead of time.
-pub(crate) const PANEL_TRANSCRIPT_OPACITY: f32 = 0.35;
+/// open — the reference's `opacity:.45` on the conversation column in both
+/// panel scenes (`5a` and `5c`) of `Agent TUI v2.dc.html`. A terminal cell
+/// has no alpha channel, so the effect is composited here instead (see
+/// `fade`): the same arithmetic the browser does, done ahead of time.
+///
+/// Was `.35` until Turn 14 raised it. The dimmed transcript is the only
+/// thing behind a panel and it has to stay readable enough to be worth
+/// leaving on screen.
+pub(crate) const PANEL_TRANSCRIPT_OPACITY: f32 = 0.45;
 
 /// `fg` composited over `onto` at `alpha` — CSS `opacity` for a medium with
 /// no alpha channel. Only `Color::Rgb` blends; anything else (notably
@@ -352,13 +397,66 @@ mod tests {
     /// `DARK`'s, using luma as the same "lightness" proxy for both.
     #[test]
     fn light_background_is_lighter_and_light_text_is_darker_than_dark() {
-        fn luma(c: Color) -> u32 {
-            match c {
-                Color::Rgb(r, g, b) => r as u32 * 3 + g as u32 * 6 + b as u32,
-                other => panic!("expected an Rgb color, got {other:?}"),
-            }
-        }
         assert!(luma(LIGHT.ground) > luma(DARK.ground));
         assert!(luma(LIGHT.text) < luma(DARK.text));
+    }
+
+    fn luma(c: Color) -> u32 {
+        match c {
+            Color::Rgb(r, g, b) => r as u32 * 3 + g as u32 * 6 + b as u32,
+            other => panic!("expected an Rgb color, got {other:?}"),
+        }
+    }
+
+    /// The ground ladder is the *only* thing separating one band from its
+    /// neighbour — nothing inside a frame is stroked — so its seven rungs
+    /// have to be seven distinct, strictly ordered steps in each theme. A
+    /// duplicate or an out-of-order pair silently deletes a boundary, which
+    /// is a defect no rendering test catches: the frame still draws, it just
+    /// stops having an edge where it needs one.
+    ///
+    /// The two orders differ, and that is the point of testing both. The
+    /// dark ladder is `--color-ground-0…6` climbing; the light one starts at
+    /// the frame ground and sinks, which is *not* the dark list reversed.
+    /// Reading it as if it were is what put `bar` above `bar_bottom` and
+    /// `break_` above `ground` in the light theme before Turn 14.
+    #[test]
+    fn both_ground_ladders_are_strictly_ordered_and_have_no_repeated_rung() {
+        let dark = [DARK.scrim, DARK.recess, DARK.break_, DARK.ground, DARK.bar_bottom, DARK.bar, DARK.panel_title];
+        let light =
+            [LIGHT.ground, LIGHT.break_, LIGHT.bar_bottom, LIGHT.bar, LIGHT.recess, LIGHT.panel_title, LIGHT.scrim];
+
+        for pair in dark.windows(2) {
+            assert!(luma(pair[0]) < luma(pair[1]), "the dark ladder climbs: {:?} then {:?}", pair[0], pair[1]);
+        }
+        for pair in light.windows(2) {
+            assert!(luma(pair[0]) > luma(pair[1]), "the light ladder sinks from the ground: {:?} then {:?}", pair[0], pair[1]);
+        }
+        // Seven distinct rungs needs no separate assertion: a strict
+        // ordering by luma already rules out two bands sharing a tone.
+    }
+
+    /// The light theme's chrome bands must sit the same way round as the
+    /// dark theme's: the top bar is a step *further* from the transcript
+    /// ground than the composer is. They were inverted in light until Turn
+    /// 14, so the two themes disagreed about which bar was which.
+    #[test]
+    fn the_top_bar_is_further_from_the_ground_than_the_composer_in_both_themes() {
+        assert!(luma(DARK.bar) > luma(DARK.bar_bottom), "dark: both rise, the top bar higher");
+        assert!(luma(LIGHT.bar) < luma(LIGHT.bar_bottom), "light: both sink, the top bar lower");
+    }
+
+    /// `step_done` and `glyph_done` are one value in the dark theme and two
+    /// in the light one, on purpose — see [`Palette::step_done`]. Pinned
+    /// because the light pair looks like a copy-paste slip and the dark pair
+    /// looks like a redundant field; each guards the other from being
+    /// "tidied" away.
+    #[test]
+    fn the_two_done_glyph_roles_coincide_in_dark_and_part_in_light() {
+        assert_eq!(DARK.step_done, DARK.glyph_done, "both are accent-700 in the dark theme");
+        assert_ne!(LIGHT.step_done, LIGHT.glyph_done, "they recede in opposite directions on a light ground");
+        assert!(luma(LIGHT.glyph_done) > luma(LIGHT.mark), "a finished tool call recedes by going lighter than the mark");
+        assert!(luma(LIGHT.step_done) > luma(LIGHT.mark), "a settled step still recedes from the mark");
+        assert!(luma(LIGHT.step_done) < luma(LIGHT.glyph_done), "but stays darker than the tool glyph, beside its answer");
     }
 }

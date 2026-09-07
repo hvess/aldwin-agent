@@ -110,6 +110,31 @@ Ink, darkest to lightest: text `#17151c` (L .200), code `#221f28` (L .245), body
 
 The chroma curve runs the other way in this theme — the accent needs *more* chroma to hold against a white ground (0.160 against the dark theme's 0.130) and the neutrals slightly more too, since a tint is harder to see in the highlights.
 
+> **Superseded by Turn 14 — every value in the two paragraphs above is
+> retired.** `tokens/semantic.css`'s `.tui-light` scope is the authority, and
+> `SYNC.md`'s Turn 14 section carries the full was/now table. Three claims
+> here are now actively wrong rather than merely old, so do not read around
+> them:
+>
+> - **"bars `#e4e1eb` … composer, footer and break rows `#cec9d8`"** had the
+>   two chrome bands the wrong way round — the top bar sat *lighter* than the
+>   composer, the reverse of the dark theme. It is now bar `#d3cedd` under a
+>   bar-bottom of `#e0dbea`.
+> - **The break row no longer rises above the ground.** The light ladder is
+>   monotonic now: ground `#faf7ff` · break `#ede9f6` · bar-bottom `#e0dbea` ·
+>   bar `#d3cedd` · recess `#c6c1d1` · panel-title `#bab3c8` · scrim
+>   `#a39fac`, each a full step below the last (min 1.127:1, which is wider
+>   than the dark ladder's own narrowest rung at 1.011:1).
+> - **The accents are no longer ramp steps.** `#6d41a9` / `#5c3093` /
+>   `#562c8b` are gone; the marks are `#4b1f7e`, past the ramp's `accent-900`
+>   floor, and are stated as literals in `.tui-light`.
+>
+> Also new in Turn 14: `--tui-step-done`, which splits the finished-`●` role
+> in two because the tool glyph recedes *lighter* than the accent here
+> (`#a17adf`, 3.11:1 on the ground — the same weight its dark counterpart
+> holds at 3.15:1) while a settled first-run step recedes *darker*
+> (`#6941a1`).
+
 ## Revision log
 
 0000. Rules (all three files, 15 in total) — every freestanding rule was a gradient fading to transparent over its outer 48px, inherited from Nocturne's signature. They are now flat single-colour rules running edge to edge, one step more muted than the structural borders they used to match. This affects the turn separators in the transcript, the rule above the permission options, and the step separators in first run.
@@ -319,6 +344,69 @@ Purpose: settle account, model and access before the first prompt.
 > `api_key_env` is required), three access points rather than four, and drops
 > the `/access` clause — see `.claude/spec/mjolnir-tui.md`'s entry of the same
 > date.
+>
+> **Superseded a third time — Turn 14, measured 2026-09-06.** First run is now
+> **three** steps (`provider`, `model`, `access`), and the shape changed as
+> well as the count: rather than paginating, **all three sit on screen from
+> the start as one vertical spine**. A settled step collapses to its answer, the
+> open step expands into its list, and a step still to come previews what it
+> will ask. Frames `14a`/`14b`/`14c` in both files; `14d` is new and covered
+> below. Measured off the frames' own inline styles, since neither this prose
+> nor the token CSS states any of it:
+>
+> - **The spine's two columns are new tokens** (`tokens/cells.css`):
+>   `--step-mark-col` = `--label-col` + `--label-gutter` = **10 cells**, and
+>   `--step-content-col` = `--margin-x` + `--step-mark-col` +
+>   `--option-label-col` = **cell 29**. So a step row is: glyph on the 3-cell
+>   margin, step name on the body column (cell 13) in the shared 16-cell
+>   option field, and the step's content on cell 29 — *whatever* that content
+>   is. A settled answer, a purpose line and an expanded option list all hang
+>   on one column.
+> - **The `step n/m` counter is gone.** The three glyphs carry the sequence
+>   instead: `●` settled (`--t-step-done`), `▌` open (`--t-mark`), `○` pending
+>   (`--t-mark-idle`). The label column is empty on every step row.
+> - Step name colours: settled `--t-label`, open `--t-accent-you`, pending
+>   `--t-dim`. The settled step's *answer* is `--t-text`; a pending step's
+>   preview line is `--t-dim`.
+> - **One blank row between steps**, not the 3-row `--section-gap-h`. That gap
+>   survives only once, between the positioning line and the first step.
+> - Option rows sit at cell 29, so within a row the mark is at 29, the name at
+>   32 and the detail at 48 (`▌`, two spaces, the 16-cell name field). Same
+>   colours as before.
+> - `14c` shows **nothing preselected on `access`** — every mark idle, no
+>   band — and its footer reads `⏎ start session` rather than `⏎ continue`.
+>   Neither is what Mjolnir ships; see the departures note below.
+> - Footer is two hints only: `⏎ continue`, `↑↓ choose`. There is no `← back`.
+> - **The wordmark is padded by TWO spaces at each end**, not one:
+>   `  M J O L N I R  `, a 17-cell reverse-video field. Mjolnir shipped 15 on
+>   the strength of a Turn 13 reading that said "one space".
+>
+> **`14d` — returning / empty state.** New frame, and the one a returning
+> developer actually opens into: what `mjolnir` shows in a known repository,
+> and what `/clear` leaves behind. Bands are `--bar-top-h` / `1fr` /
+> `--bar-bottom-h` (3 / 28 / 5).
+>
+> - Top bar, left: `mjolnir` in `--t-text`, three spaces, cwd in `--t-quiet`,
+>   ` · ` with the dot in `--t-dim`, branch in `--t-body`, dirty `*` in
+>   `--t-mark`. Right: the model id in `--t-quiet` — no gauge and no cost,
+>   because neither exists yet.
+> - Body is **bottom-anchored** (`justify-content:flex-end`), so the content
+>   sits against the composer rather than centred: wordmark, blank row, then
+>   three facts on the ordinary 8-cell label column — `in` (cwd, three spaces,
+>   branch, `*`), `provider` (`anthropic · sonnet-4.6`), `access` (the tier) —
+>   blank row, `Ask for a change, or / for commands.` in `--t-dim` with the
+>   `/` itself in `--t-quiet`, blank row.
+> - There is **no version and no commit** on this screen. The version lives in
+>   first run's top bar; the session's top bar carries the model instead.
+> - Bottom bar, five rows: blank, `▶  ▌` (both `--t-mark`), blank, `ready` /
+>   `^d closes` both in `--t-dim`, blank.
+>
+> Mjolnir's departures from `14a`–`14d`, each with a reason recorded where it
+> is made: `access` keeps its preselected `ask` row (a list with no selection
+> made `⏎` a no-op — see `first_run::FirstRun`), three access points rather
+> than four (ADR 0001), `⏎ continue` on every step, `config → ~/.mjolnir/`
+> rather than `~/.harness/config.toml`, and the `←` key stays bound but
+> unhinted.
 
 ## Interactions & behavior
 

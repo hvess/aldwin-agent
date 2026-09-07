@@ -10,13 +10,13 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::diff;
-use super::grid::{elide, justified_line, with_label_column, Ctx};
+use super::grid::{elide, justified_line, with_label_column, Ctx, MARGIN_X};
 use super::markdown::{self, Segment};
 use super::row::{band_row, Row};
 use super::wrap::wrap_line;
 use mjolnir_permissions::PromptPayload;
 
-use crate::app::{App, PermState, StatusInfo};
+use crate::app::{App, PermState};
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
@@ -29,7 +29,7 @@ use crate::log::{LogEntry, ToolActivityStatus};
 /// there's no "separate the banner from the first real entry" case.
 fn build_lines(app: &App, ctx: Ctx, height: u16) -> Vec<Line<'static>> {
     if app.log.is_empty() {
-        return hero_lines(&app.status, height, ctx);
+        return hero_lines(app, height, ctx);
     }
     let mut lines: Vec<Line> = Vec::new();
     for entry in app.log.iter() {
@@ -110,7 +110,7 @@ pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block
 /// by hand — see mjolnir-tui.md's 2026-08-29 scrolling-fix and
 /// wrapped-row-scroll-math Progress notes for the two incidents this
 /// discipline exists to prevent from recurring. `height` only matters for
-/// the empty-log hero path (it vertically centres the hero); the non-empty
+/// the empty-log hero path (it bottom-anchors the hero); the non-empty
 /// path's row count is width-only.
 pub(crate) fn row_count(app: &App, width: u16, height: u16) -> usize {
     let lines = build_lines(app, Ctx::new(app.theme.palette(), width), height);
@@ -360,39 +360,91 @@ fn is_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
-/// The welcome hero's content: a sentence of body prose, then `model` /
-/// `version` / `commit` / `access` facts on the transcript's own 12-cell
-/// label-column convention (`Turn.jsx`'s label gutter, echoed here since
-/// this hero has no art to sit beside).
+/// The empty state — the design system's `14d`, and the screen a returning
+/// developer actually opens into: what `mjolnir` shows in a repository it
+/// has been pointed at before, and what `/clear` leaves behind.
 ///
-/// It replaces a former hand-traced Braille hammer/FIGlet wordmark outright,
-/// per the design system's own explicit rule: "No logo. No mark was supplied
-/// and none was invented... every mark is a Unicode box-drawing or block
-/// character," and its Assets section is blunter still — "None. No images,
-/// no icons." The harness's identity now lives only in the top bar (plain
-/// "mjolnir" text, no glyph).
-pub(super) fn intro_content(status: &StatusInfo, ctx: Ctx) -> Vec<Line<'static>> {
+/// The wordmark leads, because "the mark identifies a frame with no
+/// transcript to identify it" — this and first run are the only two places
+/// it appears. Then three facts on the ordinary 8-cell label column, so the
+/// empty frame lines up on the same edge the transcript will use the moment
+/// there is one. Then the one line saying what to do next.
+///
+/// # What is not here
+///
+/// Turn 14 took the build's **version and commit** off this screen. The
+/// version lives in first run's top bar and the session's top bar carries
+/// the model instead, so neither fact is lost — but neither belongs in the
+/// resting state either. (`tests::the_top_bar_reports_the_running_builds_version`
+/// still pins the version; the commit's own assertion went with this
+/// change, and `version.rs` pins the constant itself.)
+///
+/// Two of `14d`'s own values are **not fabricated**, the same call
+/// `chrome::draw_top_bar` makes about the reference's context gauge and
+/// session cost:
+///
+/// * the `in` row shows the working directory alone — the reference adds a
+///   git branch and a dirty marker, and nothing in `StatusInfo` tracks one;
+/// * the `access` row shows the three permission states this directory
+///   actually has, rather than the reference's single tier word. A tier is
+///   what first run *writes*; it is not what is stored, and a
+///   `permissions.yaml` edited by hand need not correspond to any tier at
+///   all. Reporting one would be a guess printed as a fact on the screen
+///   whose whole job is to say what this directory permits.
+pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
-    let stat_label = Style::default().fg(pal.label);
-    let stat_value = Style::default().fg(pal.value);
-    const LEFT_MARGIN: &str = "   ";
+    let status = &app.status;
 
-    let mut content: Vec<Line<'static>> = Vec::with_capacity(8);
-    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("every strike is yours to call. nothing moves without you.", Style::default().fg(pal.body))]));
-    content.push(Line::default());
-    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("model    ", stat_label), Span::styled(status.model_name.clone(), stat_value)]));
-    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("version  ", stat_label), Span::styled(format!("v{}", status.version), stat_value)]));
-    content.push(Line::from(vec![Span::raw(LEFT_MARGIN), Span::styled("commit   ", stat_label), Span::styled(status.commit.clone(), stat_value)]));
-    let mut access = vec![Span::raw(LEFT_MARGIN), Span::styled("access   ", stat_label)];
-    for (i, (label, state)) in [("read", status.read), ("shell", status.shell), ("edit", status.edit)].into_iter().enumerate() {
+    // One fact row: its name in the 8-cell label column, its value on the
+    // body column. The same helper every transcript turn uses, so the empty
+    // frame and the first turn drawn into it share one edge.
+    let field = |name: &str, spans: Vec<Span<'static>>| -> Line<'static> {
+        with_label_column(vec![Line::from(spans)], Some((name, pal.label))).remove(0)
+    };
+
+    let provider = match app.current_provider.as_deref() {
+        // `anthropic · claude-sonnet-5` — one group, two facts, so ` · `
+        // parts them rather than the 6-cell gap that parts groups.
+        Some(id) => vec![
+            Span::styled(id.to_string(), Style::default().fg(pal.value)),
+            Span::styled(" · ".to_string(), Style::default().fg(pal.dim)),
+            Span::styled(status.model_name.clone(), Style::default().fg(pal.value)),
+        ],
+        // A hand-written endpoint the catalogue cannot name is a real
+        // configuration, not an error — the model still names itself.
+        None => vec![Span::styled(status.model_name.clone(), Style::default().fg(pal.value))],
+    };
+
+    let mut access = Vec::new();
+    for (i, (name, state)) in [("read", status.read), ("shell", status.shell), ("edit", status.edit)].into_iter().enumerate() {
         if i > 0 {
             access.push(Span::raw("  "));
         }
-        access.extend(access_spans(label, state, ctx));
+        access.extend(access_spans(name, state, ctx));
     }
-    content.push(Line::from(access));
+
+    let mut content: Vec<Line<'static>> = Vec::with_capacity(INTRO_ROWS);
+    content.push(super::first_run::wordmark(ctx));
+    content.push(Line::default());
+    content.push(field("in", vec![Span::styled(status.cwd.clone().unwrap_or_default(), Style::default().fg(pal.value))]));
+    content.push(field("provider", provider));
+    content.push(field("access", access));
+    content.push(Line::default());
+    content.push(Line::from(vec![
+        Span::raw(" ".repeat(MARGIN_X)),
+        Span::styled("Ask for a change, or ", Style::default().fg(pal.dim)),
+        Span::styled("/", Style::default().fg(pal.quiet)),
+        Span::styled(" for commands.", Style::default().fg(pal.dim)),
+    ]));
+    content.push(Line::default());
+    debug_assert_eq!(content.len(), INTRO_ROWS, "INTRO_ROWS must match what intro_content builds");
     content
 }
+
+/// Rows [`intro_content`] always renders. Fixed, not derived: every row is
+/// one line whatever the model name or directory is, since each is elided
+/// or simply allowed to run to the frame's edge rather than wrapped.
+pub(super) const INTRO_ROWS: usize = 8;
 
 /// One `label: state` pair in the hero's access row. No filled chip — the
 /// design system's own rule is that the accent is "a mark or a line, never
@@ -407,13 +459,20 @@ fn access_spans(label: &str, state: PermState, ctx: Ctx) -> Vec<Span<'static>> {
     vec![Span::styled(format!("{label}:"), Style::default().fg(ctx.pal.label)), Span::styled(format!("{word} "), Style::default().fg(word_fg))]
 }
 
-/// Vertically centres [`intro_content`] within the log panel's inner
-/// `height`. On a terminal short enough that the content doesn't fit,
-/// `pad_top` saturates to 0 and the content simply starts at the top and
-/// scrolls like any other tall log content would.
-fn hero_lines(status: &StatusInfo, height: u16, ctx: Ctx) -> Vec<Line<'static>> {
-    let content = intro_content(status, ctx);
-    let pad_top = (height as usize).saturating_sub(content.len()) / 2;
+/// Pushes [`intro_content`] to the *bottom* of the log panel's inner
+/// `height`, against the composer.
+///
+/// It used to be vertically centred. `14d`'s body band is
+/// `justify-content: flex-end`, like the transcript's own — which is the
+/// point: the empty state sits exactly where the first turn will appear, so
+/// typing into the composer does not make the screen jump. A centred hero
+/// had the facts drift upward as the terminal grew.
+///
+/// On a terminal too short for the content, `pad_top` saturates to 0 and it
+/// starts at the top and scrolls like any other tall log content would.
+fn hero_lines(app: &App, height: u16, ctx: Ctx) -> Vec<Line<'static>> {
+    let content = intro_content(app, ctx);
+    let pad_top = (height as usize).saturating_sub(content.len());
     let mut lines = Vec::with_capacity(pad_top + content.len());
     lines.extend(std::iter::repeat_with(Line::default).take(pad_top));
     lines.extend(content);

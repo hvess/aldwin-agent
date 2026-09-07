@@ -1,16 +1,36 @@
-//! The design system's screen `5d` — first run.
+//! The design system's first-run screens — `14a`, `14b`, `14c`.
 //!
 //! Three bands, like every other screen: a 3-row top bar, the body, and a
 //! 3-row footer (`--bar-keys-h`). The body is the wordmark, the positioning
-//! line, and the two question sections, parted by three blank rows
-//! (`--section-gap-h`).
+//! line, three blank rows (`--section-gap-h`), and then the step spine.
 //!
-//! Each section is its name in the label column with `step n/m` beneath it,
-//! and, in the body column, one row of prose saying what the question is
-//! for, a blank row, then the option rows. Every left-hand word sits on the
-//! same 8-cell label column the transcript uses, so a first-run step and a
-//! conversation turn line up on one edge — which is the design system's
-//! stated reason for having one label column at all.
+//! # The spine
+//!
+//! Turn 14 stopped paginating this screen. **All three steps are on screen
+//! from the start**, as one vertical list, so the shape of the flow is
+//! visible before any of it is answered — and so the nesting is legible for
+//! free: the settled `provider anthropic` row sits directly above a list of
+//! that provider's models, which is the whole explanation of why those
+//! models and not others. It needs no tree and no counter to say so.
+//!
+//! Each step is one row — glyph on the 3-cell margin, name on the body
+//! column (cell 13), content on `STEP_CONTENT_COL` (cell 29) — in one of
+//! three states, which the closed glyph vocabulary already had words for:
+//!
+//! | State | Glyph | Name | Content | Rows |
+//! | --- | --- | --- | --- | --- |
+//! | settled | `●` `step_done` | `label` | its answer, in `text` | 1 |
+//! | open | `▌` `mark` | `speaker_you` | its purpose, then its list | 2 + list |
+//! | pending | `○` `mark_idle` | `dim` | what it will ask, in `dim` | 1 |
+//!
+//! One blank row parts one step from the next. The 3-row `--section-gap-h`
+//! survives exactly once, above the first step.
+//!
+//! The `step n/m` counter this screen used to carry is gone: the glyphs are
+//! the progress indicator now, which is why the design system's own note
+//! says the sequence "needs no progress bar and no step counter". The label
+//! column is consequently empty on every row of this screen — the one screen
+//! in the system where that is true.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -19,7 +39,7 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
 use super::chrome::{brand_pad, BRAND};
-use super::grid::{with_label_column, Ctx, CONTENT_INDENT, MARGIN_X};
+use super::grid::{elide, Ctx, MARGIN_X, OPTION_LABEL_COL, STEP_CONTENT_COL, STEP_MARK_COL};
 use super::row::band_row;
 use crate::first_run::{AccessTier, FirstRun, Step};
 use crate::palette::Palette;
@@ -27,11 +47,6 @@ use crate::palette::Palette;
 /// Rows the top bar and the footer take. The body gets the rest.
 const TOP_BAR_ROWS: u16 = 3;
 const FOOTER_ROWS: u16 = 3;
-
-/// The option name field, in cells. One width for every list in the system
-/// — the provider list and the access list are the same control, so they
-/// share it (`--option-label-col`).
-const OPTION_LABEL_COL: usize = 16;
 
 /// `--group-gap`: 6 cells part two unrelated groups inside a bar — here,
 /// the footer's two key hints. Deliberately *not* what sits between the
@@ -41,7 +56,7 @@ const GROUP_GAP: usize = 6;
 
 /// Where the harness's answers land. Stated plainly rather than implied,
 /// per the design system's Content Fundamentals. A directory, not a single
-/// file, because the two answers land in two files inside it.
+/// file, because the answers land in two files inside it.
 const CONFIG_LOCATION: &str = "config → ~/.mjolnir/";
 
 /// The `more` row's own name and purpose. It is not a provider, so it is
@@ -49,16 +64,36 @@ const CONFIG_LOCATION: &str = "config → ~/.mjolnir/";
 const MORE_LABEL: &str = "more";
 const MORE_PURPOSE: &str = "the full provider list";
 
-/// What each question is for, in one row of body-column prose above its
-/// options.
+/// What each question is for, in one row of prose beside the open step.
 ///
-/// `provider` names `/model` because that command exists and does what the
+/// `model` names `/model` because that command exists and does what the
 /// sentence says. The design's `access` copy also promised "/access changes
 /// it later"; there is no `/access`, so that clause is dropped rather than
-/// shipped false — the same call the model step's prose used to require.
-const PROVIDER_PROSE: &str = "Where the model runs. /model changes it once the session starts.";
-const MODEL_PROSE: &str = "Which model this provider answers with.";
+/// shipped false.
+const PROVIDER_PROSE: &str = "Where the model runs. Each one needs its own key.";
+const MODEL_PROSE: &str = "Which model this session starts with. /model changes it later.";
 const ACCESS_PROSE: &str = "Which actions run without asking.";
+
+/// What a step still to come says it will ask, in one dim row. Shorter and
+/// flatter than the prose above, because a step that is not taking keys is
+/// previewing a question rather than posing one.
+const MODEL_PREVIEW: &str = "which model, once the provider is set";
+const ACCESS_PREVIEW: &str = "what runs without asking";
+/// Never drawn in the shipped flow — `provider` is always the first step
+/// when it is asked at all, so it is never pending. Present so that
+/// [`step_preview`] is total over [`Step`] rather than guessing.
+const PROVIDER_PREVIEW: &str = "where the model runs";
+
+/// Which of the three states a step is in on this frame.
+///
+/// Derived from the step's position relative to the live one rather than
+/// stored, so it cannot disagree with `FirstRun::step()`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StepState {
+    Settled,
+    Open,
+    Pending,
+}
 
 pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
     let area = frame.area();
@@ -105,31 +140,66 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar)), row);
 }
 
-/// Whether a step's own rows are still on screen, or have collapsed to the
-/// single row carrying its answer.
+/// Where a step stands relative to the one taking keys.
 ///
-/// A step the developer has already passed shows what it was answered with
-/// and nothing else. That is not only tidier: the frame is 36 rows and does
-/// not scroll, and three full lists — the expanded provider catalogue
-/// included — do not fit in it. Collapsing an answered list is what buys the
-/// model step its rows, and it is measured by
-/// `the_expanded_screen_still_fits_the_frame`.
-fn answered(state: &FirstRun, step: Step) -> bool {
+/// A step the developer has already passed collapses to the row carrying
+/// its answer. That is not only tidier: the frame is 36 rows and does not
+/// scroll, and three open lists — the expanded provider catalogue included
+/// — do not fit in it. Collapsing a settled list is what buys the open one
+/// its rows, and it is measured by `the_expanded_screen_still_fits_the_frame`.
+fn state_of(state: &FirstRun, step: Step) -> StepState {
     match (state.position(step), state.position(state.step())) {
-        (Some((at, _)), Some((now, _))) => at < now,
-        _ => false,
+        (Some((at, _)), Some((now, _))) if at < now => StepState::Settled,
+        (Some((at, _)), Some((now, _))) if at > now => StepState::Pending,
+        _ => StepState::Open,
     }
 }
 
-fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::default(), wordmark(ctx), Line::default(), positioning_line(ctx)];
-    lines.extend(section_gap(ctx));
+/// The step's name, in the order the spine draws them.
+fn step_name(step: Step) -> &'static str {
+    match step {
+        Step::Provider => "provider",
+        Step::Model => "model",
+        Step::Access => "access",
+    }
+}
 
-    if let Some((n, m)) = state.position(Step::Provider) {
-        let visible = state.visible_providers();
-        let rows: Vec<Line<'static>> = if answered(state, Step::Provider) {
-            state.chosen_provider().map(|p| vec![option_row(&p.id, &p.purpose, false, ctx)]).unwrap_or_default()
-        } else {
+fn step_prose(step: Step) -> &'static str {
+    match step {
+        Step::Provider => PROVIDER_PROSE,
+        Step::Model => MODEL_PROSE,
+        Step::Access => ACCESS_PROSE,
+    }
+}
+
+fn step_preview(step: Step) -> &'static str {
+    match step {
+        Step::Provider => PROVIDER_PREVIEW,
+        Step::Model => MODEL_PREVIEW,
+        Step::Access => ACCESS_PREVIEW,
+    }
+}
+
+/// What a settled step collapses to: the answer it was given.
+///
+/// `None` only for a step whose answer cannot be named — a catalogue row
+/// that has gone missing under the selection. The step still draws, with an
+/// empty content column, rather than vanishing out of the spine and
+/// renumbering everything below it.
+fn step_answer(state: &FirstRun, step: Step) -> Option<String> {
+    match step {
+        Step::Provider => state.chosen_provider().map(|p| p.id.clone()),
+        Step::Model => state.chosen_model().map(|m| m.id.clone()),
+        Step::Access => Some(AccessTier::ORDER[state.access].label().to_string()),
+    }
+}
+
+/// The open step's option rows. Empty for any step that is not open — a
+/// settled step shows its answer and a pending one shows nothing at all.
+fn step_options(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
+    match step {
+        Step::Provider => {
+            let visible = state.visible_providers();
             let mut rows: Vec<Line<'static>> = visible
                 .iter()
                 .enumerate()
@@ -139,55 +209,97 @@ fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
                 rows.push(more_row(state.provider == visible.len(), ctx));
             }
             rows
-        };
-        lines.extend(step_section("provider", (n, m), state.step() == Step::Provider, PROVIDER_PROSE, rows, ctx));
-        lines.extend(section_gap(ctx));
-    }
-
-    // Drawn only once a provider is settled — before that there is no list
-    // to draw, since the models on offer are that provider's own.
-    if let Some((n, m)) = state.position(Step::Model) {
-        if state.step() != Step::Provider {
-            let rows: Vec<Line<'static>> = if answered(state, Step::Model) {
-                state.chosen_model().map(|c| vec![option_row(&c.id, &c.purpose, false, ctx)]).unwrap_or_default()
-            } else {
-                state
-                    .visible_models()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, choice)| option_row(&choice.id, &choice.purpose, i == state.model, ctx))
-                    .collect()
-            };
-            lines.extend(step_section("model", (n, m), state.step() == Step::Model, MODEL_PROSE, rows, ctx));
-            lines.extend(section_gap(ctx));
         }
-    }
-
-    if let Some((n, m)) = state.position(Step::Access) {
-        let rows: Vec<Line<'static>> = AccessTier::ORDER
+        Step::Model => state
+            .visible_models()
+            .iter()
+            .enumerate()
+            .map(|(i, choice)| option_row(&choice.id, &choice.purpose, i == state.model, ctx))
+            .collect(),
+        Step::Access => AccessTier::ORDER
             .iter()
             .enumerate()
             .map(|(i, tier)| option_row(tier.label(), tier.purpose(), i == state.access, ctx))
-            .collect();
-        lines.extend(step_section("access", (n, m), state.step() == Step::Access, ACCESS_PROSE, rows, ctx));
+            .collect(),
     }
+}
 
+fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::default(), wordmark(ctx), Line::default(), positioning_line(ctx)];
+    lines.extend(section_gap(ctx));
+
+    // Every step this run asks is drawn, in order, whatever state it is in
+    // — that is the whole point of the spine. `state.steps` is what the
+    // caller asked for, so a run that skips the provider question simply
+    // has a shorter one.
+    for (i, step) in state.steps.iter().enumerate() {
+        if i > 0 {
+            // One blank row between steps. The three-row `--section-gap-h`
+            // above is used once and never again on this screen.
+            lines.push(Line::default());
+        }
+        lines.extend(step_rows(state, *step, ctx));
+    }
     lines
 }
 
+/// One step: its own row, plus — when it is the open one — a blank row and
+/// its list.
+fn step_rows(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
+    let pal = ctx.pal;
+    let status = state_of(state, step);
+    let (glyph, glyph_fg, name_fg, content_fg, content) = match status {
+        StepState::Settled => {
+            (
+                "●",
+                pal.step_done,
+                pal.label,
+                pal.text,
+                step_answer(state, step).unwrap_or_default(),
+            )
+        }
+        StepState::Open => ("▌", pal.mark, pal.speaker_you, pal.body, step_prose(step).to_string()),
+        StepState::Pending => ("○", pal.mark_idle, pal.dim, pal.dim, step_preview(step).to_string()),
+    };
+
+    let name = step_name(step);
+    // The glyph sits at the margin in a 10-cell field, so the name lands on
+    // the body column; the name sits in the shared 16-cell option field, so
+    // the content lands on cell 29. Both derived — see `grid`.
+    let name_pad = OPTION_LABEL_COL.saturating_sub(name.chars().count());
+    let room = (ctx.width as usize).saturating_sub(STEP_CONTENT_COL).saturating_sub(MARGIN_X);
+    let mut rows = vec![Line::from(vec![
+        Span::raw(" ".repeat(MARGIN_X)),
+        Span::styled(glyph.to_string(), Style::default().fg(glyph_fg)),
+        Span::raw(" ".repeat(STEP_MARK_COL - 1)),
+        Span::styled(name.to_string(), Style::default().fg(name_fg)),
+        Span::raw(" ".repeat(name_pad)),
+        Span::styled(elide(&content, room), Style::default().fg(content_fg)),
+    ])];
+
+    if status == StepState::Open {
+        rows.push(Line::default());
+        rows.extend(step_options(state, step, ctx));
+    }
+    rows
+}
+
 /// `  M J O L N I R  ` in reverse video — the accent as the ground, the desk
-/// as the ink, letters one space apart, the whole run padded by one space at
-/// each end. One row, never a block: a multi-row block-character wordmark
-/// was built and cut because "at 15px it dominated a frame whose whole
-/// argument is that nothing shouts".
+/// as the ink, letters one space apart, the whole run padded by **two**
+/// spaces at each end for a 17-cell field. One row, never a block: a
+/// multi-row block-character wordmark was built and cut because "at 15px it
+/// dominated a frame whose whole argument is that nothing shouts".
+///
+/// The pad was one space until Turn 14, on the strength of a reading of the
+/// frame rather than a measurement of it; both `.dc.html` files carry two.
 ///
 /// This is one of exactly two places the accent is allowed to be a filled
 /// field; the selection band is the other.
-fn wordmark(ctx: Ctx) -> Line<'static> {
+pub(super) fn wordmark(ctx: Ctx) -> Line<'static> {
     let letters: String = "MJOLNIR".chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
     Line::from(vec![
         Span::raw(" ".repeat(MARGIN_X)),
-        Span::styled(format!(" {letters} "), Style::default().fg(ctx.pal.reverse_ink).bg(ctx.pal.reverse_bg)),
+        Span::styled(format!("  {letters}  "), Style::default().fg(ctx.pal.reverse_ink).bg(ctx.pal.reverse_bg)),
     ])
 }
 
@@ -198,59 +310,10 @@ fn positioning_line(ctx: Ctx) -> Line<'static> {
     ])
 }
 
-/// `--section-gap-h`: three blank rows between first-run sections.
+/// `--section-gap-h`: three blank rows. Used once, between the positioning
+/// line and the first step — the steps themselves are one blank row apart.
 fn section_gap(_ctx: Ctx) -> Vec<Line<'static>> {
     vec![Line::default(), Line::default(), Line::default()]
-}
-
-/// One question: its name in the label column, `step n/m` beneath it, and
-/// its prose, a blank row and its option rows in the body column.
-///
-/// The counter is `step n/m`, which is exactly 8 cells — the label column's
-/// full width, and the reason the design writes it with a slash. An earlier
-/// pass shortened it to `1 of 2` while trying to fit `step 1 of 2` into the
-/// same column; the reference's own wording fits, so it is used.
-///
-/// Both steps state their number, as the reference does — the counter says
-/// how long the screen is, which is as much use on the question already
-/// answered as on the live one. Only the *active* step's label takes the
-/// accent; an inactive one stays on the neutral label step.
-fn step_section(
-    name: &'static str,
-    (number, total): (usize, usize),
-    active: bool,
-    prose: &'static str,
-    rows: Vec<Line<'static>>,
-    ctx: Ctx,
-) -> Vec<Line<'static>> {
-    let pal = ctx.pal;
-    let label_fg = if active { pal.speaker_you } else { pal.label };
-
-    let mut body = vec![
-        Line::from(Span::styled(prose, Style::default().fg(pal.body))),
-        Line::default(),
-    ];
-    body.extend(rows);
-
-    let mut out = with_label_column(body, Some((name, label_fg)));
-
-    // The counter belongs on the row *under* the label, in the label
-    // column — the same two-row shape a transcript turn uses for its
-    // speaker and its time. That row is the blank one between the prose
-    // and the options, so the counter replaces the blank label-column
-    // prefix `with_label_column` left there rather than displacing an
-    // option row.
-    let text = format!("step {number}/{total}");
-    let pad = CONTENT_INDENT.saturating_sub(MARGIN_X).saturating_sub(text.chars().count());
-    let mut spans =
-        vec![Span::raw(" ".repeat(MARGIN_X)), Span::styled(text, Style::default().fg(pal.dim)), Span::raw(" ".repeat(pad))];
-    if out.len() > 1 {
-        spans.extend(out[1].spans.clone().into_iter().skip(1));
-        out[1] = Line::from(spans);
-    } else {
-        out.push(Line::from(spans));
-    }
-    out
 }
 
 /// The one option row shape in the system: an idle or selected `▌`, two
@@ -259,7 +322,8 @@ fn step_section(
 ///
 /// Selection is the accent `▌` *and* the band together, never one alone.
 /// The band is a real accent fill and stops at the right margin, so it
-/// reads as belonging to the body column rather than to the whole frame.
+/// reads as belonging to the step's content column rather than to the whole
+/// frame.
 fn option_row(name: &str, purpose: &str, selected: bool, ctx: Ctx) -> Line<'static> {
     row(name, purpose, selected, None, ctx)
 }
@@ -284,17 +348,32 @@ fn row(name: &str, purpose: &str, selected: bool, trailing: Option<&str>, ctx: C
     };
     let field = Style::default().bg(bg);
 
-    let mut spans = vec![Span::styled("▌", Style::default().fg(mark_fg).bg(bg)), Span::styled("  ".to_string(), field)];
+    // The row hangs on the step's content column, so it lines up under the
+    // step's own purpose line rather than under its name. The prefix is
+    // *unstyled*: the band starts at the mark, not at the frame margin.
+    let mut spans = vec![
+        Span::raw(" ".repeat(STEP_CONTENT_COL)),
+        Span::styled("▌", Style::default().fg(mark_fg).bg(bg)),
+        Span::styled("  ".to_string(), field),
+    ];
     let pad = OPTION_LABEL_COL.saturating_sub(name.chars().count());
     spans.push(Span::styled(name.to_string(), Style::default().fg(name_fg).bg(bg)));
     spans.push(Span::styled(" ".repeat(pad), field));
-    spans.push(Span::styled(purpose.to_string(), Style::default().fg(purpose_fg).bg(bg)));
+
+    // Cells the row has for itself, between the content column and the
+    // right margin. The mark, its two spaces, the name field and any
+    // trailing glyph are fixed, so the purpose gets what is left — and on a
+    // frame narrower than the design's 120 that can be nothing at all,
+    // which is why it is elided rather than allowed to wrap the row.
+    let width = (ctx.width as usize).saturating_sub(STEP_CONTENT_COL).saturating_sub(MARGIN_X);
+    let trailing = trailing.unwrap_or("");
+    let fixed = 3 + name.chars().count() + pad + trailing.chars().count();
+    let purpose = elide(purpose, width.saturating_sub(fixed));
+    spans.push(Span::styled(purpose.clone(), Style::default().fg(purpose_fg).bg(bg)));
 
     // Fill to the right margin so the band is a band, not a ragged
     // highlight ending wherever the purpose text happens to stop.
-    let trailing = trailing.unwrap_or("");
-    let used: usize = 3 + name.chars().count() + pad + purpose.chars().count() + trailing.chars().count();
-    let width = (ctx.width as usize).saturating_sub(CONTENT_INDENT).saturating_sub(MARGIN_X);
+    let used = fixed + purpose.chars().count();
     spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), field));
     if !trailing.is_empty() {
         spans.push(Span::styled(trailing.to_string(), Style::default().fg(if selected { pal.text } else { pal.label }).bg(bg)));
@@ -315,8 +394,13 @@ fn draw_footer(frame: &mut Frame, area: Rect, ctx: Ctx) {
             Span::styled(format!(" {verb}"), Style::default().fg(pal.quiet).bg(pal.bar_bottom)),
         ]
     };
+    // Two hints, as the reference carries. `←` reopens the previous
+    // question and stays bound, but is not named here — the frame shows two
+    // groups and a third would be one wider than the design's footer. It is
+    // in the same position `Esc` has always been: real, and undocumented on
+    // screen.
     let mut left = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
-    for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose"), ("←", "back")].into_iter().enumerate() {
+    for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose")].into_iter().enumerate() {
         if i > 0 {
             left.push(Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar_bottom)));
         }
@@ -344,6 +428,10 @@ mod tests {
     use super::*;
     use crate::first_run::{sample_providers, SAMPLE_CURATED};
     use crate::palette::DARK;
+    // The step *name* column is the ordinary body column — that is the
+    // point of the spine, so it is asserted against the same constant every
+    // other screen uses rather than a local copy.
+    use crate::ui::grid::CONTENT_INDENT;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -365,6 +453,40 @@ mod tests {
         (0..36u16).find(|y| row_text(buffer, *y).contains(needle)).unwrap_or_else(|| panic!("no row containing {needle:?}"))
     }
 
+    /// Byte offset converted to a *cell* offset: `▌` is three bytes, so
+    /// `str::find` alone would report every column past a mark two cells to
+    /// the right of where it actually is. The grid counts cells.
+    fn col_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> usize {
+        let row = row_text(buffer, y);
+        let byte = row.find(needle).unwrap_or_else(|| panic!("{needle:?} not on row {y}: {row:?}"));
+        row[..byte].chars().count()
+    }
+
+    /// Every row that is a *step's own* line: a glyph on the 3-cell margin.
+    /// Option rows hang on cell 29 and so are never picked up here, and the
+    /// wordmark and positioning line carry no glyph.
+    fn spine_rows(buffer: &ratatui::buffer::Buffer) -> Vec<u16> {
+        (0..36u16).filter(|y| row_text(buffer, *y).chars().nth(MARGIN_X).is_some_and(|c| "●▌○".contains(c))).collect()
+    }
+
+    /// The row a given step's own line is on. Matched on the step name
+    /// sitting at the body column, not merely appearing on the row — the
+    /// open `provider` step's prose contains the word "model", and an
+    /// earlier version of this helper matched that instead.
+    fn step_row(buffer: &ratatui::buffer::Buffer, name: &str) -> u16 {
+        spine_rows(buffer)
+            .into_iter()
+            .find(|y| {
+                let row = row_text(buffer, *y);
+                row.match_indices(name).any(|(byte, _)| row[..byte].chars().count() == CONTENT_INDENT)
+            })
+            .unwrap_or_else(|| panic!("no step row for {name:?}"))
+    }
+
+    fn glyph_of(buffer: &ratatui::buffer::Buffer, name: &str) -> String {
+        buffer[(MARGIN_X as u16, step_row(buffer, name))].symbol().to_string()
+    }
+
     /// The wordmark is one row of reverse video — the accent as the ground,
     /// the desk as the ink — and never a block. It is the one place besides
     /// the selection band where the accent is a filled field.
@@ -372,67 +494,166 @@ mod tests {
     fn the_wordmark_is_one_reverse_video_row() {
         let buffer = render(&FirstRun::default(), 120, 36);
         let out = text(&buffer);
-        assert!(out.contains(" M J O L N I R "), "the wordmark is letters one space apart, padded at each end: {out:?}");
+        assert!(out.contains("  M J O L N I R  "), "letters one space apart, padded by two at each end: {out:?}");
 
         let row = find_row(&buffer, "M J O L N I R");
         let cell = &buffer[(MARGIN_X as u16 + 1, row)];
         assert_eq!(cell.bg, DARK.reverse_bg, "the accent is the ground");
         assert_eq!(cell.fg, DARK.reverse_ink, "and the desk colour is the ink");
 
+        let filled = (0..120).filter(|x| buffer[(*x, row)].bg == DARK.reverse_bg).count();
+        assert_eq!(filled, 17, "a 17-cell field: two spaces, 13 cells of letters, two spaces");
+
         let below = (0..120).filter(|x| buffer[(*x, row + 1)].bg == DARK.reverse_bg).count();
         assert_eq!(below, 0, "one row, never a block — the row under it carries no reverse video");
     }
 
-    /// Both lists open with a row selected, and selection is always the
-    /// accent `▌` *and* the band together — never one without the other.
-    /// `ask` is the preselected access row (see `FirstRun`).
+    /// All three steps are on screen from the first frame, in order. That is
+    /// the whole point of the spine: the shape of the flow is visible before
+    /// any of it is answered.
     #[test]
-    fn both_lists_open_with_a_row_selected() {
+    fn every_step_is_on_screen_from_the_start_in_order() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        let (provider, model, access) = (step_row(&buffer, "provider"), step_row(&buffer, "model"), step_row(&buffer, "access"));
+        assert!(provider < model && model < access, "the spine reads top to bottom: {provider} {model} {access}");
+    }
+
+    /// The three states are the three glyphs the system already has, and
+    /// they move together as the form advances. Nothing else says where the
+    /// developer is — there is no counter and no progress bar.
+    #[test]
+    fn the_glyphs_carry_the_sequence_and_no_counter_does() {
+        for (index, want) in [(0, ["▌", "○", "○"]), (1, ["●", "▌", "○"]), (2, ["●", "●", "▌"])] {
+            let state = FirstRun { index, ..Default::default() };
+            let buffer = render(&state, 120, 36);
+            let got = ["provider", "model", "access"].map(|n| glyph_of(&buffer, n));
+            assert_eq!(got, want.map(String::from), "at step {index}");
+            assert!(!text(&buffer).contains("step 1/"), "the `step n/m` counter is gone — the glyphs are the progress");
+        }
+    }
+
+    /// A settled step collapses to the answer it was given; an open one
+    /// expands into its list; a pending one previews what it will ask and
+    /// shows no list at all.
+    #[test]
+    fn a_settled_step_shows_its_answer_and_a_pending_one_shows_no_list() {
+        let before = text(&render(&FirstRun::default(), 120, 36));
+        assert!(!before.contains("alpha-large"), "no model list before the model step is open: {before:?}");
+        assert!(before.contains("which model, once the provider is set"), "it previews instead: {before:?}");
+        assert!(before.contains("what runs without asking"), "so does access: {before:?}");
+        assert!(!before.contains("every tool asks"), "and the access list is not drawn yet: {before:?}");
+
+        let state = FirstRun { index: 1, ..Default::default() };
+        let buffer = render(&state, 120, 36);
+        let out = text(&buffer);
+        assert!(out.contains("alpha-large"), "the open step's list is the chosen provider's models: {out:?}");
+        assert!(!out.contains("bravo"), "the settled provider question is down to its answer: {out:?}");
+        assert!(!out.contains("the full provider list"), "and to nothing else: {out:?}");
+
+        let provider = step_row(&buffer, "provider");
+        assert_eq!(col_of(&buffer, provider, "alpha"), STEP_CONTENT_COL, "the answer sits on the content column");
+        assert_eq!(buffer[(STEP_CONTENT_COL as u16, provider)].fg, DARK.text, "an answer is primary text");
+    }
+
+    /// Every landmark is a whole number of cells off the grid: the 3-cell
+    /// margin for the glyph, the body column (cell 13) for the step name,
+    /// and `--step-content-col` (cell 29) for *all four* kinds of content —
+    /// a settled answer, an open step's prose, a pending preview, and the
+    /// option rows. One column, whatever the step is doing.
+    #[test]
+    fn every_column_lands_on_the_grid() {
+        assert_eq!(STEP_MARK_COL, 10, "--step-mark-col is the label column plus its gutter");
+        assert_eq!(STEP_CONTENT_COL, 29, "--step-content-col: margin + step mark col + the 16-cell name field");
+
+        let buffer = render(&FirstRun::default(), 120, 36);
+
+        let provider = step_row(&buffer, "provider");
+        assert_eq!(col_of(&buffer, provider, "▌"), MARGIN_X, "the open step's glyph is on the 3-cell margin");
+        assert_eq!(col_of(&buffer, provider, "provider"), CONTENT_INDENT, "its name is on the body column, cell 13");
+        assert_eq!(col_of(&buffer, provider, "Where the model runs"), STEP_CONTENT_COL, "its prose on cell 29");
+
+        let model = step_row(&buffer, "model");
+        assert_eq!(col_of(&buffer, model, "○"), MARGIN_X);
+        assert_eq!(col_of(&buffer, model, "model"), CONTENT_INDENT, "one name column for every step");
+        assert_eq!(col_of(&buffer, model, "which model"), STEP_CONTENT_COL, "a preview hangs on the same content column");
+
+        let first = find_row(&buffer, "alpha");
+        assert_eq!(col_of(&buffer, first, "▌"), STEP_CONTENT_COL, "option rows hang on the content column too");
+        assert_eq!(col_of(&buffer, first, "alpha"), STEP_CONTENT_COL + 3, "the mark plus two spaces, then the name");
+        assert_eq!(
+            col_of(&buffer, first, "alpha models"),
+            STEP_CONTENT_COL + 3 + OPTION_LABEL_COL,
+            "the purpose starts past the 16-cell name field"
+        );
+
+        let mark = find_row(&buffer, "M J O L N I R");
+        assert_eq!(col_of(&buffer, mark, "M J O L N I R"), MARGIN_X + 2, "the wordmark's own two-space pad sits inside the margin");
+    }
+
+    /// A step row puts nothing between its glyph and its name: the glyph is
+    /// alone on the margin and the name is on the body column, with the
+    /// 10-cell `--step-mark-col` field between them. That gap is where
+    /// `step n/m` used to sit, and the counter is what Turn 14 removed —
+    /// so this is the assertion that would fail if it came back.
+    ///
+    /// Scoped to the spine deliberately. The wordmark and the positioning
+    /// line both start on the margin and run straight through cell 13; they
+    /// are not label-column content, they are full-width rows.
+    #[test]
+    fn a_step_row_carries_nothing_between_its_glyph_and_its_name() {
+        for index in 0..3 {
+            let buffer = render(&FirstRun { index, ..Default::default() }, 120, 36);
+            let rows = spine_rows(&buffer);
+            assert_eq!(rows.len(), 3, "three steps, three spine rows, at step {index}");
+            for y in rows {
+                let row = row_text(&buffer, y);
+                let gap: String = row.chars().skip(MARGIN_X + 1).take(STEP_MARK_COL - 1).collect();
+                assert!(gap.trim().is_empty(), "row {y} puts {gap:?} between the glyph and the name: {row:?}");
+            }
+        }
+    }
+
+    /// Only the open step carries a selection band, and selection is always
+    /// the accent `▌` *and* the band together — never one without the other.
+    #[test]
+    fn only_the_open_step_carries_a_selection_band() {
         let buffer = render(&FirstRun::default(), 120, 36);
         let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
-        assert_eq!(banded.len(), 2, "one banded row per list — the first provider and `ask`");
-        for y in &banded {
-            assert!(
-                (0..120).any(|x| buffer[(x, *y)].symbol() == "▌" && buffer[(x, *y)].fg == DARK.mark),
-                "row {y} carries the band, so it must carry the accent mark too"
-            );
-        }
+        assert_eq!(banded.len(), 1, "one banded row, in the one open list");
         assert!(row_text(&buffer, banded[0]).contains("alpha"), "the provider list opens on its first curated row");
-        assert!(row_text(&buffer, banded[1]).contains("ask"), "the preselected access row is `ask`");
+        assert!(
+            (0..120).any(|x| buffer[(x, banded[0])].symbol() == "▌" && buffer[(x, banded[0])].fg == DARK.mark),
+            "the banded row carries the accent mark too"
+        );
+
+        let state = FirstRun { index: 2, access: 2, ..Default::default() };
+        let buffer = render(&state, 120, 36);
+        let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
+        assert_eq!(banded.len(), 1, "still one — the two settled steps show answers, not selections");
+        assert!(row_text(&buffer, banded[0]).contains("reads and any command run"), "the chosen tier is banded");
     }
 
-    /// The provider step is first and the access step second, both stating
-    /// their number the way the reference does.
+    /// A settled step's `●` uses `step_done`, which is a different role from
+    /// the `glyph_done` a finished tool call uses — see `Palette::step_done`.
     #[test]
-    fn the_provider_step_comes_first_and_both_steps_state_their_number() {
-        let buffer = render(&FirstRun::default(), 120, 36);
-        let provider = find_row(&buffer, "provider");
-        let access = find_row(&buffer, "access");
-        assert!(provider < access, "provider is step 1");
-        assert_eq!(row_text(&buffer, provider + 1).trim_end(), format!("{}step 1/3", " ".repeat(MARGIN_X)).trim_end());
-        assert!(row_text(&buffer, access + 1).contains("step 3/3"), "{:?}", row_text(&buffer, access + 1));
+    fn a_settled_steps_glyph_uses_the_step_done_role() {
+        let state = FirstRun { index: 1, ..Default::default() };
+        let buffer = render(&state, 120, 36);
+        let row = step_row(&buffer, "provider");
+        assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.step_done);
     }
 
-    /// `step n/m` is exactly the label column's 8 cells, so it never
-    /// overflows into the body column the way `step 1 of 2` did.
-    #[test]
-    fn the_counter_fits_the_label_column_exactly() {
-        let buffer = render(&FirstRun::default(), 120, 36);
-        let row = row_text(&buffer, find_row(&buffer, "provider") + 1);
-        let counter: String = row.chars().skip(MARGIN_X).take(8).collect();
-        assert_eq!(counter, "step 1/3");
-        assert!(row.chars().skip(MARGIN_X + 8).take(2).all(|c| c == ' '), "the 2-cell gutter must stay blank: {row:?}");
-    }
-
-    /// Each question states what it is for in one row of body-column prose
-    /// above its options, and only names a command that exists.
+    /// Each open step states what it is for, and only names a command that
+    /// exists.
     #[test]
     fn each_step_states_its_purpose_and_promises_only_commands_that_exist() {
         let out = text(&render(&FirstRun::default(), 120, 36));
         assert!(out.contains("Where the model runs."), "{out:?}");
-        assert!(out.contains("/model changes it"), "{out:?}");
-        assert!(out.contains("Which actions run without asking."), "{out:?}");
-        assert!(!out.contains("/access"), "there is no /access command, so the frame must not promise one: {out:?}");
+        let model = text(&render(&FirstRun { index: 1, ..Default::default() }, 120, 36));
+        assert!(model.contains("/model changes it later"), "{model:?}");
+        let access = text(&render(&FirstRun { index: 2, ..Default::default() }, 120, 36));
+        assert!(access.contains("Which actions run without asking."), "{access:?}");
+        assert!(!access.contains("/access"), "there is no /access command, so the frame must not promise one: {access:?}");
     }
 
     /// The collapsed list ends on `more`, with a `→` flush to the right
@@ -459,59 +680,10 @@ mod tests {
         assert!(!out.contains("the full provider list"), "`more` has nothing left to reveal: {out:?}");
     }
 
-    /// Selecting an access tier lights exactly that row, mark and band
-    /// together — never one without the other.
+    /// The bands are 3 / rest / 3 rows, the three-row `--section-gap-h` is
+    /// used exactly once, and the steps themselves are one blank row apart.
     #[test]
-    fn selecting_an_access_tier_bands_that_row_and_marks_it() {
-        let state = FirstRun { index: 1, access: 2, ..Default::default() };
-        let buffer = render(&state, 120, 36);
-        let banded = (0..36u16).any(|y| (0..120).any(|x| buffer[(x, y)].symbol() == "a" && buffer[(x, y)].bg == DARK.band));
-        assert!(banded, "the chosen tier's row carries the selection band");
-        let marks = (0..36u16)
-            .filter(|y| (0..120).any(|x| buffer[(x, *y)].symbol() == "▌" && buffer[(x, *y)].fg == DARK.mark))
-            .count();
-        assert_eq!(marks, 2, "one accent mark per step — the chosen provider and the chosen access row");
-    }
-
-    /// Every landmark on this screen is a whole number of cells off the
-    /// grid: the 3-cell margin, the 8-cell label column with its 2-cell
-    /// gutter (so body text lands on cell 13), and the 16-cell option name
-    /// field the provider list and the access list share.
-    #[test]
-    fn every_column_lands_on_the_grid() {
-        let buffer = render(&FirstRun::default(), 120, 36);
-        // Byte offset converted to a *cell* offset: `▌` is three bytes, so
-        // `str::find` alone would report every column past a mark two cells
-        // to the right of where it actually is. The grid counts cells.
-        let col_of = |y: u16, needle: &str| -> usize {
-            let row = row_text(&buffer, y);
-            let byte = row.find(needle).expect("needle on row");
-            row[..byte].chars().count()
-        };
-
-        let label = find_row(&buffer, "provider");
-        assert_eq!(col_of(label, "provider"), MARGIN_X, "a step label starts on the 3-cell margin");
-        assert_eq!(col_of(label, "Where the model runs"), CONTENT_INDENT, "its prose starts on the body column, cell 13");
-
-        let first = find_row(&buffer, "alpha");
-        assert_eq!(col_of(first, "▌"), CONTENT_INDENT, "option rows start on the body column too");
-        assert_eq!(col_of(first, "alpha"), CONTENT_INDENT + 3, "the mark plus two spaces, then the name");
-        assert_eq!(col_of(first, "alpha models"), CONTENT_INDENT + 3 + OPTION_LABEL_COL, "the purpose starts past the 16-cell name field");
-
-        let access = find_row(&buffer, "access");
-        assert_eq!(col_of(access, "access"), MARGIN_X, "both steps share one label column");
-        let ask = find_row(&buffer, "every tool");
-        assert_eq!(col_of(ask, "▌"), CONTENT_INDENT);
-        assert_eq!(col_of(ask, "every tool"), CONTENT_INDENT + 3 + OPTION_LABEL_COL, "and one name field, so the two lists read as one control");
-
-        let mark = find_row(&buffer, "M J O L N I R");
-        assert_eq!(col_of(mark, "M J O L N I R"), MARGIN_X + 1, "the wordmark's own one-space pad sits inside the margin");
-    }
-
-    /// `--section-gap-h`: three blank rows between first-run sections, and
-    /// the bands are 3 / rest / 3 rows.
-    #[test]
-    fn the_vertical_bands_and_section_gaps_are_whole_rows() {
+    fn the_bands_and_the_gaps_are_whole_rows() {
         let buffer = render(&FirstRun::default(), 120, 36);
         let blank = |y: u16| row_text(&buffer, y).trim().is_empty();
 
@@ -523,59 +695,33 @@ mod tests {
             assert_eq!(buffer[(0, y)].bg, DARK.bar_bottom, "the footer is {FOOTER_ROWS} rows");
         }
 
-        let last_provider = find_row(&buffer, "more");
-        let access = find_row(&buffer, "access");
-        assert_eq!(access - last_provider - 1, 3, "three blank rows part the sections");
-        for y in (last_provider + 1)..access {
+        let positioning = find_row(&buffer, "The leverage of a model");
+        let provider = step_row(&buffer, "provider");
+        assert_eq!(provider - positioning - 1, 3, "--section-gap-h: three blank rows above the first step");
+        for y in (positioning + 1)..provider {
             assert!(blank(y), "and they are genuinely blank");
         }
+
+        let more = find_row(&buffer, "more");
+        let model = step_row(&buffer, "model");
+        assert_eq!(model - more - 1, 1, "one blank row parts one step from the next, not three");
+        assert!(blank(more + 1));
+        assert_eq!(step_row(&buffer, "access") - model - 1, 1, "and the same between the other two");
     }
 
-    /// The whole screen has to fit the design's 36 rows with the list
-    /// expanded, which is the tallest it ever gets — on *every* step, since
-    /// which lists are drawn in full changes as the form advances.
+    /// The whole spine has to fit the design's 36 rows with the provider
+    /// list expanded, which is the tallest it ever gets — on *every* step,
+    /// since which list is open changes as the form advances.
     #[test]
     fn the_expanded_screen_still_fits_the_frame() {
         for index in 0..3 {
             let state = FirstRun { expanded: true, index, ..Default::default() };
             let buffer = render(&state, 120, 36);
-            let last_access = find_row(&buffer, "reads and any command run");
-            assert!(
-                last_access < 36 - FOOTER_ROWS,
-                "on step {index} the last option row must clear the footer, not be clipped by it"
-            );
+            let last = step_row(&buffer, "access");
+            let bottom = if index == 2 { find_row(&buffer, "reads and any command run") } else { last };
+            assert!(bottom < 36 - FOOTER_ROWS, "on step {index} the spine must clear the footer, not be clipped by it");
         }
         assert_eq!(SAMPLE_CURATED, 3, "the sample is shaped like the real catalogue");
-    }
-
-    /// The model step's list is the chosen provider's own, so there is
-    /// nothing to draw until a provider is taken — and once it is, the
-    /// question that produced it collapses to the row that answered it.
-    #[test]
-    fn the_model_step_appears_once_a_provider_is_taken_and_the_provider_list_collapses() {
-        let before = text(&render(&FirstRun::default(), 120, 36));
-        assert!(!before.contains("alpha-large"), "no model list before a provider is settled: {before:?}");
-
-        let state = FirstRun { index: 1, ..Default::default() };
-        let buffer = render(&state, 120, 36);
-        let out = text(&buffer);
-        assert!(out.contains("alpha-large"), "the chosen provider's models: {out:?}");
-        assert!(out.contains("step 2/3"), "{out:?}");
-        assert!(!out.contains("bravo"), "the answered provider question is down to its answer: {out:?}");
-        assert!(!out.contains("the full provider list"), "and to nothing else: {out:?}");
-        assert!(out.contains("alpha"), "which is still on screen, so the answer stays visible: {out:?}");
-    }
-
-    /// Only the step taking keys carries a selection band — an answered
-    /// step shows what it was answered with, quietly.
-    #[test]
-    fn only_the_live_lists_carry_a_selection_band() {
-        let state = FirstRun { index: 1, ..Default::default() };
-        let buffer = render(&state, 120, 36);
-        let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
-        assert_eq!(banded.len(), 2, "the live model list and the access list ahead of it");
-        assert!(row_text(&buffer, banded[0]).contains("alpha-large"), "{:?}", row_text(&buffer, banded[0]));
-        assert!(row_text(&buffer, banded[1]).contains("ask"));
     }
 
     /// The model list follows the provider selection rather than being
@@ -588,13 +734,38 @@ mod tests {
         assert!(!out.contains("alpha-large"), "another provider's models are not on offer here: {out:?}");
     }
 
-    /// The footer names `←`, because the model step is the provider step
-    /// narrowed and a developer who picked the wrong provider needs a way
-    /// back that is not quitting the screen.
+    /// A frame narrower than the design's 120 keeps the spine's columns and
+    /// gives up the purpose text, rather than wrapping a row off the grid.
+    /// The names stay readable, which is what a list is for.
     #[test]
-    fn the_footer_names_the_key_that_reopens_the_previous_question() {
+    fn a_narrow_frame_elides_the_purpose_and_keeps_the_row_on_one_line() {
+        let buffer = render(&FirstRun::default(), 60, 36);
+        let row = (0..36u16).map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>()).find(|r| r.contains("alpha")).expect("a provider row");
+        assert!(row.chars().count() == 60, "one row, not wrapped: {row:?}");
+        assert!(row.contains("alpha"), "the name survives: {row:?}");
+        assert!(!row.contains("ALPHA_API_KEY"), "the purpose does not fit and is elided rather than wrapped: {row:?}");
+    }
+
+    /// The footer names the two keys the reference names, and states where
+    /// the answers land — plainly, rather than by implication.
+    #[test]
+    fn the_footer_names_the_keys_and_where_answers_land() {
         let out = text(&render(&FirstRun::default(), 120, 36));
-        assert!(out.contains("← back"), "{out:?}");
+        assert!(out.contains("⏎ continue"), "the footer states the key then the verb: {out:?}");
+        assert!(out.contains("↑↓ choose"), "{out:?}");
+        assert!(!out.contains("← back"), "the reference's footer carries two hints; `←` stays bound but unnamed: {out:?}");
+        assert!(out.contains("config → ~/.mjolnir/"), "where state lives is stated plainly: {out:?}");
+    }
+
+    /// No tier may promise that edits run without asking — the one claim
+    /// the harness structurally cannot honour.
+    #[test]
+    fn no_access_row_claims_edits_run_unasked() {
+        let out = text(&render(&FirstRun { index: 2, ..Default::default() }, 120, 36));
+        assert!(!out.contains("nothing asks"), "the design's original top-tier copy would be false here: {out:?}");
+        for tier in AccessTier::ORDER {
+            assert!(tier.purpose().contains("ask"), "{} must say what still asks", tier.label());
+        }
     }
 
     #[test]
@@ -612,27 +783,6 @@ mod tests {
                 let banded = (0..120).any(|x| buffer[(x, y)].bg == DARK.band);
                 println!("{y:2}|{}|{}", row_text(&buffer, y), if banded { " <- selected" } else { "" });
             }
-        }
-    }
-
-    /// The footer states where the answers land, plainly rather than by
-    /// implication.
-    #[test]
-    fn the_footer_names_the_keys_and_where_answers_land() {
-        let out = text(&render(&FirstRun::default(), 120, 36));
-        assert!(out.contains("↑↓ choose"), "the footer states the key then the verb: {out:?}");
-        assert!(out.contains("⏎ continue"), "{out:?}");
-        assert!(out.contains("config → ~/.mjolnir/"), "where state lives is stated plainly: {out:?}");
-    }
-
-    /// No tier may promise that edits run without asking — the one claim
-    /// the harness structurally cannot honour.
-    #[test]
-    fn no_access_row_claims_edits_run_unasked() {
-        let out = text(&render(&FirstRun::default(), 120, 36));
-        assert!(!out.contains("nothing asks"), "the design's original top-tier copy would be false here: {out:?}");
-        for tier in AccessTier::ORDER {
-            assert!(tier.purpose().contains("ask"), "{} must say what still asks", tier.label());
         }
     }
 }

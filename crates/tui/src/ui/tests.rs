@@ -12,7 +12,7 @@ use super::grid::{Ctx, CONTENT_INDENT, MARGIN_X};
 use super::markdown::{parse_inline, render_line as render_markdown_line};
 use super::transcript::intro_content;
 
-use crate::app::{App, PermState, StatusInfo};
+use crate::app::App;
 use crate::log::LogEntry;
 use crate::palette::{self, DARK};
 use mjolnir_config::Config;
@@ -1475,59 +1475,90 @@ fn an_ordinary_turn_end_renders_no_log_row() {
     assert!(rendered(&mut cancelled_app, 100, 20).contains("cancelled"), "a cancelled turn must still render inline");
 }
 
-/// Replaces the removed mascot-art tests — the hero no longer has any
-/// art to check the shape/gradient of; see `intro_content`'s doc
-/// comment on why (the Mjolnir Design System's explicit "no logo" rule).
+/// The empty state — the design system's `14d`. Replaces the removed
+/// mascot-art tests (the hero has no art; see `intro_content`) and the
+/// tagline/version/commit block Turn 14 took off this screen.
 #[test]
-fn intro_banner_shows_the_active_model_and_is_exactly_intro_line_count_rows() {
-    let status = StatusInfo {
-        model_name:    "claude-sonnet-5".into(),
-        version:       "9.9.9".into(),
-        commit:        "abcd1234".into(),
-        cwd:           Some("~/src/gateway".into()),
-        turn:          None,
-        step:          None,
-        running_tools: vec![],
-        read:          PermState::Denied,
-        shell:         PermState::Denied,
-        edit:          PermState::Denied,
-    };
-    assert_eq!(intro_content(&status, ctx(80)).len(), crate::log::INTRO_LINE_COUNT, "ui::intro_content must stay in sync with log::INTRO_LINE_COUNT");
-    // Tall enough that the whole banner fits without auto-follow scroll
-    // pushing its top rows out of view — see the sizing comment on
-    // user_and_assistant_messages_are_visually_distinct.
-    let mut banner_app = app();
-    let commit = banner_app.status.commit.clone();
-    let out = rendered(&mut banner_app, 110, 40);
-    assert!(out.contains("claude-sonnet-5"), "the active model should appear in the welcome banner");
-    assert!(out.contains("every strike is yours to call."), "the tagline should appear in the welcome banner");
-    assert!(out.contains(&commit), "the build's git commit should appear in the welcome banner, distinct from the release version");
-    assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "the banner should surface the current directory's permission model");
+fn the_empty_state_shows_the_wordmark_and_the_three_facts_of_this_directory() {
+    let mut app = app();
+    app.current_provider = Some("anthropic".into());
+    let out = rendered(&mut app, 110, 40);
+
+    assert!(out.contains("  M J O L N I R  "), "the mark identifies a frame with no transcript to identify it: {out:?}");
+    assert!(out.contains("anthropic"), "the provider row names the catalogue row this session runs on: {out:?}");
+    assert!(out.contains("claude-sonnet-5"), "beside the model it answers with: {out:?}");
+    assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "and what this directory permits");
+    assert!(out.contains("Ask for a change, or / for commands."), "the one line saying what to do next: {out:?}");
+    assert_eq!(intro_content(&app, ctx(80)).len(), super::transcript::INTRO_ROWS, "intro_content must stay in sync with INTRO_ROWS");
 }
 
-/// Regression guard for the reported defect: the top bar and the welcome
-/// banner printed `env!("CARGO_PKG_VERSION")` directly, and the workspace
-/// manifest was never bumped at release time, so every build claimed to be
-/// v0.1.0 no matter which release it was. Both now render whatever
-/// `StatusInfo` carries, which `App::new` fills from `version::VERSION` —
-/// so this asserts the wiring, and `version.rs`'s own tests assert that
-/// constant tracks the manifest.
+/// Turn 14 took the build's version and commit off this screen. The version
+/// is still on the top bar; the commit is not on the resting screen at all.
 #[test]
-fn the_top_bar_and_banner_report_the_running_builds_version() {
+fn the_empty_state_carries_no_build_identity_and_no_tagline() {
     let mut app = app();
-    app.status.version = "9.9.9".into();
     app.status.commit = "feedface".into();
     let out = rendered(&mut app, 110, 40);
+    assert!(!out.contains("feedface"), "the commit is off the resting screen: {out:?}");
+    assert!(!out.contains("every strike is yours to call."), "the tagline went with the fact block: {out:?}");
+}
+
+/// A hand-written endpoint has no catalogue row, which is a real
+/// configuration and not an error — the model still names itself, without a
+/// dangling separator where the provider would have been.
+#[test]
+fn the_provider_row_falls_back_to_the_model_alone_for_an_unnamed_endpoint() {
+    let mut app = app();
+    assert_eq!(app.current_provider, None);
+    let out = rendered(&mut app, 110, 40);
+    assert!(out.contains("claude-sonnet-5"), "{out:?}");
+    assert!(!out.contains(" · claude-sonnet-5"), "no separator with nothing on its left: {out:?}");
+}
+
+/// The empty state sits against the composer, where the first turn will
+/// appear — not centred. A centred hero made the screen jump on the first
+/// message and drift upward as the terminal grew.
+#[test]
+fn the_empty_state_is_anchored_to_the_bottom_of_the_log() {
+    let mut app = app();
+    let (width, height) = (110u16, 40u16);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let last = (0..height).filter(|y| (0..width).any(|x| buffer[(x, *y)].bg == DARK.ground)).max().expect("a log row");
+    let prose = find_row(&buffer, "Ask for a change");
+    assert_eq!(last - prose, 1, "one blank row between the prose and the composer band, as `14d` has it");
+}
+
+/// Regression guard for the reported defect: the top bar printed
+/// `env!("CARGO_PKG_VERSION")` directly, and the workspace manifest was
+/// never bumped at release time, so every build claimed to be v0.1.0 no
+/// matter which release it was. It now renders whatever `StatusInfo`
+/// carries, which `App::new` fills from `version::VERSION` — so this
+/// asserts the wiring, and `version.rs`'s own tests assert that constant
+/// tracks the manifest.
+///
+/// This covered the welcome banner's commit too, until Turn 14 took the
+/// commit off that screen (see
+/// `the_empty_state_carries_no_build_identity_and_no_tagline`). Nothing was
+/// weakened by that: the defect this guards was the *version*, and the
+/// version is still asserted here.
+#[test]
+fn the_top_bar_reports_the_running_builds_version() {
+    let mut app = app();
+    app.status.version = "9.9.9".into();
+    let out = rendered(&mut app, 110, 40);
     assert!(out.contains("v9.9.9"), "the top bar must show the running build's version, not a hardcoded one: {out:?}");
-    assert!(out.contains("feedface"), "the welcome banner must show the running build's commit: {out:?}");
 }
 
 #[test]
-fn a_fresh_session_shows_the_banner_before_any_log_entries() {
+fn a_fresh_session_shows_the_empty_state_before_any_log_entries() {
     let mut app = app();
     assert!(app.log.is_empty());
     let out = rendered(&mut app, 110, 40);
-    assert!(out.contains("every strike is yours to call."));
+    assert!(out.contains("Ask for a change, or / for commands."));
 }
 
 /// Replaces the old `plain_user_messages_get_a_muted_background_but_

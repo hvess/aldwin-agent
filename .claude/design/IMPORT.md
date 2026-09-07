@@ -10,6 +10,43 @@ byte-identical, and no path was added or removed in either project. The
 design-system project's `updatedAt` did not move; see the note below on why that
 is expected.
 
+## Turn 14 sync — 2026-09-06, and the direction it ran
+
+The third pass of the same day, and the first that **wrote upstream** rather
+than only reading. Both `.dc.html` frames were fetched in full and diffed
+against each other with their hex values masked: they are byte-identical apart
+from the `:root{--t-*}` block and two section headings, which is what makes the
+light theme a pure re-point of one set of roles and the role mapping below
+unambiguous.
+
+What the frames had that this copy did not:
+
+- **A new light palette.** Every `.tui-light` value changed. `tokens/cells.css`
+  had already been updated upstream (it carries `--step-mark-col` and
+  `--step-content-col`), but `tokens/semantic.css` had not — so the token layer
+  and the frames disagreed, silently, in the one direction nothing checks.
+- **A rebuilt first run** — three steps on one vertical spine — and a **new
+  `14d` frame**, the returning/empty state. Both were *measured*, not copied;
+  what came out of them is in `HANDOFF.md`'s first-run section as a third
+  supersession note, and in `SYNC.md`.
+
+Files changed here: `tokens/semantic.css` (`.tui-light` regenerated,
+`--tui-step-done` added to both scopes), `tokens/palette.css`
+(`--color-band-light`, and the accent ramp's comment, which claimed the light
+theme draws from 800/900 — it no longer does), `tokens/cells.css` (brought to
+the upstream text), `SYNC.md`, `HANDOFF.md`.
+
+**Pushed back** to `25845063-…`: `_ds/…/tokens/semantic.css`,
+`_ds/…/tokens/palette.css` and `_ds/…/SYNC.md`, so the bound token layer states
+what the frames render. `cells.css` was already current upstream and was not
+written. Nothing was pushed to the design-system project `4ea574fb-…`, which
+stays stale by the same mechanism described below.
+
+**The frames still read none of this.** Each `.dc.html` restates its whole
+palette inline, so updating `semantic.css` changes nothing about what either
+one renders — the point of the push is that the two now agree. They can drift
+apart again with no error anywhere; only measuring catches it.
+
 ## The two projects, and which one is live
 
 There are two distinct objects on claude.ai/design, and they are easy to

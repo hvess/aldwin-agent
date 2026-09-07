@@ -1,7 +1,94 @@
-# Sync record — Turn 13 decisions
+# Sync record
 
 Source of the decisions: `Agent TUI v2.dc.html` and `Agent TUI v2 Light.dc.html`
 in the consuming project. Everything below was applied to this bound copy.
+
+# Turn 14 — a three-step first run, and a light theme that ladders
+
+The frames moved first and the token layer followed, which is the direction
+that leaves this copy able to disagree with them: both files state their whole
+palette inline as `--t-*` and read nothing from `semantic.css`. Re-measure
+against that block, never against the prose here.
+
+## Applied
+
+**`tokens/cells.css`** — added the first-run step spine: `--step-mark-col`
+(`--label-col` + `--label-gutter`, 10 cells) and `--step-content-col`
+(`--margin-x` + `--step-mark-col` + `--option-label-col`, cell 29). Both
+derived, neither restated. `--option-label-col`'s comment now names the
+provider list rather than the model list, since the provider list is the one
+that sets the width.
+
+**`tokens/semantic.css`** — the `.tui-light` scope was regenerated whole, and
+one role was added to both scopes.
+
+*The light ground ladder is now monotonic.* Every band sinks below the frame
+ground, in seven ordered steps:
+
+| Role | Was | Now |
+| --- | --- | --- |
+| `--tui-ground` | `#fbf9fe` | `#faf7ff` |
+| `--tui-break` | `#f0edf5` | `#ede9f6` |
+| `--tui-bar-bottom` | `#cec9d8` | `#e0dbea` |
+| `--tui-bar` | `#e4e1eb` | `#d3cedd` |
+| `--tui-recess` | `#bbb6c5` | `#c6c1d1` |
+| `--tui-panel-title` | `#cec6df` | `#bab3c8` |
+| `--tui-scrim` | `#aeaab7` | `#a39fac` |
+
+Two of those are corrections rather than adjustments. **`--tui-bar` and
+`--tui-bar-bottom` were the wrong way round**: the top bar sat *lighter* than
+the composer, which is the reverse of the dark theme's arrangement, so the two
+chrome bands read as swapped between themes. And **the turn break no longer
+rises** — it was the one band that stepped above the light ground, on the
+argument that a separator has to stay visible; it does not need to, because
+`#ede9f6` is a full step below `#faf7ff` and nothing else on the screen is.
+
+*The ink got darker.* `--tui-text` `#17151c` → `#0e0c12`, `--tui-body`
+`#322e39` → `#1e1b23`, `--tui-code` `#221f28` → `#151219`, `--tui-quiet` and
+`--tui-value` `#433f4b` → `#2a282e`, `--tui-label` `#524d5b` → `#39373d`,
+`--tui-dim` and `--tui-context` `#615c6c` → `#48464d`.
+
+*The light accents left the ramp.* They now sit past `--color-accent-900`
+(`#562c8b`), which the theme had outgrown, so `.tui-light` states them as
+literals: `--tui-mark` and `--tui-accent-text` `#4b1f7e`, `--tui-speaker-you`
+`#592f8e`, `--tui-gauge-fill` and `--tui-hunk-header` `#7d56b8`,
+`--tui-glyph-running` `#4b1f7e`, `--tui-mark-idle` and `--tui-glyph-pending`
+`#706c79`, `--tui-gauge-track` `#6a6773`, `--tui-reverse-bg` `#4b1f7e` on
+`--tui-reverse-ink` `#faf7ff`. `--color-band-light` moved `#c6b1ef` →
+`#c4acf2` and stays the one light value drawn from `palette.css`, because that
+token exists for this one fill. The diff pair was re-picked too:
+`--tui-add` `#006911` / `--tui-add-code` `#004300` / `--tui-add-row`
+`#c9e3c9`, `--tui-del` `#9e1421` / `--tui-del-code` `#6c0003` /
+`--tui-del-row` `#facfcb`, on `--tui-diff-box` `#e6e2ee`.
+
+*New role: `--tui-step-done`*, a settled first-run step's `●`. In the dark
+theme it is `--color-accent-700`, exactly what `--tui-glyph-done` is, which is
+why it looks like a token that did not need to exist. It is: **the two part
+company in the light theme**. A finished tool call recedes by going *lighter*
+than the accent mark (`#a17adf`), because it sits in a dense run of tool rows
+and should fall back; a settled step recedes by going *darker* (`#6941a1`),
+because it sits beside an answer that has to stay readable. Spelling both as
+one token would force one of those two to be wrong.
+
+*Also*: `--tui-glyph-done` in light was `--color-accent-900` and is now
+`#a17adf`, per the above.
+
+**`tokens/palette.css`** — `--color-band-light` re-pointed, and the accent
+ramp's comment corrected: it claimed the light theme draws its marks from
+800/900, which stopped being true here. The ramp is not extended downward to
+cover the new light accents deliberately; those steps are what the *dark*
+theme is generated from, and rungs nothing in the dark theme uses would make
+the ramp a place to look up rather than a thing to read.
+
+## Not applied — the frames' own inline palette
+
+Neither `.dc.html` file reads `semantic.css`; each restates the whole palette
+in a `:root{--t-*}` block. Nothing above changes what either frame renders,
+which is the point — this copy was brought up to what they already show. The
+consequence is that the two can drift again silently, and only a measurement
+catches it.
+
+# Turn 13 decisions
 
 ## Applied
 

@@ -6,7 +6,7 @@ ratatui frontend — renders the core event stream, submits commands, approval g
 colour-transport gap is closed by the 2026-09-06 entry)
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-06
+**Last Updated:** 2026-09-07
 
 **Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
 audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed
@@ -2753,6 +2753,89 @@ Re-verified against the binary after all four: `/model` on the model the
 session is really running still says "already on"; the next `/model` swapped
 and repainted both bars; `/model google/…` with `GOOGLE_API_KEY` unset
 refused by name, kept the session, and wrote nothing.
+
+**Progress (2026-09-07, Turn 14 — the light theme, the step spine, and
+`14d`):** The design moved again, in three ways, and the token layer had
+been left behind by all three. Both `.dc.html` frames were fetched and
+diffed against each other with their hex values masked: **byte-identical
+apart from the `:root{--t-*}` block and two headings**, which is what makes
+the light theme a pure re-point of one set of roles rather than a second
+design.
+
+*The light palette was regenerated.* Two of the changes are corrections, not
+adjustments, and both were defects this project shipped:
+
+- **`--tui-bar` and `--tui-bar-bottom` were inverted.** The light top bar sat
+  *lighter* than the composer — the reverse of the dark theme — so the two
+  chrome bands read as swapped between themes.
+- **The turn break rose above the light ground.** It was the one band that
+  did, on the argument that a separator has to stay visible. It does not:
+  `#ede9f6` is a full step below `#faf7ff`.
+
+The light ladder is now monotonic, seven ordered rungs, and its narrowest
+(1.127:1, ground→break) is *wider* than the dark ladder's own narrowest
+(1.011:1, scrim→recess). `palette.rs` grew
+`both_ground_ladders_are_strictly_ordered_and_have_no_repeated_rung` and
+`the_top_bar_is_further_from_the_ground_than_the_composer_in_both_themes`,
+because neither defect is visible to a rendering test — the frame still
+draws, it just stops having an edge where it needs one. **The two ladders are
+not the same sequence**, and reading the light one as "the dark list
+reversed" is what produced both defects; `palette.rs`'s module doc now says
+so in place.
+
+New role `--tui-step-done` / `Palette::step_done`. It is `accent-700` in the
+dark theme — identical to `glyph_done`, so it looks redundant — and the two
+part in light because they recede in *opposite directions*: a finished tool
+call goes lighter than the accent (`#a17adf`), a settled first-run step goes
+darker (`#6941a1`). Pinned by a test from both sides, since the light pair
+reads as a copy-paste slip and the dark pair as a pointless field.
+`PANEL_TRANSCRIPT_OPACITY` also moved `.35` → `.45`.
+
+*First run is a spine.* Turn 14 stopped paginating it: all three steps are on
+screen from the start, one row each — glyph on the margin, name on cell 13,
+content on **`--step-content-col`, cell 29** — in one of three states
+(`●` settled / `▌` open / `○` pending). The `step n/m` counter is gone; the
+glyphs are the progress. Two new derived grid constants, `STEP_MARK_COL`
+(10) and `STEP_CONTENT_COL` (29), live in `grid.rs` beside `CONTENT_INDENT`
+and are derived the same way, so moving the option name field moves the
+content column with it.
+
+*`14d` is new* — the returning/empty state, replacing the centred welcome
+hero. Bottom-anchored, so the empty frame sits exactly where the first turn
+will appear rather than jumping when one arrives. Wordmark, then `in` /
+`provider` / `access` on the ordinary label column, then one line of prose.
+The build's **version and commit came off this screen**; the version is still
+on the top bar and still asserted there, and the commit's assertion was
+retired with a note rather than silently dropped.
+
+Three of the reference's own values are deliberately **not** rendered,
+the same call `chrome::draw_top_bar` already makes about its context gauge
+and session cost: no git branch (nothing tracks one), the three real
+permission states instead of `14d`'s single tier word (a tier is what first
+run *writes*, not what is stored — a hand-edited `permissions.yaml` need not
+correspond to one), and no `more` row on the model list (`visible_models`
+is already that provider's whole list, and a row that reveals nothing does
+nothing). The `←` key stays bound but is no longer hinted, per the
+reference's two-hint footer.
+
+*Measured, then rendered, then re-rendered.* Every column was checked against
+the frames' own inline styles before any Rust was written (the numbers are in
+`.claude/design/HANDOFF.md`'s third first-run supersession note), and one
+correction came out of it that a reading alone had got wrong for a whole
+turn: **the wordmark is padded by two spaces at each end, not one** — a
+17-cell field, not 15. `examples/snapshot.rs` now covers `empty` and the
+three first-run steps in both themes, and its page background reads the
+theme's own `--tui-scrim` — it was a fixed near-black, which put every
+*light* frame on a dark desk, hiding the one surface a reviewer uses to
+judge whether the light chrome bands step the right way. Three screenshot
+rounds against headless Chromium, the last two byte-identical across 28
+frames.
+
+**Pushed upstream**, which earlier rounds did not do: `semantic.css`,
+`palette.css` and `SYNC.md` were written back to the bound `_ds/` copy in
+`25845063-…`, so the token layer states what the frames render. The frames
+still read none of it — each restates its palette inline — so the two can
+drift again with no error anywhere, and only a measurement catches it.
 
 
 ## References

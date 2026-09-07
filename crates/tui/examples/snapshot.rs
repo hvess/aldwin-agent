@@ -31,13 +31,23 @@ use std::sync::Arc;
 
 use mjolnir_config::Config;
 use mjolnir_permissions::{Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, PromptResolution, Theme, ToolActivityEntry, ToolActivityStatus};
+use mjolnir_tui::{App, LogEntry, ModelChoice, PromptResolution, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 
-const SCENES: [&str; 6] = ["conversation", "tools", "approval", "prompt", "resolved", "long"];
+/// Scenes drawn through `App` — everything with a transcript behind it.
+/// `empty` is the design system's `14d`, the state a returning developer
+/// opens into and the one `/clear` returns them to.
+const SCENES: [&str; 7] = ["empty", "conversation", "tools", "approval", "prompt", "resolved", "long"];
+
+/// First run's three steps (`14a`, `14b`, `14c`). Drawn from `FirstRun`
+/// rather than `App` — the screen runs its own terminal loop, so it has its
+/// own draw entry point (`__preview_draw_first_run`). The index is which
+/// step is open; the spine shows all three either way, which is exactly the
+/// thing worth screenshotting.
+const FIRST_RUN_STEPS: [&str; 3] = ["first-run-provider", "first-run-model", "first-run-access"];
 
 fn main() -> io::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -47,6 +57,8 @@ fn main() -> io::Result<()> {
     std::fs::create_dir_all(&out_dir)?;
 
     for theme in [Theme::Dark, Theme::Light] {
+        let suffix = if matches!(theme, Theme::Light) { "light" } else { "dark" };
+
         for scene_name in SCENES {
             let dir = tempfile::tempdir().unwrap();
             let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
@@ -57,13 +69,52 @@ fn main() -> io::Result<()> {
             let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             terminal.draw(|f| mjolnir_tui::__preview_draw(f, &mut app)).unwrap();
 
-            let suffix = if matches!(theme, Theme::Light) { "light" } else { "dark" };
             let path = format!("{out_dir}/{scene_name}-{suffix}.html");
             std::fs::write(&path, page(terminal.backend().buffer(), scene_name, suffix))?;
             println!("{path}");
         }
+
+        for (index, name) in FIRST_RUN_STEPS.iter().enumerate() {
+            let state = first_run_state(index);
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal.draw(|f| mjolnir_tui::__preview_draw_first_run(f, &state, theme)).unwrap();
+
+            let path = format!("{out_dir}/{name}-{suffix}.html");
+            std::fs::write(&path, page(terminal.backend().buffer(), name, suffix))?;
+            println!("{path}");
+        }
     }
     Ok(())
+}
+
+/// A first-run screen with `index` as the open step, on a catalogue shaped
+/// like the real one — three curated rows behind a `more`, each with its own
+/// models. Deliberately not `mjolnir-llm`'s actual catalogue: this example
+/// does not depend on that crate, and a screenshot harness that did would
+/// change every time a provider was added.
+fn first_run_state(index: usize) -> mjolnir_tui::__PreviewFirstRun {
+    // Listed deepest-first so the purposes below zip onto the right rows —
+    // the same order, and the same copy, as the reference's `14b`.
+    let providers: Vec<ProviderChoice> = [
+        ("anthropic", "claude models · ANTHROPIC_API_KEY", ["opus-4.6", "sonnet-4.6", "haiku-4.6"]),
+        ("google", "gemini models · GOOGLE_API_KEY", ["gemini-3-pro", "gemini-3-flash", "gemini-3-lite"]),
+        ("openai", "gpt models · OPENAI_API_KEY", ["gpt-6", "o5", "gpt-6-mini"]),
+        ("mistral", "mistral models · MISTRAL_API_KEY", ["large-3", "codestral-2", "small-3"]),
+    ]
+    .into_iter()
+    .map(|(id, purpose, models)| {
+        let models = models
+            .into_iter()
+            .zip(["deepest reasoning · 200k", "balanced · 200k", "fast, cheap · 200k"])
+            .map(|(id, purpose)| ModelChoice::new(id, purpose))
+            .collect();
+        ProviderChoice::new(id, purpose, models)
+    })
+    .collect();
+
+    let mut state = mjolnir_tui::__PreviewFirstRun::new(providers, 3, true, true);
+    state.index = index;
+    state
 }
 
 /// One frame as a standalone HTML page: an absolutely-positioned grid of
@@ -71,9 +122,15 @@ fn main() -> io::Result<()> {
 /// screenshot of this lines up cell-for-cell with a screenshot of theirs.
 fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
     let (w, h) = (buf.area.width, buf.area.height);
+    // The desk the frame sits on — `--tui-scrim` for this theme, the same
+    // value `Palette::scrim` carries. It was a fixed near-black, which put
+    // every *light* frame on a dark desk: the one surface a reviewer uses
+    // to judge whether the light theme's chrome bands are stepping the
+    // right way was showing the wrong theme's ground.
+    let desk = if theme == "light" { "#a39fac" } else { "#0c0a11" };
     let mut out = format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{scene_name} {theme}</title><style>\
-         body{{margin:0;background:#0e0f18;padding:20px}}\
+         body{{margin:0;background:{desk};padding:20px}}\
          .f{{position:relative;width:{}px;height:{}px;font:400 15px/20px 'DejaVu Sans Mono','Liberation Mono',monospace;white-space:pre;overflow:hidden}}\
          .f i{{position:absolute;font-style:normal;height:20px}}\
          </style></head><body><div class=\"f\">",
@@ -137,6 +194,10 @@ fn escape(s: &str) -> String {
 
 fn scene(name: &str, app: &mut App) {
     match name {
+        // `14d` needs no log entries at all — an empty log *is* the scene.
+        // It does need a named provider, since the row that falls back to
+        // the model alone is the degraded case, not the one to review.
+        "empty" => app.current_provider = Some("anthropic".into()),
         "conversation" => conversation(app),
         "tools" => tools(app),
         "approval" => approval(app),

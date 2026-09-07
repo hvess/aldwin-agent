@@ -34,6 +34,11 @@
   --tui-glyph-done:var(--color-accent-700);
   --tui-glyph-running:var(--color-accent-400);
   --tui-glyph-pending:var(--color-neutral-700);
+  /* A settled first-run step's `●`. The same step as --tui-glyph-done here,
+     but a separate role: on a light ground a finished tool call recedes
+     *above* the accent while a settled step stays *below* it, so the two
+     part company in .tui-light and must not be spelled as one token. */
+  --tui-step-done:var(--color-accent-700);
   --tui-hunk-header:var(--color-accent-500);
 
   /* Reverse video: accent as the ground, the desk as the ink. Used by the
@@ -52,51 +57,84 @@
   --tui-del-code:var(--color-diff-del-code);
 }
 
-/* Light theme: same roles, same hue, ramps flipped. The frame ground is the
-   lightest surface and every other band is DARKER than it — including the
-   selection band, which on a light ground must sink, not glow. */
+/* Light theme: same roles, same hue, ramps flipped.
+
+   Turn 14 regenerated every value here. Two things changed, and both are
+   structural rather than cosmetic:
+
+   1. The ground ladder is now MONOTONIC. The frame ground is the lightest
+      surface and every other band sinks below it, in this order —
+
+        ground #faf7ff · break #ede9f6 · bar-bottom #e0dbea · bar #d3cedd
+        recess #c6c1d1 · panel-title #bab3c8 · scrim #a39fac
+
+      — so the seven rungs are seven distinct, ordered steps the way the dark
+      ladder is. The turn break used to be the one band that ROSE above the
+      light ground; it does not any more, and the top bar used to sit LIGHTER
+      than the composer, which put the two chrome bands the wrong way round
+      against their dark counterparts. Nothing inside a frame is stroked, so
+      these steps are the only thing separating one band from the next:
+      changing one removes a boundary.
+
+   2. The ink got darker and the accent got deeper. Text runs #0e0c12 down to
+      #48464d at the dim step, and the accent marks sit at #4b1f7e rather than
+      on the shared accent ramp — the ramp bottoms out at accent-900 #562c8b,
+      which is lighter than this theme now needs. The light accents are
+      therefore literals here, not ramp steps; only the selection band still
+      comes from the palette, because --color-band-light exists for exactly
+      this one fill.
+
+   Source: the `--t-*` block of `Agent TUI v2 Light.dc.html`, which is where
+   these were authored. The frames state them inline and do not read this
+   file, so this scope is the thing that can silently disagree with them —
+   re-measure it against that block, not against prose. */
 .tui-light{
-  --tui-ground:#fbf9fe;
-  --tui-bar:#e4e1eb;
-  --tui-bar-bottom:#cec9d8;
-  --tui-recess:#bbb6c5;
-  --tui-break:#f0edf5;
-  --tui-panel-title:#cec6df;
-  --tui-scrim:#aeaab7;
+  --tui-ground:#faf7ff;
+  --tui-bar:#d3cedd;
+  --tui-bar-bottom:#e0dbea;
+  --tui-recess:#c6c1d1;
+  --tui-break:#ede9f6;
+  --tui-panel-title:#bab3c8;
+  --tui-scrim:#a39fac;
   --tui-line:var(--color-neutral-300);
 
-  --tui-text:#17151c;
-  --tui-body:#322e39;
-  --tui-code:#221f28;
-  --tui-quiet:#433f4b;
-  --tui-value:#433f4b;
-  --tui-label:#524d5b;
-  --tui-dim:#615c6c;
-  --tui-context:#615c6c;
+  --tui-text:#0e0c12;
+  --tui-body:#1e1b23;
+  --tui-code:#151219;
+  --tui-quiet:#2a282e;
+  --tui-value:#2a282e;
+  --tui-label:#39373d;
+  --tui-dim:#48464d;
+  --tui-context:#48464d;
 
-  --tui-mark:var(--color-accent-800);
-  --tui-mark-idle:#9690a3;
+  --tui-mark:#4b1f7e;
+  --tui-mark-idle:#706c79;
   --tui-band:var(--color-band-light);
-  --tui-accent-text:var(--color-accent-900);
-  --tui-speaker-you:#5c3093;
-  --tui-speaker-agent:#433f4b;
-  --tui-gauge-fill:var(--color-accent-800);
-  --tui-gauge-track:#938da0;
-  --tui-glyph-done:var(--color-accent-900);
-  --tui-glyph-running:var(--color-accent-800);
-  --tui-glyph-pending:#9690a3;
-  --tui-hunk-header:var(--color-accent-800);
+  --tui-accent-text:#4b1f7e;
+  --tui-speaker-you:#592f8e;
+  --tui-speaker-agent:#2a282e;
+  --tui-gauge-fill:#7d56b8;
+  --tui-gauge-track:#6a6773;
+  /* The two done-glyph roles part company here. A finished tool call recedes
+     by going LIGHTER than the accent mark; a settled first-run step recedes
+     by going darker than it, because it sits beside an answer that has to
+     stay readable. In the dark theme both are accent-700. */
+  --tui-glyph-done:#a17adf;
+  --tui-glyph-running:#4b1f7e;
+  --tui-glyph-pending:#706c79;
+  --tui-step-done:#6941a1;
+  --tui-hunk-header:#7d56b8;
 
-  --tui-reverse-bg:var(--color-accent-800);
-  --tui-reverse-ink:#fbf9fe;
+  --tui-reverse-bg:#4b1f7e;
+  --tui-reverse-ink:#faf7ff;
 
-  --tui-diff-box:#ece8f3;
-  --tui-add:#007324;
-  --tui-add-bg:rgba(0,115,36,.24);
-  --tui-add-row:#d9e4d9;
-  --tui-add-code:#004914;
-  --tui-del:#b00a1d;
-  --tui-del-bg:rgba(176,10,29,.14);
-  --tui-del-row:#e9d7da;
-  --tui-del-code:#69040d;
+  --tui-diff-box:#e6e2ee;
+  --tui-add:#006911;
+  --tui-add-bg:rgba(0,105,17,.24);
+  --tui-add-row:#c9e3c9;
+  --tui-add-code:#004300;
+  --tui-del:#9e1421;
+  --tui-del-bg:rgba(158,20,33,.14);
+  --tui-del-row:#facfcb;
+  --tui-del-code:#6c0003;
 }

@@ -46,8 +46,13 @@
   --color-neutral-800:#474251;
   --color-neutral-900:#322e39;
 
-  /* Accent: the same hue at full chroma. Spans both themes — the light theme
-     draws its marks from 800/900, the dark theme from 200/400. */
+  /* Accent: the same hue at full chroma. The dark theme draws its marks from
+     200/400. The light theme no longer draws from this ramp at all — Turn 14
+     took its accents past accent-900 (#4b1f7e against a #562c8b floor), so
+     `.tui-light` states them as literals. Do not "fix" that by extending the
+     ramp downward: these steps are what the DARK theme is generated from, and
+     adding rungs nothing in the dark theme uses would make the ramp a place
+     to look rather than a thing to read. */
   --color-accent-100:#efe7fd;
   --color-accent-200:#dfd1fb;
   --color-accent-300:#ceb6fb;
@@ -61,7 +66,7 @@
   /* The selection band is a real accent fill now, not a faint tint, so each
      theme needs its own value rather than a ramp step. */
   --color-band-dark:#604788;
-  --color-band-light:#c6b1ef;
+  --color-band-light:#c4acf2;
 
   /* Diff pairs. Dark theme values; the light theme re-points them.
      Added is a true green (hue 145) and removed a warm red (hue 24). Against a

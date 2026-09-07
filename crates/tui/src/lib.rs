@@ -51,3 +51,13 @@ pub use version::{GIT_HASH, VERSION, VERSION_FULL};
 pub use app::{PendingApproval as __PreviewPendingApproval, PendingPrompt as __PreviewPendingPrompt, RunningTool as __PreviewRunningTool};
 #[doc(hidden)]
 pub use ui::draw as __preview_draw;
+/// Same, for the first-run screen. It runs its own terminal loop
+/// (`first_run::run`) rather than being a mode inside `App`, so the
+/// snapshot harness cannot reach it through `__preview_draw` and needs the
+/// screen's own draw plus the state type it takes.
+#[doc(hidden)]
+pub use first_run::FirstRun as __PreviewFirstRun;
+#[doc(hidden)]
+pub fn __preview_draw_first_run(frame: &mut ratatui::Frame, state: &first_run::FirstRun, theme: Theme) {
+    ui::first_run::draw(frame, state, theme.palette());
+}

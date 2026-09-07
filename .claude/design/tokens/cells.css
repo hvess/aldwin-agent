@@ -35,9 +35,17 @@
      there is no --body-col to apply. Do not add one; it would be a fourth
      statement of a position the other three already fix. */
 
+  /* The first-run step spine. A step's mark sits at the left margin and its name
+     at the body column, so the three steps read as one vertical list; the step's
+     content — a settled answer, a purpose line, or an expanded option list —
+     all hangs on --step-content-col. One column for content, whatever the step
+     is doing. */
+  --step-mark-col:calc(var(--label-col) + var(--label-gutter));
+  --step-content-col:calc(var(--margin-x) + var(--step-mark-col) + var(--option-label-col));
+
   /* An option row's name field, measured from the body column. 16 cells, the
-     same in every list in the system — the model list, the access list and the
-     command list are one control, so they share one width. */
+     same in every list in the system — the provider list, the access list and
+     the command list are one control, so they share one width. */
   --option-label-col:calc(var(--cell-w) * 16);
   /* The explanation pane beside the command list. */
   --option-detail-col:calc(var(--cell-w) * 10);

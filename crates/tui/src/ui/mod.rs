@@ -156,7 +156,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if pending {
         // The transcript recedes while a decision is open — the reference
-        // puts the whole conversation column at `opacity:.35` in both of
+        // puts the whole conversation column at `opacity:.45` in both of
         // its panel scenes, so the panel reads as the one live surface
         // rather than as another card competing with the history above it.
         // Applied as a post-pass over the already-drawn cells rather than

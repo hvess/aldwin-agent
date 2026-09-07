@@ -40,6 +40,26 @@ const LABEL_COL_WIDTH: usize = 8;
 const LABEL_GUTTER: usize = 2;
 pub(super) const CONTENT_INDENT: usize = MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER;
 
+/// `--option-label-col` — 16 cells, an option row's name field. One width
+/// for every list in the system: the provider list, the model list, the
+/// access list and the command list are one control, so they share it.
+pub(super) const OPTION_LABEL_COL: usize = 16;
+
+/// `--step-mark-col` — 10 cells, the field a first-run step's glyph sits
+/// in. Derived, not stated: the glyph is at the margin and the step's *name*
+/// is at the body column, so this field is exactly what separates them.
+pub(super) const STEP_MARK_COL: usize = LABEL_COL_WIDTH + LABEL_GUTTER;
+
+/// `--step-content-col` — cell 29, where a first-run step's content starts,
+/// whatever that content is: a settled answer, an open step's purpose line,
+/// a pending step's preview, or the option rows themselves. One column for
+/// all four is what makes the three steps read as a single vertical spine
+/// rather than as three stacked forms.
+///
+/// Derived from the three landmarks it is made of, like `CONTENT_INDENT`
+/// above, so moving the option name field moves this with it.
+pub(super) const STEP_CONTENT_COL: usize = MARGIN_X + STEP_MARK_COL + OPTION_LABEL_COL;
+
 /// The two facts every line builder in `ui` needs and neither of which it
 /// can derive on its own: which theme's colours to draw in, and how many
 /// cells the column it is filling is wide.

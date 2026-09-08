@@ -5,11 +5,10 @@ use std::time::{Duration, Instant};
 
 use mjolnir_core::{Command, Event};
 use mjolnir_permissions::Engine;
-use futures::{FutureExt, StreamExt};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent, EventStream, KeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::{
@@ -265,6 +264,74 @@ fn apply_input(app: &mut App, event: Option<io::Result<CtEvent>>) -> bool {
     true
 }
 
+/// Terminal input, carried to the loop on a channel by a dedicated blocking
+/// reader thread.
+///
+/// **Not `crossterm::event::EventStream`**, and the difference is the whole
+/// reason this exists. `EventStream` is a `Stream`, so the only way to ask
+/// it "is there another event right now?" without awaiting is
+/// `now_or_never()` — and that polls it with a **no-op waker**.
+/// `EventStream::poll_next` treats every poll as a subscription: when no
+/// event is ready it hands the waker it was given to its own background
+/// reader thread and sets an "already armed" flag, and a later poll carrying
+/// the *real* task waker finds that flag set and does not re-register. So
+/// one `now_or_never` that comes up empty leaves the stream holding a waker
+/// that does nothing, and terminal input stops being able to wake the loop
+/// at all.
+///
+/// It still moved, which is why this survived review: the loop was woken by
+/// whatever else happened to fire — the 120ms spinner tick, a core event,
+/// the pending-redraw timer — and drained the backlog when it got there.
+/// Measured against a pty driven at an ordinary scroll rate, that put a
+/// **median 42ms and a worst case of 100ms** between a wheel notch and the
+/// frame that showed it, in bursts landing on the tick boundary: the
+/// transcript moved eight times a second in uneven jumps instead of sixty
+/// times a second smoothly, which is exactly the reported "not smooth at
+/// all, very laggy and jittery". The same measurement across this channel is
+/// a **median 0.0ms and a worst case of 1.0ms**, at the same one-frame
+/// coalescing.
+///
+/// A channel has no such trap: [`mpsc::Receiver::try_recv`] is an ordinary
+/// synchronous method that never registers a waker, so draining what has
+/// already arrived cannot disturb the `recv()` the `select!` is suspended
+/// on. That is the same shape core events already use here — one `recv()` in
+/// the `select!`, one bounded `try_recv` drain after it — so both halves of
+/// the loop now work the same way rather than one of them being subtly
+/// special.
+///
+/// The thread blocks in `crossterm::event::read()` and is deliberately never
+/// joined: it holds no state the session needs on the way out, and the read
+/// it is parked in only returns when a key arrives. `blocking_send` gives it
+/// real backpressure if the loop ever falls behind, and the send failing is
+/// how it learns the session is over.
+fn spawn_input_reader() -> mpsc::Receiver<io::Result<CtEvent>> {
+    let (tx, rx) = mpsc::channel(INPUT_CHANNEL);
+    std::thread::Builder::new()
+        .name("mjolnir-input".into())
+        .spawn(move || loop {
+            match ratatui::crossterm::event::read() {
+                Ok(event) => {
+                    if tx.blocking_send(Ok(event)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(error));
+                    break;
+                }
+            }
+        })
+        .expect("spawning the terminal input reader");
+    rx
+}
+
+/// Events the reader thread may run ahead by. Comfortably past the burst a
+/// wheel flick or a bracketed paste arrives in, so the reader is never the
+/// thing throttling input; past that it blocks, which is the correct
+/// backpressure — the events are already in the terminal's buffer either
+/// way.
+const INPUT_CHANNEL: usize = 4096;
+
 async fn run_loop(
     terminal: &mut Out,
     mut events: mpsc::Receiver<Event>,
@@ -276,7 +343,7 @@ async fn run_loop(
 ) -> io::Result<()> {
     let mut app =
         App::new(model_name, permissions).with_theme(theme).with_catalogue(session.catalogue, session.current_provider);
-    let mut input = EventStream::new();
+    let mut input = spawn_input_reader();
     // Drives the "working"/"thinking" spinner's animation frame — a plain
     // redraw timer, not tied to any core event, since there'd otherwise be
     // no way to animate anything between events (per explicit developer
@@ -314,7 +381,7 @@ async fn run_loop(
             // "laggy": the keys were not slow, they were queued behind the
             // stream. There is no starvation the other way round, since a
             // developer cannot type fast enough to hold the loop.
-            input_event = input.next() => {
+            input_event = input.recv() => {
                 if !apply_input(&mut app, input_event) { break }
                 dirty = true;
             }
@@ -341,13 +408,25 @@ async fn run_loop(
         // well after the developer had stopped scrolling. Applying the
         // whole burst before painting makes a flick land where it was
         // aimed, in one frame.
+        //
+        // `try_recv`, not a `now_or_never` poll of a `Stream`. See
+        // `spawn_input_reader` for why that distinction is the difference
+        // between a 0ms and a 42ms median response to a wheel notch.
         for _ in 0..MAX_INPUT_PER_FRAME {
-            let Some(event) = input.next().now_or_never() else { break };
-            if !apply_input(&mut app, event) {
-                closed = true;
-                break;
+            match input.try_recv() {
+                Ok(event) => {
+                    if !apply_input(&mut app, Some(event)) {
+                        closed = true;
+                        break;
+                    }
+                    dirty = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    closed = true;
+                    break;
+                }
             }
-            dirty = true;
         }
         // Both drains are bounded, and for the same reason: a producer that
         // never goes quiet — a fast provider's deltas, a terminal being

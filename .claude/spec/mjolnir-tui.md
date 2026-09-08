@@ -3478,6 +3478,75 @@ a list picker with no text entry, so nothing there depends on them today, but
 the two setup paths are a latent divergence and only one of them is described by
 this spec.
 
+**Progress (2026-09-08, scrolling: the drain was polling with a no-op waker):**
+Reported: "scrolling the chat is severely broken, it is not smooth at all and is
+very laggy and jittery."
+
+Measured first, and everything the previous scrolling entries fixed held up. On
+a 40-turn / 997-row transcript at 120×36: `Transcript::sync` 0.9µs, `slice` 3.5µs,
+a whole frame 350–410µs whether scrolling or idle, and 3.4KB of escape sequences
+per wheel notch. Rendering every offset from the bottom up and re-aligning the
+frames confirmed all 299 steps moved by exactly one row, so the scroll *maths*
+was right too. None of that explains the report, and the reason is that none of
+it is where the defect was.
+
+`run_loop`'s input drain — the one added so a wheel flick lands in a single
+frame — was `input.next().now_or_never()` over a `crossterm::event::EventStream`.
+`now_or_never` polls with a **no-op waker**. `EventStream::poll_next` treats
+every poll as a subscription: when nothing is ready it hands the waker it was
+given to its background reader thread and sets an "already armed" flag, and a
+later poll carrying the *real* task waker finds that flag set and does not
+re-register (`crossterm-0.29.0/src/event/stream.rs`). One `now_or_never` that
+came up empty therefore left the stream holding a waker that did nothing, and
+terminal input could no longer wake the loop.
+
+It still moved, which is why this survived review and every test in the crate:
+the loop was woken by whatever else fired — the 120ms spinner tick, a core
+event, the pending-redraw timer — and drained the backlog on arrival. Driving
+the real loop under a pty at an ordinary scroll rate (40 notches, one per 12ms,
+three cursor keys each) put a **median 42ms and a worst case of 100ms** between
+a notch and the frame showing it, in bursts landing on the tick boundary, and
+painted 14–15 frames where 32 were due. The transcript moved eight times a
+second in uneven jumps instead of sixty times a second smoothly — precisely the
+reported symptom, and precisely why it read as *jitter* rather than as slowness.
+
+Isolated to be sure of the mechanism rather than the correlation: drain an
+`EventStream` with `now_or_never` until it reports pending, write one key into
+the pty, then await the stream. The key was not observed for a full second — it
+surfaced only when the 1.5s timeout woke the task from outside.
+
+The fix is to stop polling terminal input as a `Stream` at all. A blocking
+reader thread (`run.rs`'s `spawn_input_reader`) moves `crossterm::event::read()`
+onto a `tokio::sync::mpsc` channel; the `select!` awaits `recv()` and the drain
+uses `try_recv`, an ordinary synchronous method that registers no waker and so
+cannot disturb the `recv()` the loop is suspended on. That is the same shape
+core events already used correctly in the same loop — one `recv()` in the
+`select!`, one bounded `try_recv` drain after it — so both halves now work the
+same way instead of one being subtly special. Same pty measurement after:
+**median 0.0ms, worst case 1.7ms, no gap over 15ms, 31 frames** — the one-frame
+coalescing the drain existed for is fully preserved.
+
+Verified against the shipped `run()` itself, not a replica: the real binary
+driven under a pty with the screen emulated, so what was asserted is the
+rendered display. Scroll *correctness* passes either way — 20 wheel notches move
+exactly 60 rows, PageUp/PageDown step, End returns to the live bottom, 30 of 30
+notches move the screen. What changed is the response: **median 38.7ms / max
+41.8ms before, median 5.6ms / p90 16.9ms / max 20.1ms after** — from roughly two
+and a half frames behind the wheel to inside one.
+
+The defect lives entirely in how a future is polled, so no rendering or unit
+test in this crate could see it; `tests/input_wakeup.rs` is a source-level guard
+against reintroducing either spelling.
+
+Noted, not fixed: because alternate scroll mode delivers wheel notches *as
+ordinary cursor keys*, a wheel notch is indistinguishable from a real Up/Down
+press, and `App::handle_key` gives a multi-line draft's cursor first refusal on
+those. So with a multi-line draft in the composer the wheel moves the caret
+instead of the transcript. That is the documented keybinding working as
+specified, and it is not separable from the wheel while capture stays off (which
+it must, or text selection goes) — but it is a real rough edge worth a decision
+of its own rather than a silent change here.
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+    disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
     EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::crossterm::{execute, queue, ExecutableCommand};
@@ -91,11 +91,29 @@ pub struct SessionProvider {
 ///   block was a `KeyCode::Enter` and *submitted the line above it* — the
 ///   reported "pasting multi-line text sends the first sentence as a
 ///   command".
-/// * **The Kitty keyboard protocol's disambiguation flag**, and only where
-///   the terminal answers that it supports it. This is what makes
+/// * **The Kitty keyboard protocol's disambiguation flag**, sent
+///   unconditionally like every other mode here. This is what makes
 ///   Shift+Enter distinguishable from Enter at all; on a terminal without
 ///   it the two are the same bytes, and `App::handle_key`'s Alt+Enter and
 ///   Ctrl+J fallbacks are the way in.
+///
+///   It used to be sent *only* when `supports_keyboard_enhancement()`
+///   answered yes, and that gate was the bug behind "Shift+Enter works on
+///   my Linux machine but not on macOS" — reported against a terminal
+///   (Ghostty/Kitty/WezTerm) that implements the protocol on both. The query
+///   is a write-then-wait round trip with a 2s timeout whose reply is read
+///   off the same input this process is taking over, so anything that eats
+///   or delays the reply — a multiplexer that doesn't forward it, a slow
+///   answer, a race with another reader — makes it answer "no" for a
+///   terminal that would have honoured the push. Failing that way is silent
+///   and leaves Shift+Enter submitting.
+///
+///   Asking is the fragile part, so it is no longer asked. `CSI > 1 u` is a
+///   private sequence that a terminal not implementing it ignores, exactly
+///   like the alternate-scroll and synchronized-output modes either side of
+///   it — and the pop on the way out is now unconditional too, which keeps
+///   the push and pop symmetric on every terminal instead of depending on a
+///   detection result to pair them.
 /// * **Synchronized output** around each frame (see [`present`]).
 ///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
@@ -112,25 +130,21 @@ pub async fn run(
     session: SessionProvider,
 ) -> io::Result<()> {
     enable_raw_mode()?;
-    // Asked before the alternate screen goes up and before `EventStream`
-    // exists: the query reads the terminal's reply off the same input this
-    // process is about to take over, and the answer decides whether
-    // Shift+Enter can ever be seen. A terminal that doesn't answer is
-    // simply one without the protocol.
-    let enhanced = supports_keyboard_enhancement().unwrap_or(false);
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     let _ = execute!(stdout, EnableBracketedPaste);
-    if enhanced {
-        let _ = execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
-    }
+    // Pushed after the alternate screen is up, because the keyboard mode is
+    // part of the screen's own state — the flags have to land on the screen
+    // the session actually runs on. Best-effort, and unconditional: see this
+    // function's doc comment on why asking first was the bug.
+    let _ = execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     // Best-effort: a terminal that doesn't know the mode ignores the
     // sequence, and one that does gives the wheel back without costing
     // selection. Not worth failing the session over either way.
     let _ = stdout.write_all(ALTERNATE_SCROLL_ON).and_then(|()| stdout.flush());
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
-    let guard = TerminalGuard::new(enhanced);
+    let guard = TerminalGuard::new();
 
     let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme, session).await;
     // Before the guard, not after: the frame the loop last painted is still
@@ -153,29 +167,24 @@ pub async fn run(
 /// `run_loop` — the one path that never reaches `restore()` — and is
 /// necessarily best-effort (errors can't propagate out of `Drop`).
 struct TerminalGuard {
-    armed:    bool,
-    /// Whether the keyboard enhancement flags were actually pushed. Popping
-    /// a stack this process never pushed to would pop whatever the terminal
-    /// was already running with, for whichever program owns the terminal
-    /// next.
-    enhanced: bool,
+    armed: bool,
 }
 
 impl TerminalGuard {
-    fn new(enhanced: bool) -> Self {
-        Self { armed: true, enhanced }
+    fn new() -> Self {
+        Self { armed: true }
     }
 
     fn restore(mut self) -> io::Result<()> {
         self.armed = false;
-        restore_terminal(self.enhanced)
+        restore_terminal()
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.armed {
-            let _ = restore_terminal(self.enhanced);
+            let _ = restore_terminal();
         }
     }
 }
@@ -199,9 +208,14 @@ impl Drop for TerminalGuard {
 const ALTERNATE_SCROLL_ON: &[u8] = b"\x1b[?1007h";
 const ALTERNATE_SCROLL_OFF: &[u8] = b"\x1b[?1007l";
 
-fn restore_terminal(enhanced: bool) -> io::Result<()> {
+/// Pops exactly what `run` pushed, in every case — the push is
+/// unconditional now, so pairing it no longer depends on a detection result
+/// that could differ between the two ends of a session. A terminal without
+/// the protocol ignores the pop the same way it ignored the push, and one
+/// with it is left holding the mode it had before this process started.
+fn restore_terminal() -> io::Result<()> {
     let raw = disable_raw_mode();
-    let pop = if enhanced { execute!(io::stdout(), PopKeyboardEnhancementFlags) } else { Ok(()) };
+    let pop = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     let paste = execute!(io::stdout(), DisableBracketedPaste);
     let scroll = io::stdout().write_all(ALTERNATE_SCROLL_OFF).and_then(|()| io::stdout().flush());
     let mouse = execute!(io::stdout(), DisableMouseCapture);

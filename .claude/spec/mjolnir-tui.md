@@ -3433,6 +3433,51 @@ draws a mark the imported system does not list. ADR 0002's Follow-up carries
 it: add the component upstream, re-sync `.claude/design/`, then reconcile
 `IMPORT.md`'s glyph-vocabulary section with the ADR.
 
+**Progress (2026-09-08, Shift+Enter — closing the 2026-08-29 gap):** Reported:
+"it did work on my Linux machine but on macOS it isn't working", on
+Ghostty/Kitty/WezTerm — a terminal family that implements the Kitty keyboard
+protocol on both platforms, so this was a real defect and not the
+terminal-can't-report-it case the fallbacks exist for.
+
+`run.rs` pushed `DISAMBIGUATE_ESCAPE_CODES` **only** when
+`supports_keyboard_enhancement()` answered yes. That query is a write-then-wait
+round trip with a 2s timeout whose reply is read off the same input the process
+is taking over, so anything that eats or delays the reply — a multiplexer not
+forwarding it, a slow answer, a race with another reader — answers "no" for a
+terminal that would have honoured the push. It then fails silently, and
+Shift+Enter submits. Asking was the fragile part, so it is no longer asked: the
+push is unconditional and best-effort, exactly like the alternate-scroll and
+synchronized-output modes either side of it (`CSI > 1 u` is a private sequence a
+terminal without the protocol ignores). The pop is unconditional too, which is
+what keeps the pair symmetric — `TerminalGuard` no longer carries an `enhanced`
+flag, because there is no longer a detection result the two ends could disagree
+about.
+
+Measured on a real pty, before and after, same binary path and same seeded
+config:
+
+| | kitty push `CSI > 1 u` | first paint |
+| --- | --- | --- |
+| before | absent | 2.02 s |
+| after | sent | 0.01 s |
+
+The 2-second stall was the detection timeout, paid at every launch on any
+terminal that did not answer — a second, unreported cost of the same gate.
+
+Behaviour verified end to end by driving a pty and reconstructing the screen
+with `pyte`, rather than by reasoning about it: `\r` submits, `\x0a` (Ctrl+J)
+inserts a newline, and `\x1b[13;2u` — what a Kitty-protocol terminal actually
+sends for Shift+Enter — inserts a newline and leaves the turn unsent. **This is
+the live-terminal check the 2026-08-29 entry asked for and could not perform,
+and it closes that gap.** The fallbacks were right; the gate in front of them
+was not.
+
+Noted, not fixed: first run has its own terminal setup and sends *none* of these
+modes — no bracketed paste, no keyboard enhancement, no alternate scroll. It is
+a list picker with no text entry, so nothing there depends on them today, but
+the two setup paths are a latent divergence and only one of them is described by
+this spec.
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

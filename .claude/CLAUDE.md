@@ -60,15 +60,19 @@ Five things about using them, each learned the hard way:
 
 The glyph vocabulary is fixed and closed: `▌ ● ◐ ○ ✔ ▶ █ + -`. If a mark is
 needed and it is not in that table, do not draw one — `─` and the box-
-drawing set are *not* in it. The Content Fundamentals hold too:
-third-person "The agent", lowercase labels, sentence-case prose.
+drawing set are *not* in it. **One exception, ADR 0002:** a markdown table
+in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`. It is scoped to
+that one construct and is not a licence for a second stroked surface. The
+Content Fundamentals hold too: third-person "The agent", lowercase labels,
+sentence-case prose.
 
 Two rules that now govern every layout decision (Turn 13):
 
 - **Nothing inside a frame is stroked.** Every boundary is a step on the
   seven-rung ground ladder (`--color-ground-0…6`). No `Block::bordered()`,
   no rule rows, no underline attributes — a band is a rect with its own
-  `Style::bg`.
+  `Style::bg`. The rule governs boundaries between *regions*; a markdown
+  table's are between *cells*, which is why ADR 0002 carves it out.
 - **The grid is 3-cell margin, 8-cell label column, 2-cell gutter**, so
   body text lands on cell 13. There is deliberately no `--body-col` token;
   derive it, never restate it.
@@ -87,6 +91,11 @@ a decision they cover.
   Tool classes pick the grant unit; `edit` is out of the permissions model
   entirely and stays a conscious diff. Also re-derives first run's access
   scale to three points.
+- **0002 — A markdown table is drawn, and it is the only stroked thing in
+  the frame.** Carves one exception out of Turn 13's no-stroke rule and the
+  closed glyph table, on the grounds that a one-dimensional ground ladder
+  cannot express a two-dimensional grid of cell boundaries. Leaves a debt:
+  the upstream design system has no table component yet.
 
 ## Key Constraints (non-negotiable)
 

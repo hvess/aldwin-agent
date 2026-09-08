@@ -9,7 +9,7 @@
 //! | [`grid`] | the design system's cell grid, and the `Ctx` (`palette` + column width) every builder takes |
 //! | [`wrap`] | word-wrapping one logical line, before anything is inset or filled |
 //! | [`row`] | the single filled-row primitive every card, box and option row is built from |
-//! | [`markdown`] | LLM-authored markdown: fences, block prefixes, inline delimiters |
+//! | [`markdown`] | LLM-authored markdown: fences, block prefixes, tables, inline delimiters |
 //! | [`diff`] | unified-diff parsing and its bordered-box rendering |
 //! | [`transcript`] | the conversation log and the welcome hero |
 //! | [`decision`] | the pending-approval / permission panel and its resolved cards |

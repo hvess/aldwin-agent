@@ -523,6 +523,13 @@ fn transcript_turns_use_the_label_column_and_the_body_column() {
 /// The chrome bands are whole rows of one tone, and the boundaries between
 /// them are tonal rather than drawn — the Turn 13 rule, asserted over every
 /// scene rather than the one screen it was first checked on.
+///
+/// **One documented exception, which no scene here contains:** a markdown
+/// table in assistant prose is drawn, per ADR 0002 — a grid of boundaries
+/// repeated down every row is the one thing a one-dimensional ground ladder
+/// cannot express. Adding a table scene to `SCENES` will therefore trip the
+/// box-drawing assertion below, and the fix is to exempt that scene, not to
+/// un-draw the table.
 #[test]
 fn every_scene_parts_its_bands_by_tone_and_draws_no_rules() {
     every_scene(|name, theme, buffer| {

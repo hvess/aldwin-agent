@@ -464,8 +464,11 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     for segment in markdown::split_code_fences(text) {
         match segment {
             // No fill of its own — `Prose.jsx` is plain coloured text on
-            // the panel ground, no background.
-            Segment::Prose(s) => lines.extend(s.lines().flat_map(|l| wrap_line(markdown::render_line(l, body), body.width as usize))),
+            // the panel ground, no background. Handed over whole rather
+            // than a line at a time: a table's columns are sized against
+            // every row of it at once, so the block pass lives in
+            // `markdown` and this arm no longer wraps (it does its own).
+            Segment::Prose(s) => lines.extend(markdown::render_prose(&s, body)),
             // A fenced ```diff block gets the same full-width red/green
             // per-line treatment (line-number gutter included) as the Edit
             // approval card, instead of the generic code-block box below —

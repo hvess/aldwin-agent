@@ -9,7 +9,7 @@ use super::chrome::{self, highlight_command_tokens};
 use super::decision::GRANT_RULE_MAX;
 use super::draw;
 use super::grid::{Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
-use super::markdown::{parse_inline, render_line as render_markdown_line};
+use super::markdown::{parse_inline, render_line as render_markdown_line, render_prose};
 use super::transcript::intro_content;
 
 use crate::app::App;
@@ -238,7 +238,7 @@ fn speaker_rows_sit_on_the_grids_label_and_body_columns() {
     let mut app = app();
     app.log.push(LogEntry::UserMessage { text: "question".into() });
     app.log.push(LogEntry::AssistantText { text: "answer".into() });
-    let backend = TestBackend::new(100, 24);
+    let backend = TestBackend::new(56, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
@@ -2088,6 +2088,166 @@ fn a_bullet_line_replaces_the_dash_with_a_bullet_marker() {
     let line = render_markdown_line("- first item", ctx(80));
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "• first item");
+}
+
+/// The flat text of one built row — what the terminal would show on it.
+fn line_text(line: &ratatui::text::Line<'static>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Where `needle` starts, counted in *cells* rather than bytes — a drawn
+/// table's `│` and `─` are three bytes each, so `str::find`'s byte offset is
+/// not the column anything appears in.
+fn cell_pos(haystack: &str, needle: &str) -> Option<usize> {
+    let at = haystack.find(needle)?;
+    Some(haystack[..at].chars().count())
+}
+
+#[test]
+fn a_markdown_table_lays_every_column_on_one_edge() {
+    let table = "| name | status |\n| --- | --- |\n| read | allow |\n| shell | deny |\n";
+    let text: Vec<String> = render_prose(table, ctx(80)).iter().map(line_text).collect();
+
+    assert_eq!(text.len(), 6, "top rule, header, header rule, two rows, bottom rule: {text:?}");
+    // `shell` is the widest cell in column one (5 cells), which with its two
+    // pad cells and the two rules left of it puts column two's content on
+    // cell 10 in every row of the block.
+    for (row, cell) in [(1, "status"), (3, "allow"), (4, "deny")] {
+        assert_eq!(cell_pos(&text[row], cell), Some(10), "column two must start on one edge in every row: {text:?}");
+    }
+    assert!(text.iter().all(|l| !l.contains('|')), "the source's ASCII pipes must not reach the screen: {text:?}");
+}
+
+/// A table is the design system's one stroked component — see ADR 0002. The
+/// rest of Turn 13's rule still holds (a turn break, a markdown `---` and
+/// every band boundary are bands), so this pins the exception's *shape*: a
+/// closed box, every row the same width, and the interior rules on one
+/// column all the way down.
+#[test]
+fn a_table_is_a_closed_drawn_grid() {
+    let text: Vec<String> = render_prose("| a | bb |\n| --- | --- |\n| 1 | 2 |\n", ctx(40)).iter().map(line_text).collect();
+
+    assert_eq!(text.len(), 5, "top rule, header, header rule, one row, bottom rule: {text:?}");
+    for (row, (open, close)) in [(0, ('┌', '┐')), (2, ('├', '┤')), (4, ('└', '┘'))] {
+        assert!(text[row].starts_with(open) && text[row].ends_with(close), "rule row {row} must be corner to corner: {text:?}");
+        assert!(text[row][open.len_utf8()..].trim_end_matches(close).chars().all(|c| c == '─' || c == '┬' || c == '┼' || c == '┴'));
+    }
+    for row in [1, 3] {
+        assert!(text[row].starts_with('│') && text[row].ends_with('│'), "a content row is closed on both sides: {text:?}");
+    }
+
+    let widths: Vec<usize> = text.iter().map(|l| l.chars().count()).collect();
+    assert!(widths.iter().all(|w| *w == widths[0]), "every row of the box is the same width, or it does not close: {widths:?}");
+    // The interior boundary sits on one column in all five rows — the
+    // junction glyph changes, the column does not.
+    // Skipping the row's own opening glyph, which is at column 0 in every
+    // row and would otherwise be the match.
+    let interior: Vec<Option<usize>> = text.iter().map(|l| l.chars().skip(1).position(|c| matches!(c, '┬' | '┼' | '┴' | '│')).map(|p| p + 1)).collect();
+    assert!(interior.iter().all(|p| *p == interior[0]), "the interior rule must hold one column down the whole table: {text:?}");
+}
+
+/// A table arrives one line at a time and the transcript re-renders on every
+/// delta, so every prefix of one has to render without panicking — and the
+/// prefixes are the awkward states: a header with no delimiter yet, a
+/// half-typed delimiter, a row cut mid-cell. It becomes a table only when the
+/// delimiter row completes, and stays prose until then.
+#[test]
+fn a_table_renders_at_every_prefix_as_it_streams() {
+    let full = "| tool | scope |\n| --- | ---: |\n| read | project |\n| shell | global |\n";
+    let mut committed_at = None;
+
+    for end in 1..=full.len() {
+        if !full.is_char_boundary(end) {
+            continue;
+        }
+        let text: Vec<String> = render_prose(&full[..end], ctx(60)).iter().map(line_text).collect();
+        let drawn = text.iter().any(|l| l.starts_with('┌'));
+        if drawn && committed_at.is_none() {
+            committed_at = Some(end);
+        }
+        for line in &text {
+            let width: usize = line.chars().map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).sum();
+            assert!(width <= 60, "a partial table must still fit its column: {:?}", &full[..end]);
+        }
+    }
+
+    // `| tool | scope |\n| --- | -` is the first prefix whose delimiter row
+    // parses for both columns — one cell earlier there is only `| --- | `,
+    // which has no dashes in its second cell and is therefore still prose.
+    let at = committed_at.expect("the table must commit once its delimiter row is complete");
+    assert_eq!(&full[..at], "| tool | scope |\n| --- | -", "a table commits on the delimiter row, not on the header: {:?}", &full[..at]);
+}
+
+/// A column bottoms out at one cell, so `n` columns need `3n + 1` cells.
+/// Below that the box cannot close, and the deliberate choice (see
+/// `render_table`'s doc) is to clip with a visible `…` rather than either
+/// draw a `┐` where the table does not end or silently drop columns.
+#[test]
+fn a_table_with_more_columns_than_cells_clips_rather_than_lying() {
+    let head = (0..14).map(|i| format!("| c{i} ")).collect::<String>() + "|";
+    let delim = (0..14).map(|_| "| --- ").collect::<String>() + "|";
+    let row = (0..14).map(|i| format!("| v{i} ")).collect::<String>() + "|";
+    let text: Vec<String> = render_prose(&format!("{head}\n{delim}\n{row}\n"), ctx(20)).iter().map(line_text).collect();
+
+    for line in &text {
+        let width: usize = line.chars().map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).sum();
+        assert_eq!(width, 20, "a clipped row still fills its column exactly, never overhangs it: {text:?}");
+    }
+    assert!(text[0].starts_with('┌'), "the table still opens: {text:?}");
+    assert!(text.iter().any(|l| l.contains('…')), "the clip must be visible, not silent: {text:?}");
+    assert!(!text[0].ends_with('┐'), "and it must not draw an edge where the table does not end: {text:?}");
+}
+
+/// The rules are `quiet` — the tier below `dim` — so the grid carries the
+/// structure without competing with the cells for the reader's eye.
+#[test]
+fn a_tables_rules_are_quieter_than_its_content() {
+    let lines = render_prose("| a | bb |\n| --- | --- |\n| 1 | 2 |\n", ctx(40));
+    assert_eq!(lines[0].spans[0].style.fg, Some(DARK.quiet), "a rule row is drawn in `quiet`");
+    let body = &lines[3];
+    assert_eq!(body.spans[0].style.fg, Some(DARK.quiet), "a content row's own `│` is a rule too");
+    let cell = body.spans.iter().find(|s| s.content.as_ref() == "1").expect("the cell's text is present");
+    assert_eq!(cell.style.fg, Some(DARK.body), "the cell itself stays body-toned");
+}
+
+/// A header row alone is not a table — which is also what makes this safe
+/// mid-stream, since a table arrives one line at a time and renders on
+/// every delta.
+#[test]
+fn a_pipe_in_prose_is_not_a_table_without_a_delimiter_row() {
+    let text: Vec<String> = render_prose("read a | b as either\nand carry on\n", ctx(80)).iter().map(line_text).collect();
+    assert_eq!(text.len(), 2, "two prose lines, unchanged: {text:?}");
+    assert!(text[0].contains('|'), "a stray pipe in prose stays literal text: {text:?}");
+}
+
+/// `Transcript`'s invariant — a built row is a screen row, and nothing
+/// downstream wraps — applies to a table too, and a table is the one block
+/// whose natural width has no relation to the column it lands in.
+#[test]
+fn a_table_wider_than_its_column_is_elided_rather_than_overhanging() {
+    let wide = format!("| {} | {} |\n| --- | --- |\n| {} | b |\n", "x".repeat(60), "y".repeat(60), "z".repeat(60));
+    for line in render_prose(&wide, ctx(40)) {
+        let width: usize = line.spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
+        assert!(width <= 40, "every table row must fit the column it is drawn in, got {width}: {:?}", line_text(&line));
+    }
+}
+
+#[test]
+fn a_right_aligned_column_shares_its_right_edge() {
+    let text: Vec<String> = render_prose("| item | count |\n| --- | ---: |\n| a | 7 |\n", ctx(80)).iter().map(line_text).collect();
+    let header_end = cell_pos(&text[1], "count").expect("the header cell is present") + "count".len();
+    let cell_end = cell_pos(&text[3], "7").expect("the body cell is present") + 1;
+    assert_eq!(cell_end, header_end, "a `---:` column's cells are flush to the column's right edge, not its left: {text:?}");
+}
+
+#[test]
+fn a_table_in_an_assistant_reply_renders_as_a_grid_not_pipes() {
+    let mut app = app();
+    app.log.push(LogEntry::AssistantText { text: "| tool | access |\n| --- | --- |\n| read | allow |\n".into() });
+    let out = rendered(&mut app, 100, 20);
+    assert!(!out.contains('|'), "the source's ASCII pipes must not reach the screen: {out:?}");
+    assert!(out.contains('┌') && out.contains('┼') && out.contains('┘'), "the grid must actually be drawn: {out:?}");
+    assert!(out.contains("tool") && out.contains("allow"), "the table's own content must survive: {out:?}");
 }
 
 #[test]

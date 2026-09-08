@@ -40,7 +40,7 @@ use ratatui::Terminal;
 /// Scenes drawn through `App` — everything with a transcript behind it.
 /// `empty` is the design system's `14d`, the state a returning developer
 /// opens into and the one `/clear` returns them to.
-const SCENES: [&str; 7] = ["empty", "conversation", "tools", "approval", "prompt", "resolved", "long"];
+const SCENES: [&str; 8] = ["empty", "conversation", "table", "tools", "approval", "prompt", "resolved", "long"];
 
 /// First run's three steps (`14a`, `14b`, `14c`). Drawn from `FirstRun`
 /// rather than `App` — the screen runs its own terminal loop, so it has its
@@ -148,16 +148,14 @@ fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
             let first = &buf[(x, y)];
             let (fg, bg, modifier, ul) = (first.fg, first.bg, first.modifier, first.underline_color);
             let start = x;
-            let mut text = String::new();
             while x < w {
                 let cell = &buf[(x, y)];
                 if cell.fg != fg || cell.bg != bg || cell.modifier != modifier || cell.underline_color != ul {
                     break;
                 }
-                text.push_str(cell.symbol());
                 x += 1;
             }
-            let mut style = format!("left:{}px;top:{}px;color:{};background:{}", start as usize * 9, y as usize * 20, css(fg), css(bg));
+            let mut style = format!("color:{};background:{}", css(fg), css(bg));
             if modifier.contains(Modifier::BOLD) {
                 style.push_str(";font-weight:700");
             }
@@ -176,7 +174,39 @@ fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
                 let color = if matches!(ul, Color::Reset) { css(fg) } else { css(ul) };
                 style.push_str(&format!(";text-decoration:underline;text-decoration-color:{color};text-decoration-thickness:1px;text-underline-offset:4px"));
             }
-            out.push_str(&format!("<i style=\"{style}\">{}</i>", escape(&text)));
+
+            // **One `<i>` per cell, not per styled run.** A run used to be a
+            // single absolutely-positioned element holding all its text, and
+            // the glyphs inside it then advanced at the *font's* own width
+            // rather than the grid's: DejaVu Sans Mono is 0.6015625em, so at
+            // 15px a cell is 9.0234px, not 9. Drift is invisible in prose —
+            // a 20-cell run ends half a pixel late — and unmissable in a
+            // markdown table, where a 78-cell rule row is one unbroken run
+            // that finishes ~2px right of the `│` in the content row below
+            // it, which re-anchors at every style change. The box looked
+            // crooked while the buffer it was rendered from was exact.
+            //
+            // Positioning every cell makes the page cell-exact by
+            // construction, which is the one property this file exists to
+            // have ("a screenshot of this lines up cell-for-cell with a
+            // screenshot of theirs"). It costs roughly 10x the file size —
+            // a design harness can afford that, and a wrong screenshot is
+            // worse than a large one. A double-width glyph still occupies
+            // one cell and overhangs the next, exactly as it does in a
+            // terminal.
+            //
+            // Walked per *cell* rather than per char of an accumulated
+            // string: a double-width glyph is one cell whose neighbour holds
+            // an empty symbol, so a char index would fall behind the column
+            // it belongs to from the first wide glyph onward.
+            for column in start..x {
+                out.push_str(&format!(
+                    "<i style=\"left:{}px;top:{}px;{style}\">{}</i>",
+                    column as usize * 9,
+                    y as usize * 20,
+                    escape(buf[(column, y)].symbol())
+                ));
+            }
         }
     }
     out.push_str("</div></body></html>");
@@ -203,6 +233,7 @@ fn scene(name: &str, app: &mut App) {
         // the model alone is the degraded case, not the one to review.
         "empty" => app.current_provider = Some("anthropic".into()),
         "conversation" => conversation(app),
+        "table" => table(app),
         "tools" => tools(app),
         "approval" => approval(app),
         "prompt" => prompt(app),
@@ -222,6 +253,32 @@ fn conversation(app: &mut App) {
     });
     app.status.turn = Some(3);
     app.status.step = Some(2);
+}
+
+/// A markdown table — the frame's one stroked component, per ADR 0002, and
+/// therefore the scene worth looking at whenever that exception is
+/// questioned: everything around the box is still parted by tone alone.
+///
+/// Deliberately carries all four things that can go wrong at once: a cell
+/// wider than its share of the body column (elided, not wrapped), all three
+/// column alignments, inline markup inside cells (measured at its *rendered*
+/// width, so `**bold**` does not inflate the column), and prose either side
+/// of the block.
+fn table(app: &mut App) {
+    app.log.push(LogEntry::UserMessage { text: "which tools can run here, and under what scope?".into() });
+    app.log.push(LogEntry::AssistantText {
+        text: "Here is what this project currently allows:\n\n\
+               | tool | scope | grant unit | calls |\n\
+               | --- | :---: | --- | ---: |\n\
+               | `read` | project | the **directory**, not the file | 128 |\n\
+               | `shell` | global | the program — `cargo *` | 46 |\n\
+               | `explain` | project | the directory it was asked about | 9 |\n\
+               | `edit` | — | not in the permissions model at all, by design | 3 |\n\n\
+               `edit` is the one row with no grant to widen — every call is a diff you accept.\n"
+            .into(),
+    });
+    app.status.turn = Some(2);
+    app.status.step = Some(1);
 }
 
 fn tools(app: &mut App) {

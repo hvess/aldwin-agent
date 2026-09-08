@@ -3309,6 +3309,130 @@ appears to be, because dark `syn_string` and `add_code` are the same `#9ceaa7`
 by design — both roles are covered by `highlight.rs`'s own tests, which is the
 right level for them.
 
+**Progress (2026-09-07, markdown tables):** *Design half superseded
+2026-09-08 — the table is now drawn; see the next entry. The parsing,
+measuring, fitting and streaming behaviour described here all still stand.*
+Reported: the chat renders every
+other markdown construct but tables come through as literal `|` pipes and a
+`---|---|---` delimiter row. Added to `ui/markdown.rs`, and the shape of the
+fix matters more than the feature: a table is the first construct here whose
+layout is **not** a per-line property — a column is only as wide as the widest
+cell anywhere in the block — so the module's entry point moved from
+`render_line` to a new block-level `render_prose`, which groups a table's rows
+and hands every other line to the per-line path unchanged.
+`transcript::render_assistant_text`'s `Prose` arm now passes the whole segment
+and no longer wraps, because `render_prose` owns that (the one-wrap discipline
+is unchanged; it moved, it did not double).
+
+Two design calls, both made against the Turn 13 rules rather than against what
+a terminal table usually looks like:
+
+1. **Nothing is stroked, so there is no grid.** `─`/`│` are not in the closed
+   glyph vocabulary (`▌ ● ◐ ○ ✔ ▶ █ + -`) at all, and the rule is explicit
+   that a mark outside that table is not to be drawn. A table is therefore a
+   header row toned `label` (the system's field-name tier, as in the hero's own
+   `in`/`provider`/`access` rows), one `break_` band under it, and the rows on
+   the panel ground in `body`. Column *position* carries the whole shape.
+2. **That band is the table's width, not the body column's.** `band_row` fills
+   its `Ctx`, which is right for a turn break and for a markdown `---` — both
+   separate a section from what follows it — and wrong here, where the band
+   separates *this table's* header from *this table's* rows. A 40-cell band
+   under a 41-cell table reads as part of the table; a full-width one reads as
+   a section break sitting inside one.
+
+Widths are measured on the *rendered* cells, after the inline pass, so a
+`**bold**` cell is not four cells wider than what it draws. Over-wide tables
+shrink widest-column-first (a `yes`/`no` or count column keeps its text while
+the prose column gives up cells) and then elide with the system's `…`; the
+assembled row is truncated to the column as a backstop, so `Transcript`'s
+"a built row is a screen row" invariant holds for a table too — verified at 56
+columns as well as 100. Column alignment (`:--`, `:-:`, `--:`) is honoured for
+the header row as well as the body, per GFM.
+
+Detection is GFM's: a header row alone is not a table, the delimiter row
+underneath it is what commits, and the delimiter's cell count must match the
+header's or the block falls back to prose. That is also what makes it correct
+mid-stream — a half-arrived table renders as prose until the delimiter lands
+and snaps into columns on the next delta, the same posture
+`split_code_fences` takes toward an unterminated fence. Seven tests, including
+the two rules above stated as assertions (no glyph in the separator, its bg is
+`break_`) and the fit-the-column invariant.
+
+**Progress (2026-09-08, the table is drawn — ADR 0002):** The rule-less table
+above was rejected on sight, twice: "I want a real table, it's the only thing
+that makes sense here." The rules it was built from were quoted back first and
+reaffirmed against, so this is a deliberate exception, recorded in
+`.claude/adr/0002-markdown-tables-are-drawn.md` and in `CLAUDE.md`'s Design
+System and Decision-records sections rather than left as a silent divergence.
+
+A markdown table is now `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, one cell of padding either
+side of each cell's content, header above a `├─┼─┤` rule, closed top and
+bottom — except below `3n + 1` cells for `n` columns, where a column can shrink
+no further and the rows are clipped with `…`, losing the right edge. That is
+chosen over drawing an edge where the table does not end and over dropping
+columns silently; pinned by
+`a_table_with_more_columns_than_cells_clips_rather_than_lying`. Rules in `quiet` — the tier below `dim`, so the grid carries the
+structure without competing with the cells; header stays `label`, cells stay
+`body`.
+
+**What the exception is, precisely**, because its bounds matter more than the
+glyphs: Turn 13's rule governs boundaries between *regions* — a bar from the
+transcript, a turn from the one before it, a quoted field from the prose around
+it — and a step on the ground ladder expresses those exactly. A table's
+boundaries are between *cells*: one per column, repeated down every row, and
+they have to agree with each other. A ladder is one-dimensional and cannot
+express that, which the rejected version demonstrated in practice — column
+position alone held the shape only while every cell was populated and every
+column comfortably wide. Nothing else in the crate changes: turn breaks,
+markdown `---`, first-run step separators and every band boundary are still
+bands, `Block::bordered()` is still out, and the inline diff and code fence are
+still recessed fields with no outline (`row.rs:63-75` records the bug class that
+fix removed — do not reopen it by citing this entry).
+
+`CELL_GUTTER` (2 cells between columns) became `CELL_PAD` (1 cell either side
+of a cell's content): a drawn rule needs far less clearance than a rule-less
+layout did, since the rule itself now parts the columns, and two would have a
+five-column table spending 15 cells on air. Every column is padded to its full
+width including the last, which a rule-less row deliberately did not do — here
+the trailing run is what holds the closing `│` on the column the rule rows put
+their corner, and one cell short leaves the box visibly unclosed.
+
+`render_snapshot.rs`'s "no box-drawing glyph anywhere" assertion still covers
+all eleven chrome scenes and is unchanged; its doc comment now names this
+exception, so adding a table scene to `SCENES` fails with the reason rather
+than confusingly. Tests: the closed-box shape (corner to corner, every row one
+width, the interior rule holding one column down the whole table), the rule
+tone against the cell tone, and the alignment/elision/streaming assertions from
+the previous entry, updated for the new geometry. Note for anyone extending
+them — `str::find` returns a *byte* offset and `│`/`─` are three bytes each, so
+column assertions go through the `cell_pos` helper.
+
+**The screenshot harness was lying, and that was a real bug** — found because
+the first drawn table "looked misaligned" in the PNGs while the buffer behind
+it was exact (rules on columns 13/23/33/82/90 in all eight rows, every row one
+width). `examples/snapshot.rs` emitted one absolutely-positioned `<i>` per
+*styled run*, so glyphs inside a run advanced at the font's own width —
+DejaVu Sans Mono is 0.6015625em, 9.0234px at 15px, against the grid's 9 —
+and a rule row, which is one unbroken 78-cell run, finished ~2px right of the
+`│` in the content row below it, which re-anchors at every style change. Prose
+never showed it; a drawn box could not hide it. Now one `<i>` per *cell*,
+walked over the buffer rather than over an accumulated string (a double-width
+glyph is one cell whose neighbour holds an empty symbol, so a char index falls
+behind from the first wide glyph onward). Costs ~10x the page size, which a
+design harness can afford; a wrong screenshot cannot. This predates the table
+and would have quietly misinformed any future cell-alignment review — which is
+exactly what `IMPORT.md`'s rule 5 ("render it before trusting your reading of
+it") exists to prevent, so the renderer itself has to be trustworthy. Note
+when reviewing output: at 2x device scale the rules still show hairline seams
+from rasterisation alone; at 4x they are continuous, so screenshot the
+harness at 4x when the question is whether something lines up.
+
+**Debt this leaves:** the upstream design system still has no table component
+and its Iconography table still has no box-drawing glyphs, so this crate now
+draws a mark the imported system does not list. ADR 0002's Follow-up carries
+it: add the component upstream, re-sync `.claude/design/`, then reconcile
+`IMPORT.md`'s glyph-vocabulary section with the ADR.
+
 ## References
 
 - .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.

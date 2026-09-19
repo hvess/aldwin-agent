@@ -677,12 +677,9 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { reason, .. } => {
-                    assert!(matches!(reason, TurnEndReason::EndTurn));
-                    break;
-                }
-                _ => {}
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::EndTurn));
+                break;
             }
         }
 
@@ -716,9 +713,8 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "ls -la".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { .. } => break,
-                _ => {}
+            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
 
@@ -812,20 +808,16 @@ mod tests {
 
         // Wait for the partial delta so cancel lands mid-step, not before the step starts.
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TextDelta { .. } => break,
-                _ => {}
+            if let Event::TextDelta { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { reason, .. } => {
-                    assert!(matches!(reason, TurnEndReason::Cancelled));
-                    break;
-                }
-                _ => {}
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::Cancelled));
+                break;
             }
         }
 
@@ -853,20 +845,16 @@ mod tests {
 
         // Wait for the tool call to be requested so cancel lands after it, before StepEnded.
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::ToolUseRequested { .. } => break,
-                _ => {}
+            if let Event::ToolUseRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { reason, .. } => {
-                    assert!(matches!(reason, TurnEndReason::Cancelled));
-                    break;
-                }
-                _ => {}
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::Cancelled));
+                break;
             }
         }
 
@@ -900,9 +888,8 @@ mod tests {
         // Wait until the tool is actually dispatched (not merely requested) so
         // cancel lands while dispatch_tools is awaiting it, not before.
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::ToolDispatched { .. } => break,
-                _ => {}
+            if let Event::ToolDispatched { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
         cmd_tx.send(Command::Cancel).await.unwrap();
@@ -960,12 +947,9 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::ToolApprovalRequested { call_id, .. } => {
-                    cmd_tx.send(Command::ApproveTool { call_id }).await.unwrap();
-                    break;
-                }
-                _ => {}
+            if let Event::ToolApprovalRequested { call_id, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                cmd_tx.send(Command::ApproveTool { call_id }).await.unwrap();
+                break;
             }
         }
 
@@ -1006,13 +990,10 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::PromptRequested { call_id, .. } => {
-                    cmd_tx.send(Command::PromptResponse { call_id, payload: serde_json::json!("yes") })
-                        .await.unwrap();
-                    break;
-                }
-                _ => {}
+            if let Event::PromptRequested { call_id, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                cmd_tx.send(Command::PromptResponse { call_id, payload: serde_json::json!("yes") })
+                    .await.unwrap();
+                break;
             }
         }
 
@@ -1061,9 +1042,8 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::PromptRequested { .. } => break,
-                _ => {}
+            if let Event::PromptRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
         assert_eq!(pending.lock().unwrap().len(), 1, "the pending prompt should be registered before cancel");
@@ -1071,12 +1051,9 @@ mod tests {
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { reason, .. } => {
-                    assert!(matches!(reason, TurnEndReason::Cancelled));
-                    break;
-                }
-                _ => {}
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::Cancelled));
+                break;
             }
         }
 
@@ -1115,9 +1092,8 @@ mod tests {
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::TurnEnded { .. } => break,
-                _ => {}
+            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
             }
         }
 

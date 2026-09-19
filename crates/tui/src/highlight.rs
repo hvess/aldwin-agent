@@ -199,7 +199,10 @@ fn syn_color(c: Color) -> SynColor {
 /// rebuilds everything) is rare enough that falling back to a cold memo
 /// costs a frame, not a session.
 type Highlighted = Vec<Vec<Span<'static>>>;
-static MEMO: OnceLock<Mutex<HashMap<(String, String, Theme), Highlighted>>> = OnceLock::new();
+/// What a memo entry is keyed by: the fence's language, its body, and the
+/// theme — a re-render under a different theme is a different answer.
+type MemoKey = (String, String, Theme);
+static MEMO: OnceLock<Mutex<HashMap<MemoKey, Highlighted>>> = OnceLock::new();
 
 /// How many distinct fences the memo holds before it is emptied. Comfortably
 /// more than any one reply has, which is the working set that matters.

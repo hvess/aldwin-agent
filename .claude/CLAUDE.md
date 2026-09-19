@@ -74,6 +74,12 @@ a decision they cover.
   closed glyph table, on the grounds that a one-dimensional ground ladder
   cannot express a two-dimensional grid of cell boundaries. Leaves a debt:
   the upstream design system has no table component yet.
+- **0003 — A permission option is a sentence that states its own rule.**
+  Adopts `5a`'s single-sentence row over the name + detail pair, and `5a`'s
+  per-row scoping with it, which amends 0001 §3: there is no `Tab` scope
+  toggle and no grant-summary row, because each row quotes the pattern it
+  would write. Two stated costs — the session tier grants the exact target,
+  and the panel no longer names the file a grant lands in.
 
 ## Key Constraints (non-negotiable)
 

@@ -276,9 +276,52 @@ the gate stops asking. Both are the loop optimising its own scorer.
 
 ## Class A — deviations
 
-Measured in `run-1789826989`. Frame counts are out of 72. Cell indices are
-0-based, and the capture cell is 8×18px, so a cell index times 8 is the pixel
-column in the PNGs.
+Measured in `run-1789826989` unless an entry says otherwise. Frame counts are
+out of 72. Cell indices are 0-based, and the capture cell is 8×18px, so a cell
+index times 8 is the pixel column in the PNGs.
+
+**Nothing is deleted from this list when it is fixed** (Decision 3): an entry
+carries its outcome instead. A deleted finding is one the next blind judge
+rediscovers from scratch, which is the rediscovery cost this spec opens with —
+and half of what a reader needs from a catalogue is what was *already looked
+at* and why it came out the way it did. So the index below is how you see the
+state at a glance; the entries are where the reasoning lives.
+
+| | item | state |
+| --- | --- | --- |
+| 1 | status row's group rhythm | fixed |
+| 2 | status row one ink tier too loud | fixed |
+| 3 | caret on the placeholder's cell | fixed (two passes) |
+| 4 | panel ignores `OPTION_LABEL_COL` | **open — blocked on Class B 2** |
+| 5 | selected option's detail at 2.62:1 | fixed |
+| 6 | nothing caps the body measure | **open — blocked on Class C 3** |
+| 7 | tool-call line's spacing | fixed; its target *content* deferred to 29 |
+| 8 | tool call inside the developer's turn | fixed |
+| 9 | fenced diff through the inline numbering | fixed |
+| 10 | diff context rows at `--tui-context` | reclassified — a live disagreement, resolved by 11 |
+| 11 | diff gutter one rung too quiet | fixed; its *width* half refuted |
+| 12 | first run's band bounded by the frame | fixed; the list's width is now Class B 8 |
+| 13 | first run's cwd a rung quieter | fixed |
+| 14 | a dropped turn keeps its break band | fixed |
+| 15 | panel leaves one row of transcript | fixed |
+| 16 | panel ignores the frame's columns | **open — blocked on Class B 2** |
+| 17 | the two rule literals form no column | **open — blocked on Class B 2** |
+| 18 | in-panel `Tab` hint's idiom and tones | **open — blocked on Class B 4** |
+| 19 | blocked call drawn as running | **open — needs a `ToolActivityStatus` the app does not have** |
+| 20 | `T1` and `-` in the status row | fixed |
+| 21 | panel sentence has no full stop | fixed |
+| 22 | no timestamp row under the speaker | **open — needs a clock the workspace does not have** |
+| 23 | inline diff splits sign from code | fixed |
+| 24 | `justified_line` overflowed its width | fixed |
+| 25 | elision marker's two foreign glyphs | fixed |
+| 26 | panel elided what it was asking about | fixed |
+| 27 | hunk header on the code column | fixed |
+| 28 | empty state's status row copy | **open — half of it is a live copy question** |
+| 29 | tool line's summary is the file's first line | **open — a `log::summarise` question, not a rendering one** |
+
+Twenty-one fixed, eight open, and **not one of the eight is reachable by
+writing Rust in `crates/tui`**: four wait on a Class B decision, two on a data
+source that does not exist, one on a token, one on a copy question.
 
 1. **The status row parts its facts by 2 cells.** 36 frames (every scene with
    a bottom bar). `ui/chrome.rs:302,312,322` bake `"  "` into the format
@@ -289,11 +332,14 @@ column in the PNGs.
    Mjolnir shipped a misreading of it for three weeks. The four facts read as
    one undifferentiated run. **This is open-tasks entry 2, now measured at
    every size.**
+   **Fixed 2026-09-19 (first pass).** ` · ` within a group, `--group-gap`
+   between groups, per `grid::GROUP_GAP`.
 
 2. **The status row is one ink tier too loud.** 36 frames. Every span is
    `pal.label`, including the right-flush `^c to exit`. `14d` puts both sides
    of that row in `--tui-dim`. Idle chrome currently outranks the agent's own
    quiet labels.
+   **Fixed 2026-09-19 (first pass).** Every span on the row is `--tui-dim`.
 
 3. **The hardware cursor lands on the placeholder's first character.** 36
    frames. `ui/chrome.rs:437-446`: when the draft is empty the app draws
@@ -336,6 +382,8 @@ column in the PNGs.
    purpose text is `--t-accent-text`, not `--t-quiet`". Light escapes at
    4.64:1, so this is a dark-theme failure — the reverse of the usual pattern.
    Two judges measured it independently to the same hundredth.
+   **Fixed 2026-09-19 (first pass).** The selected row's detail and its
+   number both take `--tui-accent-text`: 2.62:1 -> 5.32:1.
 
 6. **Nothing caps the body measure.** 18 frames (every `*-large-*`), with the
    200×50 size the only one that shows it. Assistant prose runs cols 13–197 as
@@ -457,6 +505,9 @@ column in the PNGs.
     6 frames. `#9a95a4` (`--tui-dim`) there against `#c9c5d2` (`--tui-quiet`)
     in `empty` and `conversation`, for the identical string; light mirrors it.
     One component, two tones.
+    **Fixed 2026-09-19 (first pass).** First run's cwd takes `--tui-quiet`,
+    the rung every other screen gives the same string; the version beside it
+    stays a rung quieter, which is deliberate and recorded in place.
 
 14. **A dropped turn keeps its break band.** 4–6 frames at 80×24. In
     `markdown-small` the transcript band is 16 rows and the content needs
@@ -541,11 +592,15 @@ column in the PNGs.
     formats the turn/step as `T{t} S{st}`, falling back to `"-"`. The Content
     Fundamentals require lowercase labels, and `-` borrows a diff sign to mean
     "no value".
+    **Fixed 2026-09-19 (first pass).** `turn 1 · step 2`, and an absent turn
+    is omitted rather than printed as `-`.
 
 21. **The panel's sentence has no terminal period.** 30 frames. Renders `The
     agent wants to read a file`; `5a`'s copy is `The agent wants to run a
     shell command.` Third person and sentence case are both correct — the stop
     is the only thing missing.
+    **Fixed 2026-09-19 (first pass).** Every `PromptView` sentence ends in a
+    full stop.
 
 22. **No timestamp row under the speaker label.** Every frame that draws a
     label. `HANDOFF.md:257` puts the speaker on the label column's first row
@@ -556,6 +611,18 @@ column in the PNGs.
     8-cell column, so it is unbuilt rather than decided against — but that
     conclusion is from the design side only and wants confirming before it is
     built.
+
+    **Attempted and stopped 2026-09-19, on the data rather than on the
+    design.** There is no clock anywhere in the workspace: no `LogEntry`
+    carries a time, no crate depends on `chrono`, `time` or `jiff`, and local
+    wall-clock time is not reachable from `std` alone. So this is a
+    dependency decision, plus a change to the log's data model, plus a
+    fixture pin in `render.snap` — on evidence that is half-superseded, since
+    `HANDOFF.md:257` also states the 12-cell label column Turn 13 replaced.
+    It belongs with Class B item 6, the branch marker: **a data source that
+    does not exist, not a rendering defect.** Two judges have gone on scoring
+    the empty second row of the label column, so the finding is real; what is
+    wrong is its class.
 
 23. **The inline diff splits the sign from the code.** 24 frames, binding in
     the light ones — and **missed by every judge**, because it needs the
@@ -724,6 +791,29 @@ each is a stop-and-ask. None may be patched toward an invented answer.
    label column is dead space and nothing on screen names who is speaking. The
    design has no answer for a turn taller than the viewport.
 
+8. **How wide first run's option list is.** The design states the row's
+   *internals* — mark at cell 29, name at 32 in the shared 16-cell field,
+   detail at 48 — and one thing about its right edge: the `more` row's `→` is
+   "flush to the 3-cell right margin". It states nothing about where the list
+   itself ends, which is the width the selection band paints.
+
+   That gap has now been filled twice by invention and measured as a defect
+   both times. Filling to the frame's right margin made the band 167 cells of
+   accent at 200 columns (Class A item 12), against the rule that the accent
+   is "a mark or a line, never a filled field". Sizing it to the list's own
+   widest row fixed that and drew a different complaint from a fresh judge —
+   "the band ends on the last glyph of `ANTHROPIC_API_KEY`, so it is sized by
+   string length, not by a region". Both readings are right, which is the
+   signature of a question the design has not answered.
+
+   `5c`'s 48-cell command list is the nearest stated number and is **not**
+   this list: it is four cells too narrow for `anthropic` plus `claude models
+   · ANTHROPIC_API_KEY`, the reference's own row, at the reference's own frame
+   width. What ships is the content-sized list with the `→` at the margin, so
+   every part of the row cites something; the band's edge is the part that
+   cites nothing, and it wants a token or a decision rather than a third
+   invention.
+
 ## Class C — token debt
 
 Conformant renders of a design system that contradicts itself. Fix upstream
@@ -840,11 +930,17 @@ spending their attention on closed questions.
    questions, and one of them was refuted by the reference itself.
 
 2. **Decide the Class B questions, in this order.** (2) the permission list's
-   shape, because Class A items 4, 17 and 18 all resolve downstream of it and
-   fixing them first means fixing them twice; then (1) the placeholder; then
-   (5) the edit panel; then (7) the scrolled-turn continuation. Each ends in an
-   ADR or a design re-sync, per the CLAUDE.md rule. (6), the branch, is a
-   `StatusInfo` question and can be taken independently.
+   shape, because Class A items 4, 16, 17 and 18 all resolve downstream of it
+   and fixing them first means fixing them twice; then (1) the placeholder;
+   then (5) the edit panel; then (7) the scrolled-turn continuation; then (8)
+   first run's list width, which is the cheapest of them and has now been
+   invented twice. Each ends in an ADR or a design re-sync, per the CLAUDE.md
+   rule. (6), the branch, is a `StatusInfo` question and can be taken
+   independently — and Class A items 19, 22 and 29 are the same shape as it,
+   so whatever settles (6) settles how those are approached too.
+
+   **This is the whole of the remaining work.** Every Class A item that is
+   not waiting on one of these is built; see the index at the head of Class A.
 
 3. **Raise the Class C items upstream.** ADR 0002's ramp contradiction (C1) is
    the one that is purely ours to amend; C2 and C4 want the light ladder

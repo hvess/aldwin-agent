@@ -1,3 +1,16 @@
-# Screenshot harness run directories (mjolnir-screenshot). Frames, gate output
-# and reports are per-run working space, deleted when a report is accepted.
-target/screenshot-runs/
+# Cargo's build directory. Nothing in it is authored — fingerprints, object
+# files, incremental state and dependency builds, all reproducible from the
+# sources by `cargo build`.
+#
+# 402 of these were committed in "Initial project creation." and never
+# touched again, which made build output 72% of the repository's tracked
+# files and left ~2700 more of them untracked in every `git status`. They
+# are ignored and untracked as of 2026-09-19; the files themselves stay on
+# disk, and `git rm -r --cached target` is what took them out of the index.
+/target
+
+# The screenshot harness's run directories (mjolnir-screenshot) live under
+# it: frames, gate output and reports, per-run working space kept until a
+# report is accepted. Covered by the rule above, named here because `start`
+# prunes them on its own schedule and a reader looking for them should find
+# out where they went.

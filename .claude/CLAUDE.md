@@ -12,7 +12,7 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining four (permissions, tools, tui, screenshot) stay active, each with a dated Progress note on its known gaps; screenshot is the newest — it is built and usable — `crates/screenshot` plus the `screenshot` skill run a whole session (contract, preflight, capture, six gates, blind scoring, report); its known gaps are in the spec's Status and the skill's "What this does not cover". When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`.
+Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining four (permissions, tools, tui, screenshot) stay active, each with a dated Progress note on its known gaps; screenshot is the newest — it is built and usable — `crates/screenshot` plus the `screenshot` skill run a whole session (contract, preflight, capture, six gates, blind scoring, report); its known gaps are in the spec's Status and the skill's "What this does not cover". When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`. `mjolnir-open-tasks.md` is a ledger rather than a spec: known, understood, undone work, each entry citing its evidence.
 
 ## Design System
 

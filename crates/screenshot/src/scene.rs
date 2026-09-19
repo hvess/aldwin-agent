@@ -154,20 +154,22 @@ pub fn script(name: &str) -> Result<Script> {
 
         // Two calls in one turn, so the second queues behind the first.
         //
-        // **Reshaped, and the difference matters.** `render_snapshot.rs`
-        // builds this name by calling `handle_key(Tab)` directly, which
-        // widens the grant to the directory. Through injected input Tab does
-        // not take effect — neither the legacy `\t` nor the disambiguated
-        // `CSI 9 u` — while digits and arrows on the same panel do, and
-        // `app.rs:1236` looks correct (the hint is rendered, so
-        // `decision_grant().alternate` is `Some`). Cause unknown as of
-        // 2026-09-19: it is either a defect in the app's Tab handling under a
-        // real terminal, or the one thing this harness cannot vouch for —
-        // that the bytes it chooses are the bytes foot would send.
+        // **The name is now historical.** This scene existed to widen a
+        // grant with `Tab` and show the panel naming the broadened rule.
+        // ADR 0003 removed the toggle: scope is a property of each option
+        // row, so every prompt scene shows both scopes at once and none of
+        // them needs a keypress to get there. `Tab` is no longer sent.
         //
-        // So this frame covers the *queued* prompt and the exact-scope rule
-        // line. It does **not** cover the widened rule, and must not be read
-        // as if it did.
+        // What it still covers, and the reason to keep it: a *queued*
+        // second prompt — the `1 more waiting` note and the panel's
+        // behaviour with a non-default row selected. Renaming it is a
+        // catalogue-and-baseline change, deliberately not taken here.
+        //
+        // A long-standing caveat that outlived the toggle: through injected
+        // input `Tab` never took effect anyway — neither the legacy `\t`
+        // nor the disambiguated `CSI 9 u` — while digits and arrows on the
+        // same panel did. Whatever that was, it is no longer reachable from
+        // this scene.
         "prompt_scoped" => Script {
             name:    "prompt_scoped",
             grants:  vec![],
@@ -176,7 +178,7 @@ pub fn script(name: &str) -> Result<Script> {
                 ("call-4", "read", serde_json::json!({ "path": "crates/core/src/lib.rs" })),
             ])],
             files:   vec![(DISPATCHER, "// the dispatcher\n"), ("crates/core/src/lib.rs", "// core\n")],
-            keys:    "\"what does the dispatcher do on a deny-by-absence?\",Enter,Tab,Down,Down,Down",
+            keys:    "\"what does the dispatcher do on a deny-by-absence?\",Enter,Down,Down,Down",
             provider: true,
         },
 

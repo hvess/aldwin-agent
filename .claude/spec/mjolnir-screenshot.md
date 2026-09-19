@@ -135,14 +135,19 @@ which role was dimmed rather than staying silent about it. A tolerance would
 have been the wrong fix; solving for the blend keeps "dimmed" and
 "off-palette" distinguishable.
 
-**Tab does not take effect through injected input.** `prompt_scoped` is
-therefore reshaped: it covers the queued prompt and the exact-scope rule line,
-not the widened rule `render_snapshot.rs` gets by calling `handle_key(Tab)`
-directly. Digits and arrows on the same panel do work, and `app.rs:1236` reads
-correctly, so this is either a defect in the app's Tab handling under a real
-terminal or the one thing the proxy cannot vouch for — that the bytes it
-chooses are the bytes foot would send. Unresolved, noted in the scene, and a
-reason to keep `wtype` on the table.
+**Key encoding is unverified by construction, and `Tab` was how we found
+out.** The harness chooses the bytes a key sends, so it cannot vouch that they
+are what foot would send. On the permission panel digits resolved and arrows
+moved; `Tab` never did, in either the legacy `\t` or the disambiguated
+`CSI 9 u` encoding — either a real defect under a terminal or exactly that
+blind spot, never distinguished.
+
+ADR 0003 then unbound `Tab` in that panel, so the one scene that exercised it
+(`prompt_scoped`) no longer sends it and the symptom is unreachable. **The
+gap is not closed, only unobservable**: a clean run still says nothing about
+key handling, and the first non-digit, non-arrow binding a panel takes will
+need `wtype` (compositor-level key events, one package) before its frames
+mean anything.
 
 **Progress (2026-09-19, scenes):** Six of the twelve catalogue scenes run
 through the real path — `first_run`, `empty`, `conversation`, `markdown`,

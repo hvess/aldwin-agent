@@ -152,9 +152,10 @@ harness does not have.
   rather than notice. It is written into the run directory beside each frame
   so that judgement is visible; the independent check is the rendered handoff
   at 120×36.
-- **`prompt_scoped` is reshaped.** Tab does not take effect through injected
-  input, so that frame shows the queued prompt and the exact-scope rule — not
-  the widened rule the snapshot's version of the name has.
+- **`prompt_scoped`'s name is historical.** It existed to widen a grant with
+  Tab; ADR 0003 removed the toggle, so the scene now covers a *queued* second
+  prompt and a non-default selection, and sends no Tab. Both grant scopes are
+  on screen in every prompt scene now, one per option row.
 - **Scenes talk to an OpenAI-compatible fake, never the Anthropic client.**
   `base_url` is ignored for the anthropic provider, so a local fake can only
   be reached that way. A clean run says nothing about the Anthropic adapter.

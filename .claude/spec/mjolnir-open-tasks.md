@@ -89,17 +89,21 @@ because each is closable work.
    `.claude/design/`) and a browser render; measure its pixels against its own
    9×20 cell, never read positions off the prose.
 
-8. **Tab does not take effect through injected input, and nobody knows why
-   yet.** On the permission panel digits resolve and arrows move, but Tab —
-   which should widen the grant to the directory — does nothing, in either the
-   legacy `\t` or the disambiguated `CSI 9 u` encoding. `app.rs:1236` reads
-   correctly and the hint is rendered, so `decision_grant().alternate` is
-   `Some`. Two possibilities: a real defect in Tab handling under a terminal,
-   or the harness's own blind spot — it chooses the bytes, so it cannot vouch
-   that they are what foot would send. **The cheap test is a human pressing Tab
-   in a real session.** If it works there, the input path wants `wtype`
-   (compositor-level key events, one package) and `prompt_scoped` stops being
-   reshaped.
+8. ~~**Tab does not take effect through injected input.**~~ **Retired
+   2026-09-19 without being answered, because the feature it was about is
+   gone.** ADR 0003 moved grant scope onto the option rows and unbound `Tab`
+   in the permission panel, so there is no longer a widening keypress to test
+   and `prompt_scoped` no longer sends one.
+
+   **What did not go away is the underlying question**, and it is worth
+   restating because the evidence for it is now gone from the scenes: the
+   harness chooses the bytes a key sends, so it cannot vouch that they are
+   what foot would send. Digits and arrows demonstrably worked and `Tab` did
+   not, which was either a real defect under a terminal or exactly that blind
+   spot. Nothing about key encoding is tested here by construction. If a
+   future panel binds a non-digit, non-arrow key, this is the first thing to
+   suspect, and the input path wants `wtype` (compositor-level key events,
+   one package) before it is trusted.
 
 9. **Scenes exercise the OpenAI adapter only.** `base_url` is ignored for the
    `anthropic` provider (`llm/src/client.rs:64`), and pointing the app at a

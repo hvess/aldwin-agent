@@ -3,6 +3,10 @@ name    = "mjolnir-llm"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Exposes `test_server` to other crates. Dev-only; see the module's doc comment.
+test-server = []
+
 [dependencies]
 mjolnir-core   = { path = "../core" }
 mjolnir-config = { path = "../config" }

@@ -1,0 +1,38 @@
+{
+  "//": "The screenshot harness's baseline: what is correct by decision. See .claude/spec/mjolnir-screenshot.md. An exception with no `authority` is not an exception, it is an unfixed bug.",
+  "cell": {
+    "w": 8,
+    "h": 18
+  },
+  "font": "JetBrains Mono:size=10",
+  "exceptions": [
+    {
+      "gate": "breakages",
+      "scope": "markdown table borders in assistant prose",
+      "authority": ".claude/adr/0002-markdown-tables-are-drawn.md",
+      "note": "A markdown table is drawn with ┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │, which are outside the closed glyph vocabulary. Scoped to that one construct; not a licence for a second stroked surface.",
+      "glyphs": "┌┬┐├┼┤└┴┘─│"
+    },
+    {
+      "gate": "breakages",
+      "scope": "key hints and typographic marks",
+      "authority": ".claude/design/HANDOFF.md — screen prose, e.g. the top bar's dim `·` and first run's `⏎ continue`, `↑↓ choose`, `config →`",
+      "note": "The closed glyph table covers marks. The design's own screen descriptions use these separately, and the frames draw them.",
+      "glyphs": "·…⏎↑↓←→"
+    },
+    {
+      "gate": "role pairing",
+      "scope": "wordmark, light theme",
+      "authority": ".claude/spec/mjolnir-tui.md — 2026-09-07 audit entry",
+      "note": "The design system's own .tui-light --tui-reverse-bg disagrees with its frame, so the light wordmark renders a rung too dark. Upstream defect; explicitly not to be fixed in palette.rs."
+    },
+    {
+      "gate": "layout",
+      "scope": "decision panel option rows",
+      "authority": ".claude/design/HANDOFF.md — screen 5a: \"Four option rows, flush to the frame's left edge like the command rows in 5c\"",
+      "note": "The mark and number columns of an option row sit at cells 0-5, inside the 3-cell margin, by design. Scoped to the left margin only: nothing licences running off the right.",
+      "glyphs": ""
+    }
+  ],
+  "masks": []
+}

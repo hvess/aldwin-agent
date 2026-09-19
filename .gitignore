@@ -1,0 +1,3 @@
+# Screenshot harness run directories (mjolnir-screenshot). Frames, gate output
+# and reports are per-run working space, deleted when a report is accepted.
+target/screenshot-runs/

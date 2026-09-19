@@ -1,0 +1,26 @@
+[package]
+name    = "mjolnir-screenshot"
+version.workspace = true
+edition.workspace = true
+
+# Dev-only harness. Nothing in the shipped binary may depend on this crate;
+# `release.yml` builds `-p mjolnir-cli`, so it is never in a release build.
+[[bin]]
+name = "mjolnir-screenshot"
+path = "src/main.rs"
+
+[dependencies]
+# The product's own config writer, so a seeded global config is created by the
+# code under test rather than by a copy of its templates that would drift.
+mjolnir-config = { path = "../config" }
+# The product's own canned-response server, behind its dev-only feature, so a
+# scene is driven by a provider that answers identically every run.
+mjolnir-llm    = { path = "../llm", features = ["test-server"] }
+tokio          = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+clap        = { version = "4", features = ["derive"] }
+libc        = "0.2"
+flate2      = "1"        # only to read a PNG back and check the parser against it
+unicode-width = "0.2"    # same crate the TUI measures with, so a wide glyph
+                         # occupies the same number of cells in both

@@ -1430,6 +1430,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-screenshot"
+version = "0.1.19"
+dependencies = [
+ "clap",
+ "flate2",
+ "libc",
+ "mjolnir-config",
+ "mjolnir-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "unicode-width",
+]
+
+[[package]]
 name = "mjolnir-tools"
 version = "0.1.19"
 dependencies = [

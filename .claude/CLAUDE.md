@@ -12,48 +12,26 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining three (permissions, tools, tui) stay active, each with a dated Progress note on its one or two known gaps. When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`.
+Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining four (permissions, tools, tui, screenshot) stay active, each with a dated Progress note on its known gaps; screenshot is the newest — it is built and usable — `crates/screenshot` plus the `screenshot` skill run a whole session (contract, preflight, capture, six gates, blind scoring, report); its known gaps are in the spec's Status and the skill's "What this does not cover". When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`.
 
 ## Design System
 
 The TUI's visual design is not invented locally — it is imported. A local
 copy of everything below lives in `.claude/design/` (see its `IMPORT.md`);
-read that first, and re-sync with `DesignSync` (authenticate with
-`/design-login`) only when you need something it doesn't carry.
+read that first. Re-syncing from `claude.ai/design` has its own traps
+(which of the two projects is live, and why the obvious lookups lie) —
+the `design-sync` skill carries them; read it before any `DesignSync`
+call. Re-sync only when you need something the local copy doesn't carry.
 
-There are two projects on `claude.ai/design`, and **which one is live is
-not obvious**:
+Two things about reading the handoff, each learned the hard way:
 
-- **"Design system tokens discussion"** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
-  `type: PROJECT_TYPE_PROJECT`. Holds the five `.dc.html` frames *and a
-  bound copy of the design system* under
-  `_ds/mjolnir-design-system-4ea574fb-…/`. **That bound copy is the current
-  token layer.** Its `SYNC.md` is the change record and carries an explicit
-  "Not applied — outside this copy" table.
-- **"Mjolnir Design System"** — `https://claude.ai/design/p/4ea574fb-4be4-47de-9940-fd38927d6dd8`
-  `type: PROJECT_TYPE_DESIGN_SYSTEM`. The *source* project. **Partly synced
-  on 2026-09-07** — its token layer, `README.md`/`readme.md`, manifest and
-  guideline cards were brought to Turn 15; its `components/`, `_ds_bundle.js`,
-  `ui_kits/` and `templates/` still state pre-Turn-13 rules. `IMPORT.md`'s
-  "The source project is no longer wholly stale" section lists exactly which
-  is which. Still read values from the bound copy, not from here.
-
-Five things about using them, each learned the hard way:
-
-1. **`list_projects` only returns design-system projects.** The discussion
-   project — the live one — never appears in it. Address it by UUID.
-2. **A stale `updatedAt` proves nothing.** Editing the bound `_ds/` copy
-   does not touch the source project, so `4ea574fb-…` can sit at an old
-   date while the design moves underneath it.
-3. **`DesignSync` is main-session only.** Subagents do not have the tool.
-   Fetch the files yourself and hand over paths, not project URLs.
-4. **Measure the handoff HTML; reading it is not enough.** Neither the token
+1. **Measure the handoff HTML; reading it is not enough.** Neither the token
    CSS nor the component prose states cell positions. They exist only as
    pixel values in the HTML's inline styles, and have to be divided by the
    cell size in `cells.css` (9×20px; the frame is 120×36 cells) to become
    grid coordinates. A design pass that skipped this step produced a layout
    that was wrong in every column while matching every colour exactly.
-5. **Render it before trusting your reading of it.** Headless Chromium
+2. **Render it before trusting your reading of it.** Headless Chromium
    works, but under snap confinement it silently no-ops writes outside
    `/root` — copy the input there and write screenshots there too, or you
    get a reported success and no file.

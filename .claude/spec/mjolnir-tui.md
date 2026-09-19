@@ -11,6 +11,43 @@ by the 2026-09-06 entry; the syntax ramp by the 2026-09-07 Turn 15 entry.)
 **Owner:** Maximilian
 **Last Updated:** 2026-09-19
 
+**Progress (2026-09-19, ADR 0003 — the permission option row is a sentence):**
+The decision panel's option list was `5c`'s name + detail pair on `5a`'s
+screen. It is now `5a`'s sentence: one column, the grant pattern quoted inside
+it one step quieter, no detail column.
+
+What went with the shape, because all three were mechanisms for an axis the
+ADR removed: `App::decision_pattern_scope`, `PatternScope`, `GrantSummary`,
+`GrantUnit`, `App::decision_grant`, `decision::grant_lines`, `GRANT_RULE_MAX`,
+the panel's grant-summary and `Tab` rows, and `Tab` itself as a panel binding.
+`broad_pattern`, `directory_glob` and `program_glob` are untouched — the broad
+unit is still ADR 0001's, it is just now the pattern of two specific rows
+rather than a mode the whole list sits in.
+
+Three things a reader of this crate should know:
+
+* **`OptionRow` deliberately serves two different controls now.** Its doc
+  comment used to assert that the permission list and the model picker "cannot
+  drift into two different controls". They are two controls, because the
+  design draws two (`5a` and `5c`); what the shared type still holds in common
+  is the selection convention — mark, band, number, tones.
+* **The quoted pattern is elided by the renderer, not by `app.rs`.** A grant
+  over a 200-character shell command is ordinary input and `Row::build` wraps,
+  so an unelided sentence would silently become a two-row option. `app.rs` has
+  no frame width, so the budget is computed in `option_rows` from `LABEL_COL`
+  and `MARGIN_X` — which is why `LABEL_COL` is now a module constant.
+* **`max_height` still caps the panel at a quarter of the frame.** Its doc
+  comment justified that against `5a`'s stated half on the grounds that the
+  grant-summary and `Tab` rows made Mjolnir's panel need ~20 rows. Those rows
+  are gone and the argument is largely spent, but it was deliberately left
+  alone in the same pass: two geometry changes at once make the next
+  screenshot delta unreadable about which caused what.
+
+Measured: run `run-1789844710`, the five permission scenes at three sizes in
+both themes — 30 frames, all six gates clean, regression clean. This closed
+Class A 4, 16, 17 and 18 and Class B 2, 3 and 4 in
+`.claude/spec/mjolnir-design-conformance.md`.
+
 **Progress (2026-09-19, the conformance catalogue's unblocked layout items):**
 Six Class A deviations from `.claude/spec/mjolnir-design-conformance.md`, plus
 one the gates found while they were being captured. Each is recorded in full

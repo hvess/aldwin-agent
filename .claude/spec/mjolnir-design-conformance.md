@@ -2,12 +2,20 @@
 
 The gap between what `crates/tui` draws and what `.claude/design/` specifies, as measured rather than as remembered — and the triage that decides which half of it is a bug.
 
-**Status:** active — **nine Class A findings open, none of them fixable in
-`crates/tui`**: four wait on a Class B decision, three on a data source or a
-token that does not exist, one on a copy question, one on a design answer.
-Twenty have been fixed and deleted from the list across three passes; the
-dated Progress entries below are where that history lives. What remains is a
-conversation and an upstream re-sync rather than a loop.
+**Status:** active — **six Class A findings open, one of them now fixable in
+`crates/tui` and the other five not**: item 16 is unblocked and is the next
+piece of loop work; of the rest, three wait on a data source or a token that
+does not exist, one on a copy question, one on a design answer. Twenty-three
+have been fixed or decided away across four passes; the dated Progress entries
+below are where that history lives.
+
+The three that closed on 2026-09-19 did so through a **decision**, not a fix:
+ADR 0003 settled Class B 2, and items 4, 17 and 18 went with it. That is the
+pattern this spec predicted — a Class B answer is what unblocks the Class A
+findings sitting downstream of it — and it is the first time the prediction
+has been tested. Item 16 was the same bet and it did not pay: the decision
+unblocked it without fixing it, which is the distinction this spec's own Model
+section draws and which the first write-up of that pass got wrong.
 **Scope:** conformance of the shipped TUI's rendering to the imported design
 system, for the twelve scenes in the screenshot catalogue at three sizes in
 both themes. Covers the deviations, the design debt they sit next to, and the
@@ -16,6 +24,85 @@ exemption records that are missing. Excludes the screenshot harness itself
 every functional question.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-19
+
+**Progress (2026-09-19, ADR 0003 — the permission list's shape):** The first
+Class B question taken off Step 2's ordered list, and the one it named first:
+**what shape a permission option row is.** Decided as `5a`'s sentence, with
+`5a`'s per-row scoping rather than only its row shape. Recorded as ADR 0003,
+which amends ADR 0001 §3.
+
+Closed, and deleted from the Class A list — **three, not the four first
+claimed here.** The retracted one is instructive and is recorded rather than
+quietly corrected: item 16 was written up as closed on the reasoning that "the
+rows that competed for their own grid are gone". That is an inference, and the
+frames refute it. `prompt_scoped-medium-dark.txt` row 25 still reads
+`   read: crates/tools/src/dispatcher.rs` — label at cell 3, value at cell 9,
+which is the exact measurement item 16 recorded. **Nothing in ADR 0003 touched
+the panel's card rows.** This is the spec's own pitfall — "a measurement cited
+from a different screen is a reading, not a measurement" — committed against
+the very frames that were sitting on disk at the time.
+
+- **4** (the decision panel does not use `OPTION_LABEL_COL`) — *dissolved*
+  rather than fixed. A sentence row has no name field, so there is no width to
+  get right; `OPTION_LABEL_COL` is first run's alone, which is what `grep`
+  always showed. The constant's comment claiming four lists shared it is
+  corrected.
+- **17** (the two rule literals do not form a column) — there is one rule
+  literal per option row now, each inside its own sentence. The two rows that
+  were six cells apart no longer exist.
+- **18** (the in-panel `Tab` hint's idiom and tones) — the `Tab` row is gone
+  with the toggle it described.
+
+Class B **2**, **3** (the grant-summary row) and **4** (the `Tab` scope-toggle
+row) are closed by the same ADR: 3 and 4 were inventions with no design
+counterpart, and both were mechanisms for the axis ADR 0003 removed.
+
+**What it cost, recorded here because it is not visible in a frame.** The
+session tier now grants the exact target rather than ADR 0001's broad unit, so
+running two different `cargo` invocations in one session prompts twice — the
+friction ADR 0001 existed to remove, reintroduced on one row and bounded by
+rows 3 and 4 still granting `cargo *`. And the panel no longer names the file
+a grant lands in: `saved to ~/.mjolnir/permissions.yaml` became `everywhere`.
+Both are in ADR 0003's consequences; both are pinned by a test so they stay
+decisions rather than drift.
+
+**One new entry under "What a judge will raise again"** (item 7): `5a`'s
+fourth option reads `Deny and tell the agent why`, and Mjolnir's reads `Deny`,
+because no step collects a reason. A blind judge holding `5a` will score it.
+
+Verification: run `run-1789844710`, the five permission scenes at all three
+sizes in both themes — 30 frames. Preflight clear, **all six gates clean on
+all 30**, regression clean (24 sections moved, all in focus). Scored blind by
+three judges, none seeing the source or the diff.
+
+**Scores: minimum 61 against 90** — spatial 70–84, component 61–68. The
+sentence list itself was verified against ADR 0003 by all three and penalised
+by none; two independently noted that the option row's columns no longer drift
+with frame width, which is §1's claim borne out. What holds the number down is
+almost entirely *other* findings, and separating them is the point of this
+entry.
+
+**One defect this pass introduced, found by the judges and fixed:** the quoted
+pattern was drawn in `--tui-dim`. `5a` says "one step quieter" than body, and
+the ramp puts `quiet` at neutral-300 one rung under body's neutral-200 — `dim`
+is neutral-500, three rungs down. Two judges measured it independently and
+cited the same line. The cause was reasoning by analogy rather than off the
+ramp: the code took the detail column's `body`/`dim` pair as the model, and
+that pair is right for `5c`'s description text and wrong for this. Fixed to
+`--tui-quiet`, re-captured as `run-1789845369` (12 frames, gates clean,
+regression clean), declared cell now `#c9c5d2`.
+
+**Three findings corroborated by all three judges, all new to this catalogue
+and none of them caused by ADR 0003** — see items 30, 31 and 32 below.
+
+**And one scoping defect in the ADR itself, not in the frames.** A judge read
+§1's "the option row is a sentence" as governing the *edit-approval* panel's
+`Approve` / `Deny` rows too, which still carry a detail column. That reading
+was available because the section did not say otherwise; the ADR now scopes
+itself to a Tool prompt's list and points the edit panel at Class B 5, where
+the question already lived. Worth recording as evidence for Step 1: the judge
+was not wrong to read it that way, and no amount of blindness would have
+helped — the text was ambiguous.
 
 **Progress (2026-09-19, full-catalogue conformance run):** Run
 `run-1789826989`, all twelve scenes at 80×24, 120×36 and 200×50 in both
@@ -302,39 +389,38 @@ the end of this spec, not here.
 
 | | item | open on |
 | --- | --- | --- |
-| 4 | the decision panel does not use `OPTION_LABEL_COL` | Class B 2 |
 | 6 | nothing caps the body measure | Class C 3 |
-| 16 | the permission panel ignores the frame's own columns | Class B 2 |
-| 17 | the two rule literals do not form a column | Class B 2 |
-| 18 | the in-panel `Tab` hint's idiom and tones | Class B 4 |
+| 16 | the permission panel ignores the frame's own columns | **nothing — buildable** |
 | 19 | a call blocked on a permission is drawn as running | a `ToolActivityStatus` the app does not have |
 | 22 | no timestamp row under the speaker label | a clock the workspace does not have |
 | 28 | the empty state's status row copy | a live copy question (`idle` against `ready`) |
 | 29 | a tool line's target and summary | a `ToolActivityEntry` that carries neither |
+| 30 | the panel's target row is not a recessed field | **nothing — buildable** |
+| 31 | the panel is 14 rows where `5a` states 18 | **nothing — buildable** |
+| 32 | a diff with no context rows has no field under it | **nothing — buildable** |
 
-**Not one of these nine is reachable by writing Rust in `crates/tui`.** Four
-wait on a Class B decision, three on a data source or a token that does not
-exist, one on a copy question, one on a design answer.
+**Four of these are reachable by writing Rust in `crates/tui`** — 16, 30, 31
+and 32, all found or re-measured on `run-1789844710` and all in the permission
+panel. They are the whole of Step 4's queue, and for the first time since this
+catalogue was opened that queue is not empty. Of the other five, three wait on a data
+source or a token that does not exist, one on a copy question, one on a design
+answer. None waits on a Class B decision any more — ADR 0003 took the last of
+those.
 
-Twenty of this catalogue's findings have been fixed and are no longer listed
-here: 1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 21, 23, 24, 25, 26, 27.
+Items 30-32 are new, added 2026-09-19 from `run-1789844710`'s three blind
+judges; each was raised independently by all three, which is why they are
+entered without the usual single-judge caution.
+
+Twenty-three of this catalogue's findings are no longer listed here: 1, 2, 3,
+5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 21, 23, 24, 25, 26, 27 were fixed;
+4, 17 and 18 were closed by ADR 0003 deciding the Class B question they sat
+downstream of.
 The numbers are not reused — the dated Progress entries above cite them, and
 a reader following one of those citations should find a gap rather than a
 different finding standing in the deleted one's place. Three of the twenty
 left something behind that is still live: item 7's target slot is now part of
 item 29, and items 10 and 11 left the two records under "What a judge will
 raise again" below.
-
-4. **The decision panel does not use `OPTION_LABEL_COL`.** 30 frames
-   (`approval`, `approval_large`, `prompt`, `prompt_path`, `prompt_scoped`).
-   `ui/grid.rs:46` defines the 16-cell option name field and its comment says
-   "One width for every list in the system: the provider list, the model list,
-   the access list and the command list are one control, so they share it."
-   `grep` puts every use of it in `ui/first_run.rs`; `ui/decision.rs` never
-   imports it. Measured consequence: the detail column lands at cell 16 in the
-   `approval` family (a 10-cell field) and cell 31 in the `prompt` family (a
-   25-cell field, widened to fit the string `Allow for this session`). Neither
-   is 22, which is what the constant gives. One control, three widths.
 
 6. **Nothing caps the body measure.** 18 frames (every `*-large-*`), with the
    200×50 size the only one that shows it. Assistant prose runs cols 13–197 as
@@ -346,25 +432,29 @@ raise again" below.
    frames are 120 cells and state no maximum measure, so the *token* is Class
    C (item 3 below) while the unbounded layout is Class A.
 
-16. **The permission panel ignores the frame's own columns.** 30 frames. No
-    content inside the panel sits at cell 13: the target value lands at cell 9
-    in the `prompt` family (inside the label column's own run) and at cell 3 in
-    the `approval` family, while the transcript three rows above uses the body
-    column correctly. `5a` specifies the panel's facts as a key/value table on
-    the frame's columns. The panel and the frame read as two grids.
+16. **The permission panel ignores the frame's own columns.** 30 frames, and
+    **unblocked rather than fixed by ADR 0003** — the decision it was waiting
+    on has been taken, and nothing about it has moved. Re-measured against
+    `run-1789844710`: `prompt_scoped-medium-dark.txt` row 25 is
+    `   read: crates/tools/src/dispatcher.rs`, so the label sits on the 3-cell
+    margin and the value on cell 9, inside the label column's own run. No
+    content anywhere in the panel sits on cell 13, while the transcript three
+    rows above uses the body column correctly. The panel and the frame still
+    read as two grids.
 
-17. **The two rule literals do not form a column.** 12 frames (`prompt_path`,
-    `prompt_scoped`). Adjacent rows state the rule a saved answer would write
-    (cell 35) and the rule Tab would narrow it to (cell 41) — two lines whose
-    entire purpose is to be compared, misaligned by 6 cells, on columns
-    derivable from nothing in `cells.css`. No gate sees it: nothing overprints
-    and nothing crosses the right margin.
+    `5a` specifies the panel's facts as a 3-row key/value table on the frame's
+    own columns — labels `in`, `writes` and `network` in the label column,
+    values in the body column. **The columns half is now buildable**: ADR 0003
+    settled the control, and `prompt_card`'s rows were never part of that
+    question.
 
-18. **The in-panel `Tab` hint uses neither the footer's idiom nor its tones.**
-    12 frames. Every span measures `--tui-dim` at 3.33:1, the ramp's floor,
-    with the key in a 5-cell field matching no constant — while the footer two
-    rows below draws key hints correctly, keys in `--tui-mark` and verbs in
-    `--tui-quiet`. The same product draws one control two ways, two rows apart.
+    **The contents half is not, and is a separate finding.** A blind judge
+    measuring `run-1789844710` reported the three fact rows missing outright,
+    not merely misaligned. `in` is reachable — the working directory is in
+    `StatusInfo` — but nothing in the workspace knows what a call *writes* or
+    whether the network is live, so two of the three rows are the same shape
+    as Class B 6: a data source that does not exist. Build the columns; do not
+    invent the facts.
 
 19. **A call blocked on a permission is drawn as running.** 30 frames. The
     glyph is `◐` ("tool call / process running") on a call that has not run
@@ -427,6 +517,54 @@ raise again" below.
     marker: a data source that does not exist, and a decision about what
     `ToolActivityEntry` should carry.
 
+30. **The panel's target row is not a recessed field.** 30 frames, raised by
+    all three judges. `5a`'s equivalent row is "a recessed field on
+    `--t-recess`, no border and no accent bar, with the command on one row 2
+    cells in — `$` in accent-400 then the command in primary text, and a blank
+    half-row above and below". Measured on `run-1789844710`,
+    `prompt-medium-dark`: the row is `   read: README.md` on `--tui-bar`
+    (`#474251`) at the 3-cell margin, ink `--tui-label` (`#b1adbb`). So four
+    separate misses — no recessed ground, no 2-cell inset, `label` where the
+    reference says primary text, and no blank row above (`approval` loses the
+    same blank).
+
+    **The treatment is answered and the content is not**, and the two must not
+    be conflated. `5a` is a *shell* prompt: its block carries a `$` sigil and
+    quotes a command. What a `read` prompt puts there — whether a `read: `
+    prefix is legitimate at all — the design does not say. Build the field;
+    the sigil and the prefix are a copy question to take with Class B 5.
+
+31. **The panel is 14 rows where `5a` states 18.** 30 frames, all three
+    judges, and **this one ADR 0003 predicted.** `cells.css` sets
+    `--panel-permission-h: calc(var(--cell-h) * 18)`; measured 14 at every
+    size for the `prompt` family (`approval_large` reaches 20, being
+    content-sized). `ui/decision.rs`'s `max_height` caps the panel at a
+    quarter of the frame, and its doc comment justified that against `5a`'s
+    half on the grounds that the grant-summary and `Tab` rows made Mjolnir's
+    content need ~20 rows where the reference needs 18. **Those rows are gone,
+    so the justification is spent** — the comment says so and was deliberately
+    left unchanged in the same pass, to keep the next screenshot delta
+    readable about which change caused what. This is that follow-up.
+
+    One judge measured the consequence plainly: at 200×50 the panel takes 28%
+    of the frame where the design budgets 50%. Note the two smaller sizes are
+    a different question — at 80×24 an 18-row panel would be 75% of the frame,
+    and the design states no scaling rule, so a literal 18 is wrong there.
+
+32. **A diff with no context rows has no field under it.** 12 frames
+    (`approval-*`), one judge, but measured precisely enough to enter.
+    `semantic.css` gives `--tui-diff-box` as the one surface the inline
+    transcript diff sits on. In `approval` the hunk is a single removed row
+    and a single added row with no context, and the field ground is drawn
+    only by the context rows — so nothing renders it and the two tinted rows
+    sit straight on the panel's chrome: `#3d4b42` on `#474251` is **1.054:1**
+    dark, `#d3ead6` on `#e8e4ee` is **1.015:1** light. `approval_large` gets
+    it right because it *has* context rows, which is what localises the bug
+    to the degenerate hunk rather than to the field's colour.
+
+    Distinct from Class C 2, which is about `--tui-diff-box`'s value being too
+    close to its neighbour. Here the box is not painted at all.
+
 ## Class B — design debt
 
 The app draws these; the design system has no counterpart. Per the skill,
@@ -441,25 +579,29 @@ each is a stop-and-ask. None may be patched toward an invented answer.
    imperative naming the product, against the third-person Content
    Fundamental, so a decision to keep it is also a decision about its words.
 
-2. **The five-option permission list.** `5a` draws four options as single
-   sentences with the matched pattern quieter. ADR 0001's three scopes plus
-   "once" and "deny" force five, and the footer correctly reads `1-5 to pick`.
-   What ships is additionally a *different control*: name + description pairs,
-   which is `5c`'s command-list shape, not `5a`'s. Class A item 4 is the
-   direct consequence — a field width cannot be got right for a control the
-   design has not drawn. **The design has not been re-synced since ADR 0001.**
+2. ~~**The five-option permission list.**~~ **Closed 2026-09-19 by ADR 0003.**
+   `5a` draws four options as single sentences with the matched pattern
+   quieter; what shipped was name + description pairs, which is `5c`'s
+   command-list shape. Decided as the sentence — and as `5a`'s *per-row*
+   scoping, not only its row shape, which is what carried 3 and 4 out with it.
+   ADR 0001's five options stay, and the footer still correctly reads
+   `1-5 to pick`. Kept in this list rather than deleted, because it is the
+   worked example of what answering a Class B question does: four Class A
+   findings closed without one of them being fixed. **The design still has not
+   been re-synced since ADR 0001** — the sentences for a global tier and a
+   five-option list are Mjolnir's own words, which is the debt this leaves.
 
-3. **The grant-summary row.** ADR 0001 requires the prompt to "state the grant
-   it would write, not the command that triggered it". The design system has
-   no grant-summary component, so the row exists because an ADR mandates it and
-   is drawn at `--tui-dim`, 3.33:1 — the literal rule about to be persisted is
-   the quietest text in the panel, which reads as the opposite of the ADR's
-   intent.
+3. ~~**The grant-summary row.**~~ **Closed 2026-09-19 by ADR 0003.** It
+   existed because ADR 0001 required the prompt to "state the grant it would
+   write, not the command that triggered it", and the design had no component
+   for it. Every allow row now states its own rule in its own sentence, which
+   discharges that requirement on the row being picked rather than two rows
+   above it at `--tui-dim` — the inversion this entry recorded.
 
-4. **The `Tab` scope-toggle row.** ADR 0001 makes scope directory × duration;
-   the design has no representation of widening or narrowing a grant, and its
-   key hints are footer-only. Both the widen and narrow variants are local
-   inventions. Class A item 18 is how that shows up.
+4. ~~**The `Tab` scope-toggle row.**~~ **Closed 2026-09-19 by ADR 0003.** A
+   local invention for an axis that no longer exists: scope is a property of
+   each row now, so both scopes are on screen at once and neither needs a
+   keypress to reach. `Tab` is unbound in the panel.
 
 5. **An edit-approval panel carrying an inline hunk.** `5a` is a shell prompt:
    sentence, `$`-prefixed command in a recessed field, `in`/`writes`/`network`
@@ -521,7 +663,12 @@ compensate in `palette.rs`.
    The fix is a token decision (`--tui-dim` or `--tui-mark-idle` for rules) and
    an ADR amendment; it is not a `markdown.rs` change.
 
-2. **The light ladder undercuts its own stated floor.** The handoff states
+2. **The light ladder undercuts its own stated floor.** *(Re-measured
+   2026-09-19 by two judges on `run-1789844710`, both unprompted, with a new
+   rung: dark `--tui-break` `#1e1a26` against `--tui-ground` `#27232f` is
+   **1.111:1**, so this is not a light-theme-only failure as first written.
+   One judge reports the consequence in a frame: in `prompt-medium-light` the
+   option separator and the whole footer band are invisible by eye.)* The handoff states
    "every adjacency in the five screens is now at least 1.15:1" and a narrowest
    light rung of 1.127:1. Measured: `--tui-bar-bottom` against ground
    **1.079:1** and against the panel **1.072:1**; `--tui-diff-box` against
@@ -546,6 +693,37 @@ compensate in `palette.rs`.
    invisible. One specified row, two opposite failures, so no single local
    adjustment is right.
 
+5. **`5a`'s colour paragraph predates the token layer.** Two judges reached
+   this independently, from different evidence, and it retires a finding
+   before it could be entered as Class A.
+
+   `HANDOFF.md:278-279` states the option row's tones as raw ramp names:
+   the band "accent-900", the idle mark "neutral-800", the number "accent-300
+   on the selected row and neutral-600 on the rest". Measured against the
+   shipped token files, two of those are unusable and one is contradicted:
+
+   - **neutral-800 for the idle `▌` is `#474251`, which is the panel's own
+     ground — 1.00:1, an invisible glyph.** The app draws `--tui-mark-idle`
+     `#5d576a`, inside the 1.6–2.4:1 band the handoff itself states for this
+     glyph at line 109. The app is right and the line is stale.
+   - **accent-900 for the band is contradicted by `palette.css` in its own
+     words** — "a real accent fill now, not a faint tint", `--color-band-dark:
+     #604788`, which is what ships.
+   - The number's rungs sit in the same sentence as those two. All three
+     judges measured `--tui-accent-text` / `--tui-label` against the stated
+     accent-300 / neutral-600, and one explicitly held the finding at low
+     confidence for exactly this reason.
+
+   **So the number's tone is Class C, not Class A**, and it is not entered in
+   the Class A list. What it wants is the paragraph rewritten in semantic
+   roles like the rest of the handoff. Until then a judge will keep measuring
+   it, which is why it is recorded here.
+
+   A related self-contradiction in the same paragraph, raised by all three:
+   "one cell after the mark and two cells before the label" yields text at
+   cell 5, and the very next clause says "option text starts at cell 6". All
+   three scored against the stated 6, which is what ships.
+
 ## What a judge will raise again
 
 Findings that are answered but not *fixed*: decisions recorded only in doc
@@ -558,7 +736,11 @@ four judges spending their attention on closed questions. See Step 1: where
 that record lives is a protocol question, not a `baseline.json` entry.
 
 1. **The inline diff's gutter is not a cell narrow.** ~~Class A item 11's
-   width half.~~ Three judges across three runs have reported the line number
+   width half.~~ **A fourth judge reported it on 2026-09-19**, this time
+   citing `cells.css`'s `--gutter-line-no-inline: 5` rather than the prose —
+   which makes it the single most re-discovered finding in the catalogue and
+   the strongest evidence for Step 1. Three judges across three runs before
+   that reported the line number
    right-aligning to cell 16 where a 5-cell gutter would put it at 17. They
    are reading `HANDOFF.md`'s prose ("a 5-cell right-aligned line number");
    `ui/diff.rs:160` implements the same handoff's *HTML* — `flex: 0 0 45px;
@@ -622,6 +804,19 @@ that record lives is a protocol question, not a `baseline.json` entry.
    and an explicit boundary ("Scoped to the left margin only: nothing licences
    running off the right").
 
+7. **`Deny` against `5a`'s `Deny and tell the agent why`.** New with ADR 0003,
+   which adopted `5a`'s option copy verbatim everywhere except here.
+   `PromptResponse::Tool` carries a decision, a tier and a pattern — there is
+   no reason field and no step that collects one, so the reference's sentence
+   would name a thing the product does not do. This is the A28 precedent
+   applied a second time: a hint naming a key that does nothing is worse than
+   one that disagrees with the reference. A judge holding `5a` will score it,
+   in all 30 permission frames.
+
+   Note what would retire it rather than paper over it: a deny reason is a
+   real feature the design has already drawn, and building it would close the
+   gap in the direction the reference points.
+
 ## Steps
 
 1. **Give the decided deviations somewhere the judge will actually see them.**
@@ -646,9 +841,10 @@ that record lives is a protocol question, not a `baseline.json` entry.
    real and recurring: four judges spent a run's attention on closed
    questions, and one of them was refuted by the reference itself.
 
-2. **Decide the Class B questions, in this order.** (2) the permission list's
-   shape, because Class A items 4, 16, 17 and 18 all resolve downstream of it
-   and fixing them first means fixing them twice; then (1) the placeholder;
+2. **Decide the Class B questions, in this order.** ~~(2) the permission
+   list's shape~~ — **done 2026-09-19, ADR 0003**, and it closed Class A 4,
+   16, 17 and 18 plus Class B 3 and 4 exactly as this step predicted. Next
+   is (1) the placeholder;
    then (5) the edit panel; then (7) the scrolled-turn continuation; then (8)
    first run's list width, which is the cheapest of them and has now been
    invented twice. Each ends in an ADR or a design re-sync, per the CLAUDE.md
@@ -666,13 +862,15 @@ that record lives is a protocol question, not a `baseline.json` entry.
 
 4. **Fix what is left in `crates/tui`.** Nothing is, as of 2026-09-19 —
    every Class A item that did not wait on something outside this repository
-   is built, across three passes, and the list above is what survived. The
-   three dated Progress entries carry what each pass changed and what it
-   cost. This step stays as the place the next Class A finding lands.
+   is built, across three passes, and ADR 0003 then closed the four that were
+   waiting on a Class B answer. The four dated Progress entries carry what
+   each pass changed and what it cost. This step stays as the place the next
+   Class A finding lands.
 
-5. **Re-run the full catalogue and rescore.** Three runs so far —
-   `run-1789826989`, `run-1789829088`, `run-1789832849`; only the last is
-   still on disk. The loop has never iterated
+5. **Re-run the full catalogue and rescore.** Four runs so far —
+   `run-1789826989`, `run-1789829088`, `run-1789832849`, `run-1789844710`;
+   the last covers only the five permission scenes, so the next full-catalogue
+   run is still owed and is what the minimum should next be read from. The loop has never iterated
    (open-tasks entry 10), so this is also the first real exercise of the fix
    half of the harness. Expect the minimum to move in steps rather than
    smoothly: it is a minimum across 72 frames, so it only rises when the *worst*

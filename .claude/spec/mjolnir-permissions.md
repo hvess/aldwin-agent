@@ -7,6 +7,27 @@ Default-deny permission engine — three persistent scopes, tiered prompts, fric
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
 
+**Progress (2026-09-19, ADR 0003 — the TUI stops toggling scope):** Nothing in
+this crate changed, and that is the point worth recording: the engine's
+`kind:pattern` grammar, its glob matcher and every persisted entry are exactly
+as this spec describes them.
+
+What changed is again *which patterns the TUI offers*, and the earlier
+Progress entries below now describe a mechanism that no longer exists. The
+`Tab` scope toggle, `PatternScope`, `GrantSummary` and its `unit` are removed.
+Scope is now a property of each option row: `once` and `session` send the
+exact target, `project` and `always` send ADR 0001's broad unit, and the row's
+own sentence quotes the rule it would write ("Always allow `cargo *` in this
+project"). Both scopes are therefore visible at once rather than one being
+reachable by keypress.
+
+**One consequence lands in this spec's territory.** The session tier now sends
+the exact target where it used to send the broad unit, so two different
+`cargo` invocations in one session produce two prompts. That is narrower than
+ADR 0001's default and is ADR 0003's stated, accepted cost — not a regression
+in the engine, which never chose the pattern. Reading the 2026-09-06 entry
+below as current will mislead on exactly this point.
+
 **Progress (2026-08-29):** Everything else in this spec is implemented and
 tested — `6c60023`. Not yet built: the "MCP tool calls use the standard
 tool prompt, extended once with an edit-shape follow-up" Decision (line

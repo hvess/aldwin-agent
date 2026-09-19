@@ -379,6 +379,23 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     Line::from(parse_inline(line, base, ctx))
 }
 
+/// An `_` between two word characters is a literal underscore, never an
+/// emphasis delimiter.
+///
+/// CommonMark and GFM both disallow intraword `_` emphasis (and both allow it
+/// for `*`), and the reason is exactly the case that broke here:
+/// `ANTHROPIC_API_KEY` was rendering as `ANTHROPICAPIKEY` — italic `API`, both
+/// underscores eaten. In a harness whose transcript is full of `snake_case`
+/// identifiers, env-var names and file paths, silently deleting underscores is
+/// worse than never supporting `_italic_` at all. Found by the screenshot
+/// harness's `markdown` scene (2026-09-19), which is the first defect it
+/// caught that this crate's own tests do not.
+fn intraword(before: &str, rest: &str) -> bool {
+    let previous = before.chars().last();
+    let following = rest[1..].chars().next();
+    matches!(previous, Some(c) if c.is_alphanumeric()) && matches!(following, Some(c) if c.is_alphanumeric())
+}
+
 /// Recursive-descent inline pass: `**bold**`, `*italic*`/`_italic_`,
 /// `` `code` ``, `~~strike~~`, `[text](url)`. Delimiters nest via recursion
 /// (e.g. `**bold *and italic***`) rather than a flat token stream, which
@@ -416,7 +433,7 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
                 rest = &stripped[end + 2..];
                 continue;
             }
-        } else if rest.starts_with('*') || rest.starts_with('_') {
+        } else if rest.starts_with('*') || (rest.starts_with('_') && !intraword(&buf, rest)) {
             let delim = &rest[..1];
             let stripped = &rest[1..];
             if let Some(end) = stripped.find(delim) {

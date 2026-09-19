@@ -414,7 +414,7 @@ fn an_incrementally_synced_transcript_equals_one_built_from_scratch() {
     let mut app = app();
     let _ = rendered(&mut app, width, height);
 
-    let mut step = |app: &mut App, what: &str| {
+    let step = |app: &mut App, what: &str| {
         let _ = rendered(app, width, height);
         assert_eq!(text(&app.transcript_slice(0, usize::MAX)), from_scratch(&app.log), "incremental and from-scratch transcripts diverged after {what}");
     };
@@ -2063,6 +2063,38 @@ fn bold_markdown_strips_asterisks_and_sets_the_bold_modifier() {
 fn italic_markdown_sets_the_italic_modifier() {
     let spans = parse_inline("that is *neat* stuff", Style::default().fg(DARK.body), ctx(80));
     let italic = spans.iter().find(|s| s.content.as_ref() == "neat").expect("italic span present");
+    assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
+}
+
+#[test]
+fn an_underscore_inside_a_word_is_a_literal_underscore() {
+    // `ANTHROPIC_API_KEY` used to render as `ANTHROPICAPIKEY` — italic `API`,
+    // both underscores eaten — because `_` opened emphasis anywhere. CommonMark
+    // and GFM both forbid intraword `_` for exactly this reason, and a harness
+    // whose transcript is full of snake_case identifiers, env-var names and
+    // paths cannot silently delete characters out of them.
+    let spans = parse_inline("export ANTHROPIC_API_KEY first", Style::default().fg(DARK.body), ctx(80));
+    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "export ANTHROPIC_API_KEY first");
+    assert!(spans.iter().all(|s| !s.style.add_modifier.contains(Modifier::ITALIC)));
+}
+
+#[test]
+fn an_underscore_delimited_word_is_still_italic() {
+    // The fix narrows `_`; it does not remove it. A delimiter with a word
+    // boundary on the outside is the spelling CommonMark keeps.
+    let spans = parse_inline("that is _neat_ stuff", Style::default().fg(DARK.body), ctx(80));
+    let italic = spans.iter().find(|s| s.content.as_ref() == "neat").expect("italic span present");
+    assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
+    assert!(spans.iter().all(|s| !s.content.contains('_')), "literal underscores must not reach the screen");
+}
+
+#[test]
+fn intraword_asterisks_still_emphasise() {
+    // `*` and `_` differ deliberately: CommonMark allows intraword `*`, and
+    // narrowing both would be a bigger change than the defect asked for.
+    let spans = parse_inline("un*frigging*believable", Style::default().fg(DARK.body), ctx(80));
+    let italic = spans.iter().find(|s| s.content.as_ref() == "frigging").expect("italic span present");
     assert!(italic.style.add_modifier.contains(Modifier::ITALIC));
 }
 

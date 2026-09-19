@@ -7,6 +7,50 @@ ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
 
+**Progress (2026-09-19, `explain` surfaced a retriable LSP error as a
+failure):** `LspClient::request` now re-sends a request the server answered
+with `ContentModified` (-32801), five attempts over ~1.5s, that code and no
+other. Nothing else in the crate changes.
+
+**The defect, in a real session:** `ContentModified` means the server threw
+its answer away because its view of the content moved underneath it, and the
+protocol's intent is that the client quietly asks again. rust-analyzer
+returns it throughout startup and reindexing. Nothing in the crate recognised
+it — `client.rs` modelled every server error as a flat `Rpc { code, message }`
+and handed it up — so asking a code question in the first seconds of a
+session produced a tool error that fixed itself if you asked twice. That is
+the shape developers report as "it's flaky" and never pin down.
+
+**Why it went unseen, which is the more useful half.** Two independent
+covers. `real_rust_analyzer_resolves_a_definition` is `#[ignore]`d by default
+for good reasons of its own (it waits on indexing; slow and load-sensitive),
+so it ran only on request. And `rust-analyzer` was not installed on the
+development machine at all, so the *other* LSP test —
+`spawns_and_initializes_a_real_language_server` — failed on a missing binary,
+which made `cargo test --workspace` permanently red and trained everyone
+reading it to skim the failure. A red suite is where a real regression hides:
+the missing-binary line and a genuine breakage render identically.
+
+Installing rust-analyzer turned the first test green *and* let the second run
+for the first time, which is what exposed this. The tempting fix at that
+point — `#[ignore]`-ing the failing test to get a green suite — would have
+buried a true signal twice over.
+
+**Scope of the retry, deliberately narrow.** `is_retriable` matches
+`ContentModified` alone and is its own function so that widening it is an
+edit to a documented rule. Every other `Rpc` code reports something about the
+request itself, where re-sending identical bytes can only reproduce the
+answer while hiding it behind a delay; `Closed` and `Io` will not heal on the
+same connection. Each attempt takes a fresh request id — the abandoned one
+has been answered and will never be answered again.
+
+**What is still untested:** the retry *loop*. The policy is pinned by unit
+tests and the end-to-end path by `real_rust_analyzer_resolves_a_definition`
+(1.7s, stable over three runs, previously failing at 0.6s), but there is no
+fake server in this crate, so nothing exercises the loop deterministically
+against a scripted `ContentModified`. Building one means a test-only LSP
+server binary; it is real coverage the crate does not have.
+
 **Progress (2026-08-29):** All four V0 built-ins (Read, Edit, shell,
 Explain) and the MCP bridge are implemented and tested — `053792a`,
 `bcf6209`, `6eb4f6d`, audit-fixed in `bb8acff`. Explain's LSP support is

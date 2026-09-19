@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::BufReader;
@@ -20,6 +21,41 @@ pub enum LspError {
     Rpc { code: i64, message: String },
     #[error("i/o error talking to language server: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// LSP's `ContentModified`. The server discarded a computation because its
+/// view of the content changed underneath it: the answer is gone, but the
+/// request was well-formed and the state that invalidated it is transient.
+/// The protocol's intent is that a client quietly asks again rather than
+/// reporting a failure — rust-analyzer returns this throughout startup and
+/// reindexing, which is exactly when a developer asks the first question of
+/// a session.
+const CONTENT_MODIFIED: i64 = -32801;
+
+/// How hard [`LspClient::request`] tries again after a `ContentModified`.
+/// Doubling from 100ms gives five attempts inside ~1.5s — long enough to
+/// ride out the churn of a reindex, short enough that a developer waiting
+/// on an answer does not conclude the tool has hung. A server that is
+/// *persistently* reindexing will still surface the error, which is
+/// correct: at that point it is information, not noise.
+const RETRY_ATTEMPTS: usize = 5;
+const RETRY_BACKOFF: Duration = Duration::from_millis(100);
+// `request`'s loop reads `attempt < RETRY_ATTEMPTS` to decide whether a
+// retry is left, so a budget of one would make the whole policy dead code
+// while still looking like one on the page.
+const _: () = assert!(RETRY_ATTEMPTS > 1, "a single attempt is not a retry policy");
+
+/// Whether a failed request is worth re-sending unchanged.
+///
+/// Deliberately the narrowest possible rule — `ContentModified` and nothing
+/// else. Every other `Rpc` code reports something about the request itself
+/// (a bad position, an unsupported method, a malformed param), and re-sending
+/// an identical request can only produce an identical error while hiding it
+/// behind a delay. Kept as its own function so the policy is testable, and
+/// so widening it is a deliberate edit to a documented rule rather than a
+/// tweak to a match arm.
+fn is_retriable(err: &LspError) -> bool {
+    matches!(err, LspError::Rpc { code: CONTENT_MODIFIED, .. })
 }
 
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, LspError>>>>>;
@@ -108,7 +144,37 @@ impl LspClient {
         Ok(())
     }
 
+    /// Sends one request and waits for its response, re-sending it while the
+    /// server answers `ContentModified` (see [`is_retriable`]).
+    ///
+    /// The retry lives here rather than in `explain.rs` because it is a
+    /// property of the protocol, not of any one caller: `ContentModified` is
+    /// the server telling the *client* to ask again. Before this, the error
+    /// travelled all the way out to the developer as a tool failure, so
+    /// asking a question while rust-analyzer was still indexing produced an
+    /// error that went away on its own if you asked twice.
+    ///
+    /// Each attempt takes a fresh request id — a retry is a new request, not
+    /// a re-await of the abandoned one, whose id the server has already
+    /// answered and will never answer again.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, LspError> {
+        let mut backoff = RETRY_BACKOFF;
+        for attempt in 1..=RETRY_ATTEMPTS {
+            let result = self.request_once(method, &params).await;
+            match &result {
+                Err(e) if is_retriable(e) && attempt < RETRY_ATTEMPTS => {}
+                _ => return result,
+            }
+            tokio::time::sleep(backoff).await;
+            backoff *= 2;
+        }
+        // `RETRY_ATTEMPTS` is a non-zero constant, so the loop either
+        // returned or slept its way to the final attempt, which returns
+        // unconditionally through the `_` arm above.
+        unreachable!("the final attempt returns rather than retrying")
+    }
+
+    async fn request_once(&self, method: &str, params: &Value) -> Result<Value, LspError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().expect("pending lock poisoned").insert(id, tx);
@@ -195,6 +261,44 @@ mod tests {
     /// the actual subprocess + stdio wiring, not just the framing logic
     /// already covered in `protocol.rs`. Doesn't wait on indexing (that's
     /// covered separately, and ignored by default — see `explain.rs`).
+    /// The retry rule, pinned at its own level because the loop that uses
+    /// it can only be exercised against a live server. Widening this is the
+    /// hazard: a client that silently re-sends every failed request turns a
+    /// deterministic error into a slow one and hides it from the developer
+    /// for as long as the backoff runs.
+    #[test]
+    fn only_content_modified_is_retried() {
+        assert!(is_retriable(&LspError::Rpc { code: CONTENT_MODIFIED, message: "content modified".into() }));
+
+        // Every other code says something about the request itself, so
+        // re-sending it unchanged can only reproduce the same answer.
+        for code in [-32700, -32600, -32601, -32602, -32603, -32802, -32803, 0, 1] {
+            let err = LspError::Rpc { code, message: "other".into() };
+            assert!(!is_retriable(&err), "code {code} must not be retried");
+        }
+
+        // Nor is anything that is not an `Rpc` answer at all: a dead server
+        // or a broken pipe will not heal by asking again on the same
+        // connection, and `spawn` is where that is recovered.
+        assert!(!is_retriable(&LspError::Closed));
+        assert!(!is_retriable(&LspError::Io(std::io::Error::other("broken pipe"))));
+    }
+
+    /// Five attempts at 100ms doubling is ~1.5s of waiting in the worst
+    /// case. Pinned because both halves matter and pull opposite ways: too
+    /// short and the retry does not outlast a reindex, too long and a
+    /// developer waiting on an answer concludes the tool has hung.
+    #[test]
+    fn the_retry_budget_stays_inside_a_second_and_a_half() {
+        let mut total = Duration::ZERO;
+        let mut backoff = RETRY_BACKOFF;
+        for _ in 1..RETRY_ATTEMPTS {
+            total += backoff;
+            backoff *= 2;
+        }
+        assert_eq!(total, Duration::from_millis(1500));
+    }
+
     #[tokio::test]
     async fn spawns_and_initializes_a_real_language_server() {
         let dir = tempfile::tempdir().unwrap();

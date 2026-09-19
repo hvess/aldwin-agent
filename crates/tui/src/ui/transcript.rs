@@ -37,8 +37,8 @@ use crate::log::{LogEntry, ToolActivityStatus};
 /// `TurnEnded` is folded into the status line's activity indicator instead
 /// of getting its own row), and a silent entry must not leave a blank one
 /// behind.
-fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
-    let rendered = render_entry(entry, ctx);
+fn block_rows(entry: &LogEntry, first: bool, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
+    let rendered = render_entry(entry, opens, ctx);
     if rendered.is_empty() {
         return Vec::new();
     }
@@ -54,10 +54,12 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
         // with no glyph in it at all — the tonal step off the transcript
         // ground is the whole separator.
         //
-        // Tool activity/retry/error/notice entries continue the current turn
-        // rather than starting a new one, so they only get the plain blank
-        // row a turn's own internal groups get.
-        if matches!(entry, LogEntry::UserMessage { .. } | LogEntry::AssistantText { .. }) {
+        // Retry/error/notice entries continue the current turn rather than
+        // starting a new one, so they only get the plain blank row a turn's
+        // own internal groups get — and so does an agent entry that follows
+        // another agent entry, a tool group answering the prose above it
+        // being one turn rather than two.
+        if opens {
             lines.push(Line::default());
             lines.push(band_row(ctx.pal.break_, ctx));
             lines.push(Line::default());
@@ -72,6 +74,37 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
     // input, which read as a plain duplicate of the same information. The
     // status line is now the one place live turn activity shows.
     lines
+}
+
+/// Whose turn an entry belongs to. Not every entry has one: a retry, an
+/// error and a notice all continue whatever turn is open rather than
+/// starting one, which is why this is an `Option` at every call site.
+///
+/// The agent's arm is the load-bearing half. A tool call used to render
+/// above the turn break rather than below it, so it was grouped into the
+/// *developer's* turn and its label column was empty — an unattributed row
+/// at cells 3–10. `4a` makes the tool group part of the agent's turn
+/// ("Agent prose is neutral-300. One blank row between prose and a tool
+/// group"), and in Mjolnir the call comes before the reply it produces, so
+/// it is the tool group that opens that turn and therefore carries its
+/// speaker label.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Speaker {
+    You,
+    Agent,
+}
+
+/// Which turn `entry` belongs to, or `None` if it continues whichever one
+/// is open.
+fn speaker(entry: &LogEntry) -> Option<Speaker> {
+    match entry {
+        LogEntry::UserMessage { .. } => Some(Speaker::You),
+        LogEntry::AssistantText { .. }
+        | LogEntry::ToolActivity { .. }
+        | LogEntry::ApprovalCard { .. }
+        | LogEntry::PermissionPrompt { .. } => Some(Speaker::Agent),
+        LogEntry::RetryAttempt { .. } | LogEntry::TurnEnded { .. } | LogEntry::Error { .. } | LogEntry::Notice { .. } => None,
+    }
 }
 
 /// The transcript's screen rows, kept **one log entry at a time**.
@@ -139,7 +172,29 @@ struct CachedBlock {
     /// other half of `block_rows`' input, and it can change without `entry`
     /// changing (an earlier entry falling silent), so it is part of the key.
     first: bool,
+    /// Whether it opened a new turn, which decides both its separator and
+    /// whether it carries a speaker label. Like `first` it depends on what
+    /// came before rather than on the entry itself, so it is part of the
+    /// key too.
+    opens: bool,
     rows:  Vec<Line<'static>>,
+}
+
+impl CachedBlock {
+    /// Rows this block spends separating itself from the one above: the
+    /// blank / break band / blank of a new turn, the single blank row of a
+    /// continuation, or nothing at all for the first block in the log.
+    ///
+    /// Known per block rather than recognised by looking at the rows, which
+    /// is what lets [`Transcript::viewport`] tell a turn break at the top
+    /// of the screen from an ordinary blank row inside a reply.
+    fn lead(&self) -> usize {
+        match (self.rows.is_empty() || self.first, self.opens) {
+            (true, _) => 0,
+            (false, true) => 3,
+            (false, false) => 1,
+        }
+    }
 }
 
 impl Transcript {
@@ -181,16 +236,25 @@ impl Transcript {
         self.blocks.truncate(app.log.len());
 
         let mut first = true;
+        // Whose turn is open. An entry that renders nothing leaves it
+        // alone, for the same reason it leaves `first` alone: a turn the
+        // screen never showed cannot be the one a label belongs to.
+        let mut open: Option<Speaker> = None;
         for (i, entry) in app.log.iter().enumerate() {
-            let hit = matches!(self.blocks.get(i), Some(b) if b.first == first && b.entry == *entry);
+            let speaker = speaker(entry);
+            let opens = speaker.is_some() && speaker != open;
+            let hit = matches!(self.blocks.get(i), Some(b) if b.first == first && b.opens == opens && b.entry == *entry);
             if !hit {
-                let block = CachedBlock { entry: entry.clone(), first, rows: block_rows(entry, first, ctx) };
+                let block = CachedBlock { entry: entry.clone(), first, opens, rows: block_rows(entry, first, opens, ctx) };
                 match self.blocks.get_mut(i) {
                     Some(slot) => *slot = block,
                     None => self.blocks.push(block),
                 }
             }
-            first &= self.blocks[i].rows.is_empty();
+            if !self.blocks[i].rows.is_empty() {
+                first = false;
+                open = speaker.or(open);
+            }
         }
 
         self.starts.clear();
@@ -209,6 +273,69 @@ impl Transcript {
             return self.hero.len();
         }
         self.starts.last().copied().unwrap_or(0)
+    }
+
+    /// The rows to *draw* for a viewport of `height` rows starting at
+    /// `offset` — [`Transcript::slice`] with one correction, and the
+    /// correction is the whole reason the method exists.
+    ///
+    /// A turn break belongs to the turn below it, so when the turn above
+    /// has scrolled off the top the band comes down anyway and separates
+    /// the frame's first content from nothing at all. Measured at 80×24,
+    /// where the transcript band is 16 rows and the conversation is 17: the
+    /// `you` turn's one row was cut, and the frame opened on a blank row, a
+    /// band, and another blank row — three of sixteen rows spent marking a
+    /// boundary between the agent's reply and the top of the screen.
+    ///
+    /// So a leading separator the viewport *starts inside* gives up its two
+    /// blank rows, and the rows that frees go to the turn above: the band
+    /// itself is redrawn directly under whatever of that turn fits. The
+    /// blanks are the separator's breathing room and the band is the
+    /// separator, so under pressure it is the breathing room that goes —
+    /// at 80×24 that is the difference between a frame showing the question
+    /// and its answer with a boundary between them, and a frame showing
+    /// three blank rows and an unattributed reply.
+    ///
+    /// When nothing of the turn above fits, the band goes too: a boundary
+    /// drawn against the top of the viewport separates the reply from
+    /// nothing at all, which is the defect this started as.
+    ///
+    /// Nothing here changes [`Transcript::len`] or the scroll offset — what
+    /// the viewport draws is not how long the conversation is. That is
+    /// deliberate: feeding it back into the row count would shorten the
+    /// transcript, un-scroll the turn it hid, and bring the band back on the
+    /// next frame, which is a flicker rather than a layout.
+    pub(crate) fn viewport(&self, offset: usize, height: usize) -> Vec<Line<'static>> {
+        let end = offset + height;
+        let Some((block, start)) = self.block_at(offset) else { return self.slice(offset, height) };
+        let lead = block.lead();
+        if offset >= start + lead {
+            return self.slice(offset, height);
+        }
+        // The block's own content, and everything after it.
+        let content = start + lead;
+        let mut rows = self.slice(content, end.saturating_sub(content));
+        // What the dropped separator freed, spent on the turn above and on
+        // the one row of it that is a boundary rather than a gap.
+        let free = height.saturating_sub(rows.len());
+        let above = free.saturating_sub(1).min(start);
+        if above == 0 {
+            return rows;
+        }
+        let mut out = self.slice(start - above, above);
+        // `lead == 3` is a turn break: blank, band, blank. A continuation's
+        // single blank row has no band in it to keep.
+        if lead == 3 {
+            out.push(block.rows[1].clone());
+        }
+        out.append(&mut rows);
+        out
+    }
+
+    /// The block `offset` falls in, and the row that block starts on.
+    fn block_at(&self, offset: usize) -> Option<(&CachedBlock, usize)> {
+        let i = self.starts.partition_point(|&s| s <= offset).saturating_sub(1);
+        Some((self.blocks.get(i)?, self.starts.get(i).copied().unwrap_or(0)))
     }
 
     /// The `count` rows starting at `offset`, or fewer at the end. Owned,
@@ -272,8 +399,13 @@ fn body_lines(spans: Vec<Span<'static>>, label: Option<(&str, Color)>, ctx: Ctx)
     with_label_column(wrap_line(Line::from(spans), ctx.body().width as usize), label)
 }
 
-fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
+/// `opens` says this entry is the first of its turn, which is what decides
+/// whether it carries a speaker label: `4a` puts the speaker on the label
+/// column's first row *of the turn*, so a reply that continues a turn its
+/// own tool group already opened does not repeat the word.
+fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
+    let label = |text: &'static str, color| opens.then_some((text, color));
     match entry {
         // `Turn.jsx`: the `you` label in `speaker-you` (accent-toned), the
         // `harness` label in `speaker-agent` (neutral) — content in `text`
@@ -293,9 +425,9 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             let style = Style::default().fg(pal.text);
             let content: Vec<Line<'static>> =
                 text.lines().flat_map(|l| wrap_line(Line::from(Span::styled(l.to_string(), style)), ctx.body().width as usize)).collect();
-            with_label_column(content, Some(("you", pal.speaker_you)))
+            with_label_column(content, label("you", pal.speaker_you))
         }
-        LogEntry::AssistantText { text } => with_label_column(render_assistant_text(text, ctx), Some(("harness", pal.speaker_agent))),
+        LogEntry::AssistantText { text } => with_label_column(render_assistant_text(text, ctx), label("harness", pal.speaker_agent)),
         // `ToolLine.jsx`: a status glyph, the tool name, a right-flush
         // result summary. `ToolActivityEntry` carries no separate target
         // path distinct from the tool's own name (unlike the reference's
@@ -356,7 +488,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                     justified_line(left, right, inner_width)
                 })
                 .collect();
-            with_label_column(content, None)
+            with_label_column(content, label("harness", pal.speaker_agent))
         }
         // No glyph and no dedicated "warning" colour — the design system
         // has neither, and its palette has nothing named for a transient
@@ -391,7 +523,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         LogEntry::PermissionPrompt { payload, resolution: Some(resolved), .. } => {
             let (kind, target) = payload_call(payload);
             let summary = Span::styled(resolved.label.clone(), Style::default().fg(if resolved.allowed { pal.dim } else { pal.del }));
-            with_label_column(vec![tool_line(&kind, &target, resolved.allowed, vec![summary], ctx)], None)
+            with_label_column(vec![tool_line(&kind, &target, resolved.allowed, vec![summary], ctx)], label("harness", pal.speaker_agent))
         }
         // An answered Edit gets the same tool line, over the diff it was
         // answering — `Turn.jsx`'s own `write src/gateway/limit.rs  +84`
@@ -407,7 +539,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             if *approved {
                 content.extend(diff::boxed(&body, diff::Budget { collapse_context: true, max_rows: None }, Row::field(pal.diff_box), ctx.body()));
             }
-            with_label_column(content, None)
+            with_label_column(content, label("harness", pal.speaker_agent))
         }
         LogEntry::ApprovalCard { resolution: None, .. } | LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
         LogEntry::TurnEnded { reason } => {

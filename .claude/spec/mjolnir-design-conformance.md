@@ -2,9 +2,11 @@
 
 The gap between what `crates/tui` draws and what `.claude/design/` specifies, as measured rather than as remembered — and the triage that decides which half of it is a bug.
 
-**Status:** active — the catalogue is complete and classified; the unblocked
-colour, spacing and content deviations are fixed (see the 2026-09-19 Progress
-entry), the layout and Class B/C work is not.
+**Status:** active — the catalogue is complete and classified; every Class A
+deviation that is not blocked on a Class B decision or an absent data source
+is now fixed (see the three 2026-09-19 Progress entries). What is left is the
+Class B/C work, which is a conversation and an upstream re-sync rather than a
+loop.
 **Scope:** conformance of the shipped TUI's rendering to the imported design
 system, for the twelve scenes in the screenshot catalogue at three sizes in
 both themes. Covers the deviations, the design debt they sit next to, and the
@@ -121,6 +123,61 @@ unmeasured: nobody has ever scored one unchanged run twice. Until someone
 does, a minimum's movement between runs cannot be read as signal. Cheap
 experiment: rescore `run-1789826989` with fresh judges and see how far 58
 moves on its own.
+
+**Progress (2026-09-19, the layout pass, scored):** Run `run-1789832849`,
+the whole catalogue, five captures and two scoring rounds. Final state:
+**preflight clear, all six gates clean on all 72 frames, regression clean**
+(76 sections moved, all in focus). Second scoring round, four fresh blind
+judges on the same splits: **minimum 56 spatial / 58 component against 90**,
+means 77.6 / 71.3 (from 75.4 / 67.8 on the first full run and 79.3 / 68.3 on
+the second), **zero frames at 90**. Below threshold; the loop may not stop.
+
+Built: Class A items 3 (the caret, second pass), 8, 9, 12, 14 and 15 — the
+whole unblocked half of Steps 6 and 7 — plus items 25, 26 and 27, all three
+of which this session created or exposed. The catalogue entries carry the
+measurements; three things belong here instead.
+
+**Two of the three new items are regressions from this session's own
+fixes**, and both were found by the harness rather than by a reader. Item 15's
+cap made the panel elide, which fired the `breakages` gate on an elision
+marker that had drawn `⋯` and an em dash since it was written (item 25) —
+neither in the closed table, neither exempted, and invisible through three
+clean runs because no frame had ever been short enough to elide. The same cap
+then made the panel elide *what it was asking about* (item 26), which a judge
+measured. Item 9's own fix put the hunk header on the code column (item 27),
+which a different judge measured. **The lesson is not "be more careful"** —
+each of the three was invisible to the author by construction. It is that a
+fix that changes what a frame *contains* changes which code paths a frame
+exercises, and the harness is the only thing that sees the second effect.
+
+**One classification was corrected in the other direction.** Item 12 named
+`--pane-commands-w` as the bound for first run's option list; 48 cells elides
+`claude models · ANTHROPIC_API_KEY`, the reference's own row, at the
+reference's own frame width. The list is sized by its content instead — and
+two independent judges then measured the `more` row's `→` against the
+handoff's "flush to the 3-cell right margin", which is the one thing the
+design states about that row's right edge. The arrow went back to the margin
+and the band stayed bounded by the list, so each half cites something; what
+the design does **not** state is how wide the list is, and that is now a
+Class B entry rather than a number invented twice.
+
+**A degradation rule emerged, and it is now used in two places.** At 80×24
+neither the transcript nor the permission panel can hold everything the
+design's 120×36 frame holds. Both now give up *spacing* before *structure*:
+a turn break drops its two blank rows and keeps its band (item 14), and the
+panel's options separator does the same. The alternative — dropping the whole
+separator — is what a judge scored as "the panel's facts run straight into
+its option list", and dropping the content instead is what item 26 was.
+
+Where the remaining gap is, from 72 frames of judging: the permission panel
+has no key/value table and no recessed field (Class B item 2 and item 5, with
+Class A items 4, 16, 17 and 18 downstream of them); the top bar has no gauge,
+no cost and no branch (Class B item 6); the light ladder collapses the diff
+box against the panel ground at 1.01:1 (Class C item 2, measured again in
+three approval frames); and nothing caps the measure at 200 columns (Class C
+item 3). **None of those is reachable by writing Rust**, which is the same
+conclusion the previous pass reached, now with a second set of judges and a
+third run behind it.
 
 ## Why
 
@@ -248,6 +305,18 @@ column in the PNGs.
    (open-tasks entry 5), caught here by eye. Independent of the separate
    question of whether a `▌` should be drawn at all, which is Class B below.
 
+   **Fixed 2026-09-19 (second pass).** The first fix moved the placeholder
+   two cells right and left the caret as the terminal's own cursor, which
+   three judges then scored as a lone hollow `#ffffff` box. The caret is now
+   drawn — `14d` specifies exactly this: "`▶  ▌` (both `--t-mark`)" — and
+   nothing calls `set_cursor_position` any more, so the terminal's own
+   cursor stays hidden across the whole app as it already did on first run.
+   One cell of the composer's column is reserved for it
+   (`chrome::CARET_LEN`): a row filled to its last character had nowhere to
+   put the glyph, and ratatui would have clipped it at the rect's edge — the
+   same two-groups-sized-independently trap as item 24. Mid-draft the caret
+   takes the cell of the character it sits on, the way a block cursor does.
+
 4. **The decision panel does not use `OPTION_LABEL_COL`.** 30 frames
    (`approval`, `approval_large`, `prompt`, `prompt_path`, `prompt_scoped`).
    `ui/grid.rs:46` defines the 16-cell option name field and its comment says
@@ -298,6 +367,15 @@ column in the PNGs.
    turn and its label column is empty; `4a` makes the tool group part of the
    agent's turn. Visible as an unattributed row at cells 3–10.
 
+   **Fixed 2026-09-19.** The transcript now tracks whose turn is open
+   (`transcript::Speaker`) rather than deciding the separator from the entry
+   type alone: a tool group, an approval card and a resolved prompt all
+   belong to the agent, so the first of them opens the agent's turn, takes
+   the break band above it, and carries the `harness` label. The reply that
+   follows continues that turn — one label per turn, which is what `4a`
+   draws ("the speaker on the label column's first row"); the alternative
+   would have repeated `harness` twice inside one turn with no band between.
+
 9. **A fenced diff block is run through the inline-diff numbering.** 12 frames
    (`fenced_diff`, `long`). `ui/diff.rs:64` states that
    `mjolnir_tools::diff::unified` emits no `@@` header, "so there's no
@@ -311,6 +389,18 @@ column in the PNGs.
    `--tui-dim`, the same tone as the gutter, where the inline diff's header
    role is `--tui-hunk-header`. **The fix is not a colour**; it is that two
    different surfaces are sharing one numbering path.
+
+   **Fixed 2026-09-19.** `diff::Kind` gained a `Hunk` variant, so a `@@`
+   line is a header rather than a line of the file: no gutter number, no
+   sign, `--tui-hunk-header` (the role `5b` names for exactly this row), and
+   it anchors the counters — `@@ -12,7 +12,9 @@` makes the rows under it
+   read 12, 13, 12, 13, 14, 15 where they read 1, 2, 3, 2, 3, 4. A header
+   that does not parse leaves the counters where they were, because a wrong
+   absolute number is worse than a continued relative one; a diff with no
+   header still numbers from 1, which is what the widget's *other* surface —
+   the Edit approval card — always gets, since `mjolnir_tools::diff::unified`
+   emits no header at all. `collapse_context` keeps a header without
+   anchoring two rows of context around it.
 
 10. **Diff context rows render code at `--tui-context`.** 12 frames.
     ~~Class A~~ — **reclassified 2026-09-19 to a live disagreement.** The
@@ -351,6 +441,18 @@ column in the PNGs.
     list) is bounded by `--pane-commands-w`. The `more →` affordance on row 15
     has the same cause and is 127 cells from its own label at large.
 
+    **Fixed 2026-09-19, and not with `--pane-commands-w`.** The list is
+    sized by its own widest row (`first_run::option_rows`), clamped to what
+    the frame can give. `5c`'s 48 cells were measured against this list's
+    own copy first, and they do not fit it: `anthropic` plus `claude models
+    · ANTHROPIC_API_KEY` needs 52 cells, and the detail column it hangs on
+    starts at cell 48 — so a 48-cell list elides the *reference's* own row
+    at the reference's own frame width. Measured after: the band runs
+    29..80 at both 120 and 200 columns, clamping to 29..77 at 80, with the
+    `→` at the list's right edge rather than the frame's. This is the
+    catalogue's one classification correction from this pass: the deviation
+    was real, the analogue named for it was not.
+
 13. **`first_run` renders the cwd one rung quieter than every other screen.**
     6 frames. `#9a95a4` (`--tui-dim`) there against `#c9c5d2` (`--tui-quiet`)
     in `empty` and `conversation`, for the identical string; light mirrors it.
@@ -365,12 +467,44 @@ column in the PNGs.
     and dropping the band with the turn it belongs to is what recovers it.
     **This is open-tasks entry 3**, now with the row arithmetic.
 
+    **Fixed 2026-09-19**, and the fix is narrower than that second sentence
+    assumed. `Transcript::viewport` drops a leading separator the viewport
+    *starts inside*, whichever of its three rows the offset landed on. It
+    does **not** backfill the freed rows with the turn above: at 80×24 the
+    conversation is 17 rows against a 16-row band, so showing the `you` turn
+    again means showing it directly against the agent's reply with no break
+    between them — the same boundary lost from the other side. The rows stay
+    blank, which is how the transcript's bottom anchoring already draws
+    them. Nor does it change `Transcript::len` or the scroll offset: feeding
+    the drop back into the row count would shorten the transcript, un-scroll
+    the turn it hid, and bring the band back on the next frame, which is a
+    flicker rather than a layout.
+
 15. **At 80×24 the approval panel leaves one row of transcript.**
     2 frames (`approval_large-small-*`). Panel occupies rows 4–23, 83% of the
     frame; the transcript band is `rows 3..3`, holding a dimmed tool-call row
     with the `you` turn clipped away entirely. `5a`'s stated reason for being
     a bottom panel rather than a modal is that "the transcript above stays in
     place at 35%".
+
+    **Fixed 2026-09-19.** `decision::max_height` reserves a quarter of the
+    frame for the log, floored at 5 rows, where it used to reserve one row
+    flat. At 80×24 that is 6 rows of transcript against a 15-row panel (it
+    was 1 against 20); at 200×50 the proportion is what stops the same
+    defect reappearing in the large size, where a 5-row floor alone would
+    still allow 84%.
+
+    Two things this cost, both deliberate. The panel's own content elides
+    sooner — at 80×24 `approval` shows one row of its diff under a `5 more
+    lines not shown` marker — and that is the trade `5a` asks for, since the
+    transcript is *why* this is a panel rather than a modal. And the cap is
+    a quarter rather than the design's own half (`--panel-permission-h` is
+    18 rows of 36) because Mjolnir's panel is not `5a`'s: ADR 0001 puts five
+    options on it and adds the grant-summary and `Tab` rows, so its full
+    content wants around 20 rows where the reference wants 18. Capping at
+    half elided the *command block* — the one row saying what is being
+    approved — while keeping the options list, which is the wrong trade in
+    both directions.
 
 16. **The permission panel ignores the frame's own columns.** 30 frames. No
     content inside the panel sits at cell 13: the target value lands at cell 9
@@ -453,6 +587,87 @@ column in the PNGs.
     cannot see text truncated with a well-formed ellipsis (open-tasks entry
     5); it equally cannot see text truncated *without* one when the clip
     happens at the frame boundary.
+
+25. **An elision marker draws two glyphs the system does not have.** 8 frames
+    (`approval_large-small-*`, `prompt*-small-*`), and **found by the
+    `breakages` gate rather than by a judge** — the first finding in this
+    catalogue a gate reported. Every row the panel and the diff box use to
+    say what they left out was built as `⋯ 3 unchanged lines ⋯` (U+22EF, the
+    midline horizontal ellipsis) and, in the panel's own version, with an
+    em dash: `⋯ 4 more lines not shown — deciding doesn't require scrolling
+    them ⋯`. Neither glyph is in the closed table (`▌ ● ◐ ○ ✔ ▶ █ + -`), and
+    neither is among the typographic marks `baseline.json` exempts — those
+    are the ones the design's own screens use (`· … ⏎ ↑↓ ← →`), and U+22EF is
+    not U+2026.
+
+    It had been latent since the marker was written: the gates only saw it
+    once item 15's cap made the panel elide at 80×24, which is the same
+    lesson as item 24 from the other side — **a gate that never fires is not
+    the same as a rule that holds.** Nothing about the marker changed except
+    the frames it appeared in.
+
+    **Fixed 2026-09-19.** Both marks are gone rather than exempted: adding a
+    baseline entry is a conversation with the developer, not a step in the
+    loop, and there was nothing to have that conversation about. The
+    reference writes exactly this row as plain prose — `81 more lines` in
+    `4a`, `73 more added lines below` in `5b` — with an empty gutter beside
+    it doing the work of saying it is not a line of the file. So the rows now
+    read `3 unchanged lines`, `5 more lines not shown`, and `4 more lines not
+    shown; deciding doesn't require scrolling them`.
+
+26. **The panel elided what it was asking about.** 6 frames
+    (`prompt*-small-*`), and a **regression from item 15's own fix**: the
+    tighter budget made `clamp_panel` bite, and what it cut was the card's
+    target row, because the clamp protected two head rows (the card's blank
+    and its sentence) and the whole tail. So the panel read `The agent wants
+    to read a file.` over a truncation notice, with nothing on screen saying
+    *which* file, above five options offering to save a rule about it. A
+    judge caught it in the same pass that scored item 15's fix.
+
+    **Fixed 2026-09-19.** The head is now the whole prompt card, passed
+    explicitly rather than assumed to be two rows, and the grant summary and
+    `Tab` row moved out of the protected tail into the clampable middle. The
+    order that falls out is the right one: what the agent wants, then how to
+    answer it, then the rule a saved answer would write. The options rule
+    (blank / recessed band / blank) joined the middle too — it is a
+    boundary, not content, and on a frame that cannot hold everything it is
+    the cheapest row to lose. The head is bounded by what the tail leaves,
+    so a head too big for the budget elides itself rather than pushing the
+    options list off the bottom of the frame, which is what `clamp_panel`'s
+    own history warns about.
+
+    Measured at 52×20, where this was worst: the panel had been pushing the
+    **top bar off the frame** and losing the footer; it now draws the bar,
+    the `you` turn, the sentence, the target and all five options with the
+    footer intact.
+
+27. **The hunk header hung on the code column.** 12 frames, and a
+    **regression from item 9's own fix** in the same pass: the header was
+    rendered through the row builder with an empty gutter and an empty sign
+    field, which put it at cell 20 — the *code* column. `5b` draws
+    `@@ -0,0 +1,84 @@ impl RateLimit` at the pane's left edge, and the code
+    column is reserved for the trailing "N more lines" note, which hangs
+    there because it stands in for code. A judge measured it at cell 20
+    against a field edge of 13. **Fixed 2026-09-19**: a header takes neither
+    the gutter nor the sign column.
+
+28. **The empty state's status row is not `14d`'s copy.** 6 frames. `14d`
+    specifies `ready` left and `^d closes` right; the app draws `idle` and
+    `^c to exit`. **Half of this is not a deviation to fix**: `^c` is the key
+    Mjolnir actually binds, and a hint naming a key that does nothing is
+    worse than one that disagrees with the reference. `idle` against `ready`
+    is a live copy question — `idle` is the app's own activity vocabulary
+    (`idle`/`thinking`/`working`) and `ready` is the design's word for the
+    same state on the one screen that names it. Decide it rather than
+    silently keeping either.
+
+29. **A tool line's summary is the file's first line, not a fact about it.**
+    12 frames. The right-flush slot holds `// the dispatcher` where `4a`
+    shows `412 lines` / `7 hits in 3 files`. `log::summarise` takes the
+    first line of the tool result, which is the right shape for a shell
+    command and the wrong one for a read. Same family as item 7's deferred
+    half: the row's *columns* are correct and its *content* comes from
+    somewhere else. Not a rendering fix.
 
 ## Class B — design debt
 
@@ -587,7 +802,14 @@ spending their attention on closed questions.
    *diff*. An access tier painted in it reads as a deleted line, and in the
    light theme it is the most saturated thing in a deliberately shallow frame.
 
-3. **The option row's mark and number inside the 3-cell margin.** Already a
+3. **The footer's right-flush provenance note.** `5a` ends its footer with
+   `saved to .harness/permissions.toml`; Mjolnir's footer ends at the key
+   hints. `decision.rs` removed it deliberately: it was true of exactly one
+   of the five tiers on offer, and "allow once" and "allow for this session"
+   save nothing at all. Two judges have now scored the empty right half of
+   that row as a defect. The reasoning is sound and the record is missing.
+
+4. **The option row's mark and number inside the 3-cell margin.** Already a
    baseline entry for the `layout` gate, cited to `5a`. Listed here because it
    is the model the other entries should copy: scope named, authority cited,
    and an explicit boundary ("Scoped to the left margin only: nothing licences
@@ -629,25 +851,44 @@ spending their attention on closed questions.
    looked at as a whole rather than rung by rung, and C3 wants a measure token.
    Read the `design-sync` skill before any `DesignSync` call.
 
-4. **Fix the colour and tone deviations.** Class A items 2, 5, 10, 11 and the
+4. **Done 2026-09-19. Fix the colour and tone deviations.** Class A items 2, 5, 10, 11 and the
    `--tui-del` half of undeclared exemption 2. These are role changes with no
    layout consequence, they are the cheapest thing in the spec, and item 5 in
    particular is one token against a measured 2.62:1.
 
-5. **Fix the spacing and column deviations.** Class A items 1, 4, 7, 11, 13,
-   17, 20, 21. Item 4 waits on Step 2.
+5. **Done 2026-09-19 except items 4 and 17**, which wait on Step 2. **Fix
+   the spacing and column deviations.** Class A items 1, 4, 7, 11, 13, 17,
+   20, 21.
 
-6. **Fix the composer cursor collision.** Class A item 3, independent of the
-   Class B placeholder decision — whatever the composer draws, two things must
-   not claim cell 6.
+6. **Done 2026-09-19, in two passes. Fix the composer cursor collision.**
+   Class A item 3, independent of the Class B placeholder decision — whatever
+   the composer draws, two things must not claim cell 6. The first pass moved
+   the placeholder and left the hardware cursor; the second drew the caret
+   and hid the cursor, which is what `14d` specified all along.
 
-7. **Fix the layout deviations.** Class A items 8, 12, 14, 15, 16, 19, 22.
-   Item 16 waits on Step 2; item 22 wants its "unbuilt, not decided against"
-   reading confirmed first.
+7. **Items 8, 12, 14 and 15 done 2026-09-19. Fix the layout deviations.**
+   Class A items 8, 12, 14, 15, 16, 19, 22. Item 16 waits on Step 2. **Items
+   19 and 22 are both a data question rather than a layout one**, which is
+   the finding from attempting this step:
+
+   * 19 (a blocked call drawn as running) needs the TUI to match activity
+     entries against `app.pending_approvals` at render time, and the
+     transcript's row cache is keyed on the log entry alone — so the key has
+     to carry which of this entry's calls are blocked, or the glyph will be
+     stale for exactly as long as the decision is open.
+   * 22 (the timestamp row) has **no clock anywhere in the workspace**: no
+     `LogEntry` carries a time, no crate depends on `chrono`, `time` or
+     `jiff`, and local wall-clock time is not reachable from `std` alone. So
+     it is a dependency decision plus a log-format change plus a fixture pin
+     in `render.snap`, on evidence that is half-superseded (`HANDOFF.md:257`
+     also states the 12-cell label column Turn 13 replaced). It belongs with
+     Class B item 6, the branch: a data source that does not exist, not a
+     rendering defect.
 
 8. **Cap the measure.** Class A item 6, once C3 gives it a value to cap to.
 
-9. **Re-run the full catalogue and rescore.** The loop has never iterated
+9. **Run three of three done (`run-1789826989`, `run-1789829088`,
+   `run-1789832849`). Re-run the full catalogue and rescore.** The loop has never iterated
    (open-tasks entry 10), so this is also the first real exercise of the fix
    half of the harness. Expect the minimum to move in steps rather than
    smoothly: it is a minimum across 72 frames, so it only rises when the *worst*
@@ -662,6 +903,26 @@ spending their attention on closed questions.
 - **Reading a clean gate run as design conformance.** 72 frames, zero
   violations, minimum 58. The gates read declared cells and declared colours;
   nothing in them is a judgement about whether a band is in the right place.
+- **Taking a stated number for the right number without measuring it against
+  the copy it has to hold.** Item 12's entry named `--pane-commands-w` as the
+  bound for first run's option list; 48 cells elides `claude models ·
+  ANTHROPIC_API_KEY`, which is the reference's own row, at the reference's own
+  120-cell frame. The catalogue is measurements, and a measurement cited from
+  a *different* screen is a reading, not a measurement.
+- **Scoring a frame for a state the capture script put it in.** A judge read
+  `prompt_scoped`'s banded row as the product pre-arming `Always allow` — the
+  broadest grant — under a default-deny prompt. It is not: `App`'s
+  `decision_selected` starts at 0 and that scene's key script presses `Down`
+  three times (`Tab` does not take effect through injected input, which the
+  screenshot skill discloses). The frame is honest about what it shows and
+  says nothing about the default, so a judge brief for these scenes has to
+  say which selection is scripted.
+- **Assuming a gate that has never fired is a rule that holds.** The elision
+  marker drew `⋯` and `—` — neither in the closed table, neither exempted —
+  from the day it was written, through three clean runs, because no frame had
+  ever been short enough to elide. Item 15's cap made eight frames elide and
+  the gate fired immediately. A clean gate run is evidence about the frames
+  that were captured, not about the code that drew them.
 - **Ranking across classes by frame count.** It puts "drop the version" —
   which is a live design disagreement, not a bug — above every real defect,
   because it happens to touch 66 frames. Order within a class, never across.

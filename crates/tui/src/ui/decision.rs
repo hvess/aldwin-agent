@@ -22,13 +22,33 @@ use crate::app::{App, GrantSummary, GrantUnit, PatternScope, PendingFront};
 use crate::palette::Palette;
 
 /// Maximum rows the panel is allowed to claim, derived from the frame's
-/// total height rather than fixed — reserves room for at least one row of
-/// the conversation log and the bars above and below it, so an unusually
-/// large diff can never push the rest of the UI off-frame the way an
-/// unbounded `Constraint::Length` could. Floors at 6 (enough for a short
+/// total height rather than fixed — so an unusually large diff can never
+/// push the rest of the UI off-frame the way an unbounded
+/// `Constraint::Length` could. Floors at 6 (enough for a short
 /// title/keys/padding-only panel) even on a terminal too short to honour
 /// the reservation in full — a degenerate case, not one worth failing
 /// gracefully out of.
+///
+/// **The conversation keeps a quarter of the frame.** `5a`'s stated reason
+/// for being a bottom panel rather than a modal is that "the transcript
+/// above stays in place" — the developer answers a permission prompt by
+/// reading what led to it. Reserving a single row for the log honoured the
+/// letter of that and lost the point: measured at 80×24, the panel ran rows
+/// 4–23, **83% of the frame**, over a transcript band of `rows 3..3`
+/// holding one dimmed tool-call row with the `you` turn clipped away
+/// entirely. What the developer was being asked to approve was on screen;
+/// what it was asked *about* was not.
+///
+/// A quarter rather than the design's own half (`--panel-permission-h` is
+/// 18 rows of 36) because Mjolnir's panel is not `5a`'s: ADR 0001 puts five
+/// options on it where the reference has four, and adds the grant-summary
+/// and `Tab` scope rows, so its full content needs around 20 rows where the
+/// reference needs 18. Capping at half the frame is the number the design
+/// states, and it elides the *command block* — the one row that says what
+/// is being approved — while keeping the options list, which is the wrong
+/// trade in both directions. The floor of 5 rows is what the log needs to
+/// carry a turn and the break above it on a frame too short for a quarter
+/// to reach that.
 pub(super) fn max_height(frame_height: u16) -> usize {
     // While a decision is pending the panel *is* the bottom bar — it takes
     // the composer's and status line's rows rather than stacking above
@@ -36,13 +56,18 @@ pub(super) fn max_height(frame_height: u16) -> usize {
     // The top bar's rule row and the panel's own edge row are both gone —
     // neither the bar nor the panel is stroked any more, so neither spends
     // a row on an edge.
-    const RESERVED_FOR_REST_OF_UI: u16 = 3 /* top bar */ + 1 /* one row of log */;
+    const TOP_BAR: u16 = 3;
+    /// Rows of conversation the panel may never take: enough for a turn and
+    /// the break band above it, so the frame still says what the decision
+    /// is about.
+    const LOG_MIN: u16 = 5;
     // [`panel_lines`] adds the band's row and the footer's rows *outside*
     // the budget this bounds (see there for why) — reserved here too, so
     // the combined total still fits the same overall budget, not just the
     // clamped body alone.
     const PANEL_CHROME: u16 = 1 /* band */ + 2 /* footer padding + hint */;
-    (frame_height.saturating_sub(RESERVED_FOR_REST_OF_UI + PANEL_CHROME) as usize).max(6)
+    let log = LOG_MIN.max(frame_height / 4);
+    (frame_height.saturating_sub(TOP_BAR + log + PANEL_CHROME) as usize).max(6)
 }
 
 /// Wrapped-row count of `lines` at `width`, measured with the same
@@ -186,7 +211,7 @@ fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<us
         // already too cramped to spare a second one, and a note that wraps
         // is a note `clamp_panel` then has to throw away.
         let hidden = body.len();
-        lines.extend(card.text(&format!("⋯ {hidden} diff line{} not shown ⋯", if hidden == 1 { "" } else { "s" }), pal.dim, ctx));
+        lines.extend(card.text(&format!("{hidden} diff line{} not shown", if hidden == 1 { "" } else { "s" }), pal.dim, ctx));
     } else {
         let budget = diff::Budget { collapse_context: true, max_rows: room };
         lines.extend(diff::boxed(&body, budget, Row::field(pal.diff_box).inset(MARGIN_X, pal.bar), ctx));
@@ -445,7 +470,20 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // recessed tone" — a band that sinks below the panel rather than a line
     // drawn across it. Shared by both arms below, since every payload
     // kind's options list gets the same separator ahead of it.
-    let options_rule = || vec![card.blank(ctx), band_row(pal.recess, ctx), card.blank(ctx)];
+    // Under pressure it gives up its two blank rows and keeps the band: the
+    // blanks are the separator's breathing room, the band *is* the
+    // separator, and a panel whose facts run straight into its option list
+    // has lost a boundary the design draws. Same degradation as the
+    // transcript's turn break (`transcript::Transcript::viewport`), for the
+    // same reason — a frame shorter than the design's 36 rows has to give
+    // something up, and spacing is cheaper than structure.
+    let options_rule = |tight: bool| {
+        if tight {
+            vec![band_row(pal.recess, ctx)]
+        } else {
+            vec![card.blank(ctx), band_row(pal.recess, ctx), card.blank(ctx)]
+        }
+    };
     let queue_note = |queued: usize| -> Vec<Line<'static>> {
         if queued > 1 {
             card.text(&format!("(+{} more pending)", queued - 1), pal.dim, ctx)
@@ -455,9 +493,11 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     };
     let budget = max_height(frame_height);
 
-    let (body, badge_text, tail) = match app.pending_front() {
+    // `head` is the rows at the top of the body that must survive whatever
+    // the budget does — see [`clamp_panel`].
+    let (body, badge_text, tail, head) = match app.pending_front() {
         PendingFront::Approval(pending) => {
-            let mut tail = options_rule();
+            let mut tail = options_rule(false);
             tail.extend(option_rows(&rows, app.decision_selected, ctx));
             tail.extend(queue_note(app.pending_approvals.len()));
             // Everything the budget has left once the tail is reserved goes
@@ -465,27 +505,44 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             // is what keeps `clamp_panel` below from ever having to cut
             // into the box and leave it unclosed.
             let card_rows = budget.saturating_sub(tail.len());
-            (approval_card(&pending.diff, Vec::new(), Some(card_rows), ctx), "edit".to_string(), tail)
+            // Two rows: the card's blank and its `edit src/…` tool line.
+            // The diff box under them is already budgeted against
+            // `card_rows` and elides itself from the inside, with its own
+            // marker row, so there is nothing here for the clamp to do.
+            (approval_card(&pending.diff, Vec::new(), Some(card_rows), ctx), "edit".to_string(), tail, 2)
         }
         PendingFront::Prompt(pending) => {
             // Present for every Tool prompt (its second line, the Tab
             // toggle, only when the target has an enclosing directory to
             // broaden to); absent for a ContextFile prompt, which persists
             // a path rather than a grant pattern and has no rule to state.
-            let mut tail: Vec<Line<'static>> = match app.decision_grant() {
-                // Its own padding row above: the rule restates the target
-                // the card body just showed, so without a break the two sit
-                // as adjacent near-identical rows ("read: ./x.rs" directly
-                // over "…adds the rule  read:./x.rs") and read as a stutter
-                // rather than as a statement about what happens next.
+            // The grant summary and the `Tab` scope row sit *between* the
+            // protected head and the protected tail, so they are what a
+            // short frame elides. That is the right order of the three:
+            // what the agent wants (the head), how to answer (the tail),
+            // then the rule a saved answer would write.
+            //
+            // Its own padding row above: the rule restates the target the
+            // card body just showed, so without a break the two sit as
+            // adjacent near-identical rows ("read: ./x.rs" directly over
+            // "…adds the rule  read:./x.rs") and read as a stutter rather
+            // than as a statement about what happens next.
+            let middle: Vec<Line<'static>> = match app.decision_grant() {
                 Some(grant) => std::iter::once(card.blank(ctx)).chain(grant_lines(&grant).iter().flat_map(|line| card.text(line, pal.dim, ctx))).collect(),
                 None => Vec::new(),
             };
-            tail.extend(options_rule());
-            tail.extend(option_rows(&rows, app.decision_selected, ctx));
-            tail.extend(queue_note(app.pending_prompts.len()));
             let view = PromptView::of(&pending.payload);
-            (prompt_card(&pending.payload, Vec::new(), ctx), view.badge, tail)
+            let mut body = prompt_card(&pending.payload, Vec::new(), ctx);
+            let head = body.len();
+            let options = option_rows(&rows, app.decision_selected, ctx);
+            // Measured before anything is built: the rule keeps its blank
+            // rows only if the whole panel fits with them.
+            let tight = head + middle.len() + 3 + options.len() > budget;
+            let mut tail = options_rule(tight);
+            tail.extend(options);
+            tail.extend(queue_note(app.pending_prompts.len()));
+            body.extend(middle);
+            (body, view.badge, tail, head)
         }
         PendingFront::None => return Vec::new(),
     };
@@ -496,7 +553,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     let mut clampable = body;
     let tail_len = tail.len();
     clampable.extend(tail);
-    let clamped = clamp_panel(clampable, budget, tail_len, ctx);
+    let clamped = clamp_panel(clampable, budget, head, tail_len, ctx);
 
     let mut lines = vec![band("permission", &badge_text, ctx)];
     lines.extend(clamped);
@@ -530,14 +587,23 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
 /// can be anywhere from 2 rows (Approve/Deny) to 8 (a Tool prompt's four
 /// tiers × allow/deny): a fixed guess would either truncate real options
 /// away or protect rows that aren't the list.
-fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, ctx: Ctx) -> Vec<Line<'static>> {
-    const HEAD: usize = 2;
+fn clamp_panel(lines: Vec<Line<'static>>, max: usize, head: usize, tail: usize, ctx: Ctx) -> Vec<Line<'static>> {
     if lines.len() <= max {
         return lines;
     }
     let mut lines = lines;
     let tail_lines = lines.split_off(lines.len().saturating_sub(tail));
-    let head_lines: Vec<_> = lines.drain(..HEAD.min(lines.len())).collect();
+    // The head is protected like the tail, and for the same reason: a
+    // permission panel that elides *what it is asking about* is worse than
+    // one that elides the rule it would write. It used to be two rows flat
+    // — the card's blank and its sentence — so on a short frame the row
+    // naming the file or the command was the first thing to go, and the
+    // panel read `The agent wants to read a file.` over a truncation
+    // notice, with nothing on screen saying which file. Bounded by what is
+    // left after the tail, so a head too large for the budget elides itself
+    // rather than pushing the options list off the bottom of the frame.
+    let head = head.min(max.saturating_sub(tail)).min(lines.len());
+    let head_lines: Vec<_> = lines.drain(..head).collect();
     // `keep` is found by shrinking until head + kept body + the marker
     // actually fit in `max`, re-measuring the marker on every attempt —
     // regression fix: this used to assume the marker was always exactly one
@@ -559,7 +625,7 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, tail: usize, ctx: Ctx) -> 
         let marker: Vec<Line<'static>> = if hidden == 0 {
             Vec::new()
         } else {
-            card.text(&format!("⋯ {hidden} more line{} not shown — deciding doesn't require scrolling them ⋯", if hidden == 1 { "" } else { "s" }), ctx.pal.dim, ctx)
+            card.text(&format!("{hidden} more line{} not shown; deciding doesn't require scrolling them", if hidden == 1 { "" } else { "s" }), ctx.pal.dim, ctx)
         };
         if keep == 0 || head_lines.len() + keep + marker.len() + tail_lines.len() <= max {
             let mut out = head_lines;

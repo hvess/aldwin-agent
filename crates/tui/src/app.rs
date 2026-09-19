@@ -569,12 +569,15 @@ impl App {
         self.transcript.len()
     }
 
-    /// The `count` screen rows starting at `offset` — what `ui::draw` hands
-    /// to the log panel, and all it ever needs: the viewport, not the
-    /// conversation.
+    /// The screen rows to draw for a `count`-row viewport starting at
+    /// `offset` — what `ui::draw` hands to the log panel, and all it ever
+    /// needs: the viewport, not the conversation. Fewer than `count` rows
+    /// when the viewport opens inside a turn break (see
+    /// `Transcript::viewport`); the log panel's own bottom anchoring pads
+    /// the difference.
     pub fn transcript_slice(&mut self, offset: usize, count: usize) -> Vec<ratatui::text::Line<'static>> {
         self.sync_transcript();
-        self.transcript.slice(offset, count)
+        self.transcript.viewport(offset, count)
     }
 
     /// Brings the row cache up to date with the log at the current render

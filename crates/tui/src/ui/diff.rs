@@ -17,6 +17,14 @@ pub(super) enum Kind {
     Context,
     Added,
     Removed,
+    /// A `@@ -a,b +c,d @@` hunk header. Never produced by
+    /// `mjolnir_tools::diff::unified`, which emits no header at all — this
+    /// is a diff the *model* wrote inside a ```diff fence, where the header
+    /// is ordinary text in the reply and carries the only absolute line
+    /// numbers there are. It used to fall through to `Context`, which drew
+    /// it as a line of the file, gave it a gutter number, and numbered
+    /// everything under it from 1 as though the header were not there.
+    Hunk,
 }
 
 /// One diff body line plus the line number(s) it carries on each side of
@@ -48,6 +56,8 @@ pub(super) fn parse_body(diff: &str) -> (Option<String>, Vec<(Kind, String)>) {
             path.get_or_insert_with(|| rest.to_string());
         } else if line.starts_with("+++ ") {
             // Same path as the "---" line — nothing new to show.
+        } else if line.starts_with("@@") {
+            body.push((Kind::Hunk, line.to_string()));
         } else if let Some(rest) = line.strip_prefix('+') {
             body.push((Kind::Added, rest.to_string()));
         } else if let Some(rest) = line.strip_prefix('-') {
@@ -61,23 +71,40 @@ pub(super) fn parse_body(diff: &str) -> (Option<String>, Vec<(Kind, String)>) {
 
 /// Assigns old-file/new-file line numbers to a parsed diff body — per
 /// explicit developer feedback that diffs rendered with no line numbers at
-/// all. `mjolnir_tools::diff::unified` emits no `@@ -a,b +c,d @@` hunk
-/// header (it diffs a single already-replaced hunk, not a whole file), so
-/// there's no absolute file offset to anchor on — these are relative to the
-/// start of the shown diff, numbered from 1 on each side, the same
-/// convention a hunk header's own numbers use relative to itself. Context
-/// lines advance both counters (they exist on both sides); removed lines
-/// only the old counter; added lines only the new one — mirroring the
-/// two-column gutter GitHub and most diff UIs show.
+/// all. Context lines advance both counters (they exist on both sides);
+/// removed lines only the old counter; added lines only the new one —
+/// mirroring the two-column gutter GitHub and most diff UIs show.
+///
+/// Where the counters *start* depends on what the diff carries.
+/// `mjolnir_tools::diff::unified` emits no `@@ -a,b +c,d @@` header (it
+/// diffs a single already-replaced hunk, not a whole file), so there is no
+/// absolute file offset to anchor on and the numbers are relative to the
+/// start of the shown diff, from 1 on each side — the same convention a
+/// hunk header's own numbers use relative to itself.
+///
+/// A ```diff fence in assistant prose is a different surface sharing this
+/// one path, and it often does carry a header. Then the header's own
+/// offsets anchor the counters, and each subsequent header re-anchors them,
+/// so the gutter reads the file's line numbers rather than a count of the
+/// rows on screen. Without this the `fenced_diff` scene numbered a seven-
+/// line hunk `1, 2, 3, 2, 3, 4, 5` under a header claiming line 12.
 pub(super) fn number_lines(body: Vec<(Kind, String)>) -> Vec<DiffLine> {
     let mut old_no = 1usize;
     let mut new_no = 1usize;
     body.into_iter()
         .map(|(kind, text)| {
+            if kind == Kind::Hunk {
+                if let Some((old, new)) = hunk_offsets(&text) {
+                    old_no = old;
+                    new_no = new;
+                }
+                return DiffLine { kind, text, old_no: None, new_no: None };
+            }
             let (o, n) = match kind {
                 Kind::Context => (Some(old_no), Some(new_no)),
                 Kind::Removed => (Some(old_no), None),
                 Kind::Added => (None, Some(new_no)),
+                Kind::Hunk => unreachable!("returned above"),
             };
             if o.is_some() {
                 old_no += 1;
@@ -88,6 +115,20 @@ pub(super) fn number_lines(body: Vec<(Kind, String)>) -> Vec<DiffLine> {
             DiffLine { kind, text, old_no: o, new_no: n }
         })
         .collect()
+}
+
+/// The two starting line numbers in a `@@ -12,7 +12,9 @@` header — the old
+/// file's and the new file's. `None` for anything that does not parse,
+/// which leaves the counters where they were rather than guessing: a header
+/// the model mistyped is still a header, and a wrong number in the gutter
+/// is worse than a continued one.
+fn hunk_offsets(text: &str) -> Option<(usize, usize)> {
+    let inner = text.trim_start_matches('@').split("@@").next()?;
+    let mut sides = inner.split_whitespace();
+    let start = |side: &str, sign: char| -> Option<usize> { side.strip_prefix(sign)?.split(',').next()?.parse().ok() };
+    let old = start(sides.next()?, '-')?;
+    let new = start(sides.next()?, '+')?;
+    Some((old, new))
 }
 
 /// `+84` / `+11 -2` — a parsed diff's own stat, in the diff colours, for a
@@ -131,11 +172,19 @@ fn collapse_context(body: &[DiffLine]) -> Vec<Shown<'_>> {
     let n = body.len();
     let mut keep = vec![false; n];
     for (i, line) in body.iter().enumerate() {
-        if line.kind != Kind::Context {
-            let start = i.saturating_sub(CONTEXT_RADIUS);
-            let end = (i + CONTEXT_RADIUS).min(n.saturating_sub(1));
-            for k in &mut keep[start..=end] {
-                *k = true;
+        match line.kind {
+            // A header is always shown — it is what says where in the file
+            // the rows under it are — but it anchors no context of its own:
+            // it is not a change, and keeping two unchanged lines either
+            // side of it collapses nothing.
+            Kind::Hunk => keep[i] = true,
+            Kind::Context => {}
+            Kind::Added | Kind::Removed => {
+                let start = i.saturating_sub(CONTEXT_RADIUS);
+                let end = (i + CONTEXT_RADIUS).min(n.saturating_sub(1));
+                for k in &mut keep[start..=end] {
+                    *k = true;
+                }
             }
         }
     }
@@ -221,10 +270,23 @@ fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Colo
 /// that branch yet.
 fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
+    // A hunk header is not a line of the file: no sign, no number in the
+    // gutter, and `--tui-hunk-header` rather than the tone the gutter and a
+    // context row share — `5b` draws its own `@@ -0,0 +1,84 @@` that way,
+    // and it is the one role in the palette named for this.
+    // A header is not a row of the file, so it takes neither the gutter nor
+    // the sign column: it starts at the field's own left edge, which is
+    // where `5b` draws its `@@ -0,0 +1,84 @@ impl RateLimit`. The trailing
+    // "N more lines" note is the one in-box row that hangs on the *code*
+    // column instead, because it stands in for code.
+    if line.kind == Kind::Hunk {
+        let spans = vec![Span::styled(line.text.clone(), Style::default().fg(pal.hunk_header).bg(pal.diff_box))];
+        return row.with_fill(pal.diff_box).build(spans, ctx);
+    }
     let (marker, sign_fg, code_fg, bg) = match line.kind {
         Kind::Added => ("+ ", pal.add_code, pal.add_code, pal.add_row),
         Kind::Removed => ("- ", pal.del_code, pal.del_code, pal.del_row),
-        Kind::Context => ("  ", pal.diff_box, pal.context, pal.diff_box),
+        Kind::Context | Kind::Hunk => ("  ", pal.diff_box, pal.context, pal.diff_box),
     };
     let spans = vec![
         gutter(line.old_no, line.new_no, bg, ctx),
@@ -264,13 +326,22 @@ pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Ve
     // Indented to [`CODE_COLUMN`] so a note lines up with the code it
     // stands in for, past an empty gutter — the reference's own `81 more
     // lines` row.
+    // Plain prose, with no mark of its own. It read `... 3 unchanged lines
+    // ...` in U+22EF until a capture caught the obvious: that glyph is not
+    // in the closed table, and not among the typographic marks the baseline
+    // exempts — those are the ones the design's own screens use (`· … ⏎ ↑↓
+    // ← →`), and this was neither. The reference writes exactly this row as
+    // `81 more lines` (`4a`) and `73 more added lines below` (`5b`): the
+    // empty gutter beside it is what says it is not a line of the file, so
+    // a decoration on both ends was saying it a second time in a glyph the
+    // system does not have.
     let marker = |text: String| row.build(vec![Span::styled(format!("{}{text}", " ".repeat(CODE_COLUMN)), Style::default().fg(ctx.pal.dim).bg(row.fill()))], ctx);
 
     let mut rows: Vec<Line<'static>> = Vec::new();
     for item in &shown {
         match item {
             Shown::Line(line) => rows.extend(render_line(line, row, ctx)),
-            Shown::Elided(count) => rows.extend(marker(format!("⋯ {count} unchanged line{} ⋯", if *count == 1 { "" } else { "s" }))),
+            Shown::Elided(count) => rows.extend(marker(format!("{count} unchanged line{}", if *count == 1 { "" } else { "s" }))),
         }
     }
 
@@ -283,7 +354,7 @@ pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Ve
             let keep = max.saturating_sub(1);
             let hidden = rows.len() - keep;
             rows.truncate(keep);
-            rows.extend(marker(format!("⋯ {hidden} more line{} not shown ⋯", if hidden == 1 { "" } else { "s" })));
+            rows.extend(marker(format!("{hidden} more line{} not shown", if hidden == 1 { "" } else { "s" })));
         }
     }
 

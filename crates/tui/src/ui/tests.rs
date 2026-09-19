@@ -104,6 +104,22 @@ fn find_row(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
     panic!("row containing {needle:?} not found");
 }
 
+/// Where the drawn caret is — the `▌` in `--tui-mark` the composer paints
+/// at the draft's cursor. It used to be the terminal's own cursor, read off
+/// `TestBackend::cursor_position`; `14d` draws it instead (see
+/// `chrome::caret_row`), so the assertion is about a cell in the buffer now
+/// rather than about a position the backend was told.
+fn caret_at(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].symbol() == "▌" && buffer[(x, y)].fg == DARK.mark {
+                return (x, y);
+            }
+        }
+    }
+    panic!("no drawn caret in the frame");
+}
+
 /// Reported directly: "the chat doesn't have any top and bottom padding and
 /// it means the text touches the top and bottom bars, the designs do not do
 /// this". The transcript band used to hand its whole inner rect to the log,
@@ -210,6 +226,7 @@ fn the_bottom_bar_is_parted_from_the_transcript_by_tone_with_no_rule_drawn() {
 fn the_status_line_sits_below_the_composer_not_above_it() {
     let mut app = app();
     app.input = "drafting".into();
+    app.cursor = app.input.chars().count();
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1078,7 +1095,7 @@ fn a_path_like_prompt_shows_the_directory_scope_hint() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    let out = rendered(&mut app, 100, 20);
+    let out = rendered(&mut app, 100, 34);
     assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "must name the rule the default directory scope would save: {out:?}");
     assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "must show the exact file Tab would switch to, and that Tab is how: {out:?}");
 }
@@ -1092,12 +1109,12 @@ fn toggling_scope_flips_which_pattern_the_panel_calls_current() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    let out = rendered(&mut app, 100, 20);
+    let out = rendered(&mut app, 100, 34);
     assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "the directory glob is the default rule on the table: {out:?}");
     assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "the exact file must be shown as what Tab switches to: {out:?}");
 
     app.decision_pattern_scope = crate::app::PatternScope::Exact;
-    let out = rendered(&mut app, 100, 20);
+    let out = rendered(&mut app, 100, 34);
     assert!(out.contains("adds the rule  read:./crates/tui/src/ui.rs"), "narrowing must put the exact file on the table: {out:?}");
     assert!(out.contains("Tab  widen it to this whole directory  read:./crates/tui/src/**"), "and offer the directory back: {out:?}");
 }
@@ -1111,7 +1128,7 @@ fn a_shell_prompt_offers_a_program_scope_toggle() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    let out = rendered(&mut app, 100, 20);
+    let out = rendered(&mut app, 100, 34);
     assert!(out.contains("adds the rule  shell:cargo *"), "the program glob is the default rule for a command: {out:?}");
     assert!(out.contains("Tab  narrow it back to this one command  shell:cargo test -p gateway"), "the exact command must be offered back: {out:?}");
 }
@@ -1124,7 +1141,7 @@ fn a_target_with_no_broader_form_offers_no_scope_toggle() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "main.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    let out = rendered(&mut app, 100, 20);
+    let out = rendered(&mut app, 100, 34);
     assert!(out.contains("adds the rule  read:main.rs"), "the rule itself must still be stated: {out:?}");
     assert!(!out.contains("Tab "), "a bare filename has no enclosing directory to broaden to: {out:?}");
 }
@@ -1439,6 +1456,7 @@ fn a_slash_command_renders_differently_from_a_plain_user_message() {
 fn input_text_is_rendered_in_the_input_box() {
     let mut app = app();
     app.input = "draft text".into();
+    app.cursor = app.input.chars().count();
     let out = rendered(&mut app, 100, 20);
     assert!(out.contains("draft text"));
 }
@@ -1505,6 +1523,9 @@ fn highlight_command_tokens_requires_an_exact_word_match() {
 fn command_token_is_dimmed_live_in_the_input_box() {
     let mut app = app();
     app.input = "/clear now".into();
+    // Where typing leaves it. The caret is drawn now, so a cursor left at
+    // 0 would be sitting on the very cell this test reads.
+    app.cursor = app.input.chars().count();
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1534,6 +1555,7 @@ fn command_token_is_dimmed_live_in_the_input_box() {
 fn command_word_is_dimmed_live_even_mid_message() {
     let mut app = app();
     app.input = "hi /exit there".into();
+    app.cursor = app.input.chars().count();
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
@@ -1567,28 +1589,53 @@ fn theme_command_word_is_dimmed_live_like_every_other_known_command() {
 }
 
 /// Regression test: no visible cursor at all was a standing complaint —
-/// the input box rendered the draft text but never told the real
-/// terminal where the cursor sat within it.
+/// the input box rendered the draft text but never said where the cursor
+/// sat within it. It said so with the *terminal's* cursor until the caret
+/// became a drawn `▌` (`14d`: the composer is `▶  ▌`, both `--t-mark`),
+/// which is what this now asserts — including that nothing asks the
+/// terminal to paint a second one.
 #[test]
-fn the_terminal_cursor_is_placed_inside_the_input_box_at_the_draft_cursor() {
+fn the_caret_is_drawn_inside_the_input_box_at_the_draft_cursor() {
     let mut app = app();
     app.input = "hi".into();
     app.cursor = 2; // end of "hi"
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
 
-    assert!(terminal.backend().cursor_visible(), "the terminal cursor must be shown while the input is focused");
-    let pos = terminal.backend().cursor_position();
+    assert!(!terminal.backend().cursor_visible(), "the caret is drawn, so the terminal's own cursor stays hidden");
+    let (x, y) = caret_at(&buffer);
     // `BottomBar.jsx` is five rows deep for a single-line draft —
     // blank / composer / blank / status / blank — so the composer's one
     // content row is the 4th row up from the bottom of the frame.
-    assert_eq!(pos.y, 20 - 4, "cursor should sit on the composer's one content row");
+    assert_eq!(y, 20 - 4, "the caret sits on the composer's one content row");
     assert_eq!(
-        pos.x,
+        x,
         MARGIN_X as u16 + 3 + 2,
-        "cursor should sit right after \"hi\" (3 for the grid's left margin, 3 for the accent `▶  ` prompt prefix on the first line, 2 for the two typed chars)"
+        "and right after \"hi\": the grid's left margin, the accent `▶  ` prompt prefix on the first line, then the two typed chars"
     );
+}
+
+/// The empty composer is `14d`'s own row, glyph for glyph: `▶`, two
+/// spaces, the caret — both in `--t-mark`. The placeholder that follows it
+/// is Mjolnir's own (the design draws none), and the one thing it may not
+/// do is share a cell with the caret, which is exactly what it did while
+/// the caret was the terminal's.
+#[test]
+fn the_empty_composer_draws_the_references_prompt_and_caret() {
+    let mut app = app();
+    let backend = TestBackend::new(100, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let row = 20 - 4;
+    assert_eq!(buffer[(MARGIN_X as u16, row)].symbol(), "▶");
+    assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.mark);
+    assert_eq!(caret_at(&buffer), (MARGIN_X as u16 + 3, row), "the caret is two cells past the glyph, as the reference draws it");
+    let text: String = (0..buffer.area.width).map(|x| buffer[(x, row)].symbol().to_string()).collect();
+    assert!(text.starts_with("   ▶  ▌ Ask"), "and the placeholder starts past the caret rather than under it: {text:?}");
 }
 
 /// The composer's `▶` prompt (from `Composer.jsx`) is a *gutter*, not a
@@ -1621,10 +1668,10 @@ fn every_row_of_a_multiline_draft_shares_the_first_rows_left_edge() {
     };
     assert_eq!(column_of(first, "alpha"), column_of(second, "bravo"), "both rows start on the same column");
 
-    let pos = terminal.backend().cursor_position();
-    assert_eq!(pos.y, second, "the caret is on the row its line was drawn on");
+    let (caret_x, caret_y) = caret_at(&buffer);
+    assert_eq!(caret_y, second, "the caret is on the row its line was drawn on");
     assert_eq!(
-        pos.x,
+        caret_x,
         MARGIN_X as u16 + 3 + 5,
         "and right after \"bravo\": the grid's left margin, the prompt gutter every row reserves, then the five typed chars"
     );
@@ -1646,9 +1693,9 @@ fn the_caret_follows_a_wrapped_draft_onto_its_continuation_row() {
     let buffer = terminal.backend().buffer().clone();
 
     let first = find_row(&buffer, "wrap");
-    let pos = terminal.backend().cursor_position();
-    assert!(pos.y > first, "a draft this long wraps, so its caret cannot still be on the first row");
-    let caret_row: String = (0..buffer.area.width).map(|x| buffer[(x, pos.y)].symbol().to_string()).collect();
+    let (_, caret_y) = caret_at(&buffer);
+    assert!(caret_y > first, "a draft this long wraps, so its caret cannot still be on the first row");
+    let caret_row: String = (0..buffer.area.width).map(|x| buffer[(x, caret_y)].symbol().to_string()).collect();
     assert!(caret_row.contains("wrap"), "and the row it is on has to be one of the draft's: {caret_row:?}");
 }
 
@@ -1676,7 +1723,7 @@ fn a_draft_taller_than_the_composer_scrolls_inside_it_instead_of_taking_the_fram
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
     let carrying = |needle: &str| rows.iter().filter(|r| r.contains(needle)).count();
     let last = find_row(&buffer, "line-39");
-    assert_eq!(terminal.backend().cursor_position().y, last, "the caret sits at the end of the last line it drew");
+    assert_eq!(caret_at(&buffer).1, last, "the caret sits at the end of the last line it drew");
     assert_eq!(carrying("line-39"), 1, "the tail of the draft is on screen");
     for head in ["line-0 ", "line-1 ", "line-20"] {
         assert_eq!(carrying(head), 0, "the head of a long draft scrolls out of the band, but {head:?} is still on it");

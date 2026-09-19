@@ -47,6 +47,10 @@ const SPINNER_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
 /// place the caret from the same measurement.
 const PROMPT_PREFIX_LEN: u16 = 3;
 
+/// The drawn caret's own cell, held back from the draft's column so a row
+/// filled to its last character still has somewhere to put it.
+const CARET_LEN: u16 = 1;
+
 /// The most rows the composer may take, however long the draft is.
 ///
 /// Without a ceiling a pasted file simply became the frame: the composer
@@ -77,9 +81,16 @@ pub(super) struct Composer {
 
 impl Composer {
     pub(super) fn new(input: &str, frame_width: u16) -> Self {
-        // The frame less the grid's two margins and the prompt gutter every
-        // row reserves.
-        let width = frame_width.saturating_sub(MARGIN_X as u16 * 2).saturating_sub(PROMPT_PREFIX_LEN).max(1);
+        // The frame less the grid's two margins, the prompt gutter every
+        // row reserves, and **one cell for the caret**. The caret is drawn
+        // (`14d`: the composer is `▶  ▌`, both `--t-mark`), so it occupies
+        // a cell of this column like any glyph — and the one place that
+        // binds is a row filled to its last cell, where a caret appended
+        // after the final character would fall outside the composer's rect
+        // and be clipped away by ratatui without a trace. Reserving the
+        // cell here is the same lesson `grid::justified_line` records: two
+        // things sized independently cannot keep a cell between them.
+        let width = frame_width.saturating_sub(MARGIN_X as u16 * 2).saturating_sub(PROMPT_PREFIX_LEN).saturating_sub(CARET_LEN).max(1);
         Self { layout: draft::Layout::new(input, width as usize), width }
     }
 
@@ -462,28 +473,31 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // blocked, the placeholder says so instead of inviting a keystroke it
     // would silently drop.
     //
-    // The caret and the placeholder used to claim the **same cell**. The
-    // caret here is the terminal's own cursor rather than a drawn `▌`, and
+    // The caret and the placeholder used to claim the **same cell**,
+    // because the caret was the terminal's own cursor and
     // `set_cursor_position` put it exactly where the placeholder's first
     // character was painted: unfocused it outlined the `A`, focused it
-    // replaced it. Nothing caught it — the gates read the cells the app
-    // *declares*, and a hardware cursor is not one of them, which is why a
-    // collision this plain survived 72 clean frames. The placeholder now
-    // starts two cells past the caret, and only when there is a caret to
-    // clear: while blocked no cursor is set, so the text keeps the prompt's
-    // own column and does not hang on a phantom indent.
+    // replaced it. Moving the text two cells right cleared the collision
+    // and left the worse half of the defect standing — cell 6 became a
+    // lone hollow `#ffffff` box, a colour in neither palette and a stroked
+    // object in a frame where nothing is stroked, 1.07:1 against the light
+    // composer and the brightest mark in the frame in dark.
+    //
+    // The caret is now drawn, which is what `14d` specifies in the first
+    // place: the empty composer is `▶  ▌`, both `--t-mark`. Nothing calls
+    // `set_cursor_position` any more, so the terminal's own cursor stays
+    // hidden (`run::draw` hides it across every paint) exactly as it
+    // already did on the first-run screen.
     if app.input.is_empty() {
         app.composer_top = 0;
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
         let mut placeholder = vec![prompt()];
         if !blocked {
-            placeholder.push(Span::styled("  ", Style::default().bg(pal.bar_bottom)));
+            placeholder.push(caret(pal));
+            placeholder.push(Span::styled(" ", Style::default().bg(pal.bar_bottom)));
         }
         placeholder.push(Span::styled(text, Style::default().fg(pal.dim)));
         frame.render_widget(Paragraph::new(Line::from(placeholder)).block(block), area);
-        if !blocked {
-            frame.set_cursor_position((inner.x + PROMPT_PREFIX_LEN, inner.y));
-        }
         return;
     }
 
@@ -515,7 +529,8 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // same three cells as blank gutter, so the text keeps one left edge.
     let lines: Vec<Line> = (top..(top + height).min(layout.row_count()))
         .map(|i| {
-            let mut line = highlight_command_tokens(&layout.row_text(i), ctx);
+            let text = layout.row_text(i);
+            let mut line = if i == cursor_row { caret_row(&text, cursor_col, ctx) } else { highlight_command_tokens(&text, ctx) };
             line.spans.insert(0, if i == 0 { prompt() } else { gutter() });
             line
         })
@@ -525,14 +540,63 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // wrapper here is exactly what put the caret and the text on different
     // rows before.
     frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
+}
 
-    // No visible cursor at all was a standing complaint. Ratatui doesn't
-    // draw one; `set_cursor_position` asks the real terminal cursor to sit
-    // there instead. Skipped while a decision is pending (input is blocked
-    // then, and the placeholder says so).
-    if !blocked {
-        let x = (inner.x + PROMPT_PREFIX_LEN + cursor_col as u16).min(inner.x + inner.width.saturating_sub(1));
-        let y = (inner.y + (cursor_row - top) as u16).min(inner.y + inner.height.saturating_sub(1));
-        frame.set_cursor_position((x, y));
+/// The drawn caret — `14d`'s `▌` in `--t-mark`, on the composer's own
+/// field.
+fn caret(pal: &crate::palette::Palette) -> Span<'static> {
+    Span::styled("▌", Style::default().fg(pal.mark).bg(pal.bar_bottom))
+}
+
+/// One draft row with the caret drawn into it at display column `col`.
+///
+/// Mid-text the caret takes the cell of the character it sits on, the way
+/// a block cursor does, and a wide character under it leaves its second
+/// cell blank so nothing to the right shifts. The row is highlighted
+/// *first* and the spans split afterwards: splitting the text first would
+/// break a command word in half at the caret and lose its dim styling
+/// while it is being edited.
+fn caret_row(text: &str, col: usize, ctx: Ctx) -> Line<'static> {
+    let field = Style::default().bg(ctx.pal.bar_bottom);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut at = 0;
+    let mut placed = false;
+    for span in highlight_command_tokens(text, ctx).spans {
+        let width = span.content.width();
+        if placed || at + width <= col {
+            at += width;
+            out.push(span);
+            continue;
+        }
+        let (mut before, mut after) = (String::new(), String::new());
+        let mut under = None;
+        for c in span.content.chars() {
+            let w = c.to_string().width();
+            if at < col {
+                before.push(c);
+            } else if under.is_none() {
+                under = Some(c);
+            } else {
+                after.push(c);
+            }
+            at += w;
+        }
+        if !before.is_empty() {
+            out.push(Span::styled(before, span.style));
+        }
+        out.push(caret(ctx.pal));
+        if let Some(pad) = under.map(|c| c.to_string().width().saturating_sub(1)).filter(|&p| p > 0) {
+            out.push(Span::styled(" ".repeat(pad), field));
+        }
+        if !after.is_empty() {
+            out.push(Span::styled(after, span.style));
+        }
+        placed = true;
     }
+    // Past the last character — the common case, and the only one on an
+    // empty row.
+    if !placed {
+        out.push(caret(ctx.pal));
+    }
+    Line::from(out)
 }

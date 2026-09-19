@@ -9,7 +9,86 @@ do not "fix" it in `palette.rs`. (The 2026-09-03 colour-transport gap is closed
 by the 2026-09-06 entry; the syntax ramp by the 2026-09-07 Turn 15 entry.)
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-07
+**Last Updated:** 2026-09-19
+
+**Progress (2026-09-19, the conformance catalogue's unblocked layout items):**
+Six Class A deviations from `.claude/spec/mjolnir-design-conformance.md`, plus
+one the gates found while they were being captured. Each is recorded in full
+there; what belongs here is what moved in this crate and why a reader of the
+code should care.
+
+* **The caret is drawn.** `chrome::caret_row` paints `▌` in `--tui-mark` at
+  the draft's cursor and nothing calls `set_cursor_position` any longer, so
+  the terminal's own cursor stays hidden everywhere — which is what `14d`
+  specifies (`▶  ▌`, both `--t-mark`) and what first run already did. One
+  cell of the composer's text column is held back for it (`CARET_LEN`):
+  without it a row filled to its last character had nowhere to put the glyph
+  and ratatui clipped it at the rect's edge, which is `justified_line`'s
+  lesson in a third place.
+* **A turn knows whose it is.** `transcript::Speaker` replaces "is this entry
+  a `UserMessage` or an `AssistantText`" as the rule for drawing a turn
+  break. A tool group, an approval card and a resolved prompt all belong to
+  the agent, so the first of them opens the agent's turn — break band above
+  it, `harness` in the label column — and the reply that follows continues
+  that turn rather than opening a second one. The cache key gained `opens`
+  alongside `first` for the same reason `first` is in it: both depend on what
+  came before, so both can change without the entry changing.
+* **A turn break is not drawn against the top of the viewport.**
+  `Transcript::viewport` skips a leading separator the viewport starts
+  inside. It deliberately does not backfill the freed rows or change
+  `Transcript::len` — the note in its doc comment is the important half:
+  feeding the drop back into the row count would shorten the transcript,
+  un-scroll the turn it hid, and bring the band back next frame.
+* **A `@@` line is a hunk header.** `diff::Kind::Hunk`, rendered in
+  `--tui-hunk-header` with an empty gutter, anchoring the line numbers from
+  its own offsets. This only ever shows in a ```diff fence in assistant
+  prose; `mjolnir_tools::diff::unified` emits no header, so the approval
+  card's own numbering is unchanged.
+* **First run's option list is sized by its content.**
+  `first_run::option_rows` measures the list once and gives every row the
+  same width, so the selection band is a rectangle over the *list* rather
+  than a fill to the frame's right margin — 167 cells of accent at 200
+  columns before. Note what this is *not* sized by: `5c`'s 48-cell command
+  list, which is the nearest stated number and is too narrow for this list's
+  own copy by four cells.
+* **The permission panel leaves the conversation a quarter of the frame.**
+  `decision::max_height` reserved one row for the log and now reserves
+  `max(5, height / 4)`. The panel elides sooner as a result, which is the
+  trade `5a` asks for.
+* **The elision markers lost their decoration.** `⋯` (U+22EF) and `—` were
+  in every "N more lines not shown" row, and neither is in the closed glyph
+  table or the baseline's typographic exemption. The reference writes this
+  row as plain prose (`81 more lines`), so it does too now.
+
+Three more followed from scoring those changes, and two of them were
+regressions from the list above — see the conformance spec for the
+measurements:
+
+* **The panel protects its head, not just its tail.** `clamp_panel` took a
+  two-row head on faith; the permission panel's *target* row sat just past
+  it, so the tighter budget cut the one row naming the file. The head is now
+  passed in — the whole prompt card — and the grant summary, the `Tab` row
+  and the options separator are the clampable middle. At 52×20 this also
+  recovered a top bar and a footer the panel had been pushing off the frame.
+* **A hunk header takes neither the gutter nor the sign column.** It had been
+  rendered through the row builder with both empty, which put it on the code
+  column; `5b` draws it at the field's left edge.
+* **The elision markers lost their decoration.** `⋯` (U+22EF) and `—` were in
+  every "N more lines not shown" row, and neither is in the closed glyph
+  table or the baseline's typographic exemption. The reference writes this
+  row as plain prose (`81 more lines`), so it does too now. The `breakages`
+  gate caught this the first time a frame was short enough to elide.
+
+One rule came out of the pass and is now in two places: **a frame too small
+for the design's 120×36 gives up spacing before structure.** A turn break
+drops its two blank rows and keeps its band; the panel's options separator
+does the same. Both alternatives were measured and both are worse — dropping
+the separator whole puts a panel's facts against its option list, and
+dropping content instead is what the head-protection fix was for.
+
+`crates/tui` is clippy-clean, 292 tests pass and `render.snap` is reblessed;
+the snapshot diff was read line by line before each blessing, which is where
+the approval panel's new elision behaviour was checked rather than assumed.
 
 **Progress (2026-08-29):** All 12 Steps implemented and tested — `972d150`,
 audit-fixed in `bd09172`. Two Pitfall-level gaps, deliberate and disclosed

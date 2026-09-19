@@ -72,83 +72,26 @@ pub enum DecisionOutcome {
 /// (`App::decision_options`) on every draw/keypress, so rendering and
 /// resolution can never disagree about what option N means.
 ///
-/// `detail` exists because of direct developer feedback on the panel —
+/// Both fields answer the same direct developer feedback on the panel —
 /// "permissions are not clear, are we approving the tool? are we approving
 /// the directory? what are we concretely doing" — against a list whose
 /// labels ("Allow for this project") named a *tier* and nothing else: they
 /// said neither how long the answer lasts nor where, if anywhere, it gets
-/// written. The tier's consequence is now spelled out on the row itself
-/// ("saved to .mjolnir/permissions.yaml"), and the rule that would be saved
-/// is named once above the list by `App::decision_grant`.
+/// written. The two do it in different shapes, because the design system
+/// draws two controls (ADR 0003): a permission row is `5a`'s **sentence**,
+/// which states its own rule and leaves `detail` empty, while first run's
+/// catalogue rows are `5c`'s name + detail pair.
 pub struct DecisionOption {
     pub label:   String,
     pub detail:  String,
+    /// Byte range within `label` covering the grant pattern the sentence
+    /// quotes — `5a` draws "the matched pattern one step quieter" than the
+    /// words around it. `None` on every row that quotes no pattern: the
+    /// `once` and `deny` rows, both approval rows, and every `5c`-shaped
+    /// pair. Carried as a range rather than pre-split spans so the label
+    /// stays one readable string for tests and for `decline_outcome`.
+    pub pattern: Option<std::ops::Range<usize>>,
     pub outcome: DecisionOutcome,
-}
-
-/// Which grant pattern a pending `PromptPayload::Tool` prompt's tier options
-/// currently target — `Exact` (the literal target, today's only behaviour)
-/// or `Directory` (the target's enclosing directory, glob-broadened to
-/// `<dir>/**`). Only ever offered when the payload says `path_like: true`
-/// and the target actually has an enclosing directory to broaden to (see
-/// `directory_glob`) — toggled by Tab in the decision panel, reset to
-/// `Exact` whenever the front of the queue changes, same as
-/// `decision_selected`.
-/// Which unit a saved grant is written in. Per ADR 0001, the *broad* unit
-/// is the default and the exact one is the opt-out — a grant names a
-/// capability the agent has in this project, not one invocation of it.
-///
-/// What "broad" means depends on the tool's class:
-///
-/// * a path-shaped tool (`read`, `explain`) broadens to the **enclosing
-///   directory** — `read:./crates/tui/src/**`;
-/// * `shell` broadens to the **program**, `argv[0]` — `shell:cargo *`,
-///   which is the form the design system's own permission copy has always
-///   used ("Always allow `cargo *` in this project");
-/// * `edit` has no grant at all and never reaches this type.
-///
-/// `Exact` is still reachable by Tab, and is what a developer picks when
-/// the specific invocation is the thing they mean to allow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PatternScope {
-    #[default]
-    Broad,
-    Exact,
-}
-
-/// What `ui.rs` needs to state, above the options list, exactly what a
-/// *saved* answer to a pending Tool prompt would write — `rule` is the
-/// literal `kind:pattern` grant entry (the same string that lands in
-/// `permissions.yaml`, per mjolnir-permissions' `GrantKey`), and
-/// `alternate` is the other pattern the Tab toggle would switch to, present
-/// only when there is one (a path-like target with an enclosing directory
-/// to broaden to — see `directory_glob`).
-///
-/// This replaces the narrower scope-hint line, which only ever rendered for
-/// the path-like minority of prompts: a developer answering a `shell`
-/// prompt was given no statement at all of what "allow" would allowlist —
-/// that exact command string, not the shell tool as a whole — which is what
-/// the "are we approving the tool? the directory?" feedback was about.
-/// `scope` is the *currently selected* one, so the toggle line can name
-/// which direction Tab moves in.
-pub struct GrantSummary {
-    pub scope:     PatternScope,
-    /// What the broad form of *this* grant widens to, so the Tab hint can
-    /// name it in the developer's own terms rather than assuming a path.
-    pub unit:      GrantUnit,
-    pub rule:      String,
-    pub alternate: Option<String>,
-}
-
-/// Which broad unit a tool's grant widens to — see [`PatternScope`] and
-/// ADR 0001. Carried on [`GrantSummary`] purely so the panel's Tab hint can
-/// say "this whole directory" or "every `cargo` command" rather than one
-/// wording that is wrong for half the prompts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GrantUnit {
-    Directory,
-    /// The program name, carried so the hint can quote it.
-    Program(String),
 }
 
 /// The permanent record one answered prompt leaves in the log — what the
@@ -229,8 +172,22 @@ fn program_glob(target: &str) -> Option<String> {
 
 /// The broad grant pattern for one prompt, or `None` when the target has no
 /// broader form than itself (a bare filename with no directory component, a
-/// command with no program token). See [`PatternScope`] for why this is the
-/// default rather than the opt-in.
+/// command with no program token).
+///
+/// Per ADR 0001 a grant names a capability the agent has in this project,
+/// not one invocation of it, and what "broad" means depends on the tool's
+/// class:
+///
+/// * a path-shaped tool (`read`, `explain`) broadens to the **enclosing
+///   directory** — `read:./crates/tui/src/**`;
+/// * `shell` broadens to the **program**, `argv[0]` — `shell:cargo *`,
+///   which is the form the design system's own permission copy has always
+///   used ("Always allow `cargo *` in this project");
+/// * `edit` has no grant at all and never reaches here.
+///
+/// ADR 0003 made this the pattern of the two *persisting* rows rather than
+/// a mode the whole list sits in: there is no longer an exact/broad toggle,
+/// so the `None` case is answered by the caller quoting the target itself.
 fn broad_pattern(target: &str, path_like: bool) -> Option<String> {
     if path_like {
         directory_glob(target)
@@ -389,13 +346,6 @@ pub struct App {
     /// its first (least consequential) option, never wherever the cursor
     /// happened to sit for a previous, unrelated request.
     pub decision_selected: usize,
-    /// Which grant pattern a pending Tool prompt's tier options currently
-    /// target — see `PatternScope`'s own doc comment. Reset to `Exact`
-    /// alongside `decision_selected`, at the same three points (a fresh
-    /// request becoming the new front, or `resolve_decision` popping to the
-    /// next one) — whatever scope the developer picked for one request must
-    /// never leak onto an unrelated one.
-    pub decision_pattern_scope: PatternScope,
     pub status:            StatusInfo,
     pub should_quit:       bool,
     /// True from `TurnStarted` until the matching `TurnEnded` — drives the
@@ -489,7 +439,6 @@ impl App {
             pending_approvals: VecDeque::new(),
             pending_prompts: VecDeque::new(),
             decision_selected: 0,
-            decision_pattern_scope: PatternScope::default(),
             status,
             should_quit: false,
             turn_active: false,
@@ -643,7 +592,6 @@ impl App {
                 // before.
                 if self.pending_approvals.is_empty() {
                     self.decision_selected = 0;
-                    self.decision_pattern_scope = PatternScope::default();
                 }
                 self.pending_approvals.push_back(PendingApproval { call_id: call_id.clone(), diff: diff.clone() });
                 self.push(LogEntry::ApprovalCard { call_id, diff, resolution: None });
@@ -681,7 +629,6 @@ impl App {
                         // prompt never preempts an already-pending approval.
                         if self.pending_approvals.is_empty() && self.pending_prompts.is_empty() {
                             self.decision_selected = 0;
-                            self.decision_pattern_scope = PatternScope::default();
                         }
                         self.pending_prompts.push_back(PendingPrompt { call_id: call_id.clone(), payload: payload.clone() });
                         self.push(LogEntry::PermissionPrompt { call_id, payload, resolution: None });
@@ -1058,8 +1005,8 @@ impl App {
     pub fn decision_options(&self) -> Vec<DecisionOption> {
         match self.pending_front() {
             PendingFront::Approval(_) => vec![
-                DecisionOption { label: "Approve".into(), detail: "write this edit to the file".into(), outcome: DecisionOutcome::Approve(true) },
-                DecisionOption { label: "Deny".into(), detail: "nothing is written; the agent is told no".into(), outcome: DecisionOutcome::Approve(false) },
+                DecisionOption { label: "Approve".into(), detail: "write this edit to the file".into(), pattern: None, outcome: DecisionOutcome::Approve(true) },
+                DecisionOption { label: "Deny".into(), detail: "nothing is written; the agent is told no".into(), pattern: None, outcome: DecisionOutcome::Approve(false) },
             ],
             PendingFront::Prompt(pending) => match &pending.payload {
                 // Four allow tiers (once→session→project→always) and exactly
@@ -1075,31 +1022,58 @@ impl App {
                 // developer actually needs is the one thing this keeps: stop
                 // this call.
                 //
-                // `pattern` is the same for every tier's option (the tier
-                // alone decides persistence — see `ToolTier`'s own doc
-                // comment — the pattern is an orthogonal choice, made once
-                // via the Tab scope toggle, not per-tier); labels stay
-                // untouched by the toggle so this list never grows or
-                // reflows — `ui::decision_panel_lines` renders the actual
-                // rule that would be saved separately, above the list, from
-                // `decision_grant`.
+                // Each row is a sentence that states its own rule, per ADR
+                // 0003 and the design system's `5a` — so the pattern is a
+                // property of the row rather than one mode the whole list
+                // sits in. The session row quotes the invocation; the two
+                // persisting rows quote ADR 0001's broad unit. There is no
+                // longer a `Tab` toggle, and no separate summary row above
+                // the list restating what the selected row already says.
+                //
+                // Where a target has no broader form than itself — a bare
+                // filename, a command with no program token — rows 3 and 4
+                // quote the target, which is `broad_pattern` returning
+                // `None` and this `unwrap_or` answering it.
                 PromptPayload::Tool { target, path_like, .. } => {
-                    let pattern = match self.decision_pattern_scope {
-                        PatternScope::Broad => broad_pattern(target, *path_like).unwrap_or_else(|| target.clone()),
-                        PatternScope::Exact => target.clone(),
+                    let broad = broad_pattern(target, *path_like).unwrap_or_else(|| target.clone());
+                    // `5a` draws the quoted pattern one step quieter than
+                    // the sentence around it; the range is where it landed,
+                    // computed here because this is where the sentence is
+                    // assembled and nothing downstream should have to
+                    // re-find a substring that may legitimately repeat.
+                    let sentence = |prefix: &str, pattern: &str, suffix: &str| {
+                        let label = format!("{prefix}{pattern}{suffix}");
+                        let at = prefix.len()..prefix.len() + pattern.len();
+                        (label, Some(at))
                     };
-                    [
-                        (Decision::Allow, ToolTier::Once, "Allow once", "this call only; nothing is saved"),
-                        (Decision::Allow, ToolTier::Session, "Allow for this session", "until mjolnir exits; nothing is saved"),
-                        (Decision::Allow, ToolTier::Project, "Allow for this project", "saved to .mjolnir/permissions.yaml"),
-                        (Decision::Allow, ToolTier::Always, "Always allow", "saved to ~/.mjolnir/permissions.yaml"),
-                        (Decision::Deny, ToolTier::Once, "Deny", "this call only; nothing is saved"),
+                    vec![
+                        // Nothing is saved, so there is no rule to quote —
+                        // the sentence is `5a`'s verbatim.
+                        (Decision::Allow, ToolTier::Once, ("Allow once".to_string(), None)),
+                        (Decision::Allow, ToolTier::Session, sentence("Allow ", target, " for this session")),
+                        (Decision::Allow, ToolTier::Project, sentence("Always allow ", &broad, " in this project")),
+                        (Decision::Allow, ToolTier::Always, sentence("Always allow ", &broad, " everywhere")),
+                        // `5a` reads "Deny and tell the agent why".
+                        // `PromptResponse::Tool` carries no reason and no
+                        // step collects one, so that sentence would name a
+                        // thing the product does not do — ADR 0003 §4.
+                        (Decision::Deny, ToolTier::Once, ("Deny".to_string(), None)),
                     ]
                     .into_iter()
-                    .map(|(decision, tier, label, detail)| DecisionOption {
-                        label:   label.into(),
-                        detail:  detail.into(),
-                        outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier, pattern: pattern.clone() }),
+                    .map(|(decision, tier, (label, pattern))| {
+                        // The tier alone decides persistence (see
+                        // `ToolTier`); what each row *writes* is the
+                        // pattern its own sentence quoted.
+                        let written = match tier {
+                            ToolTier::Project | ToolTier::Always => broad.clone(),
+                            ToolTier::Once | ToolTier::Session => target.clone(),
+                        };
+                        DecisionOption {
+                            label,
+                            detail: String::new(),
+                            pattern,
+                            outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier, pattern: written }),
+                        }
                     })
                     .collect()
                 }
@@ -1107,16 +1081,19 @@ impl App {
                     DecisionOption {
                         label:   "Inject for this session".into(),
                         detail:  "until mjolnir exits; nothing is saved".into(),
+                        pattern: None,
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Session) }),
                     },
                     DecisionOption {
                         label:   "Inject for this project".into(),
                         detail:  "saved to .mjolnir/context_files.yaml".into(),
+                        pattern: None,
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Project) }),
                     },
                     DecisionOption {
                         label:   "Don't inject".into(),
                         detail:  "the agent never sees this file; asked again next time".into(),
+                        pattern: None,
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None }),
                     },
                 ],
@@ -1158,42 +1135,6 @@ impl App {
         }
     }
 
-    /// What a saved answer to the pending Tool prompt would actually write —
-    /// see `GrantSummary`. `None` for anything that doesn't persist a
-    /// pattern at all (an Edit approval, which is never allowlistable, and a
-    /// ContextFile prompt, which is path-keyed with no grant grammar of its
-    /// own). Kept as its own read, alongside `decision_options`' own
-    /// independent match on the same payload, rather than threaded out of
-    /// `decision_options` — the two answer different questions (selectable
-    /// tier options vs. "what rule is on the table, and is there another
-    /// scope for it") and `decision_options` already returns owned
-    /// `DecisionOption`s with no room for this extra shape, matching how
-    /// `decline_outcome` also matches the payload independently rather than
-    /// deriving from `decision_options`' output.
-    pub fn decision_grant(&self) -> Option<GrantSummary> {
-        let PendingFront::Prompt(pending) = self.pending_front() else { return None };
-        let PromptPayload::Tool { kind, target, path_like } = &pending.payload else { return None };
-        // The `kind:pattern` shape is mjolnir-permissions' own `GrantKey`
-        // rendering — shown literally, not prettified, because the point of
-        // this line is that a developer can match it against the entry that
-        // shows up in `permissions.yaml` afterwards.
-        let rule = |pattern: &str| format!("{kind}:{pattern}");
-        let broad = broad_pattern(target, *path_like);
-        let unit = if *path_like {
-            GrantUnit::Directory
-        } else {
-            GrantUnit::Program(target.split_whitespace().next().unwrap_or_default().to_string())
-        };
-        Some(match (self.decision_pattern_scope, broad) {
-            (PatternScope::Broad, Some(broad)) => GrantSummary { scope: PatternScope::Broad, unit, rule: rule(&broad), alternate: Some(rule(target)) },
-            // Either the developer narrowed with Tab, or the target has no
-            // broader form than itself — a bare filename, or a command with
-            // no program token. Both write the exact target; only the first
-            // has another scope to offer back.
-            (_, broad) => GrantSummary { scope: PatternScope::Exact, unit, rule: rule(target), alternate: broad.map(|b| rule(&b)) },
-        })
-    }
-
     /// The single source of truth for "which pending request is currently
     /// interactive" — see `PendingFront`'s own doc comment for why this
     /// exists instead of each caller re-checking `pending_approvals.front()`
@@ -1216,12 +1157,12 @@ impl App {
     /// pressing enter are valid inputs." Up/Down move `decision_selected`
     /// (clamped, not wrapping); Enter confirms whichever option is
     /// currently selected; a digit key `1`-`9` jumps to and immediately
-    /// confirms that option directly, without needing Enter first; Tab
-    /// flips `decision_pattern_scope` between `Exact`/`Directory` when a
-    /// scope toggle is actually available (`decision_grant`) — a no-op
-    /// otherwise, so a stray Tab on an Approve/Deny or ContextFile prompt
-    /// (neither has a scope to toggle) can't corrupt state; any other key
-    /// is silently dropped — no typing ahead, same as before.
+    /// confirms that option directly, without needing Enter first; any
+    /// other key is silently dropped — no typing ahead, same as before.
+    ///
+    /// `Tab` used to flip the whole list between the exact and broad grant
+    /// patterns. ADR 0003 moved scope onto the rows themselves, so there is
+    /// no mode left to toggle and the key is no longer bound here.
     fn handle_decision_key(&mut self, key: KeyEvent) {
         let options = self.decision_options();
         if options.is_empty() {
@@ -1236,14 +1177,6 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Tab => {
-                if self.decision_grant().is_some_and(|g| g.alternate.is_some()) {
-                    self.decision_pattern_scope = match self.decision_pattern_scope {
-                        PatternScope::Exact => PatternScope::Broad,
-                        PatternScope::Broad => PatternScope::Exact,
-                    };
-                }
-            }
             KeyCode::Up => self.decision_selected = self.decision_selected.saturating_sub(1),
             KeyCode::Down => self.decision_selected = (self.decision_selected + 1).min(options.len() - 1),
             KeyCode::Enter => {
@@ -1270,7 +1203,6 @@ impl App {
     /// comment on `App`.
     fn resolve_decision(&mut self, outcome: DecisionOutcome) {
         self.decision_selected = 0;
-        self.decision_pattern_scope = PatternScope::default();
         match outcome {
             DecisionOutcome::Approve(decision) => {
                 // Only ever the front of the queue — see `pending_approvals`'
@@ -1841,7 +1773,7 @@ mod tests {
         let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         assert!(!app.pending_prompts.is_empty());
-        assert_eq!(app.decision_options()[2].label, "Allow for this project");
+        assert_eq!(app.decision_options()[2].label, "Always allow git * in this project");
 
         app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
         assert!(app.pending_prompts.is_empty());
@@ -2082,100 +2014,99 @@ mod tests {
         serde_json::to_value(PromptPayload::Tool { kind: "read".into(), target: target.into(), path_like: true }).unwrap()
     }
 
+    /// Every allow row states its own rule in its own sentence (ADR 0003),
+    /// so the two that persist name ADR 0001's broad unit — the capability,
+    /// not the one file that triggered the prompt.
     #[test]
-    fn a_path_like_prompts_scope_hint_offers_the_enclosing_directory() {
+    fn a_path_like_prompts_sentences_quote_the_enclosing_directory() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        let grant = app.decision_grant().expect("a Tool prompt always states the rule a saved answer would add");
-        assert_eq!(grant.scope, PatternScope::Broad, "must start on the directory scope — the capability, not the one file (ADR 0001)");
-        assert_eq!(grant.rule, "read:./crates/tui/src/**", "the rule must be the literal kind:pattern entry that lands in permissions.yaml");
-        assert_eq!(grant.alternate.as_deref(), Some("read:./crates/tui/src/ui.rs"), "the exact file stays available as the narrower alternate");
+        let labels: Vec<String> = app.decision_options().into_iter().map(|o| o.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Allow once",
+                "Allow ./crates/tui/src/ui.rs for this session",
+                "Always allow ./crates/tui/src/** in this project",
+                "Always allow ./crates/tui/src/** everywhere",
+                "Deny",
+            ]
+        );
     }
 
-    /// A `shell` prompt states a rule naming the *program*. This is the
-    /// half a shell prompt has always needed most — the old model wrote the
-    /// exact command string, so approving `cargo test` said nothing about
+    /// A `shell` prompt quotes the *program*. This is the half a shell
+    /// prompt has always needed most — the old model wrote the exact
+    /// command string, so approving `cargo test` said nothing about
     /// `cargo build` and a test-running session answered the same question
     /// over and over.
     #[test]
-    fn a_non_path_like_prompt_states_a_program_rule_and_offers_the_exact_command() {
+    fn a_shell_prompts_persisting_sentences_quote_the_program() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false }).unwrap();
+        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway limit::".into(), path_like: false }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
-        let grant = app.decision_grant().expect("every Tool prompt states the rule a saved answer would add");
-        assert_eq!(grant.rule, "shell:cargo *");
-        assert_eq!(grant.alternate.as_deref(), Some("shell:cargo test"), "the exact command is the narrower alternate Tab switches to");
+        let options = app.decision_options();
+        assert_eq!(options[2].label, "Always allow cargo * in this project", "the design system's own permission copy, verbatim");
+        assert_eq!(options[3].label, "Always allow cargo * everywhere");
+        assert_eq!(
+            options[1].label, "Allow cargo test -p gateway limit:: for this session",
+            "the session row quotes the invocation — `5a`'s own scoping, and ADR 0003's stated cost"
+        );
     }
 
+    /// Where a target has no broader form than itself, the persisting rows
+    /// quote the target. Nothing may invent a wildcard that would grant
+    /// more than the developer can see on the row.
     #[test]
-    fn a_path_like_target_with_no_directory_offers_no_alternate_scope() {
+    fn a_target_with_no_broader_form_is_quoted_as_itself() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("main.rs") });
-        let grant = app.decision_grant().expect("every Tool prompt states the rule a saved answer would add");
-        assert_eq!(grant.rule, "read:main.rs");
-        assert!(grant.alternate.is_none(), "a bare filename has no enclosing directory to broaden to");
+        let options = app.decision_options();
+        assert_eq!(options[2].label, "Always allow main.rs in this project");
+        assert_eq!(options[1].label, "Allow main.rs for this session");
+    }
+
+    /// `5a` draws "the matched pattern one step quieter", so the sentence
+    /// has to say where its pattern sits. The rows that quote no pattern —
+    /// `once`, `deny` — must say so rather than pointing at an empty range.
+    #[test]
+    fn only_the_rows_that_quote_a_pattern_carry_a_span_for_it() {
+        let mut app = app();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./src/main.rs") });
+        let options = app.decision_options();
+        assert!(options[0].pattern.is_none(), "`Allow once` saves nothing, so it quotes no rule");
+        assert!(options[4].pattern.is_none(), "nor does `Deny`");
+        for option in &options[1..=3] {
+            let at = option.pattern.clone().expect("every persisting row quotes its own rule");
+            assert!(
+                option.label[at].starts_with("./"),
+                "the span must land on the pattern itself, not on the words around it: {:?}",
+                option.label
+            );
+        }
     }
 
     /// A ContextFile prompt persists an approved *path*, not a grant
-    /// pattern — there's no `kind:pattern` rule to state, and claiming one
-    /// would be inventing a mechanism that doesn't exist.
+    /// pattern — there is no `kind:pattern` rule to quote, and its rows
+    /// keep `5c`'s name + detail pair rather than `5a`'s sentence.
     #[test]
-    fn a_context_file_prompt_has_no_grant_rule_to_state() {
+    fn a_context_file_prompt_keeps_the_pair_shape_and_quotes_no_rule() {
         let mut app = app();
         let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
-        assert!(app.decision_grant().is_none());
+        let options = app.decision_options();
+        assert!(options.iter().all(|o| o.pattern.is_none()));
+        assert!(options.iter().all(|o| !o.detail.is_empty()), "the pair shape keeps its detail column");
     }
 
-    /// After toggling, the summary describes the directory glob as the rule
-    /// on the table and the exact file as what Tab switches back to — the
-    /// two must swap together, or the panel would name a rule other than the
-    /// one `decision_options` is about to persist.
+    /// Edit is not in the permissions model at all (ADR 0001): no grant, no
+    /// pattern, because `Engine::check_tool` refuses `edit_class` before
+    /// consulting any list.
     #[test]
-    fn toggling_scope_swaps_the_stated_rule_and_its_alternate() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        // Broad is the default now (ADR 0001), so the directory rule is on
-        // the table before any key is pressed and Tab narrows rather than
-        // widens.
-        let grant = app.decision_grant().unwrap();
-        assert_eq!(grant.scope, PatternScope::Broad);
-        assert_eq!(grant.rule, "read:./crates/tui/src/**");
-        assert_eq!(grant.alternate.as_deref(), Some("read:./crates/tui/src/ui.rs"));
-
-        app.handle_key(press(KeyCode::Tab));
-        let grant = app.decision_grant().unwrap();
-        assert_eq!(grant.scope, PatternScope::Exact);
-        assert_eq!(grant.rule, "read:./crates/tui/src/ui.rs");
-        assert_eq!(grant.alternate.as_deref(), Some("read:./crates/tui/src/**"));
-    }
-
-    /// The `shell` half of ADR 0001: a command's broad unit is its program,
-    /// not its enclosing directory (it has none) and not the exact argv the
-    /// old model wrote. The rule is the design system's own permission copy
-    /// — "Always allow `cargo *` in this project".
-    #[test]
-    fn a_shell_prompt_grants_the_program_not_the_command_line() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested {
-            call_id: "call-1".into(),
-            payload: serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway limit::".into(), path_like: false }).unwrap(),
-        });
-        let grant = app.decision_grant().unwrap();
-        assert_eq!(grant.scope, PatternScope::Broad);
-        assert_eq!(grant.rule, "shell:cargo *", "a shell grant names the program, so the next cargo invocation does not re-prompt");
-        assert_eq!(grant.alternate.as_deref(), Some("shell:cargo test -p gateway limit::"), "and Tab still offers the exact command back");
-        assert_eq!(grant.unit, GrantUnit::Program("cargo".into()));
-    }
-
-    /// Edit is not in the permissions model at all (ADR 0001): it has no
-    /// grant, no pattern and no scope toggle, because `Engine::check_tool`
-    /// refuses `edit_class` before consulting any list.
-    #[test]
-    fn an_edit_approval_has_no_grant_to_state() {
+    fn an_edit_approval_quotes_no_rule() {
         let mut app = app();
         app.pending_approvals.push_back(PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-        assert!(app.decision_grant().is_none(), "an edit is a conscious approval, never a grant");
+        let options = app.decision_options();
+        assert!(options.iter().all(|o| o.pattern.is_none()), "an edit is a conscious approval, never a grant");
     }
 
     /// The list the developer sees is the answer to "do we need all of the
@@ -2186,47 +2117,24 @@ mod tests {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./src/main.rs") });
         let options = app.decision_options();
-        let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
-        assert_eq!(labels, vec!["Allow once", "Allow for this session", "Allow for this project", "Always allow", "Deny"]);
-        assert!(options.iter().all(|o| !o.detail.is_empty()), "every option must say what choosing it concretely does");
+        assert_eq!(options.len(), 5);
+        assert!(
+            options.iter().all(|o| o.detail.is_empty()),
+            "a permission row is `5a`'s sentence, which carries no detail column (ADR 0003)"
+        );
         assert_eq!(
             options[4].outcome,
-            DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "./src/**".into() }),
+            DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "./src/main.rs".into() }),
             "the one deny must be the non-persisting Once tier"
         );
     }
 
+    /// The point of the model: picking a *persisting* row writes the
+    /// broadened `<dir>/**` glob, not the one file that triggered it — so a
+    /// developer approves reading a directory once instead of re-approving
+    /// every file in it.
     #[test]
-    fn tab_toggles_pattern_scope_only_when_a_hint_is_available() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        assert_eq!(app.decision_pattern_scope, PatternScope::Broad, "a prompt opens on the broad unit — the capability, not the invocation");
-
-        app.handle_key(press(KeyCode::Tab));
-        assert_eq!(app.decision_pattern_scope, PatternScope::Exact, "Tab must narrow to the exact target when a hint is offered");
-
-        app.handle_key(press(KeyCode::Tab));
-        assert_eq!(app.decision_pattern_scope, PatternScope::Broad, "Tab must flip back");
-    }
-
-    #[test]
-    fn tab_is_a_no_op_when_theres_nothing_to_toggle() {
-        let mut app = app();
-        // A bare filename: no enclosing directory, so nothing broader than
-        // itself exists. A shell target no longer qualifies — it always has
-        // a program to widen to (ADR 0001).
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("main.rs") });
-        app.handle_key(press(KeyCode::Tab));
-        assert_eq!(app.decision_pattern_scope, PatternScope::default(), "no scope hint exists for a bare filename, so Tab must not change anything");
-    }
-
-    /// The point of the model: answering a prompt without touching Tab
-    /// persists the broadened `<dir>/**` glob, not the one file that
-    /// triggered it — so a developer approves reading a directory once
-    /// instead of re-approving every file in it. ADR 0001 inverted this;
-    /// the broadened pattern used to require an explicit Tab.
-    #[test]
-    fn selecting_an_option_persists_the_broad_pattern_by_default() {
+    fn picking_a_persisting_row_writes_the_broad_pattern() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
         app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
@@ -2243,41 +2151,44 @@ mod tests {
         }
     }
 
-    /// Tab is the way down to the exact target, for when the specific
-    /// invocation really is the thing being allowed. Narrowing is opt-in;
-    /// it is no longer the default it once was.
+    /// ADR 0003's stated cost, pinned so it is a decision rather than a
+    /// drift: the session row writes the exact target, which is `5a`'s own
+    /// scoping and narrower than ADR 0001's default. A developer wanting
+    /// the program picks row 3 instead.
     #[test]
-    fn selecting_an_option_after_narrowing_persists_the_exact_target() {
+    fn picking_the_session_row_writes_the_exact_target() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        app.handle_key(press(KeyCode::Tab)); // narrow to the exact file
-        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
+        app.handle_key(press(KeyCode::Char('2'))); // option 2: allow, session tier
 
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
                 assert_eq!(
                     response,
-                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "./crates/tui/src/ui.rs".into() }
+                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Session, pattern: "./crates/tui/src/ui.rs".into() }
                 );
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
     }
 
-    /// The toggle must not leak from one request to the next — a developer
-    /// who broadened one grant must not have that silently carry over to an
-    /// unrelated file's prompt.
+    /// `Tab` was the scope toggle before ADR 0003 moved scope onto the rows
+    /// themselves. It is no longer bound in the panel, and must be dropped
+    /// silently rather than falling through to some other handler.
     #[test]
-    fn pattern_scope_resets_when_the_next_prompt_becomes_the_front() {
+    fn tab_is_no_longer_bound_in_the_decision_panel() {
         let mut app = app();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        app.handle_key(press(KeyCode::Tab));
-        assert_eq!(app.decision_pattern_scope, PatternScope::Exact);
+        let before: Vec<String> = app.decision_options().into_iter().map(|o| o.label).collect();
+        let outbox = app.outbox.len();
 
-        app.handle_key(press(KeyCode::Char('3'))); // resolves call-1
-        app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: path_like_tool_prompt("./crates/core/src/agent.rs") });
-        assert_eq!(app.decision_pattern_scope, PatternScope::Broad, "a fresh prompt must start on the default unit, regardless of the previous one's toggle");
+        app.handle_key(press(KeyCode::Tab));
+
+        assert_eq!(app.decision_selected, 0, "Tab must not move the cursor");
+        assert_eq!(app.outbox.len(), outbox, "nor resolve anything");
+        let after: Vec<String> = app.decision_options().into_iter().map(|o| o.label).collect();
+        assert_eq!(before, after, "and the sentences must not change — there is no mode left to toggle");
     }
 
     // ── Bare `/model` opens the picker ───────────────────────────────────

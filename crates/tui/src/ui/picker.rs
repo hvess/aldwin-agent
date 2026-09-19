@@ -54,8 +54,10 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
         .rows()
         .into_iter()
         .map(|row| OptionRow {
-            label:  row.label,
-            detail: if row.current { format!("{}{CURRENT_NOTE}", row.detail) } else { row.detail },
+            label:   row.label,
+            detail:  if row.current { format!("{}{CURRENT_NOTE}", row.detail) } else { row.detail },
+            // `5c`'s pair shape quotes no grant pattern — see `OptionRow`.
+            pattern: None,
         })
         .collect();
 

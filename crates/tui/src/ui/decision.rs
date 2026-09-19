@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use super::diff;
 use super::grid::{elide, Ctx, MARGIN_X};
 use super::row::{band_row, Row};
-use crate::app::{App, GrantSummary, GrantUnit, PatternScope, PendingFront};
+use crate::app::{App, PendingFront};
 use crate::palette::Palette;
 
 /// Maximum rows the panel is allowed to claim, derived from the frame's
@@ -40,10 +40,17 @@ use crate::palette::Palette;
 /// what it was asked *about* was not.
 ///
 /// A quarter rather than the design's own half (`--panel-permission-h` is
-/// 18 rows of 36) because Mjolnir's panel is not `5a`'s: ADR 0001 puts five
-/// options on it where the reference has four, and adds the grant-summary
-/// and `Tab` scope rows, so its full content needs around 20 rows where the
-/// reference needs 18. Capping at half the frame is the number the design
+/// 18 rows of 36) because Mjolnir's panel was not `5a`'s: ADR 0001 puts five
+/// options on it where the reference has four, and it carried the
+/// grant-summary and `Tab` scope rows besides, so its full content needed
+/// around 20 rows where the reference needs 18.
+///
+/// **ADR 0003 removed those two rows and their padding blank**, which spends
+/// most of that argument: the panel now needs about 18, and the design's own
+/// half is back within reach. Deliberately left at a quarter in the same
+/// pass that removed them — two geometry changes at once make the next
+/// screenshot delta unreadable about which caused what. See ADR 0003's
+/// consequences. Capping at half the frame is the number the design
 /// states, and it elides the *command block* — the one row that says what
 /// is being approved — while keeping the options list, which is the wrong
 /// trade in both directions. The floor of 5 rows is what the log needs to
@@ -327,13 +334,27 @@ pub(super) fn key_hints(pairs: &[(&str, &str)], ctx: Ctx) -> Vec<Span<'static>> 
     spans
 }
 
-/// One row of a numbered list, reduced to what the row draws: the name and
-/// the line beside it saying what picking it does. Both the permission
-/// panel's decisions and the model picker's catalogue rows arrive here as
-/// this, so the two lists cannot drift into two different controls.
+/// Where an option's text starts: `5a` puts `▌` in cell 0, the number in
+/// cell 3 and the label in cell 6. Public to the module so a test can
+/// derive how much room a sentence has for its quoted pattern instead of
+/// restating the arithmetic.
+pub(super) const LABEL_COL: usize = 6;
+
+/// One row of a numbered list, reduced to what the row draws.
+///
+/// It serves the two lists the design system draws, which are deliberately
+/// **not** the same control (ADR 0003): a permission row is `5a`'s sentence,
+/// stating its own grant rule with `detail` empty and `pattern` marking the
+/// span to quieten; first run's catalogue rows are `5c`'s name + detail
+/// pair, with no pattern. The shared type is what keeps the *selection*
+/// convention — mark, band, number, tones — identical across both, which is
+/// the part the design does hold in common.
 pub(super) struct OptionRow {
-    pub label:  String,
-    pub detail: String,
+    pub label:   String,
+    pub detail:  String,
+    /// Byte range within `label` holding the grant pattern, drawn one step
+    /// quieter per `5a`. `None` wherever the row quotes no pattern.
+    pub pattern: Option<std::ops::Range<usize>>,
 }
 
 /// The numbered, keyboard-navigable list of choices — one row per
@@ -354,10 +375,20 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
     // below); `DETAIL_GAP` parts the label column from the detail one, and
     // `MARGIN_X` keeps the longest detail off the frame's right edge.
     const DETAIL_GAP: usize = 3;
-    const LABEL_COL: usize = 6;
     let pal = ctx.pal;
     let label_width = options.iter().map(|o| o.label.width()).max().unwrap_or(0);
     let detail_width = options.iter().map(|o| o.detail.width()).max().unwrap_or(0);
+    // `label_width` is the *unelided* width, which is only safe because the
+    // two shapes are disjoint: a row with a `pattern` to elide is a `5a`
+    // sentence and carries no detail, and a row with a detail is a `5c` pair
+    // and quotes no pattern (ADR 0003). Were both ever set on one row, the
+    // detail column would be padded against a label the renderer then
+    // shortened, and the column would go ragged — so the two must stay
+    // disjoint, or this needs to measure the elided width instead.
+    debug_assert!(
+        !options.iter().any(|o| o.pattern.is_some() && !o.detail.is_empty()),
+        "an option row is either a 5a sentence or a 5c pair, never both"
+    );
     let show_details = detail_width > 0 && LABEL_COL + label_width + DETAIL_GAP + detail_width + MARGIN_X <= ctx.width as usize;
     options
         .iter()
@@ -377,8 +408,42 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
             let mut spans = vec![
                 Span::styled("▌  ", Style::default().fg(mark_fg).bg(bg)),
                 Span::styled(format!("{}  ", i + 1), Style::default().fg(number_fg).bg(bg)),
-                Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg)),
             ];
+            // `5a`: "Text in body colour with the matched pattern one step
+            // quieter." **One** step, measured on the ink ramp rather than
+            // reasoned by analogy: `semantic.css` has body at neutral-200
+            // and `quiet` at neutral-300, with `label` and `dim` two and
+            // three rungs down. The detail column below uses `dim`, which is
+            // the right tone for `5c`'s description text and the wrong one
+            // here — taking it as the pair to copy put the quoted rule three
+            // rungs under its sentence instead of one.
+            //
+            // The selected row is the exception, and for the reason the
+            // detail column already had to move off `dim`: on the `band`
+            // field it measures 2.62:1. `accent_text` is the step there.
+            match &opt.pattern {
+                Some(at) => {
+                    let quiet_fg = if is_selected { pal.accent_text } else { pal.quiet };
+                    let (head, tail) = (&opt.label[..at.start], &opt.label[at.end..]);
+                    // The pattern is the only part of the sentence that can
+                    // be arbitrarily long — a grant over a 200-character
+                    // shell command is ordinary input — and `Row::build`
+                    // *wraps*, so an unelided one would silently turn one
+                    // option into two or three rows and break the numbered
+                    // list's one-row-per-choice reading. Eliding it here
+                    // rather than where the sentence is assembled is what
+                    // lets the budget depend on the frame: `app.rs` has no
+                    // width. The words around it survive intact, and the
+                    // target is on screen in full in the card body above —
+                    // the same reasoning the grant-summary row's own
+                    // 56-cell cap was built on before ADR 0003 retired it.
+                    let room = (ctx.width as usize).saturating_sub(LABEL_COL + MARGIN_X + head.width() + tail.width());
+                    spans.push(Span::styled(head.to_string(), Style::default().fg(label_fg).bg(bg)));
+                    spans.push(Span::styled(elide(&opt.label[at.clone()], room), Style::default().fg(quiet_fg).bg(bg)));
+                    spans.push(Span::styled(tail.to_string(), Style::default().fg(label_fg).bg(bg)));
+                }
+                None => spans.push(Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg))),
+            }
             if show_details {
                 // `accent_text` on the selected row, `dim` elsewhere — Turn
                 // 14 is explicit that "the selected row's purpose text is
@@ -398,46 +463,6 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
             Row::flush(bg).build(spans, ctx)
         })
         .collect()
-}
-
-/// How much of a grant rule [`grant_lines`] spells out before eliding. A
-/// rule is `kind:pattern` over an arbitrary tool target, and an arbitrarily
-/// long one is ordinary input (a long shell command); the target is already
-/// shown in full in the card body directly above, so wrapping a second copy
-/// of it across four rows would spend the panel's row budget repeating what
-/// the developer just read. The head is what carries this line's meaning:
-/// which kind, and that the pattern is the literal target rather than a
-/// wildcard.
-pub(super) const GRANT_RULE_MAX: usize = 56;
-
-/// The panel's statement of what a *saved* answer would write — one line
-/// naming the literal `kind:pattern` rule, plus a second naming the other
-/// scope Tab would switch to when the target has one.
-///
-/// Both exist because of the same developer feedback: "permissions are not
-/// clear, are we approving the tool? are we approving the directory? what
-/// are we concretely doing." The tier labels can't answer that on their own
-/// — they stay identical whichever pattern is selected — and the line they
-/// replace only rendered for path-like targets, so a `shell` prompt said
-/// nothing at all about whether "allow" meant this command or the shell
-/// tool. Naming the rule verbatim answers it in the same vocabulary the
-/// developer will later read back out of `permissions.yaml`.
-fn grant_lines(grant: &GrantSummary) -> Vec<String> {
-    let mut lines = vec![format!("saving an answer adds the rule  {}", elide(&grant.rule, GRANT_RULE_MAX))];
-    if let Some(alternate) = &grant.alternate {
-        let alternate = elide(alternate, GRANT_RULE_MAX);
-        // The wording follows the tool's own broad unit (ADR 0001): a path
-        // widens to its directory, a command to its program. One shared
-        // phrasing was wrong for half the prompts as soon as `shell` stopped
-        // granting the exact argv.
-        lines.push(match (grant.scope, &grant.unit) {
-            (PatternScope::Exact, GrantUnit::Directory) => format!("Tab  widen it to this whole directory  {alternate}"),
-            (PatternScope::Broad, GrantUnit::Directory) => format!("Tab  narrow it back to this one file  {alternate}"),
-            (PatternScope::Exact, GrantUnit::Program(program)) => format!("Tab  widen it to every {program} command  {alternate}"),
-            (PatternScope::Broad, GrantUnit::Program(_)) => format!("Tab  narrow it back to this one command  {alternate}"),
-        });
-    }
-    lines
 }
 
 /// Builds the panel's content: whichever pending approval/prompt is at the
@@ -463,7 +488,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // The panel's own list, reduced to what a row actually draws — the
     // shape `super::picker` renders too, so both lists are one control.
     let rows: Vec<OptionRow> =
-        options.iter().map(|o| OptionRow { label: o.label.clone(), detail: o.detail.clone() }).collect();
+        options.iter().map(|o| OptionRow { label: o.label.clone(), detail: o.detail.clone(), pattern: o.pattern.clone() }).collect();
     let card = Row::card(pal.bar);
     // The separator above the options list. The design system's permission
     // screen replaced the old accent rule here with "one row of the
@@ -512,36 +537,22 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             (approval_card(&pending.diff, Vec::new(), Some(card_rows), ctx), "edit".to_string(), tail, 2)
         }
         PendingFront::Prompt(pending) => {
-            // Present for every Tool prompt (its second line, the Tab
-            // toggle, only when the target has an enclosing directory to
-            // broaden to); absent for a ContextFile prompt, which persists
-            // a path rather than a grant pattern and has no rule to state.
-            // The grant summary and the `Tab` scope row sit *between* the
-            // protected head and the protected tail, so they are what a
-            // short frame elides. That is the right order of the three:
-            // what the agent wants (the head), how to answer (the tail),
-            // then the rule a saved answer would write.
-            //
-            // Its own padding row above: the rule restates the target the
-            // card body just showed, so without a break the two sit as
-            // adjacent near-identical rows ("read: ./x.rs" directly over
-            // "…adds the rule  read:./x.rs") and read as a stutter rather
-            // than as a statement about what happens next.
-            let middle: Vec<Line<'static>> = match app.decision_grant() {
-                Some(grant) => std::iter::once(card.blank(ctx)).chain(grant_lines(&grant).iter().flat_map(|line| card.text(line, pal.dim, ctx))).collect(),
-                None => Vec::new(),
-            };
+            // There is no longer a row between the card and the options
+            // list. The grant summary and the `Tab` scope row used to sit
+            // here, stating the rule a saved answer would write and the
+            // other scope Tab would switch to; ADR 0003 put the rule into
+            // each option's own sentence, where it is read on the row being
+            // picked rather than two rows above it at `--tui-dim`.
             let view = PromptView::of(&pending.payload);
-            let mut body = prompt_card(&pending.payload, Vec::new(), ctx);
+            let body = prompt_card(&pending.payload, Vec::new(), ctx);
             let head = body.len();
             let options = option_rows(&rows, app.decision_selected, ctx);
-            // Measured before anything is built: the rule keeps its blank
-            // rows only if the whole panel fits with them.
-            let tight = head + middle.len() + 3 + options.len() > budget;
+            // Measured before anything is built: the separator keeps its
+            // blank rows only if the whole panel fits with them.
+            let tight = head + 3 + options.len() > budget;
             let mut tail = options_rule(tight);
             tail.extend(options);
             tail.extend(queue_note(app.pending_prompts.len()));
-            body.extend(middle);
             (body, view.badge, tail, head)
         }
         PendingFront::None => return Vec::new(),

@@ -6,7 +6,7 @@
 //! every scene; these say *why* each fact matters.
 
 use super::chrome::{self, highlight_command_tokens};
-use super::decision::GRANT_RULE_MAX;
+use super::decision::LABEL_COL;
 use super::draw;
 use super::grid::{Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use super::markdown::{parse_inline, render_line as render_markdown_line, render_prose};
@@ -981,27 +981,33 @@ fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
     // squeezing any of it off-screen.
     let out = rendered(&mut app, 100, 34);
     assert!(out.contains("1  Allow once"), "the first option must be numbered: {out:?}");
-    assert!(out.contains("3  Allow for this project"), "later options must be numbered too: {out:?}");
+    assert!(out.contains("3  Always allow git * in this project"), "later options must be numbered too: {out:?}");
     assert!(out.contains("5  Deny"), "the single deny option closes the list: {out:?}");
     assert!(!out.contains("Always deny"), "the persistent deny tiers are no longer offered here: {out:?}");
 }
 
 /// The panel must say what each answer concretely does, not just name a
 /// tier — the direct answer to "permissions are not clear ... what are
-/// we concretely doing". Two halves: the rule a saved answer would add
-/// (in the same `kind:pattern` form it takes in `permissions.yaml`), and
-/// per-option details saying how long each answer lasts and where, if
-/// anywhere, it is written.
+/// we concretely doing". ADR 0003 moved that answer *into* each row: the
+/// sentence names the rule in the same `kind:pattern` vocabulary it takes
+/// in `permissions.yaml`, and names its own reach.
+///
+/// What it no longer names is the *file*. The old detail column said
+/// "saved to ~/.mjolnir/permissions.yaml" where the sentence now says
+/// "everywhere", so the two persisting tiers are distinguished by reach
+/// rather than by path. That is `5a`'s own copy and a real loss of
+/// provenance — recorded in ADR 0003 rather than quietly dropped, and
+/// pinned here so it stays a decision.
 #[test]
-fn a_tool_prompt_states_the_rule_it_would_save_and_what_each_option_does() {
+fn every_option_states_its_own_rule_and_its_reach() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  shell:cargo *"), "the rule must be named — allow means every cargo command, not this one argv (ADR 0001): {out:?}");
-    assert!(out.contains("this call only; nothing is saved"), "the once tier must say it saves nothing: {out:?}");
-    assert!(out.contains("saved to .mjolnir/permissions.yaml"), "the project tier must name where it writes: {out:?}");
-    assert!(out.contains("saved to ~/.mjolnir/permissions.yaml"), "the always tier must name the *global* file, not the project one: {out:?}");
+    assert!(out.contains("Always allow cargo * in this project"), "allow means every cargo command, not this one argv (ADR 0001): {out:?}");
+    assert!(out.contains("Always allow cargo * everywhere"), "and the global tier must be distinguishable from the project one: {out:?}");
+    assert!(out.contains("1  Allow once"), "the once tier saves nothing, so it quotes no rule: {out:?}");
+    assert!(!out.contains(".mjolnir/permissions.yaml"), "the pair shape's provenance column is gone with the pair shape: {out:?}");
 }
 
 /// The old footer claimed "saved to .mjolnir/permissions.yaml" under
@@ -1085,38 +1091,34 @@ fn a_shell_prompt_shows_a_command_block_instead_of_a_raw_line() {
     assert!(out.contains("$ cargo test --workspace"), "a shell command should render as a `$ ` command block: {out:?}");
 }
 
-/// A path-like Tool prompt whose target has an enclosing directory must
-/// show the scope-toggle hint, naming both the current (directory)
-/// scope and the exact file Tab would narrow it to — so the developer
-/// can always see that the grant on the table is broader than the call
-/// that triggered it.
+/// A path-like Tool prompt's persisting rows quote the enclosing
+/// directory, and its session row quotes the file — so the developer can
+/// see on each row that the grant it writes is broader (or not) than the
+/// call that triggered it, without a separate summary row to cross-read
+/// (ADR 0003).
 #[test]
-fn a_path_like_prompt_shows_the_directory_scope_hint() {
+fn a_path_like_prompts_rows_quote_their_own_patterns() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "must name the rule the default directory scope would save: {out:?}");
-    assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "must show the exact file Tab would switch to, and that Tab is how: {out:?}");
+    assert!(out.contains("Always allow ./crates/tui/src/** in this project"), "the persisting row must quote the directory glob it would save: {out:?}");
+    assert!(out.contains("Allow ./crates/tui/src/ui.rs for this session"), "and the session row the file it would allow: {out:?}");
+    assert!(!out.contains("adds the rule"), "the separate grant-summary row is gone — each sentence states its own rule: {out:?}");
+    assert!(!out.contains("Tab  "), "and so is the scope toggle it fed: {out:?}");
 }
 
-/// A path prompt opens on the directory glob (ADR 0001 makes the broad
-/// unit the default) with Tab offered as the way back to the exact file,
-/// and narrowing swaps both halves — otherwise the panel would name a
-/// rule other than the one it is about to persist.
+/// Both scopes are now on screen at once, one per row, where they used to
+/// be one mutable rule plus a `Tab` hint naming the other. This is the
+/// property that replaced the toggle, so it is worth pinning directly.
 #[test]
-fn toggling_scope_flips_which_pattern_the_panel_calls_current() {
+fn both_grant_scopes_are_visible_at_once_without_a_toggle() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  read:./crates/tui/src/**"), "the directory glob is the default rule on the table: {out:?}");
-    assert!(out.contains("Tab  narrow it back to this one file  read:./crates/tui/src/ui.rs"), "the exact file must be shown as what Tab switches to: {out:?}");
-
-    app.decision_pattern_scope = crate::app::PatternScope::Exact;
-    let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  read:./crates/tui/src/ui.rs"), "narrowing must put the exact file on the table: {out:?}");
-    assert!(out.contains("Tab  widen it to this whole directory  read:./crates/tui/src/**"), "and offer the directory back: {out:?}");
+    assert!(out.contains("./crates/tui/src/**"), "the broad unit: {out:?}");
+    assert!(out.contains("./crates/tui/src/ui.rs for this session"), "and the exact target, on their own rows: {out:?}");
 }
 
 /// A shell prompt broadens to its *program*, not to a directory it does
@@ -1124,26 +1126,28 @@ fn toggling_scope_flips_which_pattern_the_panel_calls_current() {
 /// all on a non-path-like target and wrote the exact argv — the friction
 /// ADR 0001 exists to remove.
 #[test]
-fn a_shell_prompt_offers_a_program_scope_toggle() {
+fn a_shell_prompts_persisting_rows_quote_the_program() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  shell:cargo *"), "the program glob is the default rule for a command: {out:?}");
-    assert!(out.contains("Tab  narrow it back to this one command  shell:cargo test -p gateway"), "the exact command must be offered back: {out:?}");
+    assert!(out.contains("Always allow cargo * in this project"), "the design system's own permission copy, verbatim: {out:?}");
+    assert!(out.contains("Allow cargo test -p gateway for this session"), "and the exact command on the session row: {out:?}");
 }
 
 /// The degenerate case the program unit still has to handle: a target
-/// with no program token at all has nothing broader than itself, so the
-/// panel states its rule and offers no Tab press that would be a no-op.
+/// with no broader form than itself. Every row still quotes a rule — the
+/// target itself — rather than one of them quietly widening to a glob the
+/// developer cannot see on the row they are picking.
 #[test]
-fn a_target_with_no_broader_form_offers_no_scope_toggle() {
+fn a_target_with_no_broader_form_quotes_itself_on_every_row() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "main.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("adds the rule  read:main.rs"), "the rule itself must still be stated: {out:?}");
-    assert!(!out.contains("Tab "), "a bare filename has no enclosing directory to broaden to: {out:?}");
+    assert!(out.contains("Allow main.rs for this session"), "the session row states its rule: {out:?}");
+    assert!(out.contains("Always allow main.rs in this project"), "and so does the project row, with no invented glob: {out:?}");
+    assert!(!out.contains("Tab "), "there is no scope toggle to offer: {out:?}");
 }
 
 /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
@@ -1240,23 +1244,25 @@ fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
     // matching a literal substring, is what actually proves nothing was
     // dropped.
     //
-    // The grant line (`grant_lines`) restates the target as part of the
-    // rule it would save, elided at `GRANT_RULE_MAX` — so the expected
-    // count is the command block's own full 200 plus whatever of the
-    // rule survives elision past its "shell:" prefix. Derived from the
-    // constant rather than written out, so tuning the elision width
-    // can't silently turn this into a test of nothing. `- 1` for the `…`
-    // itself: `grid::elide` bounds the *whole* result to `max` cells,
-    // the trailing glyph included, since its callers are hand-composed
-    // rows that have exactly that many cells to spend.
+    // Since ADR 0003 the target is also quoted by each of the three
+    // persisting/session sentences, elided to whatever room that row's
+    // own words leave it — so the expected count is the command block's
+    // full 200 plus what survives elision on each of those three rows.
+    // Derived from the constants rather than written out, so tuning a
+    // row's budget can't silently turn this into a test of nothing.
     //
-    // Since ADR 0001 a shell prompt also has an *alternate* — the exact
-    // command, offered back by Tab — which restates the same target a
-    // second time under the same elision. So the target's characters
-    // appear in three places: the command block in full, the broad rule,
-    // and the alternate.
-    let in_grant_line = GRANT_RULE_MAX - "shell:".len() - 1;
-    assert_eq!(out.matches('q').count(), 200 + 2 * in_grant_line, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+    // `- 1` for the `…` itself: `grid::elide` bounds the *whole* result
+    // to `max` cells, the trailing glyph included, since its callers are
+    // hand-composed rows that have exactly that many cells to spend. The
+    // quoted pattern leads with the target's own characters in every
+    // case (the program glob is the 200 `q`s plus ` *`), so everything
+    // that survives elision is a `q`.
+    let quoted = |head: &str, tail: &str| 60 - (LABEL_COL + MARGIN_X + head.len() + tail.len()) - 1;
+    let expected = 200
+        + quoted("Allow ", " for this session")
+        + quoted("Always allow ", " in this project")
+        + quoted("Always allow ", " everywhere");
+    assert_eq!(out.matches('q').count(), expected, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
 }
 
 /// Regression test for the actual reported defect, not just the
@@ -1282,14 +1288,15 @@ fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
     // A run of ten consecutive `y`s only ever occurs inside the wrapped
     // `$ yyy...` command line (200 `y`s, hard-broken mid-run since it
     // has no whitespace to wrap at) — unlike a single "y", which the
-    // input box's placeholder text also contains. The search stops
-    // above the grant line, which restates a (differently-filled) slice
-    // of the same target as the rule it would save (`grant_lines`), so
-    // the row found is unambiguously the command block's own final
-    // wrapped row, whose trailing padding is what this test checks.
+    // input box's placeholder text also contains. The search stops above
+    // the options list, whose sentences quote elided slices of the same
+    // target (ADR 0003 put the rule on the rows; it used to be a single
+    // grant line in the same place), so the row found is unambiguously
+    // the command block's own final wrapped row, whose trailing padding
+    // is what this test checks.
     let needle = "y".repeat(10);
-    let grant_row = find_row(&buffer, "adds the rule");
-    let last_title_row = (0..grant_row)
+    let options_row = find_row(&buffer, "1  Allow once");
+    let last_title_row = (0..options_row)
         .rev()
         .find(|&y| {
             let row: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();

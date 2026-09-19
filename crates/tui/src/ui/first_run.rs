@@ -122,7 +122,11 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     let cwd = crate::app::current_dir_display().unwrap_or_default();
     let version = format!("v{}", crate::version::VERSION);
     let right = vec![vec![Span::styled(version, Style::default().fg(pal.dim).bg(pal.bar))], Vec::new()];
-    let line = super::chrome::identity_bar_row(area.width as usize, &cwd, pal.dim, right, pal);
+    // `quiet`, the same rung the session bar gives the identical string —
+    // this screen rendered it `dim`, so one component had two tones across
+    // two screens. The version beside it stays `dim`: there the step down is
+    // deliberate, because the version is the quieter fact of the two.
+    let line = super::chrome::identity_bar_row(area.width as usize, &cwd, pal.quiet, right, pal);
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(pal.bar)), row);
 }
 

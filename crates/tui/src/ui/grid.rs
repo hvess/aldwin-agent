@@ -213,11 +213,29 @@ pub(super) fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<
 
 /// Right-flushes `right` against `left` within `width` columns —
 /// `ToolLine.jsx`'s own shape (glyph/name/target on the left, a result
-/// summary flush to the right edge). Falls back to a single-space gap
-/// rather than clipping when the two sides don't leave room to space apart
-/// properly.
+/// summary flush to the right edge).
+///
+/// When the two sides do not both fit, the **right** group is elided to
+/// what is left after the left group and one space. It previously fell back
+/// to a one-space gap and returned a line *longer than `width`*, which
+/// ratatui then clipped at the frame edge — a summary cut to `17 fil` with
+/// no `…`, silently, which is the third time this codebase has learned that
+/// "two groups sized independently cannot keep a gap between them" (see
+/// `chrome::identity_bar_row` and `draw_status_line`, which both compose one
+/// line for exactly this reason). A shortened summary is still true, so the
+/// right group elides rather than being dropped whole; the left group is
+/// never cut here, because its glyph and tool name are what identify the row.
+///
+/// Note how narrow the margin was: at 80 columns `● shell (c1)` and
+/// `42 matches across 17 files` fit with a single cell to spare, so widening
+/// the tool-name field by the two cells `4a` asks for was enough to push it
+/// over. Nothing in the crate's tests would have caught the clip — it is
+/// well-formed output, just missing its tail.
 pub(super) fn justified_line(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+    let room = width.saturating_sub(left_w).saturating_sub(1);
+    let right = if right_w > room { truncate_spans(right, room) } else { right };
     let right_w: usize = right.iter().map(|s| s.content.width()).sum();
     let gap = width.saturating_sub(left_w).saturating_sub(right_w).max(1);
     let mut spans = left;

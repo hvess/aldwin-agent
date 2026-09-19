@@ -288,33 +288,41 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // the LLM doing right now" is the single most useful thing this line
     // can say, so it shouldn't be buried after the model name/turn counter.
     let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
+    // `dim`, not `label`, for every word in this row — `14d` puts both the
+    // status fact and the key hint in `--t-dim`, and the hint below already
+    // was, so the left group alone was a rung loud and idle chrome outranked
+    // the agent's own quiet labels. The two exceptions are deliberate and
+    // both come from the reference: the activity *glyph* is the accent
+    // (`4a`'s `◐  working   41s`), and a running tool's name stays `value`
+    // because it is the one live datum here rather than a standing label.
+    let ink = || Style::default().fg(pal.dim);
     let running = |text: String| {
-        vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled(text, Style::default().fg(pal.label))]
+        vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled(text, ink())]
     };
+    // Two groups, and the rhythm says which is which. Activity (with the
+    // tools it is running) is what is happening *now*; the model, the turn
+    // and the message count are standing facts about the session. Unrelated
+    // groups are parted by `--group-gap`; facts within one ride ` · `. The
+    // row shipped two literal spaces everywhere, which is neither, so four
+    // unrelated facts read as one undifferentiated run — the same misreading
+    // `grid::GROUP_GAP` records for the identity bar.
     let mut spans = if app.thinking {
-        running("thinking…  ".into())
+        running("thinking…".into())
     // `awaiting_turn` counts as active here as well as in the hint below —
     // between submitting and `TurnStarted` landing the harness is waiting
     // on the provider, and reporting that stretch as "idle" is exactly the
     // no-progress-feedback complaint `activity_label` exists to answer.
     } else if app.turn_active || app.awaiting_turn {
-        running(format!("{}  ", activity_label(app)))
+        running(activity_label(app).to_string())
     } else {
-        vec![Span::styled("idle  ", Style::default().fg(pal.label))]
+        vec![Span::styled("idle", ink())]
     };
-
-    let turn_step = match (s.turn, s.step) {
-        (Some(t), Some(st)) => format!("T{t} S{st}"),
-        (Some(t), None) => format!("T{t}"),
-        _ => "-".to_string(),
-    };
-    spans.push(Span::styled(format!("{}  {turn_step}  ", s.model_name), Style::default().fg(pal.label)));
 
     if !s.running_tools.is_empty() {
-        spans.push(Span::styled("tools: ", Style::default().fg(pal.label)));
+        spans.push(Span::styled(" · ", ink()));
         for (i, tool) in s.running_tools.iter().enumerate() {
             if i > 0 {
-                // `label`, not a bare `Span::raw` — the separator carries a
+                // `ink()`, not a bare `Span::raw` — the separator carries a
                 // visible glyph, and `Style::default()` is the *terminal's*
                 // default foreground, not a token: on a light-profile
                 // terminal it renders near-black against this bar and on a
@@ -323,15 +331,35 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
                 // `highlight_command_tokens` states for composer words; the
                 // whitespace `Span::raw`s elsewhere are exempt only because
                 // they paint no glyph.
-                spans.push(Span::styled(", ", Style::default().fg(pal.label)));
+                spans.push(Span::styled(", ", ink()));
             }
             spans.push(Span::styled(running_tool_name(tool).to_string(), Style::default().fg(pal.value)));
         }
-        spans.push(Span::raw("  "));
     }
 
+    // `--group-gap` parts the activity group from the session group.
+    spans.push(Span::styled(" ".repeat(GROUP_GAP), ink()));
+
+    // Lowercase words, not `T1 S2`: the Content Fundamentals ask for
+    // lowercase labels, and an uppercase cryptic abbreviation is what this
+    // was. An absent turn is now *omitted* rather than printed as `-` —
+    // that placeholder borrowed a diff sign to mean "no value", and a fact
+    // the session does not have yet is better left unsaid than signed.
     let messages = app.log.len();
-    spans.push(Span::styled(format!("{messages} message{}", if messages == 1 { "" } else { "s" }), Style::default().fg(pal.label)));
+    let mut facts = vec![s.model_name.clone()];
+    if let Some(t) = s.turn {
+        facts.push(format!("turn {t}"));
+    }
+    if let Some(st) = s.step {
+        facts.push(format!("step {st}"));
+    }
+    facts.push(format!("{messages} message{}", if messages == 1 { "" } else { "s" }));
+    for (i, fact) in facts.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", ink()));
+        }
+        spans.push(Span::styled(fact, ink()));
+    }
 
     // Right-aligned key hint — `StatusLine.jsx`'s own `right` prop (`esc to
     // stop`), adapted to Mjolnir's real binding: Ctrl+C, not Esc, is what
@@ -433,11 +461,26 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // gave no hint at all that this was where a message goes. While
     // blocked, the placeholder says so instead of inviting a keystroke it
     // would silently drop.
+    //
+    // The caret and the placeholder used to claim the **same cell**. The
+    // caret here is the terminal's own cursor rather than a drawn `▌`, and
+    // `set_cursor_position` put it exactly where the placeholder's first
+    // character was painted: unfocused it outlined the `A`, focused it
+    // replaced it. Nothing caught it — the gates read the cells the app
+    // *declares*, and a hardware cursor is not one of them, which is why a
+    // collision this plain survived 72 clean frames. The placeholder now
+    // starts two cells past the caret, and only when there is a caret to
+    // clear: while blocked no cursor is set, so the text keeps the prompt's
+    // own column and does not hang on a phantom indent.
     if app.input.is_empty() {
         app.composer_top = 0;
         let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
-        let placeholder = Line::from(vec![prompt(), Span::styled(text, Style::default().fg(pal.dim))]);
-        frame.render_widget(Paragraph::new(placeholder).block(block), area);
+        let mut placeholder = vec![prompt()];
+        if !blocked {
+            placeholder.push(Span::styled("  ", Style::default().bg(pal.bar_bottom)));
+        }
+        placeholder.push(Span::styled(text, Style::default().fg(pal.dim)));
+        frame.render_widget(Paragraph::new(Line::from(placeholder)).block(block), area);
         if !blocked {
             frame.set_cursor_position((inner.x + PROMPT_PREFIX_LEN, inner.y));
         }

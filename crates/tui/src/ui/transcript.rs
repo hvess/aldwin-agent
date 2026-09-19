@@ -313,15 +313,40 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             let content: Vec<Line<'static>> = calls
                 .iter()
                 .map(|c| {
-                    let target = if c.name.is_empty() { c.call_id.clone() } else { format!("{} ({})", c.name, c.call_id) };
+                    // `4a`: "glyph, 2 spaces, tool name padded to 6
+                    // characters … then the target" — its own example is
+                    // `◐  bash  cargo test…`. This row shipped a single
+                    // space and no pad, putting the name on cell 15 and the
+                    // target on 20 where the reference puts them on 16 and
+                    // 22, so no two tool rows lined up with each other.
+                    //
+                    // The 6 is a minimum, not a width: a name of 6 or more
+                    // characters would touch its own target, and two runs
+                    // colliding inside the body column is this UI's
+                    // recurring defect. Where the reference's arithmetic
+                    // runs out, the glyph's own 2-space rhythm is what
+                    // continues it.
+                    //
+                    // What is *in* the target field is still the call id
+                    // rather than the file or command the reference shows —
+                    // `ToolActivityEntry` carries `call_id`, `name` and
+                    // `status` and nothing else, so the real target is not
+                    // available to render. See the conformance spec; that
+                    // half is a data source, not a layout fix.
+                    let target = if c.name.is_empty() {
+                        c.call_id.clone()
+                    } else {
+                        let field = 6.max(c.name.width() + 2);
+                        format!("{:<field$}({})", c.name, c.call_id)
+                    };
                     // A *running* call's name is `accent_text` in the
                     // reference ("`◐  bash  cargo test…`" — the live row is
                     // the one the eye should land on), a finished one's is
                     // ordinary `body`.
                     let (glyph, text_color, summary) = match &c.status {
-                        ToolActivityStatus::Running => (Span::styled("◐ ", Style::default().fg(pal.glyph_running)), pal.accent_text, None),
-                        ToolActivityStatus::Completed { is_error: false, summary } => (Span::styled("● ", Style::default().fg(pal.glyph_done)), pal.body, Some(summary.clone())),
-                        ToolActivityStatus::Completed { is_error: true, summary } => (Span::styled("● ", Style::default().fg(pal.del)), pal.body, Some(summary.clone())),
+                        ToolActivityStatus::Running => (Span::styled("◐  ", Style::default().fg(pal.glyph_running)), pal.accent_text, None),
+                        ToolActivityStatus::Completed { is_error: false, summary } => (Span::styled("●  ", Style::default().fg(pal.glyph_done)), pal.body, Some(summary.clone())),
+                        ToolActivityStatus::Completed { is_error: true, summary } => (Span::styled("●  ", Style::default().fg(pal.del)), pal.body, Some(summary.clone())),
                     };
                     let left = vec![glyph, Span::styled(target, Style::default().fg(text_color))];
                     let right = match summary {
@@ -624,14 +649,33 @@ pub(super) const INTRO_ROWS: usize = 7;
 /// One `label: state` pair in the hero's access row. No filled chip — the
 /// design system's own rule is that the accent is "a mark or a line, never
 /// a filled field," and none of its components use a background-filled
-/// badge for a state word; add/del (green/red) plain text already reads as
-/// allow/deny at a glance.
+/// badge for a state word.
+///
+/// Both words are `value`, and the **word** is what distinguishes them.
+/// They used to be `add`/`del` — green and red — on the reasoning that the
+/// pair "already reads as allow/deny at a glance." It does, but at a price
+/// the system does not sell: those are the two diff hues, and rule 1 of
+/// three is that "nothing in a frame is a foreign colour. The only
+/// exceptions are the two diff hues, 148° and 25°" — exceptions *for the
+/// diff*, because they have to be unmistakably not-the-accent. Spent
+/// anywhere else they stop meaning "changed line": a screenshot judge read
+/// this row as deleted lines, and in the light theme `deny` at #b0122e was
+/// the most saturated thing in a deliberately shallow frame.
+///
+/// `value` is not a guess: `--tui-value` is the role named for "right-flush
+/// facts and permission \"off\" values", which is literally this. It also
+/// makes the row consistent with its own siblings — `in` and `provider`
+/// two rows up are already `value`, so the hero now reads as one key/value
+/// block instead of two rows of facts and one of signals.
 fn access_spans(label: &str, state: PermState, ctx: Ctx) -> Vec<Span<'static>> {
-    let (word, word_fg) = match state {
-        PermState::Allowed => ("allow", ctx.pal.add),
-        PermState::Denied => ("deny", ctx.pal.del),
+    let word = match state {
+        PermState::Allowed => "allow",
+        PermState::Denied => "deny",
     };
-    vec![Span::styled(format!("{label}:"), Style::default().fg(ctx.pal.label)), Span::styled(format!("{word} "), Style::default().fg(word_fg))]
+    vec![
+        Span::styled(format!("{label}:"), Style::default().fg(ctx.pal.label)),
+        Span::styled(format!("{word} "), Style::default().fg(ctx.pal.value)),
+    ]
 }
 
 /// Pushes [`intro_content`] to the *bottom* of the log panel's inner

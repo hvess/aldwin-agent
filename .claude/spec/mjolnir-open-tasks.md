@@ -12,13 +12,22 @@ An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
 contradicts) and the entry says so before it goes.
 
-## Design conformance — from the first screenshot session
+## Design conformance — superseded
 
-Run `run-1789824458`, scoring `markdown` and `conversation` at all three sizes
-in both themes. Verdict: **below threshold, minimum 74 against 90**. Gates were
-clean on all twelve frames; every deduction below is a judgement a
-deterministic gate cannot make. The run directory ages out after five more
-sessions, so the numbers are recorded here rather than by reference.
+**Superseded 2026-09-19 by `.claude/spec/mjolnir-design-conformance.md`.**
+Entries 1–4 came from run `run-1789824458`, which scored two scenes. The
+full-catalogue run `run-1789826989` scored all twelve at three sizes in both
+themes — 72 frames, minimum 58 against 90 — and the conformance spec carries
+each of these with its measurements across every scene, its class (is the app
+wrong, or has the design no answer), and where in `crates/tui` it lives. They
+are kept here as a pointer, not restated.
+
+- Entry 1 → conformance spec, Class A item 6 (the uncapped measure).
+- Entry 2 → Class A item 1 (the status row's 2-cell separators).
+- Entry 3 → Class A item 14 (the orphan break band).
+- Entry 4 → Class A item 22 (the missing time row).
+
+The original text follows, unchanged.
 
 1. **The measure is uncapped at wide terminals.** `conversation` at 200×50
    scored 74 spatial / 76 component — the only frames under the threshold.
@@ -121,6 +130,7 @@ because each is closable work.
 
 ## References
 
+- .claude/spec/mjolnir-design-conformance.md — the design gap in full; supersedes entries 1–4.
 - .claude/spec/mjolnir-screenshot.md — the harness these gaps belong to.
 - .claude/skills/screenshot/SKILL.md — what a session must disclose.
 - .claude/design/HANDOFF.md — the reference the conformance entries are measured against.

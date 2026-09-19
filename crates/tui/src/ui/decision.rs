@@ -113,17 +113,17 @@ impl PromptView {
         match payload {
             PromptPayload::Tool { kind, target, .. } => Self {
                 sentence: match kind.as_str() {
-                    "read" => "The agent wants to read a file".into(),
-                    "shell" => "The agent wants to run a shell command".into(),
-                    "explain" => "The agent wants to inspect code".into(),
-                    other => format!("The agent wants to use \"{other}\""),
+                    "read" => "The agent wants to read a file.".into(),
+                    "shell" => "The agent wants to run a shell command.".into(),
+                    "explain" => "The agent wants to inspect code.".into(),
+                    other => format!("The agent wants to use \"{other}\"."),
                 },
                 call:     format!("{kind}: {target}"),
                 badge:    kind.clone(),
                 command:  (kind == "shell").then(|| target.clone()),
             },
             PromptPayload::ContextFile { path } => Self {
-                sentence: format!("The agent wants to load {} as context", path.display()),
+                sentence: format!("The agent wants to load {} as context.", path.display()),
                 call:     format!("context_file: {}", path.display()),
                 badge:    "context".into(),
                 command:  None,
@@ -134,7 +134,7 @@ impl PromptView {
             // instead (mjolnir-permissions.md's Edit Exception). Kept for a
             // complete, non-panicking match, not a live UI path.
             PromptPayload::Edit { kind } => {
-                Self { sentence: "The agent wants to edit a file".into(), call: format!("edit: {kind}"), badge: "edit".into(), command: None }
+                Self { sentence: "The agent wants to edit a file.".into(), call: format!("edit: {kind}"), badge: "edit".into(), command: None }
             }
         }
     }
@@ -316,7 +316,8 @@ pub(super) struct OptionRow {
 /// accent `▌` mark plus the `band` field together (never the mark alone),
 /// the number in `accent_text` on the selected row and `label` otherwise.
 ///
-/// Each row also carries the option's `detail`, dim, in a column aligned
+/// Each row also carries the option's `detail` — `accent_text` on the
+/// selected row and dim elsewhere — in a column aligned
 /// across the whole list — what choosing this option concretely does
 /// ("saved to .mjolnir/permissions.yaml"). The column is dropped wholesale
 /// (never per-row, which would leave the list visibly ragged) on a frame
@@ -354,9 +355,20 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
                 Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg)),
             ];
             if show_details {
+                // `accent_text` on the selected row, `dim` elsewhere — Turn
+                // 14 is explicit that "the selected row's purpose text is
+                // `--t-accent-text`, not `--t-quiet`", and the reason is
+                // measurable rather than stylistic: `dim` on the `band`
+                // field is **2.62:1**, under the 3.3:1 the palette says dim
+                // holds, so the detail of the row the developer is actually
+                // on was the least legible text in the panel. The same role
+                // on the same band is 5.32:1. Light theme was already over
+                // the line at 4.64:1, which is why this reads as a dark-only
+                // defect and was missed: the usual failure is the other way.
+                let detail_fg = if is_selected { pal.accent_text } else { pal.dim };
                 let pad = label_width - opt.label.width() + DETAIL_GAP;
                 spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-                spans.push(Span::styled(opt.detail.clone(), Style::default().fg(pal.dim).bg(bg)));
+                spans.push(Span::styled(opt.detail.clone(), Style::default().fg(detail_fg).bg(bg)));
             }
             Row::flush(bg).build(spans, ctx)
         })

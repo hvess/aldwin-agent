@@ -184,7 +184,14 @@ pub(super) const CODE_COLUMN: usize = GUTTER + SIGN;
 /// number, the side the developer is about to be looking at.
 fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Color, ctx: Ctx) -> Span<'static> {
     let n = new_no.or(old_no).map(|n| n.to_string()).unwrap_or_default();
-    Span::styled(format!("{n:>width$} ", width = GUTTER - 1), Style::default().fg(ctx.pal.dim).bg(bg))
+    // `label`, not `dim`. The handoff names the role and then says why it
+    // is that one: "a 5-cell right-aligned line number in `--t-label` …
+    // the neutral label step holds 3.5:1 for the gutter". At `dim` it
+    // measured the same value as `--tui-context`, which is what a context
+    // row's code is painted in — so on an unchanged row the number and the
+    // code it numbers were the identical colour and the gutter stopped
+    // reading as a gutter.
+    Span::styled(format!("{n:>width$} ", width = GUTTER - 1), Style::default().fg(ctx.pal.label).bg(bg))
 }
 
 /// Renders one diff line, prefixed with its old/new line-number gutter.
@@ -199,15 +206,24 @@ fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Colo
 /// and the system ships the opaque pair for exactly this case (see
 /// `palette.rs`).
 ///
-/// Sign and code text are two different tokens in the source
-/// (`--tui-add`/`--tui-del` for the sign, `--tui-add-code`/`--tui-del-code`
-/// for the code itself) — kept as separate spans rather than one combined
-/// colour so both read as the source does.
+/// Sign and code take the **same** token here — `--t-add-code` /
+/// `--t-del-code` — rather than the sign/code split the source's review
+/// pane uses. This comment used to say the opposite ("kept as separate
+/// spans … so both read as the source does"), which read the review pane's
+/// rule onto the inline diff. The handoff draws the distinction explicitly
+/// and gives a measured reason: "Both the sign and the code take
+/// `--t-add-code` here rather than the sign/code split the review pane
+/// uses, because a tinted row over the recessed field is the darkest
+/// backdrop in the light theme and the mid-lightness sign green measures
+/// only **2.7:1** on it; the code colour holds 4.8:1 light and 5.9:1 dark."
+/// The review pane's hunk keeps the split because it sits on the much
+/// lighter transcript ground — and it is not built, so nothing here needs
+/// that branch yet.
 fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let (marker, sign_fg, code_fg, bg) = match line.kind {
-        Kind::Added => ("+ ", pal.add, pal.add_code, pal.add_row),
-        Kind::Removed => ("- ", pal.del, pal.del_code, pal.del_row),
+        Kind::Added => ("+ ", pal.add_code, pal.add_code, pal.add_row),
+        Kind::Removed => ("- ", pal.del_code, pal.del_code, pal.del_row),
         Kind::Context => ("  ", pal.diff_box, pal.context, pal.diff_box),
     };
     let spans = vec![

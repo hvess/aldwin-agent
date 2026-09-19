@@ -22,10 +22,15 @@ each of these with its measurements across every scene, its class (is the app
 wrong, or has the design no answer), and where in `crates/tui` it lives. They
 are kept here as a pointer, not restated.
 
-- Entry 1 → conformance spec, Class A item 6 (the uncapped measure).
-- Entry 2 → Class A item 1 (the status row's 2-cell separators).
-- Entry 3 → Class A item 14 (the orphan break band).
-- Entry 4 → Class A item 22 (the missing time row).
+- Entry 1 → conformance spec, Class A item 6 (the uncapped measure). **Open**,
+  waiting on a maximum-measure token that the design system does not have.
+- Entry 2 → the status row's 2-cell separators. **Fixed 2026-09-19** and
+  deleted from that catalogue, which keeps only open work; the pass that
+  built it is in its Progress entries.
+- Entry 3 → the orphan break band. **Fixed 2026-09-19**, same.
+- Entry 4 → Class A item 22 (the missing time row). **Open**, and reclassified
+  while it was attempted: there is no clock anywhere in the workspace, so it
+  is a data source that does not exist rather than a layout defect.
 
 The original text follows, unchanged.
 

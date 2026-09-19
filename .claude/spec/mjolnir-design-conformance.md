@@ -2,11 +2,12 @@
 
 The gap between what `crates/tui` draws and what `.claude/design/` specifies, as measured rather than as remembered — and the triage that decides which half of it is a bug.
 
-**Status:** active — the catalogue is complete and classified; every Class A
-deviation that is not blocked on a Class B decision or an absent data source
-is now fixed (see the three 2026-09-19 Progress entries). What is left is the
-Class B/C work, which is a conversation and an upstream re-sync rather than a
-loop.
+**Status:** active — **nine Class A findings open, none of them fixable in
+`crates/tui`**: four wait on a Class B decision, three on a data source or a
+token that does not exist, one on a copy question, one on a design answer.
+Twenty have been fixed and deleted from the list across three passes; the
+dated Progress entries below are where that history lives. What remains is a
+conversation and an upstream re-sync rather than a loop.
 **Scope:** conformance of the shipped TUI's rendering to the imported design
 system, for the twelve scenes in the screenshot catalogue at three sizes in
 both themes. Covers the deviations, the design debt they sit next to, and the
@@ -257,11 +258,22 @@ the gate stops asking. Both are the loop optimising its own scorer.
    visible to the harness, and its `note` is where the reasoning gets
    restated for someone reading frames rather than source.
 
-3. **A judge finding that the source refutes is still recorded.** Four
-   independent judges flagged the version in the session top bar; the code
-   answers it deliberately at `ui/chrome.rs:109-112`. Deleting the finding
-   would guarantee a fifth judge raises it. It is recorded as an undeclared
-   exemption, which is what it is.
+3. **A fixed deviation is deleted; an *answered* one is kept.** The two are
+   not the same thing and the difference is what a blind judge will do next.
+   A fixed deviation is gone from the frames, so no judge can raise it and
+   keeping it only makes the list of work harder to read: it goes, and the
+   dated Progress entry for the pass that built it is where it lives
+   afterwards. A finding that was answered some *other* way — refuted by the
+   reference, reclassified, or decided against the design — is still in the
+   frames. Four independent judges flagged the version in the session top
+   bar; the code answers it deliberately at `ui/chrome.rs:109-112`, and
+   deleting that would guarantee a fifth judge raises it. Those live under
+   "What a judge will raise again", which is a different list with a
+   different job.
+
+   Numbers are not reused. The Progress entries cite findings by number, so a
+   reader following one of those citations finds a gap rather than a
+   different finding wearing the deleted one's number.
 
 4. **The three-way split is prior to any priority ordering.** An earlier
    summary of this run ranked the findings by frames affected and put "drop the
@@ -280,88 +292,38 @@ Measured in `run-1789826989` unless an entry says otherwise. Frame counts are
 out of 72. Cell indices are 0-based, and the capture cell is 8×18px, so a cell
 index times 8 is the pixel column in the PNGs.
 
-**Nothing is deleted from this list when it is fixed** (Decision 3): an entry
-carries its outcome instead. A deleted finding is one the next blind judge
-rediscovers from scratch, which is the rediscovery cost this spec opens with —
-and half of what a reader needs from a catalogue is what was *already looked
-at* and why it came out the way it did. So the index below is how you see the
-state at a glance; the entries are where the reasoning lives.
+**A fixed deviation is deleted from this list.** What it was and how it was
+answered is in the Progress entry for the pass that built it; what belongs
+here is work, and a list that keeps its own history stops being readable as
+one. The exception is a finding that was *not* fixed but answered some other
+way — refuted, reclassified, or decided against the design — because a blind
+judge will raise it again and the answer has to be somewhere. Those are at
+the end of this spec, not here.
 
-| | item | state |
+| | item | open on |
 | --- | --- | --- |
-| 1 | status row's group rhythm | fixed |
-| 2 | status row one ink tier too loud | fixed |
-| 3 | caret on the placeholder's cell | fixed (two passes) |
-| 4 | panel ignores `OPTION_LABEL_COL` | **open — blocked on Class B 2** |
-| 5 | selected option's detail at 2.62:1 | fixed |
-| 6 | nothing caps the body measure | **open — blocked on Class C 3** |
-| 7 | tool-call line's spacing | fixed; its target *content* deferred to 29 |
-| 8 | tool call inside the developer's turn | fixed |
-| 9 | fenced diff through the inline numbering | fixed |
-| 10 | diff context rows at `--tui-context` | reclassified — a live disagreement, resolved by 11 |
-| 11 | diff gutter one rung too quiet | fixed; its *width* half refuted |
-| 12 | first run's band bounded by the frame | fixed; the list's width is now Class B 8 |
-| 13 | first run's cwd a rung quieter | fixed |
-| 14 | a dropped turn keeps its break band | fixed |
-| 15 | panel leaves one row of transcript | fixed |
-| 16 | panel ignores the frame's columns | **open — blocked on Class B 2** |
-| 17 | the two rule literals form no column | **open — blocked on Class B 2** |
-| 18 | in-panel `Tab` hint's idiom and tones | **open — blocked on Class B 4** |
-| 19 | blocked call drawn as running | **open — needs a `ToolActivityStatus` the app does not have** |
-| 20 | `T1` and `-` in the status row | fixed |
-| 21 | panel sentence has no full stop | fixed |
-| 22 | no timestamp row under the speaker | **open — needs a clock the workspace does not have** |
-| 23 | inline diff splits sign from code | fixed |
-| 24 | `justified_line` overflowed its width | fixed |
-| 25 | elision marker's two foreign glyphs | fixed |
-| 26 | panel elided what it was asking about | fixed |
-| 27 | hunk header on the code column | fixed |
-| 28 | empty state's status row copy | **open — half of it is a live copy question** |
-| 29 | tool line's summary is the file's first line | **open — a `log::summarise` question, not a rendering one** |
+| 4 | the decision panel does not use `OPTION_LABEL_COL` | Class B 2 |
+| 6 | nothing caps the body measure | Class C 3 |
+| 16 | the permission panel ignores the frame's own columns | Class B 2 |
+| 17 | the two rule literals do not form a column | Class B 2 |
+| 18 | the in-panel `Tab` hint's idiom and tones | Class B 4 |
+| 19 | a call blocked on a permission is drawn as running | a `ToolActivityStatus` the app does not have |
+| 22 | no timestamp row under the speaker label | a clock the workspace does not have |
+| 28 | the empty state's status row copy | a live copy question (`idle` against `ready`) |
+| 29 | a tool line's target and summary | a `ToolActivityEntry` that carries neither |
 
-Twenty-one fixed, eight open, and **not one of the eight is reachable by
-writing Rust in `crates/tui`**: four wait on a Class B decision, two on a data
-source that does not exist, one on a token, one on a copy question.
+**Not one of these nine is reachable by writing Rust in `crates/tui`.** Four
+wait on a Class B decision, three on a data source or a token that does not
+exist, one on a copy question, one on a design answer.
 
-1. **The status row parts its facts by 2 cells.** 36 frames (every scene with
-   a bottom bar). `ui/chrome.rs:302,312,322` bake `"  "` into the format
-   strings, so `idle`, the model, the turn counter and the message count are
-   parted by two cells. The design has exactly two spacings and this is
-   neither: ` · ` within a group, `--group-gap` = 6 between groups.
-   `ui/grid.rs:58`'s own comment states the distinction and records that
-   Mjolnir shipped a misreading of it for three weeks. The four facts read as
-   one undifferentiated run. **This is open-tasks entry 2, now measured at
-   every size.**
-   **Fixed 2026-09-19 (first pass).** ` · ` within a group, `--group-gap`
-   between groups, per `grid::GROUP_GAP`.
-
-2. **The status row is one ink tier too loud.** 36 frames. Every span is
-   `pal.label`, including the right-flush `^c to exit`. `14d` puts both sides
-   of that row in `--tui-dim`. Idle chrome currently outranks the agent's own
-   quiet labels.
-   **Fixed 2026-09-19 (first pass).** Every span on the row is `--tui-dim`.
-
-3. **The hardware cursor lands on the placeholder's first character.** 36
-   frames. `ui/chrome.rs:437-446`: when the draft is empty the app draws
-   `▶  ` plus placeholder text from cell 6, then calls `set_cursor_position`
-   at `inner.x + PROMPT_PREFIX_LEN` — also cell 6. Two things claim one cell.
-   In an unfocused terminal it is an outline around the `A`; in a focused one
-   the block is filled and the `A` is gone. This is the "two runs colliding
-   inside the body column" class the `breakages` gate explicitly cannot see
-   (open-tasks entry 5), caught here by eye. Independent of the separate
-   question of whether a `▌` should be drawn at all, which is Class B below.
-
-   **Fixed 2026-09-19 (second pass).** The first fix moved the placeholder
-   two cells right and left the caret as the terminal's own cursor, which
-   three judges then scored as a lone hollow `#ffffff` box. The caret is now
-   drawn — `14d` specifies exactly this: "`▶  ▌` (both `--t-mark`)" — and
-   nothing calls `set_cursor_position` any more, so the terminal's own
-   cursor stays hidden across the whole app as it already did on first run.
-   One cell of the composer's column is reserved for it
-   (`chrome::CARET_LEN`): a row filled to its last character had nowhere to
-   put the glyph, and ratatui would have clipped it at the rect's edge — the
-   same two-groups-sized-independently trap as item 24. Mid-draft the caret
-   takes the cell of the character it sits on, the way a block cursor does.
+Twenty of this catalogue's findings have been fixed and are no longer listed
+here: 1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 21, 23, 24, 25, 26, 27.
+The numbers are not reused — the dated Progress entries above cite them, and
+a reader following one of those citations should find a gap rather than a
+different finding standing in the deleted one's place. Three of the twenty
+left something behind that is still live: item 7's target slot is now part of
+item 29, and items 10 and 11 left the two records under "What a judge will
+raise again" below.
 
 4. **The decision panel does not use `OPTION_LABEL_COL`.** 30 frames
    (`approval`, `approval_large`, `prompt`, `prompt_path`, `prompt_scoped`).
@@ -374,17 +336,6 @@ source that does not exist, one on a token, one on a copy question.
    25-cell field, widened to fit the string `Allow for this session`). Neither
    is 22, which is what the constant gives. One control, three widths.
 
-5. **The selected option's detail is a neutral on the accent band.** 30
-   frames, binding in the 15 dark ones. Measured `--tui-dim` `#9a95a4` on
-   `--tui-band` `#604788` = **2.62:1**, against a palette that states dim
-   holds 3.3:1. The design's role is `--tui-accent-text` `#dfd1fb` = 5.32:1 on
-   the same band, and the Turn 14 note is explicit that "the selected row's
-   purpose text is `--t-accent-text`, not `--t-quiet`". Light escapes at
-   4.64:1, so this is a dark-theme failure — the reverse of the usual pattern.
-   Two judges measured it independently to the same hundredth.
-   **Fixed 2026-09-19 (first pass).** The selected row's detail and its
-   number both take `--tui-accent-text`: 2.62:1 -> 5.32:1.
-
 6. **Nothing caps the body measure.** 18 frames (every `*-large-*`), with the
    200×50 size the only one that shows it. Assistant prose runs cols 13–197 as
    a single 183–185 character line; a diff field spans 184 cells for 62 cells
@@ -394,168 +345,6 @@ source that does not exist, one on a token, one on a copy question.
    in one scene; it is in every scene that renders prose. Note the design
    frames are 120 cells and state no maximum measure, so the *token* is Class
    C (item 3 below) while the unbounded layout is Class A.
-
-7. **The tool-call line is one space short and unpadded.** 36 frames
-   (`tools`, `approval`, `approval_large`, `prompt` family). Renders glyph at
-   cell 13, name at 15, target at 20. `HANDOFF.md:260` is "glyph, 2 spaces,
-   tool name padded to 6 characters … then the target", which puts them at 16
-   and 22. Two judges, identical cells, different scene sets. **Fixed
-   2026-09-19**, with the 6 treated as a minimum rather than a width: a name
-   of 6 or more characters would otherwise touch its own target.
-
-   What the judges *also* raised — that the target field holds `(call-1)`, an
-   internal identifier with no counterpart in the design, where the reference
-   shows the file or command — is **not a layout fix and is deferred**.
-   `log.rs:49`'s `ToolActivityEntry` carries `call_id`, `name` and `status`
-   and nothing else, so the real target is not available to render. Same shape
-   as Class B item 6: a data source, not a rendering defect.
-
-8. **The agent's tool call is grouped into the developer's turn.** 18 frames.
-   The call renders above the `--tui-break` band, so it belongs to the `you`
-   turn and its label column is empty; `4a` makes the tool group part of the
-   agent's turn. Visible as an unattributed row at cells 3–10.
-
-   **Fixed 2026-09-19.** The transcript now tracks whose turn is open
-   (`transcript::Speaker`) rather than deciding the separator from the entry
-   type alone: a tool group, an approval card and a resolved prompt all
-   belong to the agent, so the first of them opens the agent's turn, takes
-   the break band above it, and carries the `harness` label. The reply that
-   follows continues that turn — one label per turn, which is what `4a`
-   draws ("the speaker on the label column's first row"); the alternative
-   would have repeated `harness` twice inside one turn with no band between.
-
-9. **A fenced diff block is run through the inline-diff numbering.** 12 frames
-   (`fenced_diff`, `long`). `ui/diff.rs:64` states that
-   `mjolnir_tools::diff::unified` emits no `@@` header, "so there's no
-   absolute file offset to anchor on" — and `number_lines` therefore numbers
-   from 1 relative to the shown diff, per explicit developer request. That
-   reasoning is sound for the inline diff widget. These frames are not that:
-   the `@@ -12,7 +12,9 @@` is literal text inside a ```` ```diff ```` fence in
-   assistant prose. The result is a gutter number `1` printed on a header row
-   that is not a line of the file, and a gutter reading 1, 2, 3, 2, 3, 4, 5
-   with nothing saying which side each indexes. The header also renders
-   `--tui-dim`, the same tone as the gutter, where the inline diff's header
-   role is `--tui-hunk-header`. **The fix is not a colour**; it is that two
-   different surfaces are sharing one numbering path.
-
-   **Fixed 2026-09-19.** `diff::Kind` gained a `Hunk` variant, so a `@@`
-   line is a header rather than a line of the file: no gutter number, no
-   sign, `--tui-hunk-header` (the role `5b` names for exactly this row), and
-   it anchors the counters — `@@ -12,7 +12,9 @@` makes the rows under it
-   read 12, 13, 12, 13, 14, 15 where they read 1, 2, 3, 2, 3, 4. A header
-   that does not parse leaves the counters where they were, because a wrong
-   absolute number is worse than a continued relative one; a diff with no
-   header still numbers from 1, which is what the widget's *other* surface —
-   the Edit approval card — always gets, since `mjolnir_tools::diff::unified`
-   emits no header at all. `collapse_context` keeps a header without
-   anchoring two rows of context around it.
-
-10. **Diff context rows render code at `--tui-context`.** 12 frames.
-    ~~Class A~~ — **reclassified 2026-09-19 to a live disagreement.** The
-    judges measured `#9a95a4` and read it as `--tui-dim`; the role actually
-    used is `--tui-context`, which `semantic.css` defines as
-    `var(--color-neutral-500)` — *the same value as `--tui-dim`*, so the
-    measurement was right and the inference was not. `ui/diff.rs`'s own
-    comment gives a reason ("only the changed lines should compete for
-    attention"), and the design never draws an inline diff's context rows at
-    all: `5b`'s hunk is an all-added new file. What made it a defect was the
-    measured collapse — context code the identical colour to the gutter
-    number beside it — and that is **resolved by item 11**, which moves the
-    gutter to `--tui-label`. Revisit only with evidence from a frame, not
-    from the token name.
-
-11. **The diff gutter is one rung too quiet.** 24 frames. Renders
-    `--tui-dim`; `HANDOFF.md` names the role *and* its reason — "a 5-cell
-    right-aligned line number in `--t-label` … the neutral label step holds
-    3.5:1 for the gutter". **Fixed 2026-09-19.**
-
-    The **width** half of this finding is **refuted**. Two judges reported the
-    number as one cell narrow — right-flushing at cell 6/16 where a 5-cell
-    gutter would put it at 7/17. They were reading the handoff's prose ("a
-    5-cell right-aligned line number"); `ui/diff.rs:160` cites the handoff's
-    *HTML* — `flex: 0 0 45px; text-align: right; padding-right: 9px` — which
-    is a 5-cell field carrying a 4-cell number and one cell of separation.
-    The code is correct and the prose is loose, which is exactly the trap
-    CLAUDE.md names: **measure the handoff HTML; reading it is not enough.**
-    A judge given only the prose will keep reporting this; it belongs in
-    whatever record the judge is eventually given (see Steps, item 1).
-
-12. **`first_run`'s selection band is bounded by the frame, not by its list.**
-    6 frames, severity scaling with width: cols 30–76 at small, 30–116 at
-    medium, **30–196 at large** — 167 cells of `--tui-band` for an option row
-    whose content ends at cell 63, making it the largest coloured area in the
-    frame. The rule it breaks is that the accent is "a mark or a line, never a
-    filled field", and the band's only analogue in the system (`5c`'s command
-    list) is bounded by `--pane-commands-w`. The `more →` affordance on row 15
-    has the same cause and is 127 cells from its own label at large.
-
-    **Fixed 2026-09-19, and not with `--pane-commands-w`.** The list is
-    sized by its own widest row (`first_run::option_rows`), clamped to what
-    the frame can give. `5c`'s 48 cells were measured against this list's
-    own copy first, and they do not fit it: `anthropic` plus `claude models
-    · ANTHROPIC_API_KEY` needs 52 cells, and the detail column it hangs on
-    starts at cell 48 — so a 48-cell list elides the *reference's* own row
-    at the reference's own frame width. Measured after: the band runs
-    29..80 at both 120 and 200 columns, clamping to 29..77 at 80, with the
-    `→` at the list's right edge rather than the frame's. This is the
-    catalogue's one classification correction from this pass: the deviation
-    was real, the analogue named for it was not.
-
-13. **`first_run` renders the cwd one rung quieter than every other screen.**
-    6 frames. `#9a95a4` (`--tui-dim`) there against `#c9c5d2` (`--tui-quiet`)
-    in `empty` and `conversation`, for the identical string; light mirrors it.
-    One component, two tones.
-    **Fixed 2026-09-19 (first pass).** First run's cwd takes `--tui-quiet`,
-    the rung every other screen gives the same string; the version beside it
-    stays a rung quieter, which is deliberate and recorded in place.
-
-14. **A dropped turn keeps its break band.** 4–6 frames at 80×24. In
-    `markdown-small` the transcript band is 16 rows and the content needs
-    exactly 16, yet row 3 renders blank and the break band sits at row 5 —
-    the layout reserved a row for a `you` turn it then did not draw, so the
-    frame opens on two dead rows and a band separating nothing from nothing.
-    In `fenced_diff-small` the same shape is genuinely one row over budget,
-    and dropping the band with the turn it belongs to is what recovers it.
-    **This is open-tasks entry 3**, now with the row arithmetic.
-
-    **Fixed 2026-09-19**, and the fix is narrower than that second sentence
-    assumed. `Transcript::viewport` drops a leading separator the viewport
-    *starts inside*, whichever of its three rows the offset landed on. It
-    does **not** backfill the freed rows with the turn above: at 80×24 the
-    conversation is 17 rows against a 16-row band, so showing the `you` turn
-    again means showing it directly against the agent's reply with no break
-    between them — the same boundary lost from the other side. The rows stay
-    blank, which is how the transcript's bottom anchoring already draws
-    them. Nor does it change `Transcript::len` or the scroll offset: feeding
-    the drop back into the row count would shorten the transcript, un-scroll
-    the turn it hid, and bring the band back on the next frame, which is a
-    flicker rather than a layout.
-
-15. **At 80×24 the approval panel leaves one row of transcript.**
-    2 frames (`approval_large-small-*`). Panel occupies rows 4–23, 83% of the
-    frame; the transcript band is `rows 3..3`, holding a dimmed tool-call row
-    with the `you` turn clipped away entirely. `5a`'s stated reason for being
-    a bottom panel rather than a modal is that "the transcript above stays in
-    place at 35%".
-
-    **Fixed 2026-09-19.** `decision::max_height` reserves a quarter of the
-    frame for the log, floored at 5 rows, where it used to reserve one row
-    flat. At 80×24 that is 6 rows of transcript against a 15-row panel (it
-    was 1 against 20); at 200×50 the proportion is what stops the same
-    defect reappearing in the large size, where a 5-row floor alone would
-    still allow 84%.
-
-    Two things this cost, both deliberate. The panel's own content elides
-    sooner — at 80×24 `approval` shows one row of its diff under a `5 more
-    lines not shown` marker — and that is the trade `5a` asks for, since the
-    transcript is *why* this is a panel rather than a modal. And the cap is
-    a quarter rather than the design's own half (`--panel-permission-h` is
-    18 rows of 36) because Mjolnir's panel is not `5a`'s: ADR 0001 puts five
-    options on it and adds the grant-summary and `Tab` rows, so its full
-    content wants around 20 rows where the reference wants 18. Capping at
-    half elided the *command block* — the one row saying what is being
-    approved — while keeping the options list, which is the wrong trade in
-    both directions.
 
 16. **The permission panel ignores the frame's own columns.** 30 frames. No
     content inside the panel sits at cell 13: the target value lands at cell 9
@@ -588,20 +377,6 @@ source that does not exist, one on a token, one on a copy question.
     approvals` names the call being decided — but it means matching activity
     entries against pending decisions at render time, not swapping a glyph.
 
-20. **`T1` and `-` in the status row.** 36 frames. `ui/chrome.rs:306-310`
-    formats the turn/step as `T{t} S{st}`, falling back to `"-"`. The Content
-    Fundamentals require lowercase labels, and `-` borrows a diff sign to mean
-    "no value".
-    **Fixed 2026-09-19 (first pass).** `turn 1 · step 2`, and an absent turn
-    is omitted rather than printed as `-`.
-
-21. **The panel's sentence has no terminal period.** 30 frames. Renders `The
-    agent wants to read a file`; `5a`'s copy is `The agent wants to run a
-    shell command.` Third person and sentence case are both correct — the stop
-    is the only thing missing.
-    **Fixed 2026-09-19 (first pass).** Every `PromptView` sentence ends in a
-    full stop.
-
 22. **No timestamp row under the speaker label.** Every frame that draws a
     label. `HANDOFF.md:257` puts the speaker on the label column's first row
     and the time on its second; the second row is empty in every frame, so a
@@ -624,100 +399,6 @@ source that does not exist, one on a token, one on a copy question.
     the empty second row of the label column, so the finding is real; what is
     wrong is its class.
 
-23. **The inline diff splits the sign from the code.** 24 frames, binding in
-    the light ones — and **missed by every judge**, because it needs the
-    handoff's own reasoning rather than a measurement. `HANDOFF.md`: "Both the
-    sign and the code take `--t-add-code` here rather than the sign/code split
-    the review pane uses, because a tinted row over the recessed field is the
-    darkest backdrop in the light theme and the mid-lightness sign green
-    measures only **2.7:1** on it; the code colour holds 4.8:1 light and 5.9:1
-    dark. The review pane's own hunk keeps the full three-role split … because
-    its diff sits on the much lighter transcript ground." `ui/diff.rs`
-    implemented the review pane's rule on the inline diff, and its doc comment
-    asserted the opposite of the handoff in as many words. The review pane
-    (`5b`) is not built, so nothing needed that branch. **Fixed 2026-09-19.**
-
-24. **`justified_line` overflowed its width and was clipped by the frame.**
-    Found while fixing item 7, not by a judge. `ui/grid.rs`'s right-flush
-    helper fell back to a one-space gap and returned a line *longer* than the
-    width it was given; ratatui then clipped it at the frame edge, so at 80
-    columns a tool row read `42 matches across 17 fil` — well-formed output
-    with its tail silently gone, and no `…` to say so. The margin was one
-    cell, so widening the name field by the two cells item 7 asks for was
-    enough to cross it. This is the **third** time this codebase has recorded
-    that two groups sized independently cannot keep a gap between them
-    (`chrome::identity_bar_row`, `draw_status_line`). The right group now
-    elides. **Fixed 2026-09-19.**
-
-    Note what caught it: not a gate, not a test, and not a judge — a line-by-
-    line read of the snapshot diff before blessing it. The `breakages` gate
-    cannot see text truncated with a well-formed ellipsis (open-tasks entry
-    5); it equally cannot see text truncated *without* one when the clip
-    happens at the frame boundary.
-
-25. **An elision marker draws two glyphs the system does not have.** 8 frames
-    (`approval_large-small-*`, `prompt*-small-*`), and **found by the
-    `breakages` gate rather than by a judge** — the first finding in this
-    catalogue a gate reported. Every row the panel and the diff box use to
-    say what they left out was built as `⋯ 3 unchanged lines ⋯` (U+22EF, the
-    midline horizontal ellipsis) and, in the panel's own version, with an
-    em dash: `⋯ 4 more lines not shown — deciding doesn't require scrolling
-    them ⋯`. Neither glyph is in the closed table (`▌ ● ◐ ○ ✔ ▶ █ + -`), and
-    neither is among the typographic marks `baseline.json` exempts — those
-    are the ones the design's own screens use (`· … ⏎ ↑↓ ← →`), and U+22EF is
-    not U+2026.
-
-    It had been latent since the marker was written: the gates only saw it
-    once item 15's cap made the panel elide at 80×24, which is the same
-    lesson as item 24 from the other side — **a gate that never fires is not
-    the same as a rule that holds.** Nothing about the marker changed except
-    the frames it appeared in.
-
-    **Fixed 2026-09-19.** Both marks are gone rather than exempted: adding a
-    baseline entry is a conversation with the developer, not a step in the
-    loop, and there was nothing to have that conversation about. The
-    reference writes exactly this row as plain prose — `81 more lines` in
-    `4a`, `73 more added lines below` in `5b` — with an empty gutter beside
-    it doing the work of saying it is not a line of the file. So the rows now
-    read `3 unchanged lines`, `5 more lines not shown`, and `4 more lines not
-    shown; deciding doesn't require scrolling them`.
-
-26. **The panel elided what it was asking about.** 6 frames
-    (`prompt*-small-*`), and a **regression from item 15's own fix**: the
-    tighter budget made `clamp_panel` bite, and what it cut was the card's
-    target row, because the clamp protected two head rows (the card's blank
-    and its sentence) and the whole tail. So the panel read `The agent wants
-    to read a file.` over a truncation notice, with nothing on screen saying
-    *which* file, above five options offering to save a rule about it. A
-    judge caught it in the same pass that scored item 15's fix.
-
-    **Fixed 2026-09-19.** The head is now the whole prompt card, passed
-    explicitly rather than assumed to be two rows, and the grant summary and
-    `Tab` row moved out of the protected tail into the clampable middle. The
-    order that falls out is the right one: what the agent wants, then how to
-    answer it, then the rule a saved answer would write. The options rule
-    (blank / recessed band / blank) joined the middle too — it is a
-    boundary, not content, and on a frame that cannot hold everything it is
-    the cheapest row to lose. The head is bounded by what the tail leaves,
-    so a head too big for the budget elides itself rather than pushing the
-    options list off the bottom of the frame, which is what `clamp_panel`'s
-    own history warns about.
-
-    Measured at 52×20, where this was worst: the panel had been pushing the
-    **top bar off the frame** and losing the footer; it now draws the bar,
-    the `you` turn, the sentence, the target and all five options with the
-    footer intact.
-
-27. **The hunk header hung on the code column.** 12 frames, and a
-    **regression from item 9's own fix** in the same pass: the header was
-    rendered through the row builder with an empty gutter and an empty sign
-    field, which put it at cell 20 — the *code* column. `5b` draws
-    `@@ -0,0 +1,84 @@ impl RateLimit` at the pane's left edge, and the code
-    column is reserved for the trailing "N more lines" note, which hangs
-    there because it stands in for code. A judge measured it at cell 20
-    against a field edge of 13. **Fixed 2026-09-19**: a header takes neither
-    the gutter nor the sign column.
-
 28. **The empty state's status row is not `14d`'s copy.** 6 frames. `14d`
     specifies `ready` left and `^d closes` right; the app draws `idle` and
     `^c to exit`. **Half of this is not a deviation to fix**: `^c` is the key
@@ -728,13 +409,23 @@ source that does not exist, one on a token, one on a copy question.
     same state on the one screen that names it. Decide it rather than
     silently keeping either.
 
-29. **A tool line's summary is the file's first line, not a fact about it.**
-    12 frames. The right-flush slot holds `// the dispatcher` where `4a`
-    shows `412 lines` / `7 hits in 3 files`. `log::summarise` takes the
-    first line of the tool result, which is the right shape for a shell
-    command and the wrong one for a read. Same family as item 7's deferred
-    half: the row's *columns* are correct and its *content* comes from
-    somewhere else. Not a rendering fix.
+29. **A tool line's target and summary are the wrong facts.** 12 frames, and
+    the half of item 7 that survived it: the *columns* of this row are
+    correct — glyph at 13, name at 16, target at 22 — and the content in two
+    of its three slots comes from somewhere the design never intended.
+
+    The target slot holds `(call-1)`. `log.rs:49`'s `ToolActivityEntry`
+    carries `call_id`, `name` and `status` and nothing else, so the file or
+    command `4a` shows there is not available to render. The right-flush slot
+    holds the tool result's first line — `// the dispatcher` for a read —
+    where `4a` shows a fact *about* the result (`412 lines`, `7 hits in 3
+    files`); `log::summarise` takes the first line, which is the right shape
+    for a shell command and the wrong one for a read. Four judges across two
+    rounds have now scored one or both.
+
+    Neither is a rendering fix. Same shape as Class B item 6, the branch
+    marker: a data source that does not exist, and a decision about what
+    `ToolActivityEntry` should carry.
 
 ## Class B — design debt
 
@@ -799,8 +490,9 @@ each is a stop-and-ask. None may be patched toward an invented answer.
 
    That gap has now been filled twice by invention and measured as a defect
    both times. Filling to the frame's right margin made the band 167 cells of
-   accent at 200 columns (Class A item 12), against the rule that the accent
-   is "a mark or a line, never a filled field". Sizing it to the list's own
+   accent at 200 columns — the deviation this started as, Class A item 12,
+   fixed and deleted 2026-09-19 — against the rule that the accent is "a mark
+   or a line, never a filled field". Sizing it to the list's own
    widest row fixed that and drew a different complaint from a fresh judge —
    "the band ends on the last glyph of `ANTHROPIC_API_KEY`, so it is sized by
    string length, not by a region". Both readings are right, which is the
@@ -854,15 +546,40 @@ compensate in `palette.rs`.
    invisible. One specified row, two opposite failures, so no single local
    adjustment is right.
 
-## Undeclared exemptions
+## What a judge will raise again
 
-Decisions that exist, are reasoned, and are recorded only in doc comments.
-Each is scored as a defect by every blind judge and will be again. **Promoting
-these to `baseline.json` is the highest-value work in this spec** — it is
-cheap, it is not a code change, and it is what stops the next four judges
-spending their attention on closed questions.
+Findings that are answered but not *fixed*: decisions recorded only in doc
+comments, a measurement the reference refutes, a role whose name misled the
+measurer. Every one of them is scored as a defect by every blind judge and
+will be again, because the frames still show what the judges measured.
+**Getting these in front of the judge is the highest-value work in this
+spec** — it is cheap, it is not a code change, and it is what stops the next
+four judges spending their attention on closed questions. See Step 1: where
+that record lives is a protocol question, not a `baseline.json` entry.
 
-1. **The version in the session top bar.** All four judges flagged it, citing
+1. **The inline diff's gutter is not a cell narrow.** ~~Class A item 11's
+   width half.~~ Three judges across three runs have reported the line number
+   right-aligning to cell 16 where a 5-cell gutter would put it at 17. They
+   are reading `HANDOFF.md`'s prose ("a 5-cell right-aligned line number");
+   `ui/diff.rs:160` implements the same handoff's *HTML* — `flex: 0 0 45px;
+   text-align: right; padding-right: 9px` — which is a 5-cell field carrying
+   a 4-cell number and one cell of separation. The code is correct and the
+   prose is loose, which is exactly the trap CLAUDE.md's first design rule
+   names: **measure the handoff HTML; reading it is not enough.**
+
+2. **A diff context row's code is `--tui-context`, not `--tui-dim`.**
+   ~~Class A item 10.~~ Judges measure `#9a95a4` and infer `--tui-dim`;
+   `semantic.css` defines `--tui-context` as the same `--color-neutral-500`,
+   so the measurement is right and the inference is not. The role is a
+   deliberate de-emphasis — `ui/diff.rs`: "only the changed lines should
+   compete for attention" — and the design never draws an inline diff's
+   context rows at all, since `5b`'s hunk is an all-added new file. What made
+   it a defect was the measured *collapse*, context code the identical colour
+   to the gutter number beside it, and moving the gutter to `--tui-label`
+   resolved that. Revisit only with evidence from a frame, never from a token
+   name.
+
+3. **The version in the session top bar.** All four judges flagged it, citing
    `14d`: "There is no version and no commit on this screen." The code answers
    it at `ui/chrome.rs:109-112`: the right group is "the model name and the
    running build version — the closest real facts Mjolnir has to the
@@ -879,7 +596,7 @@ spending their attention on closed questions.
    conversation, not a bug. Record it, decide it, then either drop the version
    or cite the decision.
 
-2. **The `access` row's three permission states.** Judges scored
+4. **The `access` row's three permission states.** Judges scored
    `read:deny  shell:deny  edit:deny` against `14d`'s single tier word.
    `ui/transcript.rs:552-559` refuses the tier deliberately: "A tier is what
    first run *writes*; it is not what is stored, and a `permissions.yaml`
@@ -892,14 +609,14 @@ spending their attention on closed questions.
    *diff*. An access tier painted in it reads as a deleted line, and in the
    light theme it is the most saturated thing in a deliberately shallow frame.
 
-3. **The footer's right-flush provenance note.** `5a` ends its footer with
+5. **The footer's right-flush provenance note.** `5a` ends its footer with
    `saved to .harness/permissions.toml`; Mjolnir's footer ends at the key
    hints. `decision.rs` removed it deliberately: it was true of exactly one
    of the five tiers on offer, and "allow once" and "allow for this session"
    save nothing at all. Two judges have now scored the empty right half of
    that row as a defect. The reasoning is sound and the record is missing.
 
-4. **The option row's mark and number inside the 3-cell margin.** Already a
+6. **The option row's mark and number inside the 3-cell margin.** Already a
    baseline entry for the `layout` gate, cited to `5a`. Listed here because it
    is the model the other entries should copy: scope named, authority cited,
    and an explicit boundary ("Scoped to the left margin only: nothing licences
@@ -947,52 +664,26 @@ spending their attention on closed questions.
    looked at as a whole rather than rung by rung, and C3 wants a measure token.
    Read the `design-sync` skill before any `DesignSync` call.
 
-4. **Done 2026-09-19. Fix the colour and tone deviations.** Class A items 2, 5, 10, 11 and the
-   `--tui-del` half of undeclared exemption 2. These are role changes with no
-   layout consequence, they are the cheapest thing in the spec, and item 5 in
-   particular is one token against a measured 2.62:1.
+4. **Fix what is left in `crates/tui`.** Nothing is, as of 2026-09-19 —
+   every Class A item that did not wait on something outside this repository
+   is built, across three passes, and the list above is what survived. The
+   three dated Progress entries carry what each pass changed and what it
+   cost. This step stays as the place the next Class A finding lands.
 
-5. **Done 2026-09-19 except items 4 and 17**, which wait on Step 2. **Fix
-   the spacing and column deviations.** Class A items 1, 4, 7, 11, 13, 17,
-   20, 21.
-
-6. **Done 2026-09-19, in two passes. Fix the composer cursor collision.**
-   Class A item 3, independent of the Class B placeholder decision — whatever
-   the composer draws, two things must not claim cell 6. The first pass moved
-   the placeholder and left the hardware cursor; the second drew the caret
-   and hid the cursor, which is what `14d` specified all along.
-
-7. **Items 8, 12, 14 and 15 done 2026-09-19. Fix the layout deviations.**
-   Class A items 8, 12, 14, 15, 16, 19, 22. Item 16 waits on Step 2. **Items
-   19 and 22 are both a data question rather than a layout one**, which is
-   the finding from attempting this step:
-
-   * 19 (a blocked call drawn as running) needs the TUI to match activity
-     entries against `app.pending_approvals` at render time, and the
-     transcript's row cache is keyed on the log entry alone — so the key has
-     to carry which of this entry's calls are blocked, or the glyph will be
-     stale for exactly as long as the decision is open.
-   * 22 (the timestamp row) has **no clock anywhere in the workspace**: no
-     `LogEntry` carries a time, no crate depends on `chrono`, `time` or
-     `jiff`, and local wall-clock time is not reachable from `std` alone. So
-     it is a dependency decision plus a log-format change plus a fixture pin
-     in `render.snap`, on evidence that is half-superseded (`HANDOFF.md:257`
-     also states the 12-cell label column Turn 13 replaced). It belongs with
-     Class B item 6, the branch: a data source that does not exist, not a
-     rendering defect.
-
-8. **Cap the measure.** Class A item 6, once C3 gives it a value to cap to.
-
-9. **Run three of three done (`run-1789826989`, `run-1789829088`,
-   `run-1789832849`). Re-run the full catalogue and rescore.** The loop has never iterated
+5. **Re-run the full catalogue and rescore.** Three runs so far —
+   `run-1789826989`, `run-1789829088`, `run-1789832849`; only the last is
+   still on disk. The loop has never iterated
    (open-tasks entry 10), so this is also the first real exercise of the fix
    half of the harness. Expect the minimum to move in steps rather than
    smoothly: it is a minimum across 72 frames, so it only rises when the *worst*
    frame does, and `approval_large-small-light` at 58 is gated on Steps 2 and 7.
 
-10. **Retire the superseded ledger entries.** Open-tasks 1–4 are this spec's
-    Class A items 6, 1, 14 and 22, measured across the whole catalogue instead
-    of two scenes. Point them here rather than restating them.
+6. **Retire the superseded ledger entries.** Open-tasks 1–4 came here as
+    Class A items 6, 1, 14 and 22, measured across the whole catalogue
+    instead of two scenes. Two of those (1, the status row's separators, and
+    14, the orphan break band) are now fixed and deleted; 6 and 22 are still
+    open above. The ledger points here rather than restating them, so it
+    wants the same correction.
 
 ## Pitfalls
 
@@ -1023,9 +714,10 @@ spending their attention on closed questions.
   which is a live design disagreement, not a bug — above every real defect,
   because it happens to touch 66 frames. Order within a class, never across.
 - **Fixing a Class A item that a Class B decision will move.** The option field
-  width, the panel's columns and the in-panel key hint are all downstream of a
-  control the design has not drawn. Fixing them now is fixing them twice, and
-  the second fix will look like a regression.
+  width, the panel's columns and the in-panel key hint — items 4, 16, 17 and
+  18, which is every open item but four — are all downstream of a control the
+  design has not drawn. Fixing them now is fixing them twice, and the second
+  fix will look like a regression.
 - **Letting the judge see this file.** It is the classification, the source
   reasoning and the previous scores in one place — precisely the three things
   the blind judge must not have. The judge's allowlist is `.claude/design/` and
@@ -1080,8 +772,8 @@ spending their attention on closed questions.
   measurements, its acceptance model, and its disclosed blind spots.
 - .claude/spec/mjolnir-tui.md — the surface under test; the 2026-09-06
   Progress entry records what was measured and what it corrected.
-- .claude/spec/mjolnir-open-tasks.md — entries 1–4 are superseded by this
-  spec's Class A items 6, 1, 14 and 22.
+- .claude/spec/mjolnir-open-tasks.md — entries 1–4 came here as Class A items
+  6, 1, 14 and 22; 1 and 14 are fixed and deleted, 6 and 22 are still open.
 - .claude/design/HANDOFF.md — the reference; `IMPORT.md` first, then
   `tokens/cells.css` for the grid. Measure the HTML, never the prose.
 - .claude/adr/0001-tool-level-permission-grants.md — what forces the

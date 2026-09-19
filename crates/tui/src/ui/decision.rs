@@ -16,8 +16,8 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::diff;
-use super::grid::{elide, Ctx, MARGIN_X};
-use super::row::{band_row, Row};
+use super::grid::{elide, Ctx, CONTENT_INDENT, MARGIN_X};
+use super::row::Row;
 use crate::app::{App, PendingFront};
 use crate::palette::Palette;
 
@@ -126,18 +126,23 @@ struct PromptView {
     /// Fundamentals: third person for the model when the harness speaks
     /// about it.
     sentence: String,
-    /// The literal `kind: target` the sentence above is describing —
-    /// unchanged in substance from the old title, just demoted to a dim
-    /// subtitle now that the title itself carries the explanation.
-    call:     String,
     /// The title band's right-aligned badge — `Modal.jsx`'s `badge` prop.
     badge:    String,
-    /// `Some(command)` when the target is a shell command and should get
-    /// `CommandBlock.jsx`'s own treatment. Other kinds (a file path, a
-    /// context-file load) show their exact target as plain label text
-    /// instead (`readme.md`'s "Targets are exact" rule); a `$` prompt only
-    /// means something for an actual shell command.
-    command:  Option<String>,
+    /// The bare thing being approved — a path, a command — with no
+    /// `kind: ` prefix, because the kind is already the title row's
+    /// right-flush badge and `5a` puts it there and nowhere else.
+    ///
+    /// Every prompt kind quotes this in the panel's field (conformance item
+    /// 30). The field is the design's one slot for "the object under
+    /// discussion"; it is not shell-specific, and drawing a path as plain
+    /// text at the margin was what left the panel with no field at all on
+    /// the majority of prompts.
+    target:   String,
+    /// `true` when the target is a shell command, so the field gets the
+    /// accent `$` sigil. `5a` only ever draws a command, so the sigil is
+    /// the one part of the field that is shell-specific — a `$` in front of
+    /// a file path would say something false about what runs.
+    shell:    bool,
 }
 
 impl PromptView {
@@ -150,15 +155,15 @@ impl PromptView {
                     "explain" => "The agent wants to inspect code.".into(),
                     other => format!("The agent wants to use \"{other}\"."),
                 },
-                call:     format!("{kind}: {target}"),
                 badge:    kind.clone(),
-                command:  (kind == "shell").then(|| target.clone()),
+                target:   target.clone(),
+                shell:    kind == "shell",
             },
             PromptPayload::ContextFile { path } => Self {
                 sentence: format!("The agent wants to load {} as context.", path.display()),
-                call:     format!("context_file: {}", path.display()),
                 badge:    "context".into(),
-                command:  None,
+                target:   path.display().to_string(),
+                shell:    false,
             },
             // Never actually reaches this card in production — `App::
             // decision_options`' Edit arm returns no options, since Edit
@@ -166,7 +171,7 @@ impl PromptView {
             // instead (mjolnir-permissions.md's Edit Exception). Kept for a
             // complete, non-panicking match, not a live UI path.
             PromptPayload::Edit { kind } => {
-                Self { sentence: "The agent wants to edit a file.".into(), call: format!("edit: {kind}"), badge: "edit".into(), command: None }
+                Self { sentence: "The agent wants to edit a file.".into(), badge: "edit".into(), target: kind.clone(), shell: false }
             }
         }
     }
@@ -230,22 +235,53 @@ fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<us
 
 /// The permission-prompt card — the live panel's body for a `PromptPayload`,
 /// with the same `tail` contract as [`approval_card`].
-fn prompt_card(payload: &PromptPayload, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
+fn prompt_card(payload: &PromptPayload, cwd: Option<&str>, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let card = Row::card(pal.bar);
     let view = PromptView::of(payload);
 
     let mut lines = vec![card.blank(ctx)];
     lines.extend(card.text(&view.sentence, pal.body, ctx));
-    match &view.command {
-        Some(command) => {
-            lines.push(card.blank(ctx));
-            lines.extend(command_block(command, ctx));
-        }
-        None => lines.extend(card.text(&view.call, pal.label, ctx)),
+    // Every prompt gets the field, not just a shell command (item 30). The
+    // frame's rows here are: blank, sentence, blank, field. A path used to
+    // render as `read: ./x.rs` in `label` at the margin with no field and
+    // no blank, so on every non-shell prompt — the majority — the panel had
+    // no quoted object at all and nothing inside it sat on a column the
+    // rest of the frame uses.
+    lines.push(card.blank(ctx));
+    lines.extend(command_block(&view.target, view.shell, ctx));
+    // `5a`'s 3-row key/value table, of which Mjolnir can honestly source
+    // one row. The design's `in` / `writes` / `network` need the working
+    // directory, a static analysis of what a command touches, and a network
+    // posture; only the first exists here. The other two are not invented —
+    // see the conformance spec's item 16, which is explicit that the
+    // columns are buildable and the facts are not.
+    if let Some(cwd) = cwd {
+        lines.push(card.blank(ctx));
+        lines.extend(fact_row("in", cwd, ctx));
     }
     lines.extend(tail);
     lines
+}
+
+/// One row of `5a`'s key/value table, on the frame's own columns: the label
+/// at the 3-cell margin in `label`, the value on the body column in `body`.
+///
+/// The frame's markup is a flex row of `flex: 0 0 var(--label-col)` then
+/// `padding-left: var(--label-gutter)`, which is 3 + 8 + 2 — the same cell
+/// 13 the transcript's body column lands on, and the reason the panel and
+/// the frame stopped reading as two grids (item 16).
+fn fact_row(label: &str, value: &str, ctx: Ctx) -> Vec<Line<'static>> {
+    let pal = ctx.pal;
+    let pad = CONTENT_INDENT.saturating_sub(MARGIN_X).saturating_sub(label.width());
+    Row::card(pal.bar).build(
+        vec![
+            Span::styled(label.to_string(), Style::default().fg(pal.label)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(value.to_string(), Style::default().fg(pal.body)),
+        ],
+        ctx,
+    )
 }
 
 /// `CommandBlock.jsx`: a `ground`-coloured field, *inset* from the card's
@@ -259,10 +295,14 @@ fn prompt_card(payload: &PromptPayload, tail: Vec<Line<'static>>, ctx: Ctx) -> V
 /// ran the full width of the panel — "the command row is not a box like in
 /// the design but instead completely fills the entire dialog edge-to-edge
 /// with no margin."
-fn command_block(command: &str, ctx: Ctx) -> Vec<Line<'static>> {
+fn command_block(target: &str, shell: bool, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let row = Row::card(pal.ground).inset(MARGIN_X, pal.bar).pad(COMMAND_BLOCK_PAD);
-    let spans = vec![Span::styled("$ ", Style::default().fg(pal.speaker_you)), Span::styled(command.to_string(), Style::default().fg(pal.text))];
+    let mut spans = Vec::with_capacity(2);
+    if shell {
+        spans.push(Span::styled("$ ", Style::default().fg(pal.speaker_you)));
+    }
+    spans.push(Span::styled(target.to_string(), Style::default().fg(pal.text)));
     let mut lines = vec![row.blank(ctx)];
     lines.extend(row.build(spans, ctx));
     lines.push(row.blank(ctx));
@@ -502,13 +542,19 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // transcript's turn break (`transcript::Transcript::viewport`), for the
     // same reason — a frame shorter than the design's 36 rows has to give
     // something up, and spacing is cheaper than structure.
-    let options_rule = |tight: bool| {
-        if tight {
-            vec![band_row(pal.recess, ctx)]
-        } else {
-            vec![card.blank(ctx), band_row(pal.recess, ctx), card.blank(ctx)]
-        }
-    };
+    // One blank row, and no band. `HANDOFF.md:277` says "One row of the
+    // recessed tone, blank row" here and the frame's own markup does not:
+    // between the last fact row and the first option it has a single
+    // `<div style="height:var(--row)"></div>` and nothing else. There is no
+    // `--t-recess` anywhere in `5a` — the prose uses the word twice and the
+    // markup zero times (the command field is `--t-ground`, see
+    // `command_block`). Measured off `Agent TUI v2.dc.html` 2026-09-19;
+    // conformance item 33, and CLAUDE.md's first design rule: the prose is
+    // not the design.
+    //
+    // Under pressure the blank goes too. It is spacing, not structure, and
+    // a frame shorter than the design's 36 rows has to give something up.
+    let options_rule = |tight: bool| if tight { Vec::new() } else { vec![card.blank(ctx)] };
     let queue_note = |queued: usize| -> Vec<Line<'static>> {
         if queued > 1 {
             card.text(&format!("(+{} more pending)", queued - 1), pal.dim, ctx)
@@ -544,7 +590,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             // each option's own sentence, where it is read on the row being
             // picked rather than two rows above it at `--tui-dim`.
             let view = PromptView::of(&pending.payload);
-            let body = prompt_card(&pending.payload, Vec::new(), ctx);
+            let body = prompt_card(&pending.payload, app.status.cwd.as_deref(), Vec::new(), ctx);
             let head = body.len();
             let options = option_rows(&rows, app.decision_selected, ctx);
             // Measured before anything is built: the separator keeps its

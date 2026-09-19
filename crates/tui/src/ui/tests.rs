@@ -1043,26 +1043,36 @@ fn the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame() {
 
 /// Per explicit developer feedback that it wasn't clear what a tool
 /// prompt was actually asking for: the panel must lead with a
-/// plain-English sentence, not just `kind: target`, while still showing
-/// the literal wire call underneath for anyone who wants to verify it.
+/// plain-English sentence, and still show the exact target underneath for
+/// anyone who wants to verify it.
+///
+/// The target is now quoted bare, in the panel's field, rather than as a
+/// `kind: target` line (conformance item 30). The kind has not been lost —
+/// it is the title row's right-flush badge, which is where `5a` puts it and
+/// the only place it appears in the frame.
 #[test]
-fn a_tool_prompt_shows_a_humanized_title_and_the_raw_call_underneath() {
+fn a_tool_prompt_shows_a_humanized_title_and_the_exact_target_underneath() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
     assert!(out.contains("The agent wants to read a file"), "the title must be a human-readable explanation: {out:?}");
-    assert!(out.contains("read: ./crates/tui/src/ui.rs"), "the literal tool call must still be shown: {out:?}");
+    assert!(out.contains("./crates/tui/src/ui.rs"), "the exact target must still be shown: {out:?}");
+    assert!(!out.contains("read: ./crates/tui/src/ui.rs"), "but not with a kind prefix the badge already carries: {out:?}");
 }
 
-/// The raw call line must be visually secondary (dim) to the humanized
-/// title (accent/bold) — the whole point of the split is that the
-/// sentence is what a developer reads first. Uses a non-shell kind —
-/// `command_block_lines` gives an actual shell command
-/// `CommandBlock.jsx`'s own treatment instead (see
-/// `a_shell_prompt_shows_a_command_block_instead_of_a_raw_line` below).
+/// Every prompt kind gets the field, not just a shell command — the one
+/// slot `5a` gives the object under discussion. A path used to render as a
+/// dim `kind: target` line at the margin, so on the majority of prompts the
+/// panel had no field at all (conformance item 30, measured off the
+/// handoff's own markup: `background:var(--t-ground)`, inset, a blank row
+/// inside it above and below).
+///
+/// The `$` sigil stays shell-only. It is the one part of the field that
+/// says something about *running*, and in front of a file path it would be
+/// a lie.
 #[test]
-fn the_raw_call_line_is_dimmer_than_the_humanized_title() {
+fn a_non_shell_target_gets_the_field_without_the_shell_sigil() {
     let mut app = app();
     let payload = PromptPayload::Tool { kind: "explain".into(), target: "src/gateway/router.rs".into(), path_like: false };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
@@ -1072,10 +1082,17 @@ fn the_raw_call_line_is_dimmer_than_the_humanized_title() {
     let buffer = terminal.backend().buffer().clone();
 
     let title_row = find_row(&buffer, "The agent wants to inspect code");
-    let raw_row = find_row(&buffer, "explain: src/gateway/router.rs");
-    assert_ne!(title_row, raw_row, "the title and the raw call must be on separate rows");
-    assert_eq!(buffer[(MARGIN_X as u16, raw_row)].fg, DARK.label, "the raw call row must use the muted label color");
-    assert_ne!(buffer[(MARGIN_X as u16, title_row)].fg, DARK.label, "the humanized title must not itself be the muted label color");
+    let target_row = find_row(&buffer, "src/gateway/router.rs");
+    assert_ne!(title_row, target_row, "the sentence and the target must be on separate rows");
+
+    // The field is inset by `MARGIN_X` and pads a further 2 cells, so the
+    // target starts on cell 5 and the strip beside it reads as card.
+    assert_eq!(buffer[(MARGIN_X as u16, target_row)].bg, DARK.ground, "the target must sit on the field's own ground");
+    assert_eq!(buffer[((MARGIN_X - 1) as u16, target_row)].bg, DARK.bar, "with the card's surface showing beside it");
+    assert_eq!(buffer[((MARGIN_X + 2) as u16, target_row)].fg, DARK.text, "and the target itself in primary text, not the old muted label");
+
+    let out = rendered(&mut app, 100, 34);
+    assert!(!out.contains("$ src/gateway/router.rs"), "a `$` in front of a path would claim it runs: {out:?}");
 }
 
 /// `CommandBlock.jsx`: a shell command gets a `ground`-colored field

@@ -2,12 +2,11 @@
 
 The gap between what `crates/tui` draws and what `.claude/design/` specifies, as measured rather than as remembered — and the triage that decides which half of it is a bug.
 
-**Status:** active — **six Class A findings open, one of them now fixable in
-`crates/tui` and the other five not**: item 16 is unblocked and is the next
-piece of loop work; of the rest, three wait on a data source or a token that
-does not exist, one on a copy question, one on a design answer. Twenty-three
-have been fixed or decided away across four passes; the dated Progress entries
-below are where that history lives.
+**Status:** active — **six Class A findings open, none of them fixable in
+`crates/tui`**: three wait on a data source or a token that does not exist,
+one on a copy question, one on a design answer, one on a Class B decision.
+Twenty-seven have been fixed or decided away across five passes; the dated
+Progress entries below are where that history lives.
 
 The three that closed on 2026-09-19 did so through a **decision**, not a fix:
 ADR 0003 settled Class B 2, and items 4, 17 and 18 went with it. That is the
@@ -24,6 +23,74 @@ exemption records that are missing. Excludes the screenshot harness itself
 every functional question.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-19
+
+**Progress (2026-09-19, the handoff HTML, and four deviations it closed):**
+The first pass in this catalogue's history to measure the *frame* rather than
+the prose. `Agent TUI v2.dc.html` was fetched with `DesignSync` from the
+discussion project `25845063-…` (the live one; `list_projects` does not return
+it, so it is addressed by UUID — see the `design-sync` skill). It is not in
+`.claude/design/`, which is why every previous pass read `HANDOFF.md` instead.
+
+**CLAUDE.md's first design rule was right, and it cost this catalogue more
+than anything else in it.** Measuring the markup refuted four separate
+findings that judges had scored as defects and that this spec had recorded as
+real:
+
+- The option row's tones. The frame draws the number `--t-accent-text` when
+  selected and **`--t-label`** otherwise, the idle mark **`--t-mark-idle`**,
+  and the quoted pattern **`--t-quiet`** — exactly what ships.
+  `HANDOFF.md:278-279`'s "accent-300 … neutral-600 … neutral-800" is stale in
+  all three places. All three judges scored the app as defective against it.
+- The command field is `background:var(--t-ground)`, **not** `--t-recess` as
+  `HANDOFF.md:275` says. There is no `--t-recess` anywhere in `5a`: the prose
+  uses the word twice and the markup zero times.
+- There is **no separator band** above the options — `HANDOFF.md:277`'s "one
+  row of the recessed tone" is a single blank row in the frame. The app was
+  drawing a band because the prose said to, which no judge could ever have
+  caught: they read the same prose.
+- The inline diff's gutter is `flex: 0 0 var(--gutter-line-no-inline);
+  text-align:right; padding-right: var(--cell-w)` — a 5-cell field holding a
+  4-cell number and one cell of separation, which is what the code does and
+  what four judges have now reported as a defect.
+
+Fixed and deleted from the Class A list: **16, 30, 31, 33.**
+
+- **30** — every prompt kind now gets `5a`'s field, not just a shell command.
+  A path used to render as a dim `kind: target` line at the margin, so on the
+  majority of prompts the panel had no quoted object at all. The `$` sigil
+  stays shell-only; in front of a file path it would claim the file runs.
+  The `kind` is not lost — it is the title row's right-flush badge, which is
+  where `5a` puts it and the only place the frame has it.
+- **16** — the panel's facts now sit on the frame's own columns. `5a`'s table
+  is `in` / `writes` / `network`; only `in` is sourceable here, and the other
+  two are **not invented** — nothing in the workspace knows what a command
+  writes or whether the network is live. Measured on `run-1789848617`:
+  `   in        ~/proj`, label at the 3-cell margin, value on **cell 13**.
+- **33** — the separator band is gone.
+- **31** — resolved by arithmetic rather than by an edit. The panel now draws
+  **17 rows** at 120×36 and 160×44, and 17 is exactly right: the frame's own
+  18 decompose as title + blank + sentence + blank + 3 field + blank + 3
+  facts + blank + 4 options + blank + footer, and Mjolnir has two fewer fact
+  rows and one more option. **`max_height` needed no change** — at 120×36 the
+  content is 14 clampable rows against a budget of 21, so nothing was ever
+  being clamped there; the quarter cap bites only at 80×24 and below, where
+  it drops the fact row and then the field while keeping the options and the
+  footer. ADR 0003 flagged this for re-examination; this is the examination,
+  and the answer is that the number was never the problem.
+
+Reclassified rather than fixed: **32**, which the markup showed was not a
+missing field at all. See its entry.
+
+Verification: `run-1789848617`, five scenes at three sizes in both themes —
+30 frames, all six gates clean, regression clean (40 sections moved, all in
+focus). Unit suite green across all 21 binaries, clippy clean.
+
+**A harness gap found the hard way.** The first attempt at this run captured
+an hour-old binary and reported "preflight clear" over it: `preflight` checks
+that `target/debug/mjolnir` *exists*, never that it is newer than the sources
+it was built from. The frames showed the old panel and the gates passed them
+happily. Recorded in `mjolnir-screenshot.md`; until it is fixed, build before
+every run and read the first frame before trusting any of them.
 
 **Progress (2026-09-19, ADR 0003 — the permission list's shape):** The first
 Class B question taken off Step 2's ordered list, and the one it named first:
@@ -390,17 +457,14 @@ the end of this spec, not here.
 | | item | open on |
 | --- | --- | --- |
 | 6 | nothing caps the body measure | Class C 3 |
-| 16 | the permission panel ignores the frame's own columns | **nothing — buildable** |
 | 19 | a call blocked on a permission is drawn as running | a `ToolActivityStatus` the app does not have |
 | 22 | no timestamp row under the speaker label | a clock the workspace does not have |
 | 28 | the empty state's status row copy | a live copy question (`idle` against `ready`) |
 | 29 | a tool line's target and summary | a `ToolActivityEntry` that carries neither |
-| 30 | the panel's target row is not a recessed field | **nothing — buildable** |
-| 31 | the panel is 14 rows where `5a` states 18 | **nothing — buildable** |
-| 32 | a diff with no context rows has no field under it | **nothing — buildable** |
+| 32 | a hunk's tints are near-invisible on the panel's bar | Class B 5 |
 
-**Four of these are reachable by writing Rust in `crates/tui`** — 16, 30, 31
-and 32, all found or re-measured on `run-1789844710` and all in the permission
+**Five of these are reachable by writing Rust in `crates/tui`** — 16, 30, 31,
+32 and 33, all found or re-measured on `run-1789844710` and all in the permission
 panel. They are the whole of Step 4's queue, and for the first time since this
 catalogue was opened that queue is not empty. Of the other five, three wait on a data
 source or a token that does not exist, one on a copy question, one on a design
@@ -431,30 +495,6 @@ raise again" below.
    in one scene; it is in every scene that renders prose. Note the design
    frames are 120 cells and state no maximum measure, so the *token* is Class
    C (item 3 below) while the unbounded layout is Class A.
-
-16. **The permission panel ignores the frame's own columns.** 30 frames, and
-    **unblocked rather than fixed by ADR 0003** — the decision it was waiting
-    on has been taken, and nothing about it has moved. Re-measured against
-    `run-1789844710`: `prompt_scoped-medium-dark.txt` row 25 is
-    `   read: crates/tools/src/dispatcher.rs`, so the label sits on the 3-cell
-    margin and the value on cell 9, inside the label column's own run. No
-    content anywhere in the panel sits on cell 13, while the transcript three
-    rows above uses the body column correctly. The panel and the frame still
-    read as two grids.
-
-    `5a` specifies the panel's facts as a 3-row key/value table on the frame's
-    own columns — labels `in`, `writes` and `network` in the label column,
-    values in the body column. **The columns half is now buildable**: ADR 0003
-    settled the control, and `prompt_card`'s rows were never part of that
-    question.
-
-    **The contents half is not, and is a separate finding.** A blind judge
-    measuring `run-1789844710` reported the three fact rows missing outright,
-    not merely misaligned. `in` is reachable — the working directory is in
-    `StatusInfo` — but nothing in the workspace knows what a call *writes* or
-    whether the network is live, so two of the three rows are the same shape
-    as Class B 6: a data source that does not exist. Build the columns; do not
-    invent the facts.
 
 19. **A call blocked on a permission is drawn as running.** 30 frames. The
     glyph is `◐` ("tool call / process running") on a call that has not run
@@ -517,53 +557,31 @@ raise again" below.
     marker: a data source that does not exist, and a decision about what
     `ToolActivityEntry` should carry.
 
-30. **The panel's target row is not a recessed field.** 30 frames, raised by
-    all three judges. `5a`'s equivalent row is "a recessed field on
-    `--t-recess`, no border and no accent bar, with the command on one row 2
-    cells in — `$` in accent-400 then the command in primary text, and a blank
-    half-row above and below". Measured on `run-1789844710`,
-    `prompt-medium-dark`: the row is `   read: README.md` on `--tui-bar`
-    (`#474251`) at the 3-cell margin, ink `--tui-label` (`#b1adbb`). So four
-    separate misses — no recessed ground, no 2-cell inset, `label` where the
-    reference says primary text, and no blank row above (`approval` loses the
-    same blank).
+32. **A hunk's tinted rows are near-invisible on the panel's bar.**
+    12 frames (`approval-*`), measured `#3d4b42` on `#474251` = **1.054:1**
+    dark and `#d3ead6` on `#e8e4ee` = **1.015:1** light.
 
-    **The treatment is answered and the content is not**, and the two must not
-    be conflated. `5a` is a *shell* prompt: its block carries a `$` sigil and
-    quotes a command. What a `read` prompt puts there — whether a `read: `
-    prefix is legitimate at all — the design does not say. Build the field;
-    the sigil and the prefix are a copy question to take with Class B 5.
+    **Reclassified 2026-09-19, from "buildable" to blocked on Class B 5.**
+    The first write-up called this a missing field and put it in Step 4's
+    queue. The handoff HTML says otherwise: `4a`'s inline diff is a
+    container on `--t-diff-bg` whose *changed* rows each override that
+    ground, with no padding rows of its own — so an all-changed hunk shows
+    no unoverridden field ground in the reference either, and
+    `Row::field(pal.diff_box).inset(MARGIN_X, pal.bar)` already implements
+    exactly that structure. `approval_large` looks right only because it has
+    context rows, which are what paint the ground.
 
-31. **The panel is 14 rows where `5a` states 18.** 30 frames, all three
-    judges, and **this one ADR 0003 predicted.** `cells.css` sets
-    `--panel-permission-h: calc(var(--cell-h) * 18)`; measured 14 at every
-    size for the `prompt` family (`approval_large` reaches 20, being
-    content-sized). `ui/decision.rs`'s `max_height` caps the panel at a
-    quarter of the frame, and its doc comment justified that against `5a`'s
-    half on the grounds that the grant-summary and `Tab` rows made Mjolnir's
-    content need ~20 rows where the reference needs 18. **Those rows are gone,
-    so the justification is spent** — the comment says so and was deliberately
-    left unchanged in the same pass, to keep the next screenshot delta
-    readable about which change caused what. This is that follow-up.
-
-    One judge measured the consequence plainly: at 200×50 the panel takes 28%
-    of the frame where the design budgets 50%. Note the two smaller sizes are
-    a different question — at 80×24 an 18-row panel would be 75% of the frame,
-    and the design states no scaling rule, so a literal 18 is wrong there.
-
-32. **A diff with no context rows has no field under it.** 12 frames
-    (`approval-*`), one judge, but measured precisely enough to enter.
-    `semantic.css` gives `--tui-diff-box` as the one surface the inline
-    transcript diff sits on. In `approval` the hunk is a single removed row
-    and a single added row with no context, and the field ground is drawn
-    only by the context rows — so nothing renders it and the two tinted rows
-    sit straight on the panel's chrome: `#3d4b42` on `#474251` is **1.054:1**
-    dark, `#d3ead6` on `#e8e4ee` is **1.015:1** light. `approval_large` gets
-    it right because it *has* context rows, which is what localises the bug
-    to the degenerate hunk rather than to the field's colour.
-
-    Distinct from Class C 2, which is about `--tui-diff-box`'s value being too
-    close to its neighbour. Here the box is not painted at all.
+    What is actually wrong is the *adjacency*, and it has no local fix. The
+    two diff tints are designed against the transcript's dark ground
+    (`--t-ground` `#27232f`), which is what `4a` sits them on. Mjolnir shows
+    them inside a permission panel, whose surface is `--tui-bar` `#474251` —
+    a lighter rung, against which those same tints all but vanish. No
+    arrangement of the field changes that: insetting it leaves the tint
+    beside `bar`, and not insetting it leaves the tint above and below
+    `bar`. **The design has no edit-approval panel at all**, so it has never
+    had to answer what surface a diff sits on inside one. That is Class B 5,
+    and per the screenshot skill a rendered component with no counterpart in
+    the design system is a stop-and-ask, not loop work.
 
 ## Class B — design debt
 
@@ -693,9 +711,25 @@ compensate in `palette.rs`.
    invisible. One specified row, two opposite failures, so no single local
    adjustment is right.
 
-5. **`5a`'s colour paragraph predates the token layer.** Two judges reached
-   this independently, from different evidence, and it retires a finding
-   before it could be entered as Class A.
+5. **`5a`'s colour paragraph predates the token layer — now proven at
+   source, not inferred.** Two judges reached this independently from
+   different evidence, and the handoff HTML then settled it outright
+   (fetched 2026-09-19 via `DesignSync`). The frame's own option rows read:
+
+   ```html
+   <span style="color:var(--t-mark-idle)">▌</span><span>  </span>
+   <span style="color:var(--t-label)">2</span><span>  </span>
+   <span style="color:var(--t-body)">Allow </span>
+   <span style="color:var(--t-quiet)">cargo test</span>
+   <span style="color:var(--t-body)"> for this session</span>
+   ```
+
+   So the number is `--t-accent-text` selected and **`--t-label`** otherwise,
+   the idle mark is **`--t-mark-idle`**, and the quoted pattern is
+   **`--t-quiet`** — exactly what ships. `HANDOFF.md:278-279`'s "accent-300
+   … neutral-600 … neutral-800" is stale in all three places, and all three
+   judges scored the app as defective against it. **Nothing here is a Class A
+   finding; the paragraph is.**
 
    `HANDOFF.md:278-279` states the option row's tones as raw ramp names:
    the band "accent-900", the idle mark "neutral-800", the number "accent-300

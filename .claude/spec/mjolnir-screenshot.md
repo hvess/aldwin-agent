@@ -135,6 +135,21 @@ which role was dimmed rather than staying silent about it. A tolerance would
 have been the wrong fix; solving for the blend keeps "dimmed" and
 "off-palette" distinguishable.
 
+**`preflight` does not check that the binary is current.** It verifies that
+`target/debug/mjolnir` exists, that `render_snapshot` is green and that the
+measured cell matches the baseline — not that the binary is newer than the
+sources it was built from. On 2026-09-19 a run captured an hour-old binary,
+reported "preflight clear", and passed all six gates on frames showing the
+*previous* build's panel. Nothing in the harness noticed, and nothing could
+have: every gate reads the frames, and the frames were internally consistent.
+
+This is the same failure shape as the stale-snapshot check `preflight`
+already guards against — a gate comparing against fiction and reporting
+clean — and it wants the same treatment: compare the binary's mtime against
+the newest file under `crates/`, and fail the session rather than warn. Until
+then: build before every run, and read the first captured frame before
+trusting any of them.
+
 **Key encoding is unverified by construction, and `Tab` was how we found
 out.** The harness chooses the bytes a key sends, so it cannot vouch that they
 are what foot would send. On the permission panel digits resolved and arrows

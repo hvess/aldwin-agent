@@ -118,7 +118,8 @@ impl Composer {
 /// the harness name alone, primary text, no glyph — per the design
 /// system's own revision log ("the top bar carries no accent mark: the name
 /// is the brand, and a pip there indicated nothing"), then the working
-/// directory. Right: the model name and the running build version — the
+/// directory. Right: the model name and, once a session has started, the
+/// running build version — the
 /// closest real facts Mjolnir has to the reference's `model · gauge · cost`
 /// group; a context-window gauge and a per-session cost aren't tracked
 /// anywhere in `StatusInfo`, so neither is fabricated here.
@@ -147,10 +148,15 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     let version = format!("v{}", app.status.version);
     let cwd = app.status.cwd.clone().unwrap_or_default();
 
-    let row = identity_bar_row(
-        width,
-        &cwd,
-        pal.quiet,
+    // **No version on the returning/empty screen.** `14d` is explicit:
+    // "There is no version and no commit on this screen. The version lives
+    // in first run's top bar; the session's top bar carries the model
+    // instead." A frame with no transcript is that screen, so its right
+    // group is the model alone — which is also the fallback the group
+    // already degrades to when the two do not fit.
+    let groups = if app.log.is_empty() {
+        vec![vec![Span::styled(model, on_bar(pal.quiet))], Vec::new()]
+    } else {
         vec![
             vec![
                 Span::styled(model.clone(), on_bar(pal.quiet)),
@@ -159,9 +165,10 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
             ],
             vec![Span::styled(model, on_bar(pal.quiet))],
             Vec::new(),
-        ],
-        pal,
-    );
+        ]
+    };
+
+    let row = identity_bar_row(width, &cwd, pal.quiet, groups, pal);
     frame.render_widget(Paragraph::new(row).style(Style::default().bg(pal.bar)), content_row);
 }
 

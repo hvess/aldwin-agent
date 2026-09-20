@@ -837,7 +837,12 @@ fn access_spans(rung: Option<Rung>, ctx: Ctx) -> Vec<Span<'static>> {
     let word = rung.map_or("not set", Rung::label);
     vec![
         Span::styled(word.to_string(), Style::default().fg(ctx.pal.value)),
-        Span::styled("  ·  edits always ask".to_string(), Style::default().fg(ctx.pal.dim)),
+        // One space each side of the `·`, the same separator the `provider`
+        // row above uses: these are two facts inside one group, and two
+        // adjacent rows of one table drawing two different separators is
+        // the kind of thing a reader notices without being able to say why.
+        Span::styled(" · ".to_string(), Style::default().fg(ctx.pal.dim)),
+        Span::styled("edits always ask".to_string(), Style::default().fg(ctx.pal.dim)),
     ]
 }
 

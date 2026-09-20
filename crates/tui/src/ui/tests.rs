@@ -1934,8 +1934,25 @@ fn the_empty_state_is_anchored_to_the_bottom_of_the_log() {
 fn the_top_bar_reports_the_running_builds_version() {
     let mut app = app();
     app.status.version = "9.9.9".into();
+    // A *session* frame: `14d` keeps the version off the returning/empty
+    // screen, so an empty log is the one state that must not show it —
+    // asserted separately below.
+    app.log.push(crate::log::LogEntry::Notice { message: "started".into() });
     let out = rendered(&mut app, 110, 40);
     assert!(out.contains("v9.9.9"), "the top bar must show the running build's version, not a hardcoded one: {out:?}");
+}
+
+/// `14d`: "There is no version and no commit on this screen. The version
+/// lives in first run's top bar; the session's top bar carries the model
+/// instead." A returning developer opens into this frame, and the build
+/// identity is not one of the three facts it is for.
+#[test]
+fn the_empty_screens_top_bar_carries_the_model_and_not_the_version() {
+    let mut app = app();
+    app.status.version = "9.9.9".into();
+    let out = rendered(&mut app, 110, 40);
+    assert!(!out.contains("v9.9.9"), "the empty screen must not carry a version: {out:?}");
+    assert!(out.contains("claude-sonnet-5"), "but it still names the model: {out:?}");
 }
 
 /// The top bar's two groups are measured together, so they can never touch

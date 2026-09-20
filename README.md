@@ -46,13 +46,34 @@ so a macOS build asks about every call instead of running reads unattended.
 That is the honest fallback rather than a silent downgrade, but it is a
 materially different experience and worth knowing before you install.
 
+### Verifying a release
+
+Each release carries a `SHA256SUMS` covering every archive, and a signature
+over that file. **Take `allowed_signers` from this repository, not from the
+release page** — a key served from the same place as the signature proves
+nothing.
+
+```sh
+ssh-keygen -Y verify -f allowed_signers \
+  -I release@mjolnir -n mjolnir-release \
+  -s SHA256SUMS.sig < SHA256SUMS
+
+sha256sum -c SHA256SUMS
+```
+
+No extra tools: `ssh-keygen` ships with SSH, which you already have.
+
+Verification is worth doing on a tool like this specifically: Mjolnir's whole
+claim is that an edit cannot land without a diff you accepted and that a read
+is enforced rather than trusted. None of that survives running a binary that
+is not the one built from the reviewed source.
+
 ### Reproducing a release
 
 The build is deterministic: the compiler is pinned in `rust-toolchain.toml`,
 dependencies by `Cargo.lock`, absolute source paths are remapped out of the
 binary, and the archive carries no timestamps or ownership. Rebuilding a tag
-gives byte-identical archives, so you can check that what you downloaded is
-what the source produces:
+gives byte-identical archives:
 
 ```sh
 git checkout vX.Y.Z
@@ -62,76 +83,44 @@ sha256sum -c SHA256SUMS      # the one from the release
 ```
 
 `scripts/release.sh` *is* the release recipe — the GitHub workflow only
-chooses machines and moves files between them. That is deliberate: a recipe
-living in workflow YAML can only be run by GitHub, which means it cannot be
-tested before it is pushed and cannot be reproduced by anyone checking a
-published binary against the source.
+chooses machines and moves files between them. A recipe living in workflow
+YAML can only be run by GitHub, which means it cannot be tested before it is
+pushed and cannot be reproduced by anyone checking a published binary.
 
-Two honest limits. The macOS archive reproduces the same way but only *on a
-Mac* — cross-compiling Darwin needs Apple's SDK and its licence restricts
-that to Apple hardware. And reproducing without `rustup` installed means
-`rust-toolchain.toml` is not in effect; the script warns when it detects
-this, because a build with a different compiler is perfectly good and simply
-will not match the published hash.
+Two honest limits. The macOS archive reproduces only *on a Mac* — Apple's SDK
+licence restricts cross-compilation to Apple hardware. And without `rustup`,
+`rust-toolchain.toml` is not in effect; the script warns when it detects this,
+because a build with a different compiler is fine and simply will not match
+the published hash.
 
 ### Signing a release (maintainers)
 
 One-time setup. Until it is done, pushing a `vX.Y.Z` tag fails at the
 workflow's guard rather than publishing an unsigned release.
 
-**Generate the pair outside the repository.** `cosign generate-key-pair`
-writes into the current directory, and doing that at the repo root puts the
-private key next to the public one that is meant to be committed.
-
 ```sh
-cd "$(mktemp -d)"
-cosign generate-key-pair          # prompts for a passphrase
+ssh-keygen -t ed25519 -N "" -C mjolnir-release -f mjolnir_release
 ```
 
-That leaves `cosign.key` (private, encrypted with the passphrase) and
-`cosign.pub` (public). Then:
+**No passphrase, deliberately.** `ssh-keygen` prompts on stdin and a CI
+runner has none, so a passphrase-protected key cannot sign — it fails rather
+than hanging, but it fails. The GitHub secret store is what protects it.
 
-- `cosign.key` contents → repository secret **`COSIGN_PRIVATE_KEY`**
-- the passphrase → repository secret **`COSIGN_PASSWORD`**
-- `cosign.pub` → copy into the repository root and commit it
+- contents of `mjolnir_release` → repository secret **`RELEASE_SIGNING_KEY`**
+- `mjolnir_release.pub` → committed as `allowed_signers`, in the form
+  `release@mjolnir ssh-ed25519 AAAA… mjolnir-release`
 
-Keep `cosign.key` somewhere offline, or delete it — GitHub cannot show a
-secret back to you, so losing both copies means rotating the key rather than
-recovering it. `.gitignore` covers `cosign.key` as a second line of defence,
-but the first is not generating it here.
+Losing the key is not a crisis: generate a new one, replace the secret,
+commit the new `allowed_signers`. Only signatures already published stop
+verifying.
 
-### Verifying a release
-
-Each release carries a `SHA256SUMS` covering every archive, and a detached
-signature over that file. **Take `cosign.pub` from this repository, not from
-the release page** — a key served from the same place as the signature
-proves nothing.
-
-```sh
-cosign verify-blob \
-  --key cosign.pub \
-  --signature SHA256SUMS.sig \
-  --insecure-ignore-tlog=true \
-  SHA256SUMS
-
-sha256sum -c SHA256SUMS
-```
-
-`--insecure-ignore-tlog` is expected here and is not a corner being cut. The
-signature is deliberately kept out of Sigstore's public transparency log,
-which would otherwise publish this private repository's name, its workflow
-path and the timing of every release to a permanent public record. The flag
-disables a check that does not apply.
-
-Verification is worth doing on a tool like this specifically: Mjolnir's whole
-claim is that an edit cannot land without a diff you accepted and that a read
-is enforced rather than trusted. None of that survives running a binary that
-is not the one built from the reviewed source.
-
-Building from source is the alternative — see [Prerequisites](#prerequisites)
-and [Build](#build) below. It's also how new releases get made: pushing a
-`vX.Y.Z` tag triggers `.github/workflows/release.yml`, which cross-builds all
-platform binaries and attaches them to a GitHub Release automatically.
+**Why not cosign.** It was the first choice and does not work for this. On
+3.x it has deprecated detached signatures and refuses offline key signing:
+`sign-blob --output-signature` errors with "must specify --bundle with
+--new-bundle-format", and the bundle path errors with "--tlog-upload=false is
+not supported with --signing-config". Keeping a signature out of Sigstore's
+public log now requires hand-writing a signing-config — more moving parts for
+a worse result.
 
 ## Prerequisites
 

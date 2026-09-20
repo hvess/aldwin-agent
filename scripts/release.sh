@@ -37,6 +37,8 @@ usage:
   release.sh check <tag>        verify the tag matches the workspace version
   release.sh build <target>     build one target into dist/bin/<target>/mjolnir
   release.sh package            archive every built target, deterministically
+  release.sh sign <key-file>    sign dist/SHA256SUMS with an SSH private key
+  release.sh verify [signers]   verify that signature (default: ./allowed_signers)
 
   Build on the OS that matches the target; package only ever on Linux.
 USAGE
@@ -165,9 +167,51 @@ cmd_package() {
     cat dist/SHA256SUMS
 }
 
+# ── sign / verify ────────────────────────────────────────────────────────
+#
+# `ssh-keygen -Y`, not cosign.
+#
+# cosign was the first choice and does not work for this. On 3.x it has
+# deprecated detached signatures and refuses offline key signing outright:
+# `sign-blob --output-signature` errors with "must specify --bundle with
+# --new-bundle-format", and the bundle path errors with "--tlog-upload=false
+# is not supported with --signing-config". Getting a signature that is not
+# published to Sigstore's public log now means hand-writing a signing-config
+# with the log services stripped out — more moving parts, for a worse result.
+#
+# `ssh-keygen -Y` is already installed everywhere, needs no network, no log
+# and no service, and its file format has been stable for years. The
+# signature covers SHA256SUMS, and SHA256SUMS covers every archive, so one
+# signature is the whole chain.
+#
+# The namespace is what stops a signature made for one purpose being replayed
+# as another; ssh-keygen requires it on both sides and refuses a mismatch.
+readonly SIG_NAMESPACE="mjolnir-release"
+readonly SIG_PRINCIPAL="release@mjolnir"
+
+cmd_sign() {
+    local key="${1:-}"
+    [ -n "$key" ] || usage
+    [ -f "$key" ] || { echo "error: no such key file: $key" >&2; exit 1; }
+    [ -f dist/SHA256SUMS ] || { echo "error: no dist/SHA256SUMS — run 'package' first" >&2; exit 1; }
+
+    ssh-keygen -Y sign -f "$key" -n "$SIG_NAMESPACE" dist/SHA256SUMS
+}
+
+cmd_verify() {
+    local signers="${1:-allowed_signers}"
+    [ -f "$signers" ] || { echo "error: no signers file: $signers" >&2; exit 1; }
+    [ -f dist/SHA256SUMS.sig ] || { echo "error: no signature — run 'sign' first" >&2; exit 1; }
+
+    ssh-keygen -Y verify -f "$signers" -I "$SIG_PRINCIPAL" \
+        -n "$SIG_NAMESPACE" -s dist/SHA256SUMS.sig < dist/SHA256SUMS
+}
+
 case "${1:-}" in
     check)   shift; cmd_check   "$@" ;;
     build)   shift; cmd_build   "$@" ;;
     package) shift; cmd_package "$@" ;;
+    sign)    shift; cmd_sign    "$@" ;;
+    verify)  shift; cmd_verify  "$@" ;;
     *)       usage ;;
 esac

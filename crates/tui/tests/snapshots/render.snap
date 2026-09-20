@@ -1243,7 +1243,7 @@
  49|                                                                                                                                                                                                        |Reset/Rgb(54, 49, 63)/0x200
 === Dark first_run 80x24
   0|                                                                                |Reset/Rgb(71, 66, 81)/0x80
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                   v0.1.19   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x19 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                   v0.1.20   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x19 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
   2|                                                                                |Reset/Rgb(71, 66, 81)/0x80
   3|                                                                                |Reset/Rgb(39, 35, 47)/0x80
   4|     M J O L N I R                                                              |Reset/Rgb(39, 35, 47)/0x3 Rgb(12, 10, 17)/Rgb(190, 157, 247)/0x17 Reset/Rgb(39, 35, 47)/0x60
@@ -1268,7 +1268,7 @@
  23|                                                                                |Reset/Rgb(54, 49, 63)/0x80
 === Dark first_run 120x36
   0|                                                                                                                        |Reset/Rgb(71, 66, 81)/0x120
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                           v0.1.19   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x59 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                           v0.1.20   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x59 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
   2|                                                                                                                        |Reset/Rgb(71, 66, 81)/0x120
   3|                                                                                                                        |Reset/Rgb(39, 35, 47)/0x120
   4|     M J O L N I R                                                                                                      |Reset/Rgb(39, 35, 47)/0x3 Rgb(12, 10, 17)/Rgb(190, 157, 247)/0x17 Reset/Rgb(39, 35, 47)/0x100
@@ -1305,7 +1305,7 @@
  35|                                                                                                                        |Reset/Rgb(54, 49, 63)/0x120
 === Dark first_run 200x50
   0|                                                                                                                                                                                                        |Reset/Rgb(71, 66, 81)/0x200
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                                                                                                           v0.1.19   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x139 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                                                                                                           v0.1.20   |Reset/Rgb(71, 66, 81)/0x3 Rgb(244, 242, 249)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3 Rgb(201, 197, 210)/Rgb(71, 66, 81)/0x38 Reset/Rgb(71, 66, 81)/0x139 Rgb(154, 149, 164)/Rgb(71, 66, 81)/0x7 Reset/Rgb(71, 66, 81)/0x3
   2|                                                                                                                                                                                                        |Reset/Rgb(71, 66, 81)/0x200
   3|                                                                                                                                                                                                        |Reset/Rgb(39, 35, 47)/0x200
   4|     M J O L N I R                                                                                                                                                                                      |Reset/Rgb(39, 35, 47)/0x3 Rgb(12, 10, 17)/Rgb(190, 157, 247)/0x17 Reset/Rgb(39, 35, 47)/0x180
@@ -2599,7 +2599,7 @@
  49|                                                                                                                                                                                                        |Reset/Rgb(239, 236, 244)/0x200
 === Light first_run 80x24
   0|                                                                                |Reset/Rgb(232, 228, 238)/0x80
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                   v0.1.19   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x19 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                   v0.1.20   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x19 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
   2|                                                                                |Reset/Rgb(232, 228, 238)/0x80
   3|                                                                                |Reset/Rgb(247, 245, 250)/0x80
   4|     M J O L N I R                                                              |Reset/Rgb(247, 245, 250)/0x3 Rgb(247, 245, 250)/Rgb(77, 42, 128)/0x17 Reset/Rgb(247, 245, 250)/0x60
@@ -2624,7 +2624,7 @@
  23|                                                                                |Reset/Rgb(239, 236, 244)/0x80
 === Light first_run 120x36
   0|                                                                                                                        |Reset/Rgb(232, 228, 238)/0x120
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                           v0.1.19   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x59 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                           v0.1.20   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x59 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
   2|                                                                                                                        |Reset/Rgb(232, 228, 238)/0x120
   3|                                                                                                                        |Reset/Rgb(247, 245, 250)/0x120
   4|     M J O L N I R                                                                                                      |Reset/Rgb(247, 245, 250)/0x3 Rgb(247, 245, 250)/Rgb(77, 42, 128)/0x17 Reset/Rgb(247, 245, 250)/0x100
@@ -2661,7 +2661,7 @@
  35|                                                                                                                        |Reset/Rgb(239, 236, 244)/0x120
 === Light first_run 200x50
   0|                                                                                                                                                                                                        |Reset/Rgb(232, 228, 238)/0x200
-  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                                                                                                           v0.1.19   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x139 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
+  1|   mjolnir   ~/Documents/mjolnir-harness/crates/tui                                                                                                                                           v0.1.20   |Reset/Rgb(232, 228, 238)/0x3 Rgb(36, 31, 43)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3 Rgb(66, 60, 76)/Rgb(232, 228, 238)/0x38 Reset/Rgb(232, 228, 238)/0x139 Rgb(92, 85, 104)/Rgb(232, 228, 238)/0x7 Reset/Rgb(232, 228, 238)/0x3
   2|                                                                                                                                                                                                        |Reset/Rgb(232, 228, 238)/0x200
   3|                                                                                                                                                                                                        |Reset/Rgb(247, 245, 250)/0x200
   4|     M J O L N I R                                                                                                                                                                                      |Reset/Rgb(247, 245, 250)/0x3 Rgb(247, 245, 250)/Rgb(77, 42, 128)/0x17 Reset/Rgb(247, 245, 250)/0x180

@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The tree is needed for the script, and for `cosign.pub`: the verify
+      # The tree is needed for the script, and for `allowed_signers`: the verify
       # step checks the signature against the *committed* public key, which
       # is the same file a recipient is told to use.
       - uses: actions/checkout@v4
@@ -85,67 +85,56 @@ jobs:
           pattern: bin-*
           merge-multiple: true
 
-      # Fails here, with something actionable, rather than inside cosign with
-      # a message about a malformed key. A release that silently skipped
+      # Fails here, with something actionable, rather than inside ssh-keygen
+      # with a message about a missing file. A release that silently skipped
       # signing would be worse than one that did not build: the channel would
       # look signed and not be.
       - name: The signing key must be configured
         env:
-          KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         # Plain `if` blocks, not `[ cond ] && action`: a `run:` step is
         # `bash -e`, where a standalone `&&` list whose left side is false
-        # exits the step — so the happy path would have failed and the
-        # unhappy one would not have reported anything.
+        # exits the step.
         run: |
           missing=""
           if [ -z "$KEY" ]; then
-            missing="the COSIGN_PRIVATE_KEY secret"
+            missing="the RELEASE_SIGNING_KEY secret"
           fi
-          if [ ! -f cosign.pub ]; then
-            missing="${missing:+$missing and }the committed cosign.pub"
+          if [ ! -f allowed_signers ]; then
+            missing="${missing:+$missing and }the committed allowed_signers"
           fi
           if [ -n "$missing" ]; then
-            echo "::error::Release signing is not set up — missing $missing. Run \`cosign generate-key-pair\` in a temporary directory, add the private half as COSIGN_PRIVATE_KEY and its passphrase as COSIGN_PASSWORD, and commit cosign.pub. See README's \"Signing a release\"."
+            echo "::error::Release signing is not set up — missing $missing. See README's \"Signing a release\"."
             exit 1
           fi
 
       - name: Package
         run: scripts/release.sh package
 
-      - uses: sigstore/cosign-installer@v4
-
-      # One signature over the checksum file rather than one per artifact: a
-      # recipient runs two commands whatever the target matrix grows to, and
-      # there is exactly one thing whose signature can be wrong.
+      # `ssh-keygen -Y`, not cosign. cosign 3.x deprecated detached
+      # signatures and refuses offline key signing outright — see the note in
+      # `scripts/release.sh`. ssh-keygen needs no install, no network and no
+      # transparency log.
       #
-      # `--tlog-upload=false` keeps it out of Sigstore's public transparency
-      # log, which would otherwise publish this private repository's name,
-      # its workflow path and the timing of every release to a permanent
-      # public record.
+      # **The key must have no passphrase.** ssh-keygen prompts on stdin, and
+      # a CI runner has none, so a passphrase-protected key fails rather than
+      # signing. The secret store is the protection.
       - name: Sign the checksums
-        working-directory: dist
         env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD:    ${{ secrets.COSIGN_PASSWORD }}
+          KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
-          cosign sign-blob \
-            --key env://COSIGN_PRIVATE_KEY \
-            --output-signature SHA256SUMS.sig \
-            --tlog-upload=false \
-            --yes \
-            SHA256SUMS
+          keyfile="$(mktemp)"
+          umask 077
+          printf '%s\n' "$KEY" > "$keyfile"
+          scripts/release.sh sign "$keyfile" < /dev/null
+          rm -f "$keyfile"
 
-      # Verified with the *public* key from the repository, using the same
+      # Verified against the *committed* allowed_signers, with the same
       # command the README gives a recipient. Signing and then not checking
       # leaves the first real verification to someone who cannot tell a
       # broken pipeline from a tampered download.
       - name: Verify the signature the way a recipient does
-        run: |
-          cosign verify-blob \
-            --key cosign.pub \
-            --signature dist/SHA256SUMS.sig \
-            --insecure-ignore-tlog=true \
-            dist/SHA256SUMS
+        run: scripts/release.sh verify < /dev/null
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -161,24 +150,20 @@ jobs:
             ### Verifying this release
 
             Every artifact is covered by `SHA256SUMS`, and `SHA256SUMS` is
-            signed. `cosign.pub` lives in the repository — take it from
+            signed. `allowed_signers` lives in the repository — take it from
             there, not from this page, so the key and the signature do not
             come from the same place.
 
             ```sh
-            cosign verify-blob \
-              --key cosign.pub \
-              --signature SHA256SUMS.sig \
-              --insecure-ignore-tlog=true \
-              SHA256SUMS
+            ssh-keygen -Y verify -f allowed_signers \
+              -I release@mjolnir -n mjolnir-release \
+              -s SHA256SUMS.sig < SHA256SUMS
 
             sha256sum -c SHA256SUMS
             ```
 
-            `--insecure-ignore-tlog` is expected: the signature is
-            deliberately not published to Sigstore's public transparency log,
-            which would make this private repository's name and release
-            cadence public. The flag disables a check that does not apply.
+            No extra tools: `ssh-keygen` is already installed wherever you
+            have SSH.
 
             ### Reproducing it
 

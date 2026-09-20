@@ -22,23 +22,21 @@
 
 # Private key material, which must never be committed under any name.
 #
-# `cosign generate-key-pair` writes `cosign.key` into the current directory,
-# and the obvious place to run it is the repository root — right beside the
-# `cosign.pub` that *is* meant to be committed. One `git add -A` separates
-# the correct outcome from publishing the key that signs every release to a
-# repository other people can read.
+# The release signing key is an SSH private key generated outside this tree;
+# only its public half belongs here, inside `allowed_signers`. These patterns
+# are the second line of defence for the day someone generates the pair in
+# the repository root — which is the obvious place to run `ssh-keygen`, right
+# beside the public half that *is* meant to be committed.
 #
-# The generated `cosign.key` is passphrase-encrypted, so a leak is not
-# instantly fatal, but it is still a rotation event: new keypair, new secret,
-# new public key committed, and every prior signature now verifiable only
-# with a key you have repudiated.
-#
-# Belt and braces — the README tells you to generate the pair in a temporary
-# directory and move only the public half in, so this rule should never fire.
-# It exists for the day someone does it the obvious way instead.
-cosign.key
+# The CI key deliberately has no passphrase, because ssh-keygen prompts on
+# stdin and a runner has none. That makes a leak immediately fatal rather
+# than merely a rotation event, so these rules matter more than they would
+# for an encrypted key.
 *.key
 *.pem
+id_ed25519
+id_rsa
+mjolnir_release
 
 # `scripts/release.sh` stages builds and archives here. Everything in it is
 # reproducible from a tag by running that script, which is the whole point of

@@ -26,6 +26,8 @@ pub type GateReportShape = GateReport;
 use crate::session::Session;
 
 pub const ITERATION_CAP: u32 = 5;
+/// Kept for the advisory line the report still prints, and for nothing else.
+/// See [`verdict`] for why it is no longer a gate.
 pub const THRESHOLD: u32 = 90;
 
 pub struct Frame {
@@ -35,15 +37,40 @@ pub struct Frame {
     pub png:        std::path::PathBuf,
     pub annotated:  Option<std::path::PathBuf>,
     pub gates:      GateReport,
+    pub expect:     crate::expect::Outcome,
 }
 
 /// The exit condition, computed rather than narrated.
 ///
-/// `preflight clean ∧ no gate violation ∧ min score ≥ 90 ∧ iterations ≤ cap` —
-/// a conjunction, not a number. It is also what keeps self-scoring honest: an
-/// agent can rationalise a score, but it cannot exit on the score alone.
+/// `preflight clean ∧ regression in focus ∧ no gate violation ∧ no failed
+/// assertion ∧ iterations ≤ cap` — a conjunction, not a number.
+///
+/// # Why the judge's score is no longer in it
+///
+/// It was, for five runs, as `min score ≥ 90` — and the loop never once
+/// exited. The reason is not that the TUI was that far off; it is that the
+/// quantity was never calibrated. A fresh blind model with no anchors gave
+/// `empty` 64 and `first_run` 86 on substantially the same finding set
+/// (`run-1789850385`), and on `run-1789829088` the means *rose* while the
+/// minimum fell 58 → 48. Taking the minimum across 72 frames of that is
+/// gating on the harshest reading of the harshest judge, and the spec's own
+/// Progress entry called it "the noisiest statistic available" while
+/// continuing to gate on it.
+///
+/// What replaces it is [`crate::expect`]: the design's stated geometry, as
+/// assertions that cite the `HANDOFF.md` line they come from. Reproducible
+/// bit-for-bit, comparable between runs, and a failure arrives already
+/// knowing what it violated.
+///
+/// The judge stays, and its scores are still recorded and still printed —
+/// but as **advisory**. An assertion suite only checks what somebody wrote
+/// down; the judge is what finds the deviation nobody enumerated, and on
+/// `run-1789850385` that was two of the twelve new findings. Demoting it is
+/// not distrusting it. It is refusing to let an uncalibrated number decide a
+/// yes/no question.
 pub fn verdict(session: &Session, frames: &[Frame]) -> (String, bool) {
     let violations: usize = frames.iter().map(|f| f.gates.violations.len()).sum();
+    let failures: usize = frames.iter().map(|f| f.expect.failures.len()).sum();
     let capped = session.iterations.len() as u32 >= ITERATION_CAP;
 
     match &session.regression {
@@ -68,15 +95,34 @@ pub fn verdict(session: &Session, frames: &[Frame]) -> (String, bool) {
             false,
         );
     }
-    match session.minimum() {
-        Some(min) if min >= THRESHOLD => (format!("Passed — no gate violations, minimum score {min}"), true),
-        Some(min) if capped => (
-            format!("Capped at {ITERATION_CAP} iterations — minimum score {min}, below the threshold of {THRESHOLD}"),
+    if failures > 0 {
+        let first = frames.iter().flat_map(|f| f.expect.failures.iter()).next().expect("counted above");
+        return (
+            format!(
+                "Failed — {failures} design assertions, first: {} expects {} ({})",
+                first.screen, first.rule, first.cite
+            ),
             false,
-        ),
-        Some(min) => (format!("Below threshold — minimum score {min}, needs {THRESHOLD}"), false),
-        None => ("Not scored — gates are clean, but no judge scores were recorded".to_string(), false),
+        );
     }
+
+    let checked: usize = frames.iter().map(|f| f.expect.checked).sum();
+    if checked == 0 {
+        return ("Not scored — no design assertions ran, so nothing was checked against the reference".to_string(), false);
+    }
+
+    // The advisory half. It cannot fail the run; it is here so a reader sees
+    // what the judge thought next to what the reference proved.
+    let advisory = match session.minimum() {
+        Some(min) if min >= THRESHOLD => format!("; judge minimum {min}"),
+        Some(min) => format!("; judge minimum {min}, advisory only (threshold {THRESHOLD})"),
+        None => "; no judge scores recorded".to_string(),
+    };
+
+    if capped {
+        return (format!("Capped at {ITERATION_CAP} iterations — {checked} assertions clean{advisory}"), false);
+    }
+    (format!("Passed — no gate violations, {checked} design assertions clean{advisory}"), true)
 }
 
 pub fn write(run: &Path, session: &Session, frames: &[Frame]) -> Result<std::path::PathBuf> {
@@ -101,6 +147,7 @@ pub fn write(run: &Path, session: &Session, frames: &[Frame]) -> Result<std::pat
         )
         .replace("{{PREFLIGHT}}", &preflight_section(frames))
         .replace("{{GATES}}", &format!("{}{}", gates_section(frames), regression_section(session)))
+        .replace("{{CONFORMANCE}}", &conformance_section(frames))
         .replace("{{SCORES}}", &scores_section(session))
         .replace("{{FRAMES}}", &frames_section(frames)?)
         .replace("{{ITERATIONS}}", &iterations_section(session));
@@ -178,6 +225,46 @@ fn regression_section(session: &Session) -> String {
     }
 }
 
+/// The deterministic half of the report, and the half the verdict is
+/// computed from.
+fn conformance_section(frames: &[Frame]) -> String {
+    let checked: usize = frames.iter().map(|f| f.expect.checked).sum();
+    let failures: Vec<(&Frame, &crate::expect::Failure)> =
+        frames.iter().flat_map(|f| f.expect.failures.iter().map(move |v| (f, v))).collect();
+
+    if checked == 0 {
+        return "<p>No assertions ran. Nothing was checked against the design reference, so a clean gate result here means only that the frames are well-formed.</p>".into();
+    }
+    if failures.is_empty() {
+        return format!(
+            "<p><strong>{checked} assertions clean.</strong> Every position, tone and \
+             row count the design system states for these screens holds in every frame.</p>"
+        );
+    }
+    let rows: String = failures
+        .iter()
+        .map(|(frame, failure)| {
+            format!(
+                "<tr><td class=\"mono\">{}-{}-{}{}</td><td>{}</td><td>{}</td><td class=\"note\">{}</td></tr>",
+                escape(&frame.scene),
+                escape(&frame.size),
+                escape(&frame.theme),
+                failure.row.map(|r| format!(" r{r}")).unwrap_or_default(),
+                escape(&failure.screen),
+                escape(&failure.detail),
+                escape(&failure.cite),
+            )
+        })
+        .collect();
+    format!(
+        "<table><tr><th>frame</th><th>screen</th><th>measured</th><th>stated</th></tr>{rows}</table>\
+         <p class=\"note\"><strong>{} failed</strong> of {checked} checked. Each row cites the \
+         <code>HANDOFF.md</code> line it comes from; none of it is a judgement. This is what the \
+         verdict is computed from.</p>",
+        failures.len()
+    )
+}
+
 fn scores_section(session: &Session) -> String {
     if session.scores.is_empty() {
         return "<p>No scores recorded. The judge writes these into <code>session.json</code>.</p>".into();
@@ -200,8 +287,12 @@ fn scores_section(session: &Session) -> String {
     let minimum = session.minimum().unwrap_or(0);
     format!(
         "<table><tr><th>frame</th><th>spatial</th><th>component</th><th>note</th></tr>{rows}</table>\
-         <p class=\"note\">Minimum across every frame: <strong>{minimum}</strong>, against a threshold of {THRESHOLD}. \
-         The minimum, never the mean — an average of {THRESHOLD} can hide one frame at forty.</p>"
+         <p class=\"note\">Minimum across every frame: <strong>{minimum}</strong>, against a reference point of {THRESHOLD}. \
+         <strong>Advisory.</strong> These numbers no longer gate the run and have not since the assertion suite \
+         replaced them: a 0–100 from a fresh blind model with no anchors is uncalibrated, and taking the minimum \
+         across every frame gates on the harshest reading of the harshest judge. What the judge is for is the \
+         deviation nobody thought to write an assertion about; that is why its findings still matter and its \
+         arithmetic does not.</p>"
     )
 }
 

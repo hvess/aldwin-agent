@@ -43,6 +43,14 @@ pub struct Exception {
     /// why; this is what the gate actually consults.
     #[serde(default)]
     pub glyphs:    String,
+    /// The ink-on-ground pairs this exception allows, for a `contrast` entry,
+    /// each written exactly as the gate reports it — `"--tui-dim on
+    /// --tui-diff-box"`. A pair rather than a threshold on purpose: raising a
+    /// floor would silence every adjacency at once, including the ones nobody
+    /// has looked at, which is the suppression dump the `authority` rule
+    /// exists to prevent.
+    #[serde(default)]
+    pub pairs:     Vec<String>,
 }
 
 /// Cells that legitimately differ between two captures of the same state.

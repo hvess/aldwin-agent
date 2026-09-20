@@ -13,7 +13,10 @@
 pub mod baseline;
 pub mod capture;
 pub mod compositor;
+pub mod contrast;
 pub mod design;
+pub mod expect;
+pub mod facts;
 pub mod fake;
 pub mod gates;
 pub mod geometry;

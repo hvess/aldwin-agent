@@ -82,6 +82,17 @@ enum Command {
     Run {
         #[arg(long)]
         run: PathBuf,
+        /// How long the app must be silent before a frame is taken. The
+        /// default is the settled value; lower it for an iteration pass and
+        /// restore it for the one the verdict is read from, since a frame
+        /// taken too early is a frame of a half-drawn app.
+        #[arg(long, default_value = "400")]
+        quiet_ms: u64,
+        /// Capture one theme only. The themes are a pure palette swap — the
+        /// harness proves it per run, see `themes_are_a_palette_swap` — so a
+        /// fix pass that is not about colour can halve its capture time.
+        #[arg(long)]
+        theme: Option<Theme>,
     },
     /// Assemble the report from what the run directory already holds.
     Report {
@@ -93,6 +104,27 @@ enum Command {
     Verdict {
         #[arg(long)]
         run: PathBuf,
+    },
+    /// Every failed design assertion in the run, grouped by screen, each
+    /// with the `HANDOFF.md` line it comes from.
+    ///
+    /// This is the deterministic half of what six blind judges used to
+    /// produce, and it is the first thing to read after `run`.
+    Conformance {
+        #[arg(long)]
+        run: PathBuf,
+    },
+    /// The frames a blind judge should be handed, and what it may read.
+    ///
+    /// One theme, because the harness proves per run that the two are a
+    /// palette swap; the design frame size, because that is the only frame
+    /// the design specifies. Twelve frames rather than seventy-two.
+    JudgeSet {
+        #[arg(long)]
+        run: PathBuf,
+        /// Include every size rather than the design frame alone.
+        #[arg(long)]
+        all_sizes: bool,
     },
     /// The regression gate: which snapshot regions moved, and whether the
     /// focus set accounts for them.
@@ -161,6 +193,14 @@ fn load_frames(run: &Path) -> std::io::Result<Vec<report::Frame>> {
     for entry in manifest {
         let gates_path = entry["gates"].as_str().unwrap_or_default();
         let gates: report::GateReportShape = serde_json::from_str(&std::fs::read_to_string(gates_path)?)?;
+        // A run directory from before the assertion suite existed has no
+        // `expect.json`. Treating that as "nothing was checked" rather than
+        // as "everything passed" is what makes `verdict` refuse it instead of
+        // reporting a clean run it never measured.
+        let expect = match entry["expect"].as_str() {
+            Some(path) => serde_json::from_str(&std::fs::read_to_string(path)?)?,
+            None => mjolnir_screenshot::expect::Outcome::default(),
+        };
         frames.push(report::Frame {
             scene:     entry["scene"].as_str().unwrap_or_default().to_string(),
             size:      entry["size"].as_str().unwrap_or_default().to_string(),
@@ -168,9 +208,46 @@ fn load_frames(run: &Path) -> std::io::Result<Vec<report::Frame>> {
             png:       PathBuf::from(entry["png"].as_str().unwrap_or_default()),
             annotated: entry["annotated"].as_str().map(PathBuf::from),
             gates,
+            expect,
         });
     }
     Ok(frames)
+}
+
+/// Are the two themes the same frame in different paint?
+///
+/// This is not a nicety. Half the capture matrix, half the gate time and —
+/// before this — half the judging budget went on light frames, and if the
+/// declared grids are identical then a light frame *cannot* hold a spatial
+/// defect its dark twin does not. Proving it per run is what licenses judging
+/// one theme instead of two, and what makes `run --theme dark` a legitimate
+/// shortcut rather than a guess.
+///
+/// It is proved rather than assumed because it is a property of the app, not
+/// of the design: a theme-conditional layout would break it, silently, and
+/// the run that introduced one is exactly the run that must not be allowed to
+/// go on judging one theme. `run-1789850385` had 36 identical pairs.
+///
+/// Returns the number of pairs compared, or the first frame where they
+/// diverge.
+fn themes_are_a_palette_swap(run: &Path, scenes: &[String]) -> std::io::Result<std::result::Result<usize, String>> {
+    let mut pairs = 0;
+    for scene in scenes {
+        for size in Size::ALL {
+            let dark = run.join(format!("{scene}-{size}-dark.txt"));
+            let light = run.join(format!("{scene}-{size}-light.txt"));
+            let (Ok(a), Ok(b)) = (std::fs::read_to_string(&dark), std::fs::read_to_string(&light)) else { continue };
+            if a != b {
+                let row = a.lines().zip(b.lines()).position(|(x, y)| x != y);
+                return Ok(Err(match row {
+                    Some(n) => format!("{scene} {size}, first at row {n}"),
+                    None => format!("{scene} {size}, different row counts"),
+                }));
+            }
+            pairs += 1;
+        }
+    }
+    Ok(Ok(pairs))
 }
 
 fn main() -> std::io::Result<()> {
@@ -269,7 +346,7 @@ fn main() -> std::io::Result<()> {
             Ok(())
         }
 
-        Command::Run { run } => {
+        Command::Run { run, quiet_ms, theme: only_theme } => {
             let root = workspace_root();
             let session = Session::load(&run)?;
             let binary = root.join("target/debug/mjolnir");
@@ -279,10 +356,16 @@ fn main() -> std::io::Result<()> {
                 return Err(std::io::Error::other("cell disagrees with the baseline; run preflight"));
             }
 
+            let themes: Vec<Theme> = match only_theme {
+                Some(one) => vec![one],
+                None => Theme::ALL.to_vec(),
+            };
             let mut manifest = Vec::new();
+            let mut assertions = 0usize;
+            let mut failed = 0usize;
             for scene_name in &session.scenes {
                 for size in Size::ALL {
-                    for theme in Theme::ALL {
+                    for theme in themes.iter().copied() {
                         let frame = capture(
                             &comp,
                             &binary,
@@ -292,7 +375,7 @@ fn main() -> std::io::Result<()> {
                             scene_name,
                             size,
                             theme,
-                            Duration::from_millis(400),
+                            Duration::from_millis(quiet_ms),
                             &[],
                             &run,
                         )?;
@@ -300,19 +383,39 @@ fn main() -> std::io::Result<()> {
                             [] => "clean".to_string(),
                             counts => counts.iter().map(|(g, n)| format!("{g} {n}")).collect::<Vec<_>>().join(", "),
                         };
-                        println!("{scene_name} {size} {theme}  {} cells  {gates}", frame.checked);
+                        assertions += frame.expect.checked;
+                        failed += frame.expect.failures.len();
+                        let expect = match frame.expect.failures.len() {
+                            0 => format!("{} assertions clean", frame.expect.checked),
+                            n => format!("{n}/{} assertions FAILED", frame.expect.checked),
+                        };
+                        println!("{scene_name} {size} {theme}  {} cells  {gates}  {expect}", frame.checked);
+                        for failure in &frame.expect.failures {
+                            println!("    {} expects {} — {}", failure.screen, failure.rule, failure.detail);
+                            println!("      {}", failure.cite);
+                        }
                         manifest.push(serde_json::json!({
                             "scene": frame.scene,
                             "size": frame.size.to_string(),
                             "theme": frame.theme.to_string(),
                             "png": frame.path,
                             "annotated": frame.annotated,
+                            "facts": frame.facts,
                             "gates": run.join(format!("{scene_name}-{size}-{theme}.gates.json")),
+                            "expect": run.join(format!("{scene_name}-{size}-{theme}.expect.json")),
                         }));
                     }
                 }
             }
             std::fs::write(run.join("frames.json"), serde_json::to_string_pretty(&manifest)?)?;
+
+            println!("\n{assertions} design assertions, {failed} failed");
+            if only_theme.is_none() {
+                match themes_are_a_palette_swap(&run, &session.scenes)? {
+                    Ok(pairs) => println!("themes are a palette swap ({pairs} frame pairs, identical declared grids)"),
+                    Err(where_) => println!("THEMES DIVERGE: {where_} — a light frame can now hold a defect its dark twin does not"),
+                }
+            }
 
             // Recorded, not just printed. The verdict reads it back out of
             // the session: a regression nobody stored is a gate that cannot
@@ -354,6 +457,88 @@ fn main() -> std::io::Result<()> {
             let frames = load_frames(&run)?;
             let path = report::write(&run, &session, &frames)?;
             println!("report {}", path.display());
+            Ok(())
+        }
+
+        Command::Conformance { run } => {
+            let frames = load_frames(&run)?;
+            let mut total = 0;
+            let mut checked = 0;
+            let mut by_screen: Vec<(String, Vec<String>)> = Vec::new();
+            for frame in &frames {
+                checked += frame.expect.checked;
+                for failure in &frame.expect.failures {
+                    total += 1;
+                    let line = format!(
+                        "  {}-{}-{} row {}  {}\n      {}\n      {}",
+                        frame.scene,
+                        frame.size,
+                        frame.theme,
+                        failure.row.map(|r| r.to_string()).unwrap_or_else(|| "-".into()),
+                        failure.rule,
+                        failure.detail,
+                        failure.cite
+                    );
+                    match by_screen.iter_mut().find(|(s, _)| *s == failure.screen) {
+                        Some((_, lines)) => lines.push(line),
+                        None => by_screen.push((failure.screen.clone(), vec![line])),
+                    }
+                }
+            }
+            for (screen, lines) in &by_screen {
+                println!("{screen} — {} failed", lines.len());
+                for line in lines {
+                    println!("{line}");
+                }
+                println!();
+            }
+            let skipped: Vec<&String> = frames.iter().flat_map(|f| f.expect.skipped.iter()).collect();
+            if !skipped.is_empty() {
+                let mut names: Vec<&str> = skipped.iter().map(|s| s.as_str()).collect();
+                names.sort_unstable();
+                names.dedup();
+                println!("not anchored on some frames, so unchecked there: {}", names.join(", "));
+            }
+            println!("{checked} assertions checked, {total} failed");
+            Ok(())
+        }
+
+        Command::JudgeSet { run, all_sizes } => {
+            let frames = load_frames(&run)?;
+            // Dark rather than light for one reason only: the dark theme is
+            // the one the design system was authored in, so its frames are
+            // the ones the handoff's own screens can be held against.
+            let wanted: Vec<&report::Frame> = frames
+                .iter()
+                .filter(|f| f.theme == "dark" && (all_sizes || f.size == Size::Medium.to_string()))
+                .collect();
+            println!("# Frames for the judge — {} of {}", wanted.len(), frames.len());
+            println!("#");
+            println!("# One theme: the harness proves per run that the declared grids are");
+            println!("# identical across themes, so a light frame cannot hold a spatial");
+            println!("# defect its dark twin does not. What differs is contrast, and the");
+            println!("# `contrast` gate measures that better than an eye can.");
+            if !all_sizes {
+                println!("# One size: 120x36 is the frame the design specifies. Degradation at");
+                println!("# 80x24 and 200x50 is a judgement, not a stated rule.");
+            }
+            println!();
+            for frame in &wanted {
+                let stem = format!("{}-{}-{}", frame.scene, frame.size, frame.theme);
+                println!("{}", run.join(format!("{stem}.png")).display());
+                println!("{}", run.join(format!("{stem}.facts.txt")).display());
+            }
+            println!();
+            println!("# The judge reads .claude/design/ (IMPORT.md first), .claude/design/ERRATA.md");
+            println!("# and .claude/adr/*.md — and nothing else. Not crates/, not .claude/spec/.");
+            println!("#");
+            println!("# Hand it the .facts.txt, not a PNG to decode: it carries every span's");
+            println!("# declared role, its hex and its contrast. Six judges on run-1789850385");
+            println!("# spent most of 890K tokens recovering exactly that from pixels, and");
+            println!("# three of them inferred a role name wrongly while doing it.");
+            println!("#");
+            println!("# Ask for findings against named rules, not for a 0-100 score. The");
+            println!("# score is advisory now; the gate is `mjolnir-screenshot conformance`.");
             Ok(())
         }
 

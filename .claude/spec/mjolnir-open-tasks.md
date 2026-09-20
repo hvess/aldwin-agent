@@ -4,7 +4,8 @@ Work that is known, understood and not done. Each entry says what was seen, wher
 
 **Status:** active — a ledger, not a spec. Nothing here blocks anything else.
 **Scope:** everything outstanding as of 2026-09-19, from the first screenshot
-session, the harness's own disclosed gaps, and two repo-level findings.
+session, the harness's own disclosed gaps, two repo-level findings, and two
+scene gaps found by `run-1789850385`'s judges (entries 14 and 15).
 **Owner:** Maximilian
 **Last Updated:** 2026-09-19
 
@@ -63,9 +64,16 @@ The original text follows, unchanged.
 
 ## Harness gaps — disclosed, not hidden
 
-These are in `.claude/skills/screenshot/SKILL.md` under "What this does not
-cover", so a session reports them rather than implying coverage. Listed here
-because each is closable work.
+Entries 5–10 are in `.claude/skills/screenshot/SKILL.md` under "What this does
+not cover", so a session reports them rather than implying coverage. Listed
+here because each is closable work.
+
+Entries 14 and 15 are new on 2026-09-19 and are **not** disclosed in the
+skill — both are scenes that cannot exercise what they render, found by
+`run-1789850385`'s judges reading the frames as evidence about the app. 14 is
+the sharper of the two, because the skill currently claims the coverage it
+lacks. They take the next free numbers rather than slotting in above the Repo
+entries; numbers here are never reused.
 
 5. **`breakages` cannot see a collision inside the body column, or text
    truncated with a well-formed ellipsis.** The `layout` gate catches content
@@ -110,10 +118,42 @@ because each is closable work.
    local fake is nothing but a `base_url`. A defect living only in the
    Anthropic client is invisible to every screenshot session.
 
-10. **The loop has never iterated.** One session has run: capture → gates →
+10. **The loop has never iterated.** Six sessions have run: capture → gates →
     judge → report. No session has gone capture → fix → recapture → rescore,
     so the iteration cap, the per-iteration notes and the fix half of the loop
     are untested by use.
+
+    **Cheaper than it was, as of 2026-09-20.** An iteration pass no longer
+    needs a judge at all: `mjolnir-screenshot conformance` is the fix
+    loop's feedback, it runs in the 2m31s the capture takes, and
+    `run --quiet-ms 150 --theme dark` roughly quarters that again for a pass
+    that is not about colour. `crates/tui` now has eleven cited Class A items
+    queued (conformance Step 4), which is the first time there has been
+    enough work to make an iterating session worth opening.
+
+14. **No scene ever has two prompts pending at once, so
+    `decision::queue_note` is unreachable.** `prompt_scoped` issues two tool
+    calls in one assistant message and draws two `◐` rows, but its panel is
+    **byte-identical** to `prompt_path`'s and `(+N more pending)` appears in
+    none of the 72 frames of `run-1789850385`: the second call is logged as
+    running before its prompt is queued, so `pending_prompts.len()` is 1 when
+    the panel draws. The screenshot skill's "What this does not cover" says
+    that scene "covers a *queued* second prompt" — it does not, and the
+    disclosure should either be corrected or the scene should press the case
+    it claims. Closing it means a scene that reaches two pending prompts,
+    which is also what would let a judge see the design question in
+    `mjolnir-design-conformance` Class B 9.
+
+15. **`empty`'s `provider` row cannot exercise what it renders.**
+    `14d` specifies the fact as `anthropic · sonnet-4.6` — vendor and model —
+    and `transcript::intro_content` draws exactly that whenever the provider
+    is known. Every scene reaches its fake through a bare `base_url`, so
+    `current_provider` is `None` and the row falls back to the model alone. A
+    blind judge on `run-1789850385` read that as the app dropping the vendor,
+    which is the failure mode this ledger's entry 9 describes from the other
+    side: the scenes exercise one configuration and the frames are then read
+    as evidence about all of them. Closing it means a scene whose provider is
+    a catalogue entry rather than an endpoint.
 
 ## Repo
 

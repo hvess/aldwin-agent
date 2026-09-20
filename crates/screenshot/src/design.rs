@@ -24,6 +24,16 @@ pub struct Design {
     /// The closed glyph table — the **marks**. Key hints and typography are
     /// not in it and are carried as a cited exception in the baseline file.
     pub marks: BTreeSet<char>,
+    /// `tokens/cells.css`, resolved to **cell counts**. `--cell-w` and
+    /// `--cell-h` are one cell each by definition, so a token declared as
+    /// `calc(var(--cell-w) * 3)` is 3 and one declared as a sum of other
+    /// tokens is their sum.
+    ///
+    /// Parsed rather than restated for the same reason the palette is: the
+    /// `structure` gate asserts the design's stated geometry, and a gate that
+    /// held its own copy of `--panel-permission-h` would go on asserting 18
+    /// after a re-sync moved it.
+    pub cells: BTreeMap<String, u16>,
 }
 
 impl Design {
@@ -83,7 +93,14 @@ impl Design {
             return Err(Error::new(ErrorKind::InvalidData, "no roles resolved from the design tokens"));
         }
 
-        Ok(Design { dark, light, marks: glyph_table(&handoff) })
+        let cells = cell_tokens(&strip_comments(&std::fs::read_to_string(dir.join("tokens/cells.css"))?));
+        for required in ["margin-x", "label-col", "label-gutter", "group-gap", "panel-permission-h", "bar-top-h", "bar-bottom-h", "break-h"] {
+            if !cells.contains_key(required) {
+                return Err(Error::new(ErrorKind::InvalidData, format!("tokens/cells.css declares no --{required}")));
+            }
+        }
+
+        Ok(Design { dark, light, marks: glyph_table(&handoff), cells })
     }
 
     pub fn roles(&self, theme: Theme) -> &BTreeMap<String, (u8, u8, u8)> {
@@ -170,6 +187,75 @@ fn blend_factor(role: (u8, u8, u8), ground: (u8, u8, u8), target: (u8, u8, u8)) 
         }
     }
     Some((alpha * 100.0).round() as u8)
+}
+
+/// `cells.css` resolved to cell counts.
+///
+/// The file is deliberately written as primitives plus `calc()`, with a
+/// comment forbidding a derived value from being restated as a literal, so
+/// resolving it needs one pass of substitution rather than a parser. Only the
+/// two forms the file actually uses are understood — `calc(var(--x) * n)` and
+/// a sum of `var()` terms — and a token using anything else is skipped rather
+/// than guessed at, which is why `load_from` checks for the ones the gates
+/// need by name.
+fn cell_tokens(css: &str) -> BTreeMap<String, u16> {
+    let mut raw: Vec<(String, String)> = Vec::new();
+    for line in css.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("--") else { continue };
+        let Some((name, value)) = rest.split_once(':') else { continue };
+        raw.push((name.trim().to_string(), value.trim().trim_end_matches(';').trim().to_string()));
+    }
+
+    let mut out: BTreeMap<String, u16> = BTreeMap::new();
+    // A cell is the unit, so the two primitives are 1 and everything else is
+    // counted in them.
+    out.insert("cell-w".into(), 1);
+    out.insert("cell-h".into(), 1);
+
+    // Substitution, not recursion: `--step-content-col` is a sum of three
+    // tokens, one of which is itself a sum, so a single pass is not enough
+    // and the file gives no ordering guarantee. Iterating to a fixed point
+    // costs nothing at this size and cannot loop on a well-formed file.
+    for _ in 0..raw.len() + 1 {
+        let mut progressed = false;
+        for (name, value) in &raw {
+            if out.contains_key(name) {
+                continue;
+            }
+            if let Some(n) = eval(value, &out) {
+                out.insert(name.clone(), n);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    out
+}
+
+/// `calc(var(--a) * 3)`, `calc(var(--a) + var(--b))`, `var(--a)`, or a bare
+/// integer. Anything else — a `px` literal, a number token like `--tui-cols` —
+/// yields `None`, which leaves it out of the map.
+fn eval(value: &str, known: &BTreeMap<String, u16>) -> Option<u16> {
+    let body = value.strip_prefix("calc(").and_then(|v| v.strip_suffix(')')).unwrap_or(value).trim();
+
+    if let Some((left, right)) = body.split_once('*') {
+        let multiplicand = eval(left.trim(), known)?;
+        return Some(multiplicand * right.trim().parse::<u16>().ok()?);
+    }
+    if body.contains('+') {
+        let mut total = 0u16;
+        for term in body.split('+') {
+            total += eval(term.trim(), known)?;
+        }
+        return Some(total);
+    }
+    if let Some(name) = body.strip_prefix("var(--").and_then(|v| v.strip_suffix(')')) {
+        return known.get(name.trim()).copied();
+    }
+    body.parse::<u16>().ok()
 }
 
 fn strip_comments(css: &str) -> String {

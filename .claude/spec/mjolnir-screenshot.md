@@ -2,10 +2,11 @@
 
 Screenshot harness — runs the shipped binary in a real terminal, offscreen, at three fixed sizes, and scores the frames against the design system.
 
-**Status:** active — built and in use, with the gaps in the 2026-09-19
-"session" entry below. Originally: The capture stack is
-proven by probe (see Progress), the acceptance model is decided below, and
-every Step has an answer; no open questions remain.
+**Status:** active — built and in use. **The acceptance model changed on
+2026-09-20**: the exit condition is now a suite of assertions read off the
+design system, and the blind judge's 0–100 score is advisory. See the Progress
+entry of that date, which also carries what the change cost and what it cannot
+do. Remaining gaps are in `mjolnir-open-tasks` 5–7, 9, 10, 14 and 15.
 **Scope:** screenshotting and scoring `crates/tui` as rendered by the shipped
 `mjolnir` binary. Two deliverables: the crate `crates/screenshot`
 (`mjolnir-screenshot`), which captures, gates and scores, and a skill that
@@ -13,7 +14,73 @@ drives it — declaring the goal, focus set and scenes, running the loop, and
 asking before it deletes a run. Excludes cell-level assertions (`crates/tui/tests/render_snapshot.rs`,
 `ui/tests.rs`), the design system itself, and functional testing.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-19
+**Last Updated:** 2026-09-20
+
+**Progress (2026-09-20, the loop became deterministic):** Built in one pass
+after `run-1789850385` measured where a session's time actually goes: capture
+and all six gates took ~3 minutes for 72 frames, and **six blind judges took
+11 minutes, 890K tokens and 225 tool calls**. The largest single activity in
+those 225 calls was decoding PNGs to recover values the harness already held
+— three judges independently solved the panel's dim blend back to α = 0.450,
+which is a constant in `palette.rs` and which the colour gate reconstructs per
+cell.
+
+Counting that run's twelve new Class A findings afterwards: **eight were
+mechanically derivable** from the declared grid, the region map and
+`cells.css`. So were three Class C items. Four needed a judge.
+
+What was built, in the order it matters:
+
+- **`expect.rs` — `HANDOFF.md`'s screen sections as assertions the harness
+  executes.** Four tables (`4a`, `5a`, `5d`, `14d` — which is every screen
+  Mjolnir draws), each rule citing the line it comes from and resolving its
+  arithmetic through `cells.css` rather than restating a number. This is now
+  what the verdict is computed from.
+- **`facts.rs` — the declared spans, written beside every frame.** Each span's
+  cell range, text, ink role, ground role, band and contrast. A judge is
+  handed this instead of a decoder. It also removes an entire error class:
+  "What a judge will raise again" item 2 exists because a judge inferred
+  `--tui-dim` from a hex the app had declared `--tui-context`, and with the
+  declared role in hand that inference cannot be made.
+- **`contrast.rs` and a seventh gate.** Every ink-on-ground pair the frame
+  paints and every band against its neighbour, against the floors the design
+  states about *itself* — 3.3:1 for ink (`HANDOFF.md:109`), 1.6:1 for a mark
+  (same line), 1.15:1 for a ground step (`:74`). Not `SYNC.md`'s 4.67, which
+  the same document contradicts.
+- **A copy lint** in the `content` gate: contractions, and a count that
+  disagrees with its own pronoun.
+- **A theme-identity proof, per run.** All 36 dark/light pairs have
+  byte-identical declared grids. That is what licenses judging one theme
+  instead of two — and it is *proved* rather than assumed, because a
+  theme-conditional layout would break it silently and the run that
+  introduced one is exactly the run that must not go on judging one theme.
+- **`conformance` and `judge-set` commands**, and `run --quiet-ms` /
+  `run --theme` for iteration passes.
+
+**The result, on `run-1789890592`, with no code changed in `crates/tui`:**
+372 assertions, 22 failed; 27 gate violations. Six distinct cited findings, in
+**2m31s, with zero judge tokens** — four of which had cost six judges 890K
+tokens to find the day before, and two of which no judge has ever found:
+
+- Class A 46, the dark theme's idle mark at 1.402:1 against the 2.4:1 the
+  light theme meets and the design states. Eighteen blind readings across five
+  runs missed it.
+- Class C 11, which **corrected a finding this catalogue had backwards**. Item
+  38 said the app's 45% panel dim deviated from `5a`'s stated 35%. It does —
+  but 35% measures 2.706:1 dark and 1.975:1 light against the design's own
+  3.3:1 ink floor, so the reference's number is the worse of the two and no
+  opacity satisfies both halves of the reference. Three judges reported the
+  deviation; none measured what the reference would produce.
+
+**What it cost, and what it cannot do**, because neither is visible in a green
+run. The assertion suite checks conformance to what somebody **wrote down**;
+it cannot find what nobody enumerated, and on the run that motivated it that
+was two of twelve findings. The `contrast` gate does not fail a dimmed span,
+for the reason in Class C 11 — a regression in the dim would pass. And the
+judge is now handed twelve frames rather than seventy-two, so a defect that
+only appears at 80×24 in the light theme is out of its reach and inside the
+gates' only.
+
 
 **Progress (2026-09-19, capture probe):** The stack was built and run end to
 end on this machine with no new packages — a headless `sway`
@@ -339,7 +406,7 @@ size measured at startup. Capture waits until the pty reports the target size.
 
 - **A component the design system has no counterpart for halts the loop.** — The design is imported, not invented, so such a thing is not 60% correct. It is design debt needing a deliberate decision; ADR 0002 is what handling one looks like.
 
-- **The threshold is the minimum across frames, never the mean.** — Three sizes in two themes is six frames, and a mean of 90 hides one frame at 40.
+- **The threshold is the minimum across frames, never the mean.** — Three sizes in two themes is six frames, and a mean of 90 hides one frame at 40. *(Held for five runs, then retired on 2026-09-20: the reasoning is right about means and wrong about the underlying quantity, which was never calibrated enough to take a minimum of. The assertion suite is a count of failures, where a minimum and a mean are the same thing.)*
 
 - **The exit condition is a conjunction, not a number.** — It is also what keeps self-scoring honest: an agent that both fixes and judges can rationalise a score, but the gates are deterministic and it cannot exit on the score alone.
 
@@ -396,9 +463,18 @@ number downstream inherits that.
 | breakages | declared cells | truncated or clipped text, colliding runs, glyphs outside the closed vocabulary, cells the app never painted, misaligned table rows |
 | colour | declared cells | every foreground and ground the app declares belongs to the theme's palette |
 | role pairing | declared cells + region map | a cell's declared foreground and ground are the pair the design specifies for its region's role |
+| contrast | declared spans + region map | every ink-on-ground pair and every band against its neighbour, against the floors the design states about itself — 3.3:1 ink, 1.6:1 mark, 1.15:1 ground step |
 | regression | `render.snap` diff vs merge-base | every region the diff touches falls inside the focus set |
-| content | declared cells | the mechanical part of Content Fundamentals — third-person "The agent", lowercase labels |
+| content | declared cells | the mechanical part of Content Fundamentals — third person, no contractions, a count that agrees with its pronoun |
 | component exists | judgement | nothing rendered that the design system has no counterpart for |
+
+**Added 2026-09-20: a third tier that is not a gate.** The gates above are
+properties of *any* well-formed frame. The **design assertions**
+(`crate::expect`) are different in kind: they are what `HANDOFF.md` says about
+a *particular screen*, so a failure cites the line rather than a rule. They
+run per frame alongside the gates, they are zero-tolerance in the same way,
+and they are what the exit condition is now computed from. See the
+2026-09-20 Progress entry for why that replaced the judge's score.
 
 **"Declared cells" means the app's own output, not the picture.** The pty
 proxy carries every escape sequence mjolnir emits, so the harness knows each
@@ -451,11 +527,30 @@ different clock — the design system's, not the code's.
 | spatial | cells vs the reference frame | rows and columns sit where the handoff puts them |
 | component fidelity | judgement | what is in focus matches its referenced design |
 
-Scored 0–100 per frame by a **separate agent, blind to the code**: it is given
-the frames, the criteria, the focus set and the design reference, and nothing
-else — no diff, no source, no earlier scores. The threshold is **90, taken as
-the minimum across every frame in the run** — six per scene, and a session may
-name several.
+Judged by a **separate agent, blind to the code**: it is given the frames,
+their declared spans (`.facts.txt`), the criteria, the focus set, the design
+reference and `.claude/design/ERRATA.md`, and nothing else — no diff, no
+source, no earlier scores.
+
+**Superseded 2026-09-20 in three ways, each measured.** The judge no longer
+gates, is no longer asked for a number, and no longer sees every frame:
+
+1. **The score is advisory.** It was `min ≥ 90` across every frame for five
+   runs, and the loop never once exited. The quantity is uncalibrated — one
+   judge scored two screens 64 and 86 on substantially the same finding set —
+   and the minimum across 72 frames of it gates on the harshest reading of the
+   harshest judge. This spec's own Progress entry called that "the noisiest
+   statistic available" and then went on gating with it. What gates now is
+   `crate::expect`.
+2. **It is asked for findings against named rules, not 0–100.** A closed
+   question converges between judges; an open one does not.
+3. **It sees twelve frames, not seventy-two** — one theme, because the run
+   proves the declared grids are identical across themes, and the 120×36
+   design frame, because that is the only frame the design specifies.
+
+What it is *for* is unchanged and is the reason it survives at all: an
+assertion suite finds deviation from what somebody wrote down, and the judge
+finds what nobody enumerated. On `run-1789850385` that was two of twelve.
 
 Its feedback is therefore in visual terms ("the option list sits one cell left
 of the body column"), and translating that back into code is the fixer's job,
@@ -470,7 +565,10 @@ what skipping that step cost last time.
 
 ### Exit
 
-    preflight clean ∧ no gate violation ∧ min score ≥ 90 ∧ iterations ≤ 5
+    preflight clean ∧ regression in focus ∧ no gate violation
+                    ∧ no failed design assertion ∧ iterations ≤ 5
+
+The judge's score is not a term in it. See the 2026-09-20 Progress entry.
 
 A report is written on every exit, including a cap-out, which it must say
 plainly.

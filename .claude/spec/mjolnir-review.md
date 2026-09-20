@@ -113,6 +113,14 @@ harmless there because a bad frame is something the judge says out loud.
     hermeticity — it is the honest substitute, and it turns "clippy suddenly
     fails on untouched code" from a mystery into a line in the report.
 
+11. **The report is plain HTML and stays that way.** `review.html` is
+    self-contained — no stylesheet, no script, no embedded frames — and does
+    **not** apply the design system this loop enforces. Dressing the referee
+    in the players' kit makes it harder to trust. The binary writes only what
+    was measured and leaves a marked placeholder; the skill appends the
+    judge's section, because the agent that made the change is the one that
+    would otherwise write the verdict sentence.
+
 ## Pitfalls
 
 - **Letting the contradictions list grow.** It is two entries. A previous

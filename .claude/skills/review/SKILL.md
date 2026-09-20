@@ -36,9 +36,11 @@ Both flags are required — a review that cannot say what it is reviewing
 cannot judge whether the change did it, and stage 5 is handed them verbatim.
 
 Roughly three minutes, almost all of it capture. It prints one line per stage,
-the directory of frames stage 5 needs, and writes **`review.md`** into that
+the directory of frames stage 5 needs, and writes **`review.html`** into that
 directory: the goal, the focus, the commit, and a row per stage with what it
-measured. Any stage that failed gets its diagnostic quoted underneath.
+measured. Any stage that failed gets its diagnostic quoted underneath. It is
+self-contained — no stylesheet, no script, no embedded frames — so it opens
+in a browser from disk and survives being moved.
 
 | stage | what it runs | what a failure means |
 | --- | --- | --- |
@@ -110,12 +112,17 @@ this is the flaky stage, and the prompt is the only thing mitigating that.
 > If a screen matches, say so in one line. Do not pad the list. A finding you
 > cannot cite a design line for is not a finding.
 
-**Append the result to `review.md`** under its `## Stage 5 — confidence`
-heading: the score, the findings, and the verdict. The binary deliberately
-leaves that section empty — it writes only what was measured, because the
-agent that made the change is the one that would otherwise write the verdict
-sentence, and "close, two stages clean" is nothing false and much less useful
-than the numbers.
+**Append the result to `review.html`** by replacing the `<!-- stage-5 -->`
+marker and the placeholder paragraph that follows it: the score, the
+findings, and the verdict. Plain tags only — `<p>`, `<ul>`, `<table>`,
+`<h3>`, `<code>`, `<strong>`, `<em>` — and the page's own `ok` / `bad` /
+`count` / `note` classes where a result needs colour. Escape any `<`, `>` or
+`&` you quote from a tool.
+
+The binary deliberately leaves that section empty. It writes only what was
+measured, because the agent that made the change is the one that would
+otherwise write the verdict sentence, and "close, two stages clean" is
+nothing false and much less useful than the numbers.
 
 Then:
 

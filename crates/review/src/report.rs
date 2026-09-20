@@ -1,19 +1,52 @@
-//! The run's record — `review.md`, written into the frames directory.
+//! The run's record — `review.html`, written into the frames directory.
 //!
-//! Small on purpose. What it holds is what a reader needs tomorrow or on a
-//! pull request: which stages ran, what they measured, and what the judge
-//! concluded. The frames sit beside it rather than inside it.
+//! Small on purpose, and self-contained: no external stylesheet, no script,
+//! no embedded frames. What it holds is what a reader needs tomorrow or on a
+//! pull request — which stages ran, what they measured, and what the judge
+//! concluded. The frames sit next to it on disk.
 //!
-//! The split is the one thing here worth defending. **This file writes only
-//! what was measured; the judge's score and findings are appended by the
-//! skill.** The agent that made the change is the one that would otherwise
-//! write the verdict sentence, and "close, two stages clean" is nothing
-//! false and much less useful than the numbers.
+//! **The page is plain HTML and stays that way.** Dressing the referee in the
+//! players' kit makes it harder to trust, so the design system this loop
+//! enforces is deliberately not applied here. That is a rule, not an
+//! omission.
+//!
+//! The other rule worth defending: **this file writes only what was
+//! measured.** The judge's score and findings are appended by the skill,
+//! into the placeholder left for them. The agent that made the change is the
+//! one that would otherwise write the verdict sentence, and "close, two
+//! stages clean" is nothing false and much less useful than the numbers.
 
 use std::io::Result;
 use std::path::Path;
 
 use crate::stages::Outcome;
+
+/// Where the skill's section goes. Left as a comment so a reader of the raw
+/// file can see the seam, and so an append is a string replace rather than a
+/// parse.
+pub const STAGE5_MARKER: &str = "<!-- stage-5 -->";
+
+const STYLE: &str = "\
+:root{color-scheme:light dark;--fg:#1a1a1a;--bg:#fff;--muted:#666;--line:#e3e3e3;--ok:#1a7f37;--bad:#b3261e;--code:#f5f5f5}\
+@media(prefers-color-scheme:dark){:root{--fg:#e6e6e6;--bg:#16181c;--muted:#9aa0a6;--line:#2c2f34;--ok:#4ac26b;--bad:#f2795f;--code:#1f2227}}\
+*{box-sizing:border-box}\
+body{margin:0;padding:32px 20px 64px;background:var(--bg);color:var(--fg);\
+font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}\
+main{max-width:860px;margin:0 auto}\
+h1{font-size:24px;margin:0 0 4px}\
+h2{font-size:17px;margin:40px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}\
+h3{font-size:15px;margin:24px 0 8px}\
+dl{margin:16px 0;display:grid;grid-template-columns:auto 1fr;gap:6px 16px}\
+dt{color:var(--muted)}dd{margin:0}\
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}\
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}\
+th{color:var(--muted);font-weight:600}\
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}\
+pre{background:var(--code);padding:12px 14px;border-radius:6px;overflow-x:auto}\
+.ok{color:var(--ok);font-weight:600}.bad{color:var(--bad);font-weight:600}\
+.count{margin:12px 0;color:var(--muted)}\
+.note{color:var(--muted);font-size:14px}\
+@media(max-width:520px){dl{grid-template-columns:1fr;gap:2px 0}dt{margin-top:8px}}";
 
 /// Stats a stage reports when it passes, parsed from what the tool said
 /// rather than counted again here.
@@ -43,49 +76,75 @@ pub struct Run<'a> {
     pub captured: usize,
 }
 
+/// Text into HTML text. Everything user- or tool-supplied goes through this:
+/// a clippy diagnostic is full of `&`, `<` and `>`, and one unescaped `<`
+/// silently swallows the rest of a cell.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
-    let mut out = String::from("# Review\n\n");
-    out.push_str(&format!("**Goal:** {}\n\n", run.goal));
-    out.push_str(&format!("**Focus:** {}\n\n", run.focus));
-    out.push_str(&format!("**Commit:** `{}`\n\n", run.commit));
-
-    out.push_str("## Stages 0–4 — deterministic\n\n");
-    out.push_str("| stage | result | measured |\n| --- | --- | --- |\n");
-    for outcome in run.outcomes {
-        let result = if outcome.passed { "ok" } else { "**FAIL**" };
-        // A failure's detail is a tool's diagnostic, often many lines; the
-        // table gets its first line and the section below gets the rest.
-        let measured = outcome.detail.lines().next().unwrap_or("").replace('|', "\\|");
-        out.push_str(&format!("| {} | {result} | {measured} |\n", outcome.stage));
-    }
-
     let failures: Vec<&Outcome> = run.outcomes.iter().filter(|o| !o.passed).collect();
+    let passed = run.outcomes.len() - failures.len();
+
+    let mut out = String::new();
+    out.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+    out.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+    out.push_str("<title>Mjolnir review</title><style>");
+    out.push_str(STYLE);
+    out.push_str("</style></head><body><main>");
+
+    out.push_str("<h1>Review</h1>");
     out.push_str(&format!(
-        "\n{} of {} stages passed.\n",
-        run.outcomes.len() - failures.len(),
-        run.outcomes.len()
+        "<dl><dt>Goal</dt><dd>{}</dd><dt>Focus</dt><dd>{}</dd><dt>Commit</dt><dd><code>{}</code></dd></dl>",
+        esc(run.goal),
+        esc(run.focus),
+        esc(run.commit)
     ));
 
+    out.push_str("<h2>Stages 0&ndash;4 &middot; deterministic</h2>");
+    out.push_str("<table><tr><th>stage</th><th>result</th><th>measured</th></tr>");
+    for outcome in run.outcomes {
+        let (class, word) = if outcome.passed { ("ok", "ok") } else { ("bad", "FAIL") };
+        // A failure's detail is a tool diagnostic, often many lines; the table
+        // takes its first line and the section below takes the rest.
+        let measured = outcome.detail.lines().next().unwrap_or("");
+        out.push_str(&format!(
+            "<tr><td>{}</td><td class=\"{class}\">{word}</td><td>{}</td></tr>",
+            esc(outcome.stage),
+            esc(measured)
+        ));
+    }
+    out.push_str("</table>");
+    out.push_str(&format!("<p class=\"count\">{passed} of {} stages passed.</p>", run.outcomes.len()));
+
     if !failures.is_empty() {
-        out.push_str("\n### Issues\n\n");
+        out.push_str("<h3>Issues</h3>");
         for outcome in failures {
-            out.push_str(&format!("**{}**\n\n```\n{}\n```\n\n", outcome.stage, outcome.detail.trim_end()));
+            out.push_str(&format!("<p><strong>{}</strong></p><pre>{}</pre>", esc(outcome.stage), esc(outcome.detail.trim_end())));
         }
     }
 
     match run.frames {
-        Some(path) => out.push_str(&format!("\n{} frames captured, in `{}`.\n", run.captured, path.display())),
-        None => out.push_str("\nNo frames captured (`--no-capture`); stage 5 needs them.\n"),
+        Some(path) => out.push_str(&format!(
+            "<p class=\"note\">{} frames captured, in <code>{}</code>.</p>",
+            run.captured,
+            esc(&path.display().to_string())
+        )),
+        None => out.push_str("<p class=\"note\">No frames captured (<code>--no-capture</code>); stage&nbsp;5 needs them.</p>"),
     }
 
+    out.push_str("<h2>Stage 5 &middot; confidence</h2>");
+    out.push_str(STAGE5_MARKER);
     out.push_str(
-        "\n## Stage 5 — confidence\n\n\
-         _Appended by the review skill once the judge has run. Until then this\n\
-         run is incomplete: stages 0–4 say nothing about whether the change\n\
-         matches its design._\n",
+        "<p class=\"note\">Appended by the review skill once the judge has run. \
+         Until then this run is incomplete: stages 0&ndash;4 say nothing about whether \
+         the change matches its design.</p>",
     );
 
-    let path = dir.join("review.md");
+    out.push_str("</main></body></html>\n");
+
+    let path = dir.join("review.html");
     std::fs::write(&path, out)?;
     Ok(path)
 }
@@ -108,5 +167,14 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
     #[test]
     fn output_with_no_summary_lines_counts_nothing() {
         assert_eq!(test_counts("error: could not compile"), (0, 0, 0));
+    }
+
+    /// A clippy diagnostic is full of angle brackets — `Vec<String>`, `-->`,
+    /// `&str`. One unescaped `<` swallows the rest of the page.
+    #[test]
+    fn tool_output_is_escaped_into_the_page() {
+        let escaped = esc("expected `Vec<String>` & found `&str` --> src/x.rs");
+        assert!(!escaped.contains('<') && !escaped.contains('>'));
+        assert!(escaped.contains("&lt;String&gt;") && escaped.contains("&amp;"));
     }
 }

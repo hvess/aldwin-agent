@@ -14,3 +14,8 @@
 # the rule above, named here because `mjolnir-review` keeps only the last
 # three runs and a reader looking for an older one should find out where it
 # went.
+
+# Written by Mjolnir itself: answering "for this project" at a permission
+# prompt appends the grant here, so it's whatever this developer approved.
+# The other .mjolnir/ files are hand-authored and stay tracked.
+/.mjolnir/permissions.yaml

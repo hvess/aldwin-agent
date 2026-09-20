@@ -25,8 +25,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run stages 1–4 and report. Stage 5 is the skill's.
+    /// Run stages 0–4 and write the report. Stage 5 is the skill's.
     Review {
+        /// What this change set out to do, in a sentence. Required: a review
+        /// that cannot say what it is reviewing cannot judge whether the
+        /// change did it, and stage 5 is handed this verbatim.
+        #[arg(long)]
+        goal: String,
+        /// The screens the change touched, comma-separated scene names.
+        /// Stage 5 judges these and ignores the rest — without it a judge
+        /// reports the whole app's backlog instead of this change.
+        #[arg(long)]
+        focus: String,
         /// Skip the capture. Stages 1–4 do not need it; stage 5 does, and
         /// this is how an iteration pass that only fixed a lint avoids
         /// paying for frames it will not look at.
@@ -203,7 +213,7 @@ fn main() -> std::io::Result<()> {
             Ok(())
         }
 
-        Command::Review { no_capture, theme, quiet_ms } => {
+        Command::Review { goal, focus, no_capture, theme, quiet_ms } => {
             let mut outcomes = stages::toolchain(&root, &base.toolchain)?;
             outcomes.extend(stages::lint(&root)?);
             outcomes.extend(stages::test(&root)?);
@@ -227,6 +237,10 @@ fn main() -> std::io::Result<()> {
                 true => None,
                 false => Some(capture_all(&root, &base, theme, quiet_ms)?),
             };
+            let captured = frames
+                .as_ref()
+                .map(|dir| std::fs::read_dir(dir).map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0))
+                .unwrap_or(0);
 
             println!();
             let mut failed = 0;
@@ -243,11 +257,37 @@ fn main() -> std::io::Result<()> {
                 }
             }
 
+            // The report goes beside the frames when there are any, and into
+            // a directory of its own when there are not — a review that
+            // skipped capture is still a review worth keeping.
+            let commit = std::process::Command::new("git")
+                .current_dir(&root)
+                .args(["rev-parse", "--short", "HEAD"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            let dir = match &frames {
+                Some(dir) => dir.clone(),
+                None => frames_dir(&root)?,
+            };
+            let written = mjolnir_review::report::write(
+                &dir,
+                &mjolnir_review::report::Run {
+                    goal: &goal,
+                    focus: &focus,
+                    commit: &commit,
+                    outcomes: &outcomes,
+                    frames: frames.as_deref(),
+                    captured,
+                },
+            )?;
+
             println!();
             match &frames {
                 Some(dir) => println!("frames for stage 5: {}", dir.display()),
                 None => println!("no frames captured (--no-capture); stage 5 needs them"),
             }
+            println!("report: {}", written.display());
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }

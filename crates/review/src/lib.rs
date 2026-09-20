@@ -29,6 +29,7 @@ pub mod keys;
 pub mod png;
 pub mod proxy;
 pub mod pty;
+pub mod report;
 pub mod scene;
 pub mod stages;
 pub mod tokens;

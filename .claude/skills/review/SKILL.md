@@ -27,11 +27,18 @@ at the wrong screens reports the whole app's backlog instead of this change.
 ## 1–4. The deterministic stages
 
 ```sh
-cargo build && ./target/release/mjolnir-review review
+cargo build && ./target/release/mjolnir-review review \
+  --goal  "<what this change set out to do, in a sentence>" \
+  --focus "<the scenes it touched>"
 ```
 
-Roughly three minutes, almost all of it capture. It prints one line per stage
-and the directory of frames stage 5 needs.
+Both flags are required — a review that cannot say what it is reviewing
+cannot judge whether the change did it, and stage 5 is handed them verbatim.
+
+Roughly three minutes, almost all of it capture. It prints one line per stage,
+the directory of frames stage 5 needs, and writes **`review.md`** into that
+directory: the goal, the focus, the commit, and a row per stage with what it
+measured. Any stage that failed gets its diagnostic quoted underneath.
 
 | stage | what it runs | what a failure means |
 | --- | --- | --- |
@@ -103,7 +110,14 @@ this is the flaky stage, and the prompt is the only thing mitigating that.
 > If a screen matches, say so in one line. Do not pad the list. A finding you
 > cannot cite a design line for is not a finding.
 
-Write the score and the findings down. Then:
+**Append the result to `review.md`** under its `## Stage 5 — confidence`
+heading: the score, the findings, and the verdict. The binary deliberately
+leaves that section empty — it writes only what was measured, because the
+agent that made the change is the one that would otherwise write the verdict
+sentence, and "close, two stages clean" is nothing false and much less useful
+than the numbers.
+
+Then:
 
 - **≥ 90** — stage 5 passes. The review is done.
 - **< 90** — fix what the judge found, then run the whole loop again from

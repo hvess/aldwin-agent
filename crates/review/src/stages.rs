@@ -17,16 +17,17 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn from(stage: &'static str, output: std::process::Output, keep: usize) -> Self {
+    /// `stat` is what the stage reports when it passes — a count the tool
+    /// itself produced, not one recomputed here.
+    fn from(stage: &'static str, output: std::process::Output, keep: usize, stat: impl Fn(&str) -> String) -> Self {
+        let combined = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
         if output.status.success() {
-            return Outcome { stage, passed: true, detail: String::new() };
+            return Outcome { stage, passed: true, detail: stat(&combined) };
         }
         // Both streams: cargo puts diagnostics on stderr and test failures on
         // stdout, and a stage that showed only one of them would report a
         // failing suite as an empty error.
-        let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
-        text.push_str(&String::from_utf8_lossy(&output.stdout));
-        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let lines: Vec<&str> = combined.lines().filter(|l| !l.trim().is_empty()).collect();
         let tail = lines.iter().rev().take(keep).rev().copied().collect::<Vec<_>>().join("\n");
         Outcome { stage, passed: false, detail: tail }
     }
@@ -60,12 +61,19 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
         "1 lint · clippy",
         cargo(root, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?,
         40,
+        |out| {
+            let crates = out.lines().filter(|l| l.trim_start().starts_with("Checking ")).count();
+            format!("clippy clean across {crates} crate targets")
+        },
     )])
 }
 
 /// Stage 2 — the suite.
 pub fn test(root: &Path) -> Result<Vec<Outcome>> {
-    Ok(vec![Outcome::from("2 test", cargo(root, &["test", "--workspace"])?, 60)])
+    Ok(vec![Outcome::from("2 test", cargo(root, &["test", "--workspace"])?, 60, |out| {
+        let (passed, _, ignored) = crate::report::test_counts(out);
+        format!("{passed} passed, {ignored} ignored")
+    })])
 }
 
 /// Stage 4 — the rendered frames.
@@ -94,6 +102,10 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         "4 frames",
         cargo(root, &["test", "-p", "mjolnir-tui", "--test", "render_snapshot"])?,
         60,
+        |out| {
+            let (passed, _, _) = crate::report::test_counts(out);
+            format!("{passed} checks over 12 scenes x 3 sizes x 2 themes")
+        },
     );
     Ok(vec![if outcome.passed {
         outcome

@@ -18,7 +18,7 @@
 //! marked legacy in `semantic.css` itself. A role that is neither carried nor
 //! on that list is an error, not a silent omission — see [`generate`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Error, ErrorKind, Result};
 use std::path::Path;
 
@@ -31,6 +31,14 @@ const UNCARRIED: [(&str, &str); 3] = [
 
 /// Where the generated file lands, relative to the workspace root.
 pub const OUTPUT: &str = "crates/tui/src/tokens.rs";
+
+/// The imported design system. Everything the loop knows about the design is
+/// read from here and from nowhere else — there used to be a second parser
+/// (`design.rs`, 286 lines) resolving the same three files for a cell check
+/// that has since become a hermetic test in `crates/tui`.
+pub fn design_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
+}
 
 pub fn output_path(root: &Path) -> std::path::PathBuf {
     root.join(OUTPUT)
@@ -88,9 +96,21 @@ pub fn generate(design_dir: &Path) -> Result<String> {
             out.push_str(&format!("    {}: Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}),\n", field(role), rgb.0, rgb.1, rgb.2));
         }
         out.push_str("};\n\n");
+
+        // Every value of that palette as a flat list, so a conformance test
+        // can ask "is this colour in the design system?" without naming
+        // forty-two fields — and without going stale when the design gains a
+        // forty-third.
+        out.push_str(&format!("pub(crate) const {name}_VALUES: [Color; {}] = [\n", carried.len()));
+        for role in &carried {
+            let rgb = resolve(scope_roles, role).or_else(|| resolve(&dark_roles, role)).expect("resolved above");
+            out.push_str(&format!("    Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}), // --tui-{role}\n", rgb.0, rgb.1, rgb.2));
+        }
+        out.push_str("];\n\n");
     }
 
     out.push_str(&grid(&cells)?);
+    out.push_str(&glyphs(&std::fs::read_to_string(design_dir.join("HANDOFF.md"))?)?);
     Ok(out)
 }
 
@@ -147,6 +167,64 @@ fn grid(cells: &str) -> Result<String> {
         out.push_str(&format!("pub(crate) const {name}: usize = {value};\n"));
     }
     Ok(out)
+}
+
+/// The closed glyph table, and the glyphs a recorded design contradiction
+/// licenses on top of it.
+///
+/// Two sources, deliberately kept apart in the output. `MARKS` is the
+/// design's own table, parsed from `HANDOFF.md`'s Glyphs section. Anything in
+/// `MARKS_BY_EXCEPTION` is there because the design contradicts itself and
+/// `crates/review/baseline.json` records where — the `·` its own copy
+/// mandates but its table omits, ADR 0002's box-drawing set. Every one of
+/// those is a bug upstream, and the entry leaves the baseline when the design
+/// is fixed.
+///
+/// Generating both is what lets the conformance test live in `crates/tui`
+/// and read no files at all.
+fn glyphs(handoff: &str) -> Result<String> {
+    let mut marks = BTreeSet::new();
+    let start = handoff
+        .find("### Glyphs")
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "HANDOFF.md has no `### Glyphs` section"))?;
+    for line in handoff[start..].lines().skip(1) {
+        if line.starts_with("##") {
+            break;
+        }
+        let Some(cell) = line.strip_prefix("| ") else { continue };
+        let Some((first, _)) = cell.split_once('|') else { continue };
+        for chunk in first.split('`').skip(1).step_by(2) {
+            marks.extend(chunk.chars());
+        }
+    }
+    if marks.is_empty() {
+        return Err(Error::new(ErrorKind::InvalidData, "HANDOFF.md's Glyphs section parsed to nothing"));
+    }
+
+    let baseline = crate::Baseline::load()?;
+    let mut excepted: BTreeSet<char> = BTreeSet::new();
+    for c in &baseline.contradictions {
+        excepted.extend(c.glyphs.chars());
+    }
+    let cite: Vec<&str> = baseline.contradictions.iter().filter(|c| !c.glyphs.is_empty()).map(|c| c.id.as_str()).collect();
+
+    let list = |set: &BTreeSet<char>| set.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>().join(", ");
+    Ok(format!(
+        "\n// ---- Glyphs ---------------------------------------------------------\n\
+         //\n\
+         // The design system's closed table, from HANDOFF.md's Glyphs section.\n\
+         pub(crate) const MARKS: [char; {}] = [{}];\n\
+         \n\
+         // Glyphs a recorded design contradiction licenses on top of it. Each is\n\
+         // a bug in .claude/design/, not in the app; see crates/review/baseline.json\n\
+         // ({}).\n\
+         pub(crate) const MARKS_BY_EXCEPTION: [char; {}] = [{}];\n",
+        marks.len(),
+        list(&marks),
+        cite.join(", "),
+        excepted.len(),
+        list(&excepted),
+    ))
 }
 
 /// `--tui-bar-bottom` -> `bar_bottom`, and `break` -> `break_` because it is
@@ -290,7 +368,7 @@ mod tests {
     use super::*;
 
     fn design() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
+        design_dir()
     }
 
     #[test]

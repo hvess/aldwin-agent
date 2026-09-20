@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use mjolnir_review::capture::{capture, measure_cell};
-use mjolnir_review::design::Design;
 use mjolnir_review::geometry::{Size, Theme};
 use mjolnir_review::{scene, stages, tokens, Baseline, Compositor};
 
@@ -92,16 +91,12 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Capture every scene, and check each frame's cells against the design.
+/// Capture every scene into a fresh directory, for stage 5 to look at.
 ///
-/// Returns the directory and the stage-3 outcome for the cell half.
-fn capture_all(
-    root: &Path,
-    base: &Baseline,
-    design: &Design,
-    theme: Option<Theme>,
-    quiet_ms: u64,
-) -> std::io::Result<(PathBuf, Vec<String>, Vec<String>)> {
+/// No assertions: everything that reads declared cells is a hermetic test in
+/// `crates/tui` now. This exists to make pictures, which is the one thing a
+/// `TestBackend` cannot do.
+fn capture_all(root: &Path, base: &Baseline, theme: Option<Theme>, quiet_ms: u64) -> std::io::Result<PathBuf> {
     let dir = frames_dir(root)?;
     let binary = root.join("target/debug/mjolnir");
     if !binary.exists() {
@@ -115,33 +110,21 @@ fn capture_all(
             cell.w, cell.h, base.cell.w, base.cell.h
         )));
     }
-
     let themes: Vec<Theme> = theme.map(|t| vec![t]).unwrap_or_else(|| Theme::ALL.to_vec());
-    let mut violations = Vec::new();
-    let mut applied = Vec::new();
     for name in scene::IMPLEMENTED {
         for size in Size::ALL {
             for theme in themes.iter().copied() {
-                let frame = capture(&comp, &binary, design, base, cell, name, size, theme, Duration::from_millis(quiet_ms), &[], &dir)?;
-                for v in &frame.cells.violations {
-                    violations.push(format!("{name}-{size}-{theme} r{} c{}  {}", v.row, v.col, v.detail));
-                }
-                for note in &frame.cells.applied {
-                    if !applied.contains(note) {
-                        applied.push(note.clone());
-                    }
-                }
+                capture(&comp, &binary, base, cell, name, size, theme, Duration::from_millis(quiet_ms), &[], &dir)?;
             }
         }
     }
-    Ok((dir, violations, applied))
+    Ok(dir)
 }
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
     let root = workspace_root();
     let base = Baseline::load()?;
-    let design = Design::load()?;
 
     match cli.command {
         Command::Scenes => {
@@ -176,7 +159,7 @@ fn main() -> std::io::Result<()> {
         }
 
         Command::Tokens { write } => {
-            let design_dir = Design::dir();
+            let design_dir = tokens::design_dir();
             if write {
                 let text = tokens::generate(&design_dir)?;
                 let path = tokens::output_path(&root);
@@ -211,7 +194,7 @@ fn main() -> std::io::Result<()> {
             for name in names {
                 for s in size.map(|s| vec![s]).unwrap_or_else(|| Size::ALL.to_vec()) {
                     for t in theme.map(|t| vec![t]).unwrap_or_else(|| Theme::ALL.to_vec()) {
-                        let frame = capture(&comp, &binary, &design, &base, cell, name, s, t, Duration::from_millis(quiet_ms), &[], &dir)?;
+                        let frame = capture(&comp, &binary, &base, cell, name, s, t, Duration::from_millis(quiet_ms), &[], &dir)?;
                         println!("{name} {s} {t}  {}", frame.path.display());
                     }
                 }
@@ -221,44 +204,29 @@ fn main() -> std::io::Result<()> {
         }
 
         Command::Review { no_capture, theme, quiet_ms } => {
-            let mut outcomes = stages::lint(&root)?;
+            let mut outcomes = stages::toolchain(&root, &base.toolchain)?;
+            outcomes.extend(stages::lint(&root)?);
             outcomes.extend(stages::test(&root)?);
 
-            // Stage 3, first half: the app's design system is the imported
-            // one. Checked before the frames are taken, because if the
-            // palette has drifted then every frame below was drawn with the
-            // wrong colours and reporting them would be reporting a
-            // consequence as a cause.
-            let design_dir = Design::dir();
+            // Stage 3 before stage 4, because if the generated palette has
+            // drifted then every frame below was drawn with the wrong
+            // colours and reporting those would be reporting a consequence
+            // as a cause.
+            let design_dir = tokens::design_dir();
             outcomes.push(match tokens::check(&root, &design_dir)? {
-                Ok(n) => stages::Outcome { stage: "3 tokens · generated", passed: true, detail: format!("{n} values") },
+                Ok(n) => stages::Outcome { stage: "3 tokens", passed: true, detail: format!("{n} values from the design") },
                 Err(detail) => stages::Outcome {
-                    stage:  "3 tokens · generated",
+                    stage:  "3 tokens",
                     passed: false,
                     detail: format!("{detail}\n\nRegenerate with:\n    cargo run -p mjolnir-review -- tokens --write"),
                 },
             });
+            outcomes.extend(stages::frames(&root)?);
 
-            outcomes.extend(stages::screenshots(&root)?);
-
-            let mut frames = None;
-            if !no_capture {
-                let (dir, violations, applied) = capture_all(&root, &base, &design, theme, quiet_ms)?;
-                outcomes.push(if violations.is_empty() {
-                    stages::Outcome { stage: "3 tokens · cells", passed: true, detail: String::new() }
-                } else {
-                    let shown = violations.iter().take(20).cloned().collect::<Vec<_>>().join("\n");
-                    stages::Outcome {
-                        stage:  "3 tokens · cells",
-                        passed: false,
-                        detail: format!("{} cells outside the design system:\n{shown}", violations.len()),
-                    }
-                });
-                for note in applied {
-                    println!("  leaning on a design contradiction: {note}");
-                }
-                frames = Some(dir);
-            }
+            let frames = match no_capture {
+                true => None,
+                false => Some(capture_all(&root, &base, theme, quiet_ms)?),
+            };
 
             println!();
             let mut failed = 0;
@@ -283,7 +251,8 @@ fn main() -> std::io::Result<()> {
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }
-            println!("stages 1–4 clean. Stage 5 is the skill's: spawn the judge against those frames.");
+            println!("stages 1–4 clean, and every one of them hermetic. Stage 5 is the skill's:");
+            println!("spawn the judge against those frames.");
             Ok(())
         }
     }

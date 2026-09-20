@@ -27,13 +27,19 @@ what this spec replaces.
 
 ## The stages
 
-| stage | answers | how |
-| --- | --- | --- |
-| 1 lint | does it build clean | `cargo clippy --workspace --all-targets -- -D warnings` |
-| 2 test | does the suite pass | `cargo test --workspace` |
-| 3 tokens | is the app's design system still the imported one, and does every cell come from it | regenerate `crates/tui/src/tokens.rs` and diff; then scan every captured frame's declared cells |
-| 4 screenshots | did the rendered frames change | `render_snapshot.rs` against `tests/snapshots/render.snap` |
-| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 90 |
+| stage | answers | how | hermetic |
+| --- | --- | --- | --- |
+| 0 toolchain | are these results comparable to the last run's | `rustc --version` against the baseline | yes |
+| 1 lint | does it build clean | `cargo clippy --workspace --all-targets -- -D warnings` | yes |
+| 2 test | does the suite pass | `cargo test --workspace` | yes |
+| 3 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
+| 4 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
+| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 90 | no, and cannot be |
+
+Stages 0–4 take about fifteen seconds and hold no clock, no network, no
+subprocess of the app and no compositor. Capture is not a stage: it runs after
+them to make the pictures stage 5 looks at, and its non-determinism is
+harmless there because a bad frame is something the judge says out loud.
 
 ## Decisions
 
@@ -86,6 +92,27 @@ what this spec replaces.
    design is fixed upstream — it is a bug list for the design system, not a
    compensation layer for the app.
 
+8. **Everything that reads declared cells is a hermetic test in
+   `crates/tui`, not a capture.** Palette membership, the closed glyph table
+   and the copy rules all ran through the review harness's real terminal
+   until 2026-09-20 — a compositor, a subprocess and 2m45s per run, none of
+   it reproducible. A `TestBackend` buffer holds the same declared cells, so
+   they moved and now cost under two seconds. What a real terminal uniquely
+   gives is a picture, and pictures are stage 5's.
+
+9. **The copy and glyph rules are scoped to app-owned rows.** They govern
+   Mjolnir's own copy, not what it echoes: the transcript renders a model's
+   reply verbatim, and an em dash or a contraction there is ordinary. A
+   global buffer-level check would fail on real use, which is a check that is
+   wrong rather than strict. `app_owned_rows` makes the split by scene and
+   band and states what it misses.
+
+10. **The toolchain is recorded, not pinned.** `rust-toolchain.toml` is read
+    by rustup and this machine installs Rust from pacman, so there is nothing
+    to pin against. Recording the version and failing when it moves is not
+    hermeticity — it is the honest substitute, and it turns "clippy suddenly
+    fails on untouched code" from a mystery into a line in the report.
+
 ## Pitfalls
 
 - **Letting the contradictions list grow.** It is two entries. A previous
@@ -97,8 +124,13 @@ what this spec replaces.
   screens its diff never names.
 - **Regenerating a snapshot to make stage 4 pass.** The regeneration is the
   deliberate act; reading the diff first is what makes it one.
-- **Reading a clean stage 4 as a correct UI.** It proves the frames did not
-  change, not that they were ever right.
+- **Reading a clean stage 4 as a correct UI.** Its baseline half proves the
+  frames did not change, and its conformance half proves every cell came from
+  the design. Neither says a band is in the right place — nothing mechanical
+  here does, because the design ships no reference frame to compare against.
+- **Putting a check that needs a real terminal into stages 0–4.** They are
+  hermetic and the value of that is the whole point; anything needing a
+  compositor belongs after them, feeding stage 5.
 
 ## Progress (2026-09-20, the rebuild)
 

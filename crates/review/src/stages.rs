@@ -68,22 +68,30 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![Outcome::from("2 test", cargo(root, &["test", "--workspace"])?, 60)])
 }
 
-/// Stage 4 — the rendered frames, against the committed baseline.
+/// Stage 4 — the rendered frames.
 ///
-/// This is `crates/tui/tests/render_snapshot.rs`, which serialises every
-/// cell's symbol, foreground, background and modifiers for every scene at
-/// every size in both themes. It runs in-process against a `TestBackend` in
-/// under a second, and it is the *only* baseline: capturing the same frames
-/// through a real terminal and diffing those too would be a second fixture
-/// asserting the same thing, on a slower clock.
+/// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
+/// `TestBackend` buffers for twelve scenes at three sizes in both themes:
 ///
-/// What the real terminal is for is stage 5's pictures — see
-/// [`crate::capture`]. It sees one thing this cannot, which is what foot
-/// actually does with the app's bytes, and that is worth a picture rather
-/// than a second baseline.
-pub fn screenshots(root: &Path) -> Result<Vec<Outcome>> {
+/// * **the baseline** — every cell's symbol, foreground, background and
+///   modifiers, serialised and diffed against `tests/snapshots/render.snap`;
+/// * **design conformance** — every colour is one of the forty-two roles
+///   `tokens.rs` carries (or one dimmed toward a ground), every glyph is from
+///   the closed table, and the app's own copy is third person with no
+///   contractions.
+///
+/// Both are hermetic and together take under two seconds. The conformance
+/// half ran against a real terminal until 2026-09-20 — a compositor, a
+/// subprocess and 2m45s — until it was noticed that a `TestBackend` buffer
+/// holds the same declared cells. The terminal now only makes pictures for
+/// stage 5.
+///
+/// This re-runs tests stage 2 already ran. That is deliberate and costs about
+/// a second: a failure here names the design rule that broke, where the same
+/// failure inside a workspace-wide run is one line among six hundred.
+pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     let outcome = Outcome::from(
-        "4 screenshots",
+        "4 frames",
         cargo(root, &["test", "-p", "mjolnir-tui", "--test", "render_snapshot"])?,
         60,
     );
@@ -96,6 +104,30 @@ pub fn screenshots(root: &Path) -> Result<Vec<Outcome>> {
                 outcome.detail
             ),
             ..outcome
+        }
+    }])
+}
+
+/// The toolchain this run measured against.
+///
+/// Not hermeticity — `rust-toolchain.toml` is read by rustup and this machine
+/// installs Rust from pacman, so there is nothing to pin against. What this
+/// buys instead is honesty: clippy's lint set and rustc's diagnostics move
+/// between releases, so a stage 1 failure on untouched code is a real
+/// possibility, and a recorded version turns it from a mystery into a line in
+/// the report.
+pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
+    let output = Command::new("rustc").current_dir(root).arg("--version").output()?;
+    let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(vec![if found == expected {
+        Outcome { stage: "0 toolchain", passed: true, detail: found }
+    } else {
+        Outcome {
+            stage:  "0 toolchain",
+            passed: false,
+            detail: format!(
+                "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it:\n    cargo run -p mjolnir-review -- measure --record-toolchain"
+            ),
         }
     }])
 }

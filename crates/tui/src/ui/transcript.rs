@@ -161,6 +161,17 @@ pub(crate) struct Transcript {
     /// empty. Never cached across syncs — it is seven rows, and it reads
     /// `App::status`, which changes on its own schedule.
     hero:   Vec<Line<'static>>,
+    /// How many blocks the last [`Transcript::sync`] actually rebuilt.
+    ///
+    /// This is the incremental-render guarantee made countable. The two
+    /// tests that guard it used to time a render loop and assert a ratio
+    /// (`long < short * 8.0`), which is a proxy for the mechanism and a
+    /// load-sensitive one: it passes on an idle machine and fails under a
+    /// profiler, in a container, or beside a busy build, for reasons that
+    /// have nothing to do with the code. A count says the same thing
+    /// exactly, in no time at all, and says it about the mechanism rather
+    /// than about the machine.
+    rebuilt: usize,
 }
 
 struct CachedBlock {
@@ -222,6 +233,7 @@ impl Transcript {
             self.theme = Some(theme);
         }
         let ctx = Ctx::new(theme.palette(), width);
+        self.rebuilt = 0;
 
         if app.log.is_empty() {
             self.blocks.clear();
@@ -245,6 +257,7 @@ impl Transcript {
             let opens = speaker.is_some() && speaker != open;
             let hit = matches!(self.blocks.get(i), Some(b) if b.first == first && b.opens == opens && b.entry == *entry);
             if !hit {
+                self.rebuilt += 1;
                 let block = CachedBlock { entry: entry.clone(), first, opens, rows: block_rows(entry, first, opens, ctx) };
                 match self.blocks.get_mut(i) {
                     Some(slot) => *slot = block,
@@ -265,6 +278,14 @@ impl Transcript {
             acc += block.rows.len();
             self.starts.push(acc);
         }
+    }
+
+    /// Blocks rebuilt by the last [`Transcript::sync`] — the incremental
+    /// guarantee, countable. See the field's own note for why this replaced
+    /// a timed assertion.
+    #[cfg(test)]
+    pub(crate) fn rebuilt(&self) -> usize {
+        self.rebuilt
     }
 
     /// Total screen rows — what `ScrollState` measures its offset against.

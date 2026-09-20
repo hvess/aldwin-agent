@@ -8,8 +8,8 @@
 //! | --- | --- |
 //! | 1 lint | does it build clean and pass static analysis |
 //! | 2 test | does the suite still pass |
-//! | 3 tokens | is the app's design system still the imported one, and does every cell come from it |
-//! | 4 screenshots | did the rendered frames change, against a committed baseline |
+//! | 3 tokens | is the app's design system still the imported one |
+//! | 4 frames | do the rendered frames still match the baseline, and does every cell come from the design |
 //! | 5 confidence | does the change look like the design, and did it do what it set out to do |
 //!
 //! Stages 1–4 answer yes or no and say why. Nothing here scores, ranks or
@@ -22,9 +22,7 @@
 
 pub mod baseline;
 pub mod capture;
-pub mod cells;
 pub mod compositor;
-pub mod design;
 pub mod fake;
 pub mod geometry;
 pub mod keys;

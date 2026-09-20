@@ -27,6 +27,12 @@ pub struct Baseline {
     pub comment:        String,
     pub cell:           Cell,
     pub font:           String,
+    /// `rustc --version` this baseline's results were produced on. Stage 0
+    /// fails when the toolchain moves: clippy's lint set changes between
+    /// releases, so a stage 1 failure on untouched code is a real
+    /// possibility and deserves to be named rather than puzzled over.
+    #[serde(default)]
+    pub toolchain:      String,
     #[serde(default)]
     pub contradictions: Vec<Contradiction>,
 }

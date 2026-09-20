@@ -126,6 +126,184 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
+/// Which rows of a scene the **app** owns, as opposed to echoing from
+/// outside it.
+///
+/// This boundary is the whole subtlety in the two checks below. The closed
+/// glyph table and the no-contractions rule govern Mjolnir's own copy —
+/// labels, hints, panel sentences, the status row. They do not govern a
+/// model's reply, which the transcript renders verbatim and which may
+/// legitimately contain an em dash, a contraction, or any Unicode at all. A
+/// global buffer-level check would fail on ordinary use, which is a check
+/// that is wrong rather than strict.
+///
+/// The buffer cannot tell the two apart — by the time text is cells, its
+/// provenance is gone. So the split is made by scene and band:
+///
+/// * `first_run`, `empty` and the `prompt*` family render no model text, so
+///   the whole frame is the app's. (A `prompt` panel quotes a path, which is
+///   ASCII and carries neither a mark nor a contraction.)
+/// * `approval*` quote a diff — file content, not the app's — so only their
+///   chrome bars are checked.
+/// * Every other scene renders a transcript, so likewise.
+///
+/// What this misses, stated rather than implied: app copy drawn *inside* a
+/// transcript body on a prose scene. There is little of it — the tool line's
+/// name column and the `N more lines` marker — and it is covered wherever
+/// the same code draws into a panel instead.
+fn app_owned_rows(scene_name: &str, height: u16) -> Vec<u16> {
+    const WHOLE_FRAME: [&str; 5] = ["first_run", "empty", "prompt", "prompt_path", "prompt_scoped"];
+    if WHOLE_FRAME.contains(&scene_name) {
+        return (0..height).collect();
+    }
+    let top = 0..3u16;
+    let bottom = height.saturating_sub(5)..height;
+    top.chain(bottom).collect()
+}
+
+/// Every cell the frame paints carries a colour from the design system.
+///
+/// Stronger than its neighbour below, which only asserts the colour is not
+/// the terminal's own default. This asserts *membership*: the value is one
+/// of the forty-two roles `tokens.rs` carries, or one of those dimmed
+/// toward a ground, which is what the app does to a transcript behind an
+/// open panel.
+///
+/// `tokens.rs` is generated from `.claude/design/tokens/`, so this is
+/// conformance to the design rather than to a copy of it. The check used to
+/// run against a real terminal through the review harness — a compositor, a
+/// subprocess and 2m45s, and not hermetic. A `TestBackend` buffer holds the
+/// same declared cells, so it runs here in milliseconds instead.
+#[test]
+fn every_cell_carries_a_colour_from_the_design_system() {
+    for theme in [Theme::Dark, Theme::Light] {
+        let palette = mjolnir_tui::__design_palette(theme);
+        // The dimmed transcript behind an open panel: every ink the app has,
+        // composited over every ground it has. Enumerated rather than
+        // solved for — the blend is a known function of two known sets.
+        let mut allowed: Vec<ratatui::style::Color> = palette.to_vec();
+        for ink in palette {
+            for ground in palette {
+                allowed.push(mjolnir_tui::__design_fade(*ink, *ground));
+            }
+        }
+        allowed.sort_by_key(|c| format!("{c:?}"));
+        allowed.dedup();
+
+        for scene_name in SCENES {
+            for (width, height) in SIZES {
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+                scene(scene_name, &mut app);
+                let buffer = render(&mut app, width, height);
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = &buffer[(x, y)];
+                        for (which, colour) in [("foreground", cell.fg), ("background", cell.bg)] {
+                            // Whitespace paints no ink, so a colourless
+                            // foreground on a blank cell is an idiom, not a
+                            // defect — the same carve-out the neighbour below
+                            // makes, and for the same reason.
+                            if which == "foreground" && cell.symbol().trim().is_empty() {
+                                continue;
+                            }
+                            assert!(
+                                allowed.contains(&colour),
+                                "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {which} {colour:?} is not a design token, \
+                                 nor a token dimmed toward a ground"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Every glyph comes from the design system's closed table.
+///
+/// The table is `HANDOFF.md`'s, parsed into `tokens.rs` by the generator.
+/// `MARKS_BY_EXCEPTION` is the set a recorded design contradiction licenses
+/// on top of it — the `·` the design's own copy mandates but its table
+/// omits, and ADR 0002's box-drawing set. Both are bugs upstream, and both
+/// leave `crates/review/baseline.json` when the design is fixed.
+#[test]
+fn every_glyph_comes_from_the_closed_table() {
+    let (marks, by_exception) = mjolnir_tui::__design_glyphs();
+    for theme in [Theme::Dark, Theme::Light] {
+        for scene_name in SCENES {
+            for (width, height) in SIZES {
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+                scene(scene_name, &mut app);
+                let buffer = render(&mut app, width, height);
+                for y in app_owned_rows(scene_name, height) {
+                    for x in 0..width {
+                        for ch in buffer[(x, y)].symbol().chars() {
+                            if ch.is_ascii() || marks.contains(&ch) || by_exception.contains(&ch) {
+                                continue;
+                            }
+                            panic!(
+                                "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {ch:?} is not in the design \
+                                 system's glyph table and no recorded contradiction licenses it"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The mechanical half of the Content Fundamentals: the agent is written
+/// about in the third person, and the design system's copy uses no
+/// contractions.
+///
+/// Found a real defect when it first ran against every frame: the permission
+/// panel's elision row read `1 more line not shown; deciding doesn't require
+/// scrolling them` — a contraction, and a plural pronoun for a count of one,
+/// on every 80×24 frame.
+///
+/// The bare pronoun needs more care than the contractions do, and the first
+/// version of this proved it by firing on the wordmark: `M J O L N I R` is
+/// letter-spaced, so it contains a literal `"I "`. Requiring a lowercase word
+/// after it separates `I can` from `I R`.
+#[test]
+fn rendered_copy_is_third_person_and_uses_no_contractions() {
+    const FIRST_PERSON: [&str; 6] = ["I'm", "I'll", "I've", "we ", "We ", "our "];
+    const ENCLITICS: [&str; 6] = ["n't", "'re", "'ll", "'ve", "'s ", "'d "];
+
+    for theme in [Theme::Dark, Theme::Light] {
+        for scene_name in SCENES {
+            for (width, height) in SIZES {
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+                scene(scene_name, &mut app);
+                let buffer = render(&mut app, width, height);
+                for y in app_owned_rows(scene_name, height) {
+                    let row: String = (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+                    let bytes = row.as_bytes();
+                    let starts_word = |at: usize| at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+                    let where_ = format!("{theme:?} {scene_name} {width}x{height} row {y}");
+
+                    for form in FIRST_PERSON {
+                        for (at, _) in row.match_indices(form) {
+                            assert!(!starts_word(at), "{where_}: first person {form:?} in {:?}", row.trim());
+                        }
+                    }
+                    for (at, w) in bytes.windows(3).enumerate() {
+                        let bare_i = starts_word(at) && w[0] == b'I' && w[1] == b' ' && w[2].is_ascii_lowercase();
+                        assert!(!bare_i, "{where_}: first person \"I\" in {:?}", row.trim());
+                    }
+                    for form in ENCLITICS {
+                        for (at, _) in row.match_indices(form) {
+                            let inside_word = at > 0 && bytes[at - 1].is_ascii_alphanumeric();
+                            assert!(!inside_word, "{where_}: contraction {form:?} in {:?}", row.trim());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Every cell the frame paints must carry palette colours, not the
 /// terminal's own defaults — the invariant behind `palette.rs` existing at
 /// all, asserted here rather than left to a reader spotting a bare

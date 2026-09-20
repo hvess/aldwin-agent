@@ -17,11 +17,10 @@ use std::time::{Duration, Instant};
 
 use crate::baseline::Baseline;
 use crate::compositor::Compositor;
-use crate::design::Design;
 use crate::geometry::{Cell, Size, Theme};
 use crate::proxy::{foot_command, verify_against_pixels, Proxy};
 use crate::pty::Pty;
-use crate::{cells, fake, png, scene};
+use crate::{fake, png, scene};
 
 /// Measure foot's cell for the pinned font.
 ///
@@ -71,8 +70,6 @@ pub struct Frame {
     pub theme:   Theme,
     /// How many cells the parser and the frame were checked to agree on.
     pub checked: usize,
-    /// Stage 3's second half for this frame: every cell from the design.
-    pub cells:   cells::Report,
 }
 
 /// Capture one frame: one scene, one size, one theme.
@@ -86,7 +83,6 @@ pub struct Frame {
 pub fn capture(
     comp: &Compositor,
     binary: &Path,
-    design: &Design,
     baseline: &Baseline,
     cell: Cell,
     scene_name: &str,
@@ -96,7 +92,7 @@ pub fn capture(
     keys: &[Vec<u8>],
     run_dir: &Path,
 ) -> Result<Frame> {
-    let outcome = take_frame(comp, binary, design, baseline, cell, scene_name, size, theme, quiet_for, keys, run_dir);
+    let outcome = take_frame(comp, binary, baseline, cell, scene_name, size, theme, quiet_for, keys, run_dir);
     let _ = comp.clear();
     outcome
 }
@@ -105,7 +101,6 @@ pub fn capture(
 fn take_frame(
     comp: &Compositor,
     binary: &Path,
-    design: &Design,
     baseline: &Baseline,
     cell: Cell,
     scene_name: &str,
@@ -189,28 +184,17 @@ fn take_frame(
         )));
     }
 
-    // Stage 3's cell half. It reads the declared grid, so it runs here
-    // where the grid is, rather than re-parsing the frame later.
-    let report = cells::check(&grid, theme, design, baseline);
-    std::fs::write(
-        run_dir.join(format!("{scene_name}-{size}-{theme}.cells.json")),
-        serde_json::to_string_pretty(&report)?,
-    )?;
-
-    // The clean frame stays the evidence; the marked-up copy is the
-    // explanation, and only exists when there is something to explain.
-    let annotated = if report.violations.is_empty() {
-        None
-    } else {
-        let marks: Vec<(u16, u16)> = report.violations.iter().map(|v| (v.row, v.col)).collect();
-        let marked = run_dir.join(format!("{scene_name}-{size}-{theme}.marked.png"));
-        png::annotate(&path, &marked, &marks, cell.w, cell.h)?;
-        Some(marked)
-    };
+    // No assertions here any more. Every check that reads declared cells —
+    // palette membership, the closed glyph table, the copy rules — moved to
+    // `crates/tui/tests/render_snapshot.rs`, where a `TestBackend` buffer
+    // holds the same cells hermetically and in milliseconds. What a real
+    // terminal is for is the picture: stage 5 looks at these, and nothing
+    // else does.
+    let annotated = None;
 
     drop(proxy);
 
-    Ok(Frame { path, annotated, grid: grid_path, scene: scene_name.to_string(), size, theme, checked, cells: report })
+    Ok(Frame { path, annotated, grid: grid_path, scene: scene_name.to_string(), size, theme, checked })
 }
 
 fn wait_for_png(path: &Path) -> Result<()> {

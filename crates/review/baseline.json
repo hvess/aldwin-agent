@@ -1,24 +1,25 @@
 {
-  "//": "The measured cell and pinned font for this machine, and the design system's own self-contradictions. A contradiction is a bug in .claude/design/, removed when the design is fixed upstream — never when the app changes. See crates/review/src/baseline.rs.",
+  "//": "The measured cell and pinned font for this machine, and the design system's own self-contradictions. A contradiction is a bug in .claude/design/, removed when the design is fixed upstream \u2014 never when the app changes. See crates/review/src/baseline.rs.",
   "cell": {
     "w": 8,
     "h": 18
   },
   "font": "JetBrains Mono:size=10",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
   "contradictions": [
     {
       "id": "closed-glyph-table-vs-the-designs-own-copy",
-      "design_says": "HANDOFF.md:232-241 closes the glyph table at `▌ ● ◐ ○ ✔ ▶ █ + -`, and IMPORT.md restates it as closed.",
-      "design_also_says": "The same document mandates `·` as the top bar's within-group separator (:142, :254-255), `→` on first run's `more` row (:336), `⏎` and `↑↓` in two footers (:280, :341), and presupposes `…` for clipping.",
+      "design_says": "HANDOFF.md:232-241 closes the glyph table at `\u258c \u25cf \u25d0 \u25cb \u2714 \u25b6 \u2588 + -`, and IMPORT.md restates it as closed.",
+      "design_also_says": "The same document mandates `\u00b7` as the top bar's within-group separator (:142, :254-255), `\u2192` on first run's `more` row (:336), `\u23ce` and `\u2191\u2193` in two footers (:280, :341), and presupposes `\u2026` for clipping.",
       "app_follows": "The copy. A frame cannot draw the screens the design specifies without these five marks, so the table is the half that is wrong.",
-      "glyphs": "·…⏎↑↓←→"
+      "glyphs": "\u00b7\u2026\u23ce\u2191\u2193\u2190\u2192"
     },
     {
       "id": "no-table-component-adr-0002",
       "design_says": "HANDOFF.md:232-241's closed glyph table contains no box-drawing characters, and Turn 13's rule is that nothing inside a frame is stroked.",
       "design_also_says": "The design system has no table component at all, and a one-dimensional ground ladder cannot express a two-dimensional grid of cell boundaries.",
-      "app_follows": "ADR 0002 — a markdown table in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, scoped to that one construct. This entry is retired when the design system gains a table component.",
-      "glyphs": "┌┬┐├┼┤└┴┘─│"
+      "app_follows": "ADR 0002 \u2014 a markdown table in assistant prose is drawn with `\u250c \u252c \u2510 \u251c \u253c \u2524 \u2514 \u2534 \u2518 \u2500 \u2502`, scoped to that one construct. This entry is retired when the design system gains a table component.",
+      "glyphs": "\u250c\u252c\u2510\u251c\u253c\u2524\u2514\u2534\u2518\u2500\u2502"
     }
   ]
 }

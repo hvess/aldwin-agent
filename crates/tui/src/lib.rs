@@ -75,6 +75,42 @@ pub fn __preview_scrim_hex(theme: Theme) -> String {
     }
 }
 
+/// The design system as data, for the conformance tests in
+/// `tests/render_snapshot.rs`.
+///
+/// Those tests assert that every cell the app paints carries a colour from
+/// the design and a glyph from its closed table. They ran against a real
+/// terminal until 2026-09-20, through the review harness's capture stack,
+/// which meant the check cost a compositor, a subprocess and 2m45s and was
+/// not hermetic. The cells a `TestBackend` buffer holds are the same
+/// declared cells, so the check moved here and the terminal is now only
+/// needed for the pictures a human or a judge looks at.
+///
+/// `tokens.rs` is generated from `.claude/design/tokens/`, so asserting
+/// against these values *is* asserting against the design.
+#[doc(hidden)]
+pub fn __design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
+    match theme {
+        Theme::Dark => &tokens::DARK_VALUES,
+        Theme::Light => &tokens::LIGHT_VALUES,
+    }
+}
+
+/// The closed glyph table, and the glyphs a recorded design contradiction
+/// licenses on top of it — see `crates/review/baseline.json`.
+#[doc(hidden)]
+pub fn __design_glyphs() -> (&'static [char], &'static [char]) {
+    (&tokens::MARKS, &tokens::MARKS_BY_EXCEPTION)
+}
+
+/// One colour composited over another at the opacity the app dims a
+/// transcript behind an open panel, so a conformance test can enumerate the
+/// dimmed values rather than trying to solve for them.
+#[doc(hidden)]
+pub fn __design_fade(fg: ratatui::style::Color, onto: ratatui::style::Color) -> ratatui::style::Color {
+    palette::fade(fg, onto, palette::PANEL_TRANSCRIPT_OPACITY)
+}
+
 /// Same, for the first-run screen. It runs its own terminal loop
 /// (`first_run::run`) rather than being a mode inside `App`, so the
 /// snapshot harness cannot reach it through `__preview_draw` and needs the

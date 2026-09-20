@@ -518,6 +518,14 @@ impl App {
         self.transcript.len()
     }
 
+    /// Blocks the last transcript sync rebuilt — the incremental-render
+    /// guarantee, countable. Test-only: nothing in the app reads it, and the
+    /// two tests that assert on it used to time a render loop instead.
+    #[cfg(test)]
+    pub(crate) fn blocks_rebuilt(&self) -> usize {
+        self.transcript.rebuilt()
+    }
+
     /// The screen rows to draw for a `count`-row viewport starting at
     /// `offset` — what `ui::draw` hands to the log panel, and all it ever
     /// needs: the viewport, not the conversation. Fewer than `count` rows

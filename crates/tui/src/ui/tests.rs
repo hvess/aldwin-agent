@@ -486,41 +486,28 @@ fn an_incrementally_synced_transcript_equals_one_built_from_scratch() {
 /// on a slow CI box.
 #[test]
 fn a_streamed_delta_re_renders_one_entry_not_the_whole_transcript() {
-    use std::time::Instant;
-
     let reply = format!("Here is the plan. {}\n\n```rust\nfn f(x: u32) -> u32 {{ x + 1 }}\n```\n", "prose ".repeat(40));
-    let append = |app: &mut App| {
-        let Some(LogEntry::AssistantText { text }) = app.log.last_mut() else { unreachable!() };
-        text.push_str("token ");
-    };
-
-    let elapsed_for = |turns: usize| -> f64 {
+    let rebuilt_for = |turns: usize| -> usize {
         let mut app = app();
         for i in 0..turns {
             app.log.push(LogEntry::UserMessage { text: format!("question {i}") });
             app.log.push(LogEntry::AssistantText { text: reply.clone() });
         }
+        // Warm: the first sync after a resize rebuilds every block by
+        // definition, which is not what this is about.
         let _ = rendered(&mut app, 100, 24);
-        // Warm, then measure: the first sync after a resize renders every
-        // entry by definition, which is not what this is about.
-        for _ in 0..20 {
-            append(&mut app);
-            let _ = app.total_lines();
-        }
-        let t = Instant::now();
-        for _ in 0..200 {
-            append(&mut app);
-            let _ = app.total_lines();
-        }
-        t.elapsed().as_secs_f64()
+        let _ = app.total_lines();
+
+        let Some(LogEntry::AssistantText { text }) = app.log.last_mut() else { unreachable!() };
+        text.push_str("token ");
+        let _ = app.total_lines();
+        app.blocks_rebuilt()
     };
 
-    let short = elapsed_for(2);
-    let long = elapsed_for(40);
-    assert!(
-        long < short * 8.0,
-        "a delta on a 40-turn transcript took {long:.4}s against {short:.4}s on a 2-turn one — a streamed token is re-rendering the whole log again"
-    );
+    // One appended token changed one entry, so exactly one block is stale —
+    // whatever else is in the log.
+    assert_eq!(rebuilt_for(2), 1, "a streamed token rebuilt more than the entry it changed");
+    assert_eq!(rebuilt_for(40), 1, "a streamed token on a 40-turn transcript rebuilt more than the entry it changed");
 }
 
 /// The other half of the entry above, and a bug the multi-line composer
@@ -541,33 +528,28 @@ fn a_streamed_delta_re_renders_one_entry_not_the_whole_transcript() {
 /// slow CI box.
 #[test]
 fn a_growing_composer_re_renders_nothing_in_the_transcript() {
-    use std::time::Instant;
-
     let reply = format!("Here is the plan. {}\n\n```rust\nfn f(x: u32) -> u32 {{ x + 1 }}\n```\n", "prose ".repeat(40));
-    let elapsed_for = |turns: usize| -> f64 {
-        let mut app = app();
-        for i in 0..turns {
-            app.log.push(LogEntry::UserMessage { text: format!("question {i}") });
-            app.log.push(LogEntry::AssistantText { text: reply.clone() });
-        }
-        let _ = rendered(&mut app, 100, 30);
-        let t = Instant::now();
-        for i in 0..60 {
-            // One row of draft, then two, then one again — the band grows
-            // and shrinks under the transcript on every pass.
-            app.input = if i % 2 == 0 { "x".into() } else { "x\ny".into() };
-            app.cursor = app.input.chars().count();
-            let _ = rendered(&mut app, 100, 30);
-        }
-        t.elapsed().as_secs_f64()
-    };
+    let mut app = app();
+    for i in 0..40 {
+        app.log.push(LogEntry::UserMessage { text: format!("question {i}") });
+        app.log.push(LogEntry::AssistantText { text: reply.clone() });
+    }
+    let _ = rendered(&mut app, 100, 30);
 
-    let short = elapsed_for(2);
-    let long = elapsed_for(40);
-    assert!(
-        long < short * 8.0,
-        "a composer height change on a 40-turn transcript took {long:.4}s against {short:.4}s on a 2-turn one — resizing the log band is re-rendering the whole conversation again"
-    );
+    // One row of draft, then two, then one again — the band grows and
+    // shrinks under the transcript on every pass, and none of it touches the
+    // log.
+    for i in 0..6 {
+        app.input = if i % 2 == 0 { "x".into() } else { "x\ny".into() };
+        app.cursor = app.input.chars().count();
+        let _ = rendered(&mut app, 100, 30);
+        assert_eq!(
+            app.blocks_rebuilt(),
+            0,
+            "resizing the log band rebuilt {} transcript blocks; height is not an input to block_rows",
+            app.blocks_rebuilt()
+        );
+    }
 }
 
 /// The invariant the whole scroll path now rests on: a row of the

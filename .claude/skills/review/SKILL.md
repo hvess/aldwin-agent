@@ -35,15 +35,26 @@ and the directory of frames stage 5 needs.
 
 | stage | what it runs | what a failure means |
 | --- | --- | --- |
+| 0 toolchain | `rustc --version` against the baseline | the toolchain moved. Clippy's lint set changes between releases, so stage 1 may now fail on code nobody touched — record the new version deliberately rather than puzzling over it |
 | 1 lint | `cargo clippy --workspace --all-targets -- -D warnings` | fix it before anything else; a lint failure means the other stages ran against code you are about to change |
 | 2 test | `cargo test --workspace` | a regression, or a test that needed updating with the change |
-| 3 tokens · generated | regenerates `crates/tui/src/tokens.rs` from `.claude/design/tokens/` and diffs | the app's palette and the design have drifted. `cargo run -p mjolnir-review -- tokens --write`, then read the diff before committing it |
-| 3 tokens · cells | every cell in every captured frame uses a palette colour and a glyph from the closed table | the app painted something outside the design system |
-| 4 screenshots | `cargo test -p mjolnir-tui --test render_snapshot` | the rendered frames changed. If the change is *meant* to change them, regenerate deliberately: `UPDATE_SNAPSHOTS=1 cargo test -p mjolnir-tui --test render_snapshot` — after reading the diff |
+| 3 tokens | regenerates `crates/tui/src/tokens.rs` from `.claude/design/tokens/` and diffs | the app's design system and the imported one have drifted. `cargo run -p mjolnir-review -- tokens --write`, then read the diff before committing it |
+| 4 frames | `cargo test -p mjolnir-tui --test render_snapshot` | either the rendered frames changed against the baseline, or a cell left the design system — the failure names which. If the change is *meant* to alter the frames, regenerate deliberately after reading the diff: `UPDATE_SNAPSHOTS=1 cargo test -p mjolnir-tui --test render_snapshot` |
 
-Two flags for iteration passes: `--no-capture` skips the frames when you are
-only chasing a lint or a test, and `--quiet-ms 150` roughly halves capture
-time. Restore the default for the pass stage 5 reads.
+**All five are hermetic.** Same inputs, same result, no clock, no network, no
+subprocess of the app, no compositor. The whole path runs in about fifteen
+seconds, almost all of it `cargo test`. Capture is *not* a stage — it runs
+after them, only to make the pictures stage 5 looks at.
+
+Stage 4 does two jobs and both read `TestBackend` buffers: the snapshot
+baseline, and design conformance — every colour is one of the forty-two roles
+`tokens.rs` carries (or one dimmed toward a ground), every glyph is from the
+closed table, and the app's own copy is third person with no contractions.
+
+Two flags: `--no-capture` skips the pictures entirely, which is what you want
+for every pass that is not going to reach stage 5; `--quiet-ms 150` roughly
+halves capture time when you do need them. Restore the default for the pass
+stage 5 actually reads.
 
 **Every one of these must pass before stage 5 runs.** A judge looking at
 frames drawn with a drifted palette is a judge reporting a consequence as a
@@ -122,11 +133,20 @@ is to fix the design, not to keep recording it.
 
 ## What this does not cover
 
-- **Stage 4 is a regression baseline, not a correctness one.** It proves the
-  frames did not change. Whether they were ever *right* is stage 5's.
-- **Stage 3 checks tokens and cells, not layout.** Nothing mechanical here
-  asks whether a band is in the right place; that question needs a reference
-  frame to compare against, which the design system does not currently ship.
+- **Stage 4's baseline half proves the frames did not change**, not that they
+  were ever right. Whether they were is stage 5's.
+- **Nothing mechanical checks layout.** Stages 3 and 4 check tokens, colours,
+  glyphs and copy. Whether a band is in the *right place* needs a reference
+  frame to compare against, and the design system does not ship one.
+- **Stage 4's copy and glyph checks are scoped to app-owned rows.** A model's
+  reply is rendered verbatim and may legitimately contain an em dash or a
+  contraction, so a global check would fail on ordinary use. The split is by
+  scene and band — see `app_owned_rows` in the test, which states what it
+  misses.
+- **Capture is not hermetic and does not need to be.** It spawns a
+  compositor, a terminal and a fake provider, and waits `quiet_ms` for the
+  app to settle. It is stage 5's input, not a gate: a bad frame is something
+  the judge will say out loud.
 - **`cargo fmt` is not in stage 1.** The codebase's alignment needs
   nightly-only rustfmt options and the workspace pins no nightly; see
   `stages::lint`.

@@ -43,13 +43,16 @@ Three things a reader of this crate should know:
   alone in the same pass: two geometry changes at once make the next
   screenshot delta unreadable about which caused what.
 
-Measured: run `run-1789844710`, the five permission scenes at three sizes in
-both themes — 30 frames, all six gates clean, regression clean. This closed
-Class A 4, 16, 17 and 18 and Class B 2, 3 and 4 in
-`.claude/spec/mjolnir-design-conformance.md`.
+Measured over the five permission scenes at three sizes in both themes — 30
+frames, clean. *(The conformance catalogue this closed seven entries in was
+deleted on 2026-09-20 with the harness that produced it; see
+`.claude/spec/mjolnir-review.md`'s Progress entry for why. The measurement
+stands, the catalogue numbers no longer resolve, and git history has them.)*
 
 **Progress (2026-09-19, the conformance catalogue's unblocked layout items):**
-Six Class A deviations from `.claude/spec/mjolnir-design-conformance.md`, plus
+*(That catalogue was deleted on 2026-09-20 — see `mjolnir-review.md`. The
+work below was done and stands; its item numbers no longer resolve.)*
+Six Class A deviations, plus
 one the gates found while they were being captured. Each is recorded in full
 there; what belongs here is what moved in this crate and why a reader of the
 code should care.

@@ -75,11 +75,11 @@ contradicts) and the entry says so before it goes.
    the review loop's stage 2 no longer reports a missing dependency as a
    broken workspace. Run it with `cargo test -p mjolnir-tools -- --ignored`.
 
-10. **`target/` is tracked — 402 files — and the repo had no `.gitignore`
-    until 2026-09-19.** The new file ignores `target/screenshot-runs/` only,
-    because an ignore rule does nothing about what is already tracked.
-    Untracking the rest is a separate decision with a noisy diff; nothing
-    depends on it, and build churn shows up in `git status` until it happens.
+10. ~~**`target/` is tracked — 402 files — and the repo had no `.gitignore`
+    until 2026-09-19.**~~ **Done.** The rule is `/target`, which covers the
+    whole directory rather than the one subdirectory the first version
+    named, and `git ls-files target` now returns nothing. Build output no
+    longer shows up in `git status`.
 
 11. **No CI runs the test suite.** `.github/workflows/release.yml` builds on a
     tag and is the only workflow. Note that the screenshot harness cannot join

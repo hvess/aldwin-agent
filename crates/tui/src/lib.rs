@@ -37,6 +37,7 @@ mod palette;
 mod picker;
 mod run;
 mod scroll;
+mod tokens;
 mod ui;
 mod version;
 

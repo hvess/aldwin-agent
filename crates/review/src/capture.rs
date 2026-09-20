@@ -18,11 +18,10 @@ use std::time::{Duration, Instant};
 use crate::baseline::Baseline;
 use crate::compositor::Compositor;
 use crate::design::Design;
-use crate::{gates, regions};
 use crate::geometry::{Cell, Size, Theme};
 use crate::proxy::{foot_command, verify_against_pixels, Proxy};
 use crate::pty::Pty;
-use crate::{fake, png, scene};
+use crate::{cells, fake, png, scene};
 
 /// Measure foot's cell for the pinned font.
 ///
@@ -72,12 +71,8 @@ pub struct Frame {
     pub theme:   Theme,
     /// How many cells the parser and the frame were checked to agree on.
     pub checked: usize,
-    pub gates:   gates::Report,
-    /// What the design's own tables say about this frame, checked.
-    pub expect:  crate::expect::Outcome,
-    /// The declared spans, written beside the frame so a judge is handed
-    /// data rather than a PNG to decode. See [`crate::facts`].
-    pub facts:   PathBuf,
+    /// Stage 3's second half for this frame: every cell from the design.
+    pub cells:   cells::Report,
 }
 
 /// Capture one frame: one scene, one size, one theme.
@@ -194,47 +189,20 @@ fn take_frame(
         )));
     }
 
-    // The map is written out beside the frame: it is a judgement the harness
-    // made about the app's own layout, and it underpins two gates, so it has
-    // to be visible rather than implicit.
-    let map = regions::derive(&grid, theme, design);
-    std::fs::write(run_dir.join(format!("{scene_name}-{size}-{theme}.regions.txt")), map.render())?;
-
-    // The facts come before the gates because the `contrast` gate reads
-    // them: spans are the unit both a judge and that gate reason about, and
-    // deriving them twice would let the two disagree.
-    let facts = crate::facts::derive(&grid, &map, theme, design, scene_name, &size.to_string());
-    let facts_path = run_dir.join(format!("{scene_name}-{size}-{theme}.facts.json"));
-    std::fs::write(&facts_path, serde_json::to_string_pretty(&facts)?)?;
-    std::fs::write(run_dir.join(format!("{scene_name}-{size}-{theme}.facts.txt")), facts.render())?;
-
-    // The design's stated geometry, asserted. Unlike the gates this is not a
-    // property of *any* well-formed frame — it is what `HANDOFF.md` says
-    // about this particular screen — so a failure cites the line that states
-    // it. See `crate::expect`.
-    let expect = crate::expect::check(&grid, &map, design, scene_name, size);
+    // Stage 3's cell half. It reads the declared grid, so it runs here
+    // where the grid is, rather than re-parsing the frame later.
+    let report = cells::check(&grid, theme, design, baseline);
     std::fs::write(
-        run_dir.join(format!("{scene_name}-{size}-{theme}.expect.json")),
-        serde_json::to_string_pretty(&expect)?,
+        run_dir.join(format!("{scene_name}-{size}-{theme}.cells.json")),
+        serde_json::to_string_pretty(&report)?,
     )?;
-
-    // Gates run on the declared cells, never on the picture, and they do not
-    // stop a run: one iteration should show the whole picture rather than
-    // send a fix loop from one symptom to the next.
-    let report = gates::run(&grid, &map, theme, design, baseline, &facts);
-    let gates_path = run_dir.join(format!("{scene_name}-{size}-{theme}.gates.json"));
-    std::fs::write(&gates_path, serde_json::to_string_pretty(&report)?)?;
 
     // The clean frame stays the evidence; the marked-up copy is the
     // explanation, and only exists when there is something to explain.
-    let annotated = if report.violations.is_empty() && expect.passed() {
+    let annotated = if report.violations.is_empty() {
         None
     } else {
-        let mut marks: Vec<(u16, u16)> = report.violations.iter().map(|v| (v.row, v.col)).collect();
-        // A failed assertion is outlined too. It is as much a thing to look
-        // at as a gate violation, and the whole point of the marked copy is
-        // that a reader does not have to cross-reference a row number.
-        marks.extend(expect.failures.iter().filter_map(|f| f.row.map(|r| (r, 0))));
+        let marks: Vec<(u16, u16)> = report.violations.iter().map(|v| (v.row, v.col)).collect();
         let marked = run_dir.join(format!("{scene_name}-{size}-{theme}.marked.png"));
         png::annotate(&path, &marked, &marks, cell.w, cell.h)?;
         Some(marked)
@@ -242,7 +210,7 @@ fn take_frame(
 
     drop(proxy);
 
-    Ok(Frame { path, annotated, grid: grid_path, scene: scene_name.to_string(), size, theme, checked, gates: report, expect, facts: facts_path })
+    Ok(Frame { path, annotated, grid: grid_path, scene: scene_name.to_string(), size, theme, checked, cells: report })
 }
 
 fn wait_for_png(path: &Path) -> Result<()> {

@@ -210,10 +210,10 @@ fn collapse_context(body: &[DiffLine]) -> Vec<Shown<'_>> {
 /// names for a diff gutter inside the transcript, laid out in the reference
 /// as a 4-cell right-aligned number plus one cell of separation
 /// (`flex: 0 0 45px; text-align: right; padding-right: 9px`).
-const GUTTER: usize = 5;
+use crate::tokens::GUTTER_LINE_NO_INLINE as GUTTER;
 
 /// The `+ ` / `- ` sign that follows the gutter, before the code itself.
-const SIGN: usize = 2;
+use crate::tokens::DIFF_SIGN_COL as SIGN;
 
 /// Cells from the box's inner edge to the first character of code — what an
 /// in-box note (`⋯ 3 unchanged lines ⋯`) indents to, so it starts in the

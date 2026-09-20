@@ -9,8 +9,8 @@
 # disk, and `git rm -r --cached target` is what took them out of the index.
 /target
 
-# The screenshot harness's run directories (mjolnir-screenshot) live under
-# it: frames, gate output and reports, per-run working space kept until a
-# report is accepted. Covered by the rule above, named here because `start`
-# prunes them on its own schedule and a reader looking for them should find
-# out where they went.
+# The review loop's captured frames live under it, at target/review-frames/:
+# the PNGs stage 5 looks at plus each frame's declared cell grid. Covered by
+# the rule above, named here because `mjolnir-review` keeps only the last
+# three runs and a reader looking for an older one should find out where it
+# went.

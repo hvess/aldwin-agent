@@ -1430,7 +1430,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mjolnir-screenshot"
+name = "mjolnir-review"
 version = "0.1.19"
 dependencies = [
  "clap",

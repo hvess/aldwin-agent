@@ -35,15 +35,17 @@ use crate::palette::Palette;
 /// no margin at all, so every transcript row started 5 cells left of where
 /// the grid puts it — reported directly as "the chat rows themselves appear
 /// misaligned and do not follow the cell/grid system."
-pub(super) const MARGIN_X: usize = 3;
-const LABEL_COL_WIDTH: usize = 8;
-const LABEL_GUTTER: usize = 2;
+pub(super) use crate::tokens::{LABEL_COL_WIDTH, LABEL_GUTTER, MARGIN_X};
+
+/// Body text's column — **derived here and nowhere else**, because
+/// `cells.css` deliberately declares no `--body-col` and says why: it would
+/// be "a fourth statement of a position the other three already fix".
 pub(super) const CONTENT_INDENT: usize = MARGIN_X + LABEL_COL_WIDTH + LABEL_GUTTER;
 
 /// `--option-label-col` — 16 cells, an option row's name field. One width
 /// for every list in the system: the provider list, the model list, the
 /// access list and the command list are one control, so they share it.
-pub(super) const OPTION_LABEL_COL: usize = 16;
+pub(super) use crate::tokens::OPTION_LABEL_COL;
 
 /// `--group-gap` — 6 cells, what parts two *unrelated* groups inside a bar:
 /// the identity group from the model group in the top bar, `review changes`
@@ -55,12 +57,12 @@ pub(super) const OPTION_LABEL_COL: usize = 16;
 /// ` · ` rhythm instead. Mjolnir shipped six cells in the identity group for
 /// three weeks on a misreading of the handoff prose; see `.claude/design/
 /// HANDOFF.md`'s "the gap here is not `--group-gap`" note.
-pub(super) const GROUP_GAP: usize = 6;
+pub(super) use crate::tokens::GROUP_GAP;
 
 /// `--step-mark-col` — 10 cells, the field a first-run step's glyph sits
 /// in. Derived, not stated: the glyph is at the margin and the step's *name*
 /// is at the body column, so this field is exactly what separates them.
-pub(super) const STEP_MARK_COL: usize = LABEL_COL_WIDTH + LABEL_GUTTER;
+pub(super) use crate::tokens::STEP_MARK_COL;
 
 /// `--step-content-col` — cell 29, where a first-run step's content starts,
 /// whatever that content is: a settled answer, an open step's purpose line,
@@ -70,7 +72,7 @@ pub(super) const STEP_MARK_COL: usize = LABEL_COL_WIDTH + LABEL_GUTTER;
 ///
 /// Derived from the three landmarks it is made of, like `CONTENT_INDENT`
 /// above, so moving the option name field moves this with it.
-pub(super) const STEP_CONTENT_COL: usize = MARGIN_X + STEP_MARK_COL + OPTION_LABEL_COL;
+pub(super) use crate::tokens::STEP_CONTENT_COL;
 
 /// The two facts every line builder in `ui` needs and neither of which it
 /// can derive on its own: which theme's colours to draw in, and how many

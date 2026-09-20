@@ -1,0 +1,145 @@
+# mjolnir-review
+
+The feedback loop that runs after a change to Mjolnir is ready for submission.
+
+**Status:** active — built and in use. Replaced `mjolnir-screenshot` on
+2026-09-20; see Progress.
+**Scope:** the five-stage review loop — the crate `crates/review`
+(`mjolnir-review`) that runs the four deterministic stages, and the `review`
+skill that drives the loop and owns the fifth. Excludes what the stages
+themselves test (that is each crate's own spec) and the design system's
+content.
+**Owner:** Maximilian
+**Last Updated:** 2026-09-20
+
+## Why
+
+A change to `crates/tui` needs two questions answered before it ships: did it
+break anything, and does it do what it set out to do. The first is mechanical
+and the second is not, and the whole design of this loop is keeping them
+apart.
+
+Four stages are deterministic: they run a command, compare against something
+committed, and say yes or no. One is a subagent looking at pictures. Nothing
+in the deterministic four makes a judgement about whether the UI *looks like*
+the design, because the previous harness tried exactly that and the attempt is
+what this spec replaces.
+
+## The stages
+
+| stage | answers | how |
+| --- | --- | --- |
+| 1 lint | does it build clean | `cargo clippy --workspace --all-targets -- -D warnings` |
+| 2 test | does the suite pass | `cargo test --workspace` |
+| 3 tokens | is the app's design system still the imported one, and does every cell come from it | regenerate `crates/tui/src/tokens.rs` and diff; then scan every captured frame's declared cells |
+| 4 screenshots | did the rendered frames change | `render_snapshot.rs` against `tests/snapshots/render.snap` |
+| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 90 |
+
+## Decisions
+
+1. **One screenshot baseline, not two.** `render.snap` serialises every
+   cell's symbol, foreground, background and modifiers for twelve scenes at
+   three sizes in both themes — 72 sections — in under a second, in-process.
+   Capturing the same frames through a real terminal and diffing those too
+   would be a second fixture asserting the same thing on a slower clock. The
+   real terminal earns its place by producing **pictures for stage 5**, which
+   is the one thing `TestBackend` cannot do.
+
+2. **The app's design system is generated, not transcribed.**
+   `crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css`
+   and committed; stage 3 regenerates it and fails on any diff. Before this,
+   `palette.rs` carried eighty-four hand-written hex literals with a
+   `// neutral-200` comment beside each as the only link to the design.
+
+   The first generation reproduced all eighty-four exactly, so the
+   transcription had in fact been kept honest — which is the argument for
+   generating it, not against. It was honest because someone was checking by
+   hand, every time, forever.
+
+3. **Three roles are deliberately not carried**, listed with reasons in
+   `crates/review/src/tokens.rs`. `--tui-add-bg` and `--tui-del-bg` are
+   `rgba()` tints for a browser; a terminal cell has one opaque background,
+   and the design ships `--tui-add-row` / `--tui-del-row` beside them for
+   exactly that. `--tui-line` is marked legacy in `semantic.css` itself. A
+   role that is neither carried nor on that list fails the stage rather than
+   being silently dropped.
+
+4. **Only tokens the app consumes are generated.** `cells.css` declares panel
+   and bar heights the app does not read. Emitting a constant nothing uses
+   would be the generator asserting a layout rule; whether the app *should*
+   consume one is stage 5's question.
+
+5. **Stage 5 judges only the screens the change touched.** The app has
+   deviations that cannot be fixed in `crates/tui` — there is no branch in
+   `StatusInfo`, no clock in the workspace, and the design has no
+   edit-approval screen. A judge assessing the whole app reports those every
+   run and the loop never terminates, which is precisely how the previous
+   harness failed: five runs, never once exited.
+
+6. **The score is a threshold, not a measurement.** Two runs will not produce
+   the same number. The findings are the output.
+
+7. **Design contradictions live in `crates/review/baseline.json`.** The
+   reference disagrees with itself in places, and stage 3 cannot run against
+   it without somewhere to record where. Each entry states both halves of what
+   the design says and which half the app follows, and is removed when the
+   design is fixed upstream — it is a bug list for the design system, not a
+   compensation layer for the app.
+
+## Pitfalls
+
+- **Letting the contradictions list grow.** It is two entries. A previous
+  version of this idea reached fourteen and then needed its own admission
+  rule, at which point it had become the thing it was built to prevent.
+- **Running stage 5 on a failing stage 1–4.** A judge looking at frames drawn
+  with a drifted palette reports a consequence as a cause.
+- **Inferring the focus from the diff.** A change to a shared helper touches
+  screens its diff never names.
+- **Regenerating a snapshot to make stage 4 pass.** The regeneration is the
+  deliberate act; reading the diff first is what makes it one.
+- **Reading a clean stage 4 as a correct UI.** It proves the frames did not
+  change, not that they were ever right.
+
+## Progress (2026-09-20, the rebuild)
+
+This spec replaces `mjolnir-screenshot.md`. What it replaced had grown to
+5,731 lines of harness and 3,726 lines of governing documents to check a
+7,400-line TUI against a 444-line design reference — apparatus twenty-one
+times the size of the thing it enforced, and the ratio was the problem rather
+than a symptom of one.
+
+The cause was a single mistake made repeatedly: trying to mechanise "does this
+look like the design" against a prose reference that contradicts itself in
+fourteen places. Each layer built to cope with that ambiguity became something
+else to interpret. Blind judges were added because the question had no
+mechanical answer; a three-way classification because their findings arrived
+undifferentiated; an errata file because they re-derived the same
+contradictions every run; twenty baseline exemptions because the gates fired
+on design debt; an assertion suite because the judges were uncalibrated. The
+errata's own admission rule then structurally excluded the most re-raised
+finding in the catalogue's history.
+
+Deleted: the conformance catalogue (1,572 lines), the errata (149), the
+assertion suite (596), the contrast gate and its floors (182), the facts
+emitter (245), the region map (178), the acceptance model and its HTML report
+(354), the regression focus-set machinery (164), and the twenty exemptions.
+
+Kept: the capture stack — compositor, pty, proxy, vt, png, scenes — which is
+the genuinely hard part and which works. Added: token generation, and a slim
+cell check with nowhere to put a judgement.
+
+**Found on the first clean run**, by the copy lint that survived the cut: the
+permission panel's elision row read `1 more line not shown; deciding doesn't
+require scrolling them` — a contraction the design's copy never uses, and a
+plural pronoun for a count of one, on every 80×24 frame. It now reads
+`1 more line not shown`, which is the shape of the design's own elision row.
+
+## References
+
+- .claude/skills/review/SKILL.md — the loop, and stage 5's prompt.
+- crates/review/src/tokens.rs — stage 3, and the roles it does not carry.
+- crates/review/src/cells.rs — stage 3's cell half, and why it has no
+  judgement in it.
+- crates/tui/tests/render_snapshot.rs — stage 4's baseline.
+- crates/review/baseline.json — the design's own contradictions.
+- .claude/design/IMPORT.md — the reference, and its provenance.

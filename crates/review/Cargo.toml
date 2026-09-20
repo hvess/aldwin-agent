@@ -1,12 +1,12 @@
 [package]
-name    = "mjolnir-screenshot"
+name    = "mjolnir-review"
 version.workspace = true
 edition.workspace = true
 
 # Dev-only harness. Nothing in the shipped binary may depend on this crate;
 # `release.yml` builds `-p mjolnir-cli`, so it is never in a release build.
 [[bin]]
-name = "mjolnir-screenshot"
+name = "mjolnir-review"
 path = "src/main.rs"
 
 [dependencies]

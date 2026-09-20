@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use mjolnir_config::Config;
 use mjolnir_permissions::{Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use mjolnir_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -35,10 +35,15 @@ use ratatui::Terminal;
 
 const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/render.snap");
 
-/// Frame sizes worth pinning: the design system's own 120×36 frame, a
-/// conventional 80×24, a narrow terminal that forces wrapping and drops
-/// the option-detail column, and a wide one.
-const SIZES: [(u16, u16); 4] = [(120, 36), (80, 24), (52, 20), (160, 44)];
+/// The three sizes the review loop uses, and the same three
+/// `crates/review`'s `Size` enum captures — small for vertical pressure,
+/// the design system's own 120×36 frame, and a maximized terminal whose job
+/// is to catch a layout that sprawls rather than one that clips.
+///
+/// They match on purpose. Stage 4 baselines these frames and stage 5 looks
+/// at pictures of the same ones, so a judge's finding and a snapshot diff
+/// name the same frame.
+const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (200, 50)];
 
 const SCENES: [&str; 11] = [
     "empty",
@@ -54,6 +59,30 @@ const SCENES: [&str; 11] = [
     "long",
 ];
 
+/// The provider list `5d` shows, in the reference's own order and copy.
+/// Pinned here rather than read from config for the same reason the build
+/// identity is: a snapshot that inherits its content breaks on the next
+/// change to something it is not testing.
+fn first_run_state() -> mjolnir_tui::__PreviewFirstRun {
+    let providers: Vec<ProviderChoice> = [
+        ("anthropic", "claude models · ANTHROPIC_API_KEY", ["opus-4.6", "sonnet-4.6", "haiku-4.6"]),
+        ("google", "gemini models · GOOGLE_API_KEY", ["gemini-3-pro", "gemini-3-flash", "gemini-3-lite"]),
+        ("openai", "gpt models · OPENAI_API_KEY", ["gpt-6", "o5", "gpt-6-mini"]),
+        ("mistral", "mistral models · MISTRAL_API_KEY", ["large-3", "codestral-2", "small-3"]),
+    ]
+    .into_iter()
+    .map(|(id, purpose, models)| {
+        let models = models
+            .into_iter()
+            .zip(["deepest reasoning · 200k", "balanced · 200k", "fast, cheap · 200k"])
+            .map(|(id, purpose)| ModelChoice::new(id, purpose))
+            .collect();
+        ProviderChoice::new(id, purpose, models)
+    })
+    .collect();
+    mjolnir_tui::__PreviewFirstRun::new(providers, 3, true, true)
+}
+
 #[test]
 fn every_scene_renders_exactly_as_recorded() {
     let mut out = String::new();
@@ -66,6 +95,19 @@ fn every_scene_renders_exactly_as_recorded() {
                 let _ = writeln!(out, "=== {theme:?} {scene_name} {width}x{height}");
                 out.push_str(&serialize(&buffer));
             }
+        }
+        // First run is the design system's `5d` and the one screen the app
+        // draws outside `App` — it runs its own terminal loop rather than
+        // being a mode, which is why it needs the preview draw rather than
+        // going through `scene` above. Baselined here so every screen the
+        // design specifies has one, and so stage 4 and stage 5 look at the
+        // same twelve scenes.
+        for (width, height) in SIZES {
+            let state = first_run_state();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            terminal.draw(|f| mjolnir_tui::__preview_draw_first_run(f, &state, theme)).expect("draw");
+            let _ = writeln!(out, "=== {theme:?} first_run {width}x{height}");
+            out.push_str(&serialize(terminal.backend().buffer()));
         }
     }
 

@@ -1,0 +1,24 @@
+{
+  "//": "The measured cell and pinned font for this machine, and the design system's own self-contradictions. A contradiction is a bug in .claude/design/, removed when the design is fixed upstream — never when the app changes. See crates/review/src/baseline.rs.",
+  "cell": {
+    "w": 8,
+    "h": 18
+  },
+  "font": "JetBrains Mono:size=10",
+  "contradictions": [
+    {
+      "id": "closed-glyph-table-vs-the-designs-own-copy",
+      "design_says": "HANDOFF.md:232-241 closes the glyph table at `▌ ● ◐ ○ ✔ ▶ █ + -`, and IMPORT.md restates it as closed.",
+      "design_also_says": "The same document mandates `·` as the top bar's within-group separator (:142, :254-255), `→` on first run's `more` row (:336), `⏎` and `↑↓` in two footers (:280, :341), and presupposes `…` for clipping.",
+      "app_follows": "The copy. A frame cannot draw the screens the design specifies without these five marks, so the table is the half that is wrong.",
+      "glyphs": "·…⏎↑↓←→"
+    },
+    {
+      "id": "no-table-component-adr-0002",
+      "design_says": "HANDOFF.md:232-241's closed glyph table contains no box-drawing characters, and Turn 13's rule is that nothing inside a frame is stroked.",
+      "design_also_says": "The design system has no table component at all, and a one-dimensional ground ladder cannot express a two-dimensional grid of cell boundaries.",
+      "app_follows": "ADR 0002 — a markdown table in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, scoped to that one construct. This entry is retired when the design system gains a table component.",
+      "glyphs": "┌┬┐├┼┤└┴┘─│"
+    }
+  ]
+}

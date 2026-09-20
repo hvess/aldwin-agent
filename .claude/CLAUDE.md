@@ -12,7 +12,21 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29, four (config, core, llm, cli) are archived under `.claude/spec/archive/` — implemented, tested, and audited with no known gaps. The remaining five (permissions, tools, tui, screenshot, design-conformance) stay active, each with a dated Progress note on its known gaps; screenshot is built and usable — `crates/screenshot` plus the `screenshot` skill run a whole session (contract, preflight, capture, six gates, blind scoring, report); its known gaps are in the spec's Status and the skill's "What this does not cover". When a spec step is completed, note it; when all steps are done, move the spec to `.claude/spec/archive/`. `mjolnir-design-conformance.md` is the newest — it is a catalogue rather than a build: the measured gap between what the TUI draws and what the design system specifies, split three ways into *the app is wrong* (loop work), *the design has no answer* (stop and ask), and *the design contradicts itself* (fix upstream). Read it before acting on any screenshot score, and never show it to a blind judge. `mjolnir-open-tasks.md` is a ledger rather than a spec: known, understood, undone work, each entry citing its evidence.
+Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29,
+four (config, core, llm, cli) are archived under `.claude/spec/archive/` —
+implemented, tested, and audited with no known gaps. Four stay active:
+permissions, tools, tui and review. When a spec step is completed, note it;
+when all steps are done, move the spec to `.claude/spec/archive/`.
+
+`mjolnir-review.md` is the feedback loop that runs after a change is ready
+for submission — five stages, four of them deterministic and one a blind
+subagent. `.claude/skills/review/SKILL.md` drives it; run `/review` when a
+feature is finished. Read the spec's Progress entry before changing how any
+stage works: it records what the loop replaced and why, and the failure it
+replaced is easy to rebuild by accident.
+
+`mjolnir-open-tasks.md` is a ledger rather than a spec: known, understood,
+undone work, each entry citing its evidence.
 
 ## Design System
 
@@ -54,6 +68,20 @@ Two rules that now govern every layout decision (Turn 13):
 - **The grid is 3-cell margin, 8-cell label column, 2-cell gutter**, so
   body text lands on cell 13. There is deliberately no `--body-col` token;
   derive it, never restate it.
+
+**The design system reaches the app by generation, not by hand.**
+`crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css` by
+`cargo run -p mjolnir-review -- tokens --write` and committed; the review
+loop's stage 3 regenerates it and fails on any diff. Do not edit it, and do
+not add a colour or a grid constant to the app by writing a literal — add it
+to the design, re-sync, regenerate.
+
+Where the reference disagrees with itself, the disagreement is recorded in
+`crates/review/baseline.json` under `contradictions`, with both halves of
+what the design says and which half the app follows. An entry leaves that
+file when the design is fixed upstream. Keep it short — the list is a bug
+list for the design system, and a previous version of this idea grew to
+fourteen entries and became the problem it was built to solve.
 
 `.claude/spec/mjolnir-tui.md`'s Progress entries record what was measured
 and what it corrected; read the 2026-09-06 entry before touching layout in

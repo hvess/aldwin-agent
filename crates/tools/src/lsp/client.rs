@@ -299,7 +299,15 @@ mod tests {
         assert_eq!(total, Duration::from_millis(1500));
     }
 
+    /// Gated the way `llm/tests/live_lumo.rs` gates its live-API tests:
+    /// this one needs `rust-analyzer` on `PATH`, which the build does not
+    /// provide and a clean checkout on a fresh machine does not have. It
+    /// failed the whole suite there, which makes the review loop's stage 2
+    /// report a missing dependency as a broken workspace.
+    ///
+    ///     cargo test -p mjolnir-tools -- --ignored
     #[tokio::test]
+    #[ignore = "spawns real rust-analyzer; needs it on PATH"]
     async fn spawns_and_initializes_a_real_language_server() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();

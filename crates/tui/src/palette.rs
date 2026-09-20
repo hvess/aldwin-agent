@@ -87,6 +87,45 @@
 
 use ratatui::style::Color;
 
+/// The two palettes, **generated** from `.claude/design/tokens/` into
+/// [`crate::tokens`] and re-exported here so every call site keeps reading
+/// `palette::DARK`.
+///
+/// They used to be written out by hand in this file, with a `// neutral-200`
+/// comment beside each value as the only thing linking them to the design
+/// system. That is a transcription, and a transcription drifts. The review
+/// loop's stage 3 regenerates the file and fails if the result differs, so
+/// the app's palette and the imported design cannot disagree — the first
+/// generation reproduced all eighty-four hand-written values exactly, which
+/// is the evidence that the transcription had been kept honest until now and
+/// no reason to keep doing it by hand.
+pub(crate) use crate::tokens::{DARK, LIGHT};
+
+// What the light half of that generated file is, and why it looks the way
+// it does — kept because it is history the generator cannot carry:
+//
+// The design system's `.tui-light` scope — same roles, same hue, ramps
+// flipped; selection band darker than the page, not lighter (per the
+// source's own note: "on a light ground the selection band must be darker
+// than the page, not lighter").
+//
+// Turn 15 regenerated every value here for the second time. The change is
+// *depth*, not hue: the theme now spans `#241f2b` ink to a `#f7f5fa`
+// ground where Turn 14 ran `#0e0c12` to `#faf7ff` with a `#a39fac` desk,
+// and the seven ground rungs sit inside 10% of each other. See this
+// module's doc comment for why that shallowness is the decision rather
+// than an oversight.
+//
+// The light values also stopped being literals upstream. Turn 14 wrote
+// thirty hexes into `.tui-light` on the argument that the light accents
+// had outgrown `--color-accent-900`; Turn 15 replaced that with light
+// ramps of their own — `--color-ground-light-*`, `--color-ink-light-*`,
+// `--color-accent-light-*`, `--color-neutral-light-*` and
+// `--color-diff-light-*` — so every field below can name its rung the way
+// the [`DARK`] fields do.
+//
+// Both palettes are generated now; see the re-export above.
+
 /// One themeable surface, matching the design system's `--tui-*` roles
 /// one-to-one (see this module's doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,131 +286,7 @@ pub(crate) struct Palette {
     pub del_code: Color,
 }
 
-pub(crate) const DARK: Palette = Palette {
-    theme: Theme::Dark,
-    // The ground ladder, darkest to lightest: --color-ground-0…6. These
-    // seven are the frame's entire structure now that nothing is stroked.
-    scrim: Color::Rgb(0x0c, 0x0a, 0x11),       // ground-0
-    recess: Color::Rgb(0x0f, 0x0b, 0x15),      // ground-1
-    break_: Color::Rgb(0x1e, 0x1a, 0x26),      // ground-2
-    ground: Color::Rgb(0x27, 0x23, 0x2f),      // ground-3
-    bar_bottom: Color::Rgb(0x36, 0x31, 0x3f),  // ground-4
-    bar: Color::Rgb(0x47, 0x42, 0x51),         // ground-5
-    panel_title: Color::Rgb(0x5d, 0x57, 0x6b), // ground-6
-    text: Color::Rgb(0xf4, 0xf2, 0xf9),        // neutral-100
-    body: Color::Rgb(0xe3, 0xdf, 0xeb),        // neutral-200
-    code: Color::Rgb(0xec, 0xe9, 0xf3),        // neutral-150
-    context: Color::Rgb(0x9a, 0x95, 0xa4),     // neutral-500
-    value: Color::Rgb(0xc9, 0xc5, 0xd2),       // neutral-300
-    label: Color::Rgb(0xb1, 0xad, 0xbb),       // neutral-400
-    dim: Color::Rgb(0x9a, 0x95, 0xa4),         // neutral-500
-    quiet: Color::Rgb(0xc9, 0xc5, 0xd2),       // neutral-300
-    mark: Color::Rgb(0xbe, 0x9d, 0xf7),        // accent-400
-    mark_idle: Color::Rgb(0x5d, 0x57, 0x6a),   // neutral-700
-    band: Color::Rgb(0x60, 0x47, 0x88),        // band-dark
-    accent_text: Color::Rgb(0xdf, 0xd1, 0xfb), // accent-200
-    speaker_you: Color::Rgb(0xce, 0xb6, 0xfb), // accent-300
-    speaker_agent: Color::Rgb(0xc9, 0xc5, 0xd2), // neutral-300
-    gauge_fill: Color::Rgb(0xa0, 0x81, 0xd5),  // accent-500
-    gauge_track: Color::Rgb(0x60, 0x5a, 0x6c), // neutral-750
-    glyph_done: Color::Rgb(0x7f, 0x64, 0xab),    // accent-700
-    glyph_running: Color::Rgb(0xbe, 0x9d, 0xf7), // accent-400
-    glyph_pending: Color::Rgb(0x5d, 0x57, 0x6a), // neutral-700
-    step_done: Color::Rgb(0x7f, 0x64, 0xab),     // accent-700 — see the field
-    hunk_header: Color::Rgb(0xa0, 0x81, 0xd5),   // accent-500
-    syn_keyword: Color::Rgb(0xc9, 0xa2, 0xf7),   // syntax-keyword, 300°
-    syn_call: Color::Rgb(0x8f, 0xb8, 0xf8),      // syntax-call, 265°
-    syn_type: Color::Rgb(0x6f, 0xcf, 0xd9),      // syntax-type, 195°
-    syn_string: Color::Rgb(0x9c, 0xea, 0xa7),    // syntax-string — the diff green
-    syn_number: Color::Rgb(0xe8, 0xc1, 0x84),    // syntax-number, 75°
-    reverse_bg: Color::Rgb(0xbe, 0x9d, 0xf7),    // accent-400
-    reverse_ink: Color::Rgb(0x0c, 0x0a, 0x11),   // ground-0
-    diff_box: Color::Rgb(0x3a, 0x36, 0x48),      // diff-ground
-    add: Color::Rgb(0x5e, 0xd4, 0x76),
-    add_row: Color::Rgb(0x3d, 0x4b, 0x42),
-    add_code: Color::Rgb(0x9c, 0xea, 0xa7),
-    del: Color::Rgb(0xf6, 0x6d, 0x67),
-    del_row: Color::Rgb(0x4b, 0x3a, 0x42),
-    del_code: Color::Rgb(0xff, 0xa8, 0xa0),
-};
 
-/// The design system's `.tui-light` scope — same roles, same hue, ramps
-/// flipped; selection band darker than the page, not lighter (per the
-/// source's own note: "on a light ground the selection band must be darker
-/// than the page, not lighter").
-///
-/// Turn 15 regenerated every value here for the second time. The change is
-/// *depth*, not hue: the theme now spans `#241f2b` ink to a `#f7f5fa`
-/// ground where Turn 14 ran `#0e0c12` to `#faf7ff` with a `#a39fac` desk,
-/// and the seven ground rungs sit inside 10% of each other. See this
-/// module's doc comment for why that shallowness is the decision rather
-/// than an oversight.
-///
-/// The light values also stopped being literals upstream. Turn 14 wrote
-/// thirty hexes into `.tui-light` on the argument that the light accents
-/// had outgrown `--color-accent-900`; Turn 15 replaced that with light
-/// ramps of their own — `--color-ground-light-*`, `--color-ink-light-*`,
-/// `--color-accent-light-*`, `--color-neutral-light-*` and
-/// `--color-diff-light-*` — so every field below can name its rung the way
-/// the [`DARK`] fields do.
-pub(crate) const LIGHT: Palette = Palette {
-    theme: Theme::Light,
-    // The ladder inverts *and is monotonic*: the frame ground is the
-    // lightest surface and every other band sinks below it, in the order
-    // written below — which is `--color-ground-light-0…6` in order, since
-    // Turn 15 renumbered those rungs strictly by lightness.
-    //
-    // Two things that order is not. It is not the dark ladder reversed:
-    // `break_` sits *below* both chrome bands here (rung 3) where in the
-    // dark theme it sits below the ground (rung 2). And `bar` is darker
-    // than `bar_bottom`, not lighter — the top bar is a step further from
-    // the transcript than the composer is, the same way round as in the
-    // dark theme even though both directions of travel are opposite.
-    //
-    // Listed lightest to darkest, which is the ladder's own order here.
-    ground: Color::Rgb(0xf7, 0xf5, 0xfa),      // ground-light-0
-    bar_bottom: Color::Rgb(0xef, 0xec, 0xf4),  // ground-light-1
-    bar: Color::Rgb(0xe8, 0xe4, 0xee),         // ground-light-2
-    break_: Color::Rgb(0xe4, 0xe0, 0xec),      // ground-light-3
-    recess: Color::Rgb(0xde, 0xd9, 0xe6),      // ground-light-4
-    panel_title: Color::Rgb(0xd4, 0xce, 0xe0), // ground-light-5
-    scrim: Color::Rgb(0xcf, 0xca, 0xd9),       // ground-light-6
-    text: Color::Rgb(0x24, 0x1f, 0x2b),        // ink-light-0
-    body: Color::Rgb(0x35, 0x30, 0x3e),        // ink-light-2
-    code: Color::Rgb(0x2a, 0x24, 0x33),        // ink-light-1
-    context: Color::Rgb(0x5c, 0x55, 0x68),     // ink-light-5
-    value: Color::Rgb(0x42, 0x3c, 0x4c),       // ink-light-3
-    label: Color::Rgb(0x51, 0x4a, 0x5c),       // ink-light-4
-    dim: Color::Rgb(0x5c, 0x55, 0x68),         // ink-light-5
-    quiet: Color::Rgb(0x42, 0x3c, 0x4c),       // ink-light-3
-    mark: Color::Rgb(0x6b, 0x3f, 0xb0),        // accent-light-500
-    mark_idle: Color::Rgb(0x9a, 0x93, 0xa5),   // neutral-light-500
-    band: Color::Rgb(0xd8, 0xcb, 0xf0),        // band-light
-    accent_text: Color::Rgb(0x4d, 0x2a, 0x80), // accent-light-800
-    speaker_you: Color::Rgb(0x5d, 0x34, 0x99), // accent-light-700
-    speaker_agent: Color::Rgb(0x42, 0x3c, 0x4c), // ink-light-3
-    gauge_fill: Color::Rgb(0x7d, 0x56, 0xb8),  // accent-light-400
-    gauge_track: Color::Rgb(0xb8, 0xb2, 0xc2), // neutral-light-400
-    glyph_done: Color::Rgb(0x7a, 0x58, 0xae),  // accent-light-300
-    glyph_running: Color::Rgb(0x6b, 0x3f, 0xb0), // accent-light-500
-    glyph_pending: Color::Rgb(0x9a, 0x93, 0xa5), // neutral-light-500
-    step_done: Color::Rgb(0x5f, 0x3a, 0xa0),   // accent-light-600 — see the field
-    hunk_header: Color::Rgb(0x7d, 0x56, 0xb8), // accent-light-400
-    syn_keyword: Color::Rgb(0x7b, 0x2f, 0xc9), // syntax-light-keyword, 300°
-    syn_call: Color::Rgb(0x1f, 0x56, 0xc4),    // syntax-light-call, 265°
-    syn_type: Color::Rgb(0x0a, 0x5c, 0x6d),    // syntax-light-type, 195°
-    syn_string: Color::Rgb(0x0f, 0x6b, 0x23),  // syntax-light-string
-    syn_number: Color::Rgb(0x8a, 0x53, 0x00),  // syntax-light-number, 75°
-    reverse_bg: Color::Rgb(0x4d, 0x2a, 0x80),  // accent-light-800
-    reverse_ink: Color::Rgb(0xf7, 0xf5, 0xfa), // ground-light-0
-    diff_box: Color::Rgb(0xe9, 0xe5, 0xf0),    // diff-light-ground
-    add: Color::Rgb(0x12, 0x63, 0x25),
-    add_row: Color::Rgb(0xd3, 0xea, 0xd6),
-    add_code: Color::Rgb(0x0d, 0x4d, 0x18),
-    del: Color::Rgb(0xb0, 0x12, 0x2e),
-    del_row: Color::Rgb(0xf4, 0xd2, 0xda),
-    del_code: Color::Rgb(0x6b, 0x00, 0x16),
-};
 
 /// Which fixed `Palette` a session renders with — selected once at startup
 /// (`Theme::from_config`, `App::theme`), switchable live via `/theme`; see

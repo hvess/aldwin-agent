@@ -360,7 +360,7 @@ pub(super) fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
 /// Shared so a second panel cannot invent a second spelling of the same
 /// footer.
 pub(super) fn key_hints(pairs: &[(&str, &str)], ctx: Ctx) -> Vec<Span<'static>> {
-    const GROUP_GAP: usize = 6;
+    use super::grid::GROUP_GAP;
     let key = Style::default().fg(ctx.pal.mark);
     let verb = Style::default().fg(ctx.pal.quiet);
     let mut spans = Vec::new();
@@ -682,7 +682,14 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, head: usize, tail: usize, 
         let marker: Vec<Line<'static>> = if hidden == 0 {
             Vec::new()
         } else {
-            card.text(&format!("{hidden} more line{} not shown; deciding doesn't require scrolling them", if hidden == 1 { "" } else { "s" }), ctx.pal.dim, ctx)
+            // A count and nothing else, which is what the design's own
+            // elision row is (`HANDOFF.md:262` — `81 more lines`), and what
+            // `diff::boxed`'s marker already said. This used to add
+            // "deciding doesn't require scrolling them", which carried a
+            // contraction the design system's copy never uses and, at
+            // `hidden == 1` — the only value any 80×24 frame ever shows —
+            // referred to one line as "them".
+            card.text(&format!("{hidden} more line{} not shown", if hidden == 1 { "" } else { "s" }), ctx.pal.dim, ctx)
         };
         if keep == 0 || head_lines.len() + keep + marker.len() + tail_lines.len() <= max {
             let mut out = head_lines;

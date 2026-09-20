@@ -83,6 +83,18 @@ enum Command {
         #[arg(long)]
         record: bool,
     },
+    /// Write stage 5's result into the run's report and print the score.
+    ///
+    /// A command rather than an instruction to hand-edit HTML: the first
+    /// version left the append to the skill's discipline and the section
+    /// came back empty on three consecutive runs.
+    Stage5 {
+        #[arg(long)]
+        run: PathBuf,
+        /// JSON: `{"iteration": 1, "findings": [{"severity","design","frame","frames"}], "matches": []}`
+        #[arg(long)]
+        findings: PathBuf,
+    },
     /// Print the scene catalogue.
     Scenes,
 }
@@ -142,6 +154,19 @@ fn main() -> std::io::Result<()> {
     let base = Baseline::load()?;
 
     match cli.command {
+        Command::Stage5 { run, findings } => {
+            let stage5: mjolnir_review::report::Stage5 =
+                serde_json::from_str(&std::fs::read_to_string(&findings)?).map_err(std::io::Error::other)?;
+            let report = run.join("review.html");
+            let score = mjolnir_review::report::write_stage5(&report, &stage5)?;
+            println!("stage 5: {score}, threshold 90 — {}", if score >= 90 { "passes" } else { "does not pass" });
+            println!("report: {}", report.display());
+            if score < 90 {
+                return Err(std::io::Error::other("stage 5 is below the threshold; fix and re-run the loop"));
+            }
+            Ok(())
+        }
+
         Command::Scenes => {
             for name in scene::CATALOGUE {
                 let state = if scene::IMPLEMENTED.contains(name) { "ready" } else { "not wired up" };

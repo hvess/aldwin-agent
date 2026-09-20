@@ -149,6 +149,102 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// One finding, as the judge reported it.
+#[derive(serde::Deserialize)]
+pub struct Finding {
+    pub severity: String,
+    pub design:   String,
+    pub frame:    String,
+    pub frames:   String,
+}
+
+/// What the skill hands back from stage 5.
+#[derive(serde::Deserialize)]
+pub struct Stage5 {
+    pub iteration: u32,
+    pub findings:  Vec<Finding>,
+    /// Anything the judge confirmed matches, one line each. Optional.
+    #[serde(default)]
+    pub matches:   Vec<String>,
+}
+
+/// The score, derived from severities rather than chosen by the judge.
+///
+/// A model picking "80" cannot say what makes it 80 rather than 70. This
+/// can, and it makes the 90 threshold mean something concrete: at most two
+/// minor deviations and nothing else.
+pub fn score(findings: &[Finding]) -> u32 {
+    let weight = |s: &str| match s.trim() {
+        "blocking" => 25,
+        "major" => 15,
+        _ => 5,
+    };
+    let deducted: u32 = findings.iter().map(|f| weight(&f.severity)).sum();
+    100u32.saturating_sub(deducted)
+}
+
+/// Render stage 5 into the report, replacing the placeholder.
+///
+/// A command rather than an instruction to edit HTML by hand. The first
+/// version of this loop left the append to the skill's discipline and the
+/// section came back empty on three consecutive runs — the agent was busy
+/// reading findings and fixing code, which is exactly when a manual step
+/// gets skipped.
+pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
+    let text = std::fs::read_to_string(report)?;
+    let start = text.find(STAGE5_MARKER).ok_or_else(|| {
+        std::io::Error::other(format!("{} has no {STAGE5_MARKER} — already filled in?", report.display()))
+    })?;
+    // The placeholder paragraph the marker introduces runs to the next
+    // `</p>`; everything after that is the page's own closing tags.
+    let end = text[start..].find("</p>").map(|i| start + i + 4).unwrap_or(start + STAGE5_MARKER.len());
+
+    let value = score(&stage5.findings);
+    let counts = |s: &str| stage5.findings.iter().filter(|f| f.severity.trim() == s).count();
+    let (blocking, major, minor) = (counts("blocking"), counts("major"), counts("minor"));
+    let verdict = if value >= 90 { ("ok", "passes") } else { ("bad", "does not pass") };
+
+    let mut out = String::new();
+    out.push_str(&format!("<p><strong>Iteration {}.</strong></p>", stage5.iteration));
+    out.push_str(&format!(
+        "<p class=\"count\">Score <strong class=\"{}\">{value}</strong> — \
+         100 &minus; (25 &times; {blocking} blocking) &minus; (15 &times; {major} major) &minus; (5 &times; {minor} minor). \
+         Threshold is 90, so stage&nbsp;5 <strong>{}</strong>.</p>",
+        verdict.0, verdict.1
+    ));
+
+    if stage5.findings.is_empty() {
+        out.push_str("<p>No findings.</p>");
+    } else {
+        out.push_str("<table><tr><th>severity</th><th>design</th><th>frame</th><th>frames</th></tr>");
+        for f in &stage5.findings {
+            let class = match f.severity.trim() {
+                "blocking" | "major" => "bad",
+                _ => "",
+            };
+            out.push_str(&format!(
+                "<tr><td class=\"{class}\">{}</td><td>{}</td><td>{}</td><td class=\"note\">{}</td></tr>",
+                esc(&f.severity),
+                esc(&f.design),
+                esc(&f.frame),
+                esc(&f.frames)
+            ));
+        }
+        out.push_str("</table>");
+    }
+
+    if !stage5.matches.is_empty() {
+        out.push_str("<h3>Confirmed matching</h3><ul>");
+        for m in &stage5.matches {
+            out.push_str(&format!("<li>{}</li>", esc(m)));
+        }
+        out.push_str("</ul>");
+    }
+
+    std::fs::write(report, format!("{}{out}{}", &text[..start], &text[end..]))?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,7 +6,6 @@
 //! every scene; these say *why* each fact matters.
 
 use super::chrome::{self, highlight_command_tokens};
-use super::decision::LABEL_COL;
 use super::draw;
 use super::grid::{Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use super::markdown::{parse_inline, render_line as render_markdown_line, render_prose};
@@ -16,7 +15,7 @@ use crate::app::App;
 use crate::log::LogEntry;
 use crate::palette::{self, DARK};
 use mjolnir_config::Config;
-use mjolnir_permissions::{Engine, PromptPayload};
+use mjolnir_permissions::{Class, Engine, PromptPayload};
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
@@ -53,7 +52,7 @@ fn app() -> App {
 #[test]
 fn a_long_prompt_title_can_be_abbreviated_but_the_full_options_list_must_survive() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "x".repeat(300), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["x".repeat(300)], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     // Narrow (30 cols, so the target still wraps across many rows and
     // forces real abbreviation) but tall enough (34 rows) that the
@@ -71,10 +70,10 @@ fn a_long_prompt_title_can_be_abbreviated_but_the_full_options_list_must_survive
 #[test]
 fn no_truncation_marker_appears_when_nothing_was_actually_hidden() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 50, 14);
-    assert!(!out.contains("0 more line"), "a degenerate all-head-and-tail panel must not claim to have hidden 0 lines: {out:?}");
+    assert!(!out.contains(" 0 more line"), "a degenerate all-head-and-tail panel must not claim to have hidden 0 lines: {out:?}");
 }
 
 
@@ -458,7 +457,7 @@ fn an_incrementally_synced_transcript_equals_one_built_from_scratch() {
 
     app.log.push(LogEntry::PermissionPrompt {
         call_id: "c2".into(),
-        payload: PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false },
+        payload: PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into()], declared: Class::Write },
         resolution: None,
     });
     step(&mut app, "a pending prompt");
@@ -887,19 +886,19 @@ fn a_resolved_permission_prompt_records_a_human_phrase_not_a_debug_string() {
     let mut app = app();
     app.log.push(LogEntry::PermissionPrompt {
         call_id:    "c1".into(),
-        payload:    PromptPayload::Tool { kind: "shell".into(), target: "touch hello.html".into(), path_like: false },
+        payload:    PromptPayload::Tool { program: "touch".into(), argv: vec!["hello.html".into()], declared: Class::Write },
         resolution: Some(crate::log::PromptResolution { allowed: true, label: "allowed once".into() }),
     });
     let out = rendered(&mut app, 100, 20);
     assert!(out.contains("allowed once"), "the record should name the choice in the developer's own words: {out:?}");
-    assert!(out.contains("shell") && out.contains("touch hello.html"), "the record should name the call it answered: {out:?}");
+    assert!(out.contains("touch hello.html"), "the record should name the call it answered: {out:?}");
     assert!(!out.contains("decision:") && !out.contains("tier:"), "no wire-type debug formatting may reach the log: {out:?}");
 }
 
 #[test]
 fn a_pending_permission_prompt_does_not_render_inline_in_the_conversation_log() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "git".into(), argv: vec!["status".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "c1".into(), payload, resolution: None });
     let out = rendered(&mut app, 100, 20);
     assert!(!out.contains("Allow shell: git status?"), "a pending prompt must not render inline in the log — see the decision panel instead: {out:?}");
@@ -956,16 +955,15 @@ fn the_decision_panel_shows_a_numbered_approve_deny_list() {
 #[test]
 fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "git".into(), argv: vec!["status".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     // Tall enough for the panel's chrome (top bar, title band, footer)
     // plus a full 8-tier options list without the outer layout
     // squeezing any of it off-screen.
     let out = rendered(&mut app, 100, 34);
     assert!(out.contains("1  Allow once"), "the first option must be numbered: {out:?}");
-    assert!(out.contains("3  Always allow git * in this project"), "later options must be numbered too: {out:?}");
-    assert!(out.contains("5  Deny"), "the single deny option closes the list: {out:?}");
-    assert!(!out.contains("Always deny"), "the persistent deny tiers are no longer offered here: {out:?}");
+    assert!(out.contains("3  Always allow git writes in this project"), "later options must be numbered too: {out:?}");
+    assert!(out.contains("8  Never allow git"), "and the eighth closes the list: {out:?}");
 }
 
 /// The panel must say what each answer concretely does, not just name a
@@ -983,11 +981,11 @@ fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
 #[test]
 fn every_option_states_its_own_rule_and_its_reach() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("Always allow cargo * in this project"), "allow means every cargo command, not this one argv (ADR 0001): {out:?}");
-    assert!(out.contains("Always allow cargo * everywhere"), "and the global tier must be distinguishable from the project one: {out:?}");
+    assert!(out.contains("Always allow cargo writes in this project"), "allow means every cargo write, not this one argv (ADR 0004 §2): {out:?}");
+    assert!(out.contains("Always allow cargo writes everywhere"), "and the global tier must be distinguishable from the project one: {out:?}");
     assert!(out.contains("1  Allow once"), "the once tier saves nothing, so it quotes no rule: {out:?}");
     assert!(!out.contains(".mjolnir/permissions.yaml"), "the pair shape's provenance column is gone with the pair shape: {out:?}");
 }
@@ -999,7 +997,7 @@ fn every_option_states_its_own_rule_and_its_reach() {
 #[test]
 fn the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let backend = TestBackend::new(100, 34);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1016,7 +1014,7 @@ fn the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved() {
 #[test]
 fn the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 46, 34);
     assert!(out.contains("1  Allow once") && out.contains("5  Deny"), "the numbered list must survive intact: {out:?}");
@@ -1035,7 +1033,7 @@ fn the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame() {
 #[test]
 fn a_tool_prompt_shows_a_humanized_title_and_the_exact_target_underneath() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+    let payload = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/tui/src/ui.rs".into()], declared: Class::Read };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
     assert!(out.contains("The agent wants to read a file"), "the title must be a human-readable explanation: {out:?}");
@@ -1056,7 +1054,7 @@ fn a_tool_prompt_shows_a_humanized_title_and_the_exact_target_underneath() {
 #[test]
 fn a_non_shell_target_gets_the_field_without_the_shell_sigil() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "explain".into(), target: "src/gateway/router.rs".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "explain".into(), argv: vec!["src/gateway/router.rs".into()], declared: Class::Read };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let backend = TestBackend::new(100, 34);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1083,70 +1081,64 @@ fn a_non_shell_target_gets_the_field_without_the_shell_sigil() {
 #[test]
 fn a_shell_prompt_shows_a_command_block_instead_of_a_raw_line() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
     assert!(!out.contains("shell: cargo test --workspace"), "a shell command must not show the old raw `kind: target` line: {out:?}");
     assert!(out.contains("$ cargo test --workspace"), "a shell command should render as a `$ ` command block: {out:?}");
 }
 
-/// A path-like Tool prompt's persisting rows quote the enclosing
-/// directory, and its session row quotes the file — so the developer can
-/// see on each row that the grant it writes is broader (or not) than the
-/// call that triggered it, without a separate summary row to cross-read
-/// (ADR 0003).
+/// The eight rows of ADR 0004 §8, rendered. Allow and deny mirrored, in one
+/// vertical list, each row a sentence that states the rule it would write.
 #[test]
-fn a_path_like_prompts_rows_quote_their_own_patterns() {
+fn the_panel_draws_all_eight_rows_in_one_list() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+    let payload = PromptPayload::Tool { program: "git".into(), argv: vec!["push".into()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("Always allow ./crates/tui/src/** in this project"), "the persisting row must quote the directory glob it would save: {out:?}");
-    assert!(out.contains("Allow ./crates/tui/src/ui.rs for this session"), "and the session row the file it would allow: {out:?}");
-    assert!(!out.contains("adds the rule"), "the separate grant-summary row is gone — each sentence states its own rule: {out:?}");
-    assert!(!out.contains("Tab  "), "and so is the scope toggle it fed: {out:?}");
+
+    for (n, sentence) in [
+        (1, "Allow once"),
+        (2, "Allow git writes for this session"),
+        (3, "Always allow git writes in this project"),
+        (4, "Always allow git writes everywhere"),
+        (5, "Deny once"),
+        (6, "Deny git writes for this session"),
+        (7, "Deny git writes in this project"),
+        (8, "Never allow git"),
+    ] {
+        assert!(out.contains(&format!("{n}  {sentence}")), "row {n} must read {sentence:?}: {out:?}");
+    }
+    assert!(out.contains("1-8 to pick"), "the footer must offer all eight: {out:?}");
 }
 
-/// Both scopes are now on screen at once, one per row, where they used to
-/// be one mutable rule plus a `Tab` hint naming the other. This is the
-/// property that replaced the toggle, so it is worth pinning directly.
+/// The prompt shows the class the agent declared, because that is the claim
+/// the developer is being asked to weigh — and, under ADR 0004 §4, the claim
+/// the sandbox will hold the call to.
 #[test]
-fn both_grant_scopes_are_visible_at_once_without_a_toggle() {
+fn the_panel_states_the_class_the_agent_declared() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tui/src/ui.rs".into(), path_like: true };
+    let payload = PromptPayload::Tool { program: "git".into(), argv: vec!["status".into()], declared: Class::Read };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("./crates/tui/src/**"), "the broad unit: {out:?}");
-    assert!(out.contains("./crates/tui/src/ui.rs for this session"), "and the exact target, on their own rows: {out:?}");
+
+    assert!(out.contains("declared a read"), "the declaration must be on screen: {out:?}");
+    assert!(out.contains("git status"), "and so must the call it is about: {out:?}");
 }
 
-/// A shell prompt broadens to its *program*, not to a directory it does
-/// not have. This inverts the old behaviour, which offered no toggle at
-/// all on a non-path-like target and wrote the exact argv — the friction
-/// ADR 0001 exists to remove.
+/// The second prompt of ADR 0004 §4. The one fact that makes it a question
+/// rather than a report — that nothing was changed — has to be on the screen,
+/// because it is what makes saying yes safe.
 #[test]
-fn a_shell_prompts_persisting_rows_quote_the_program() {
+fn the_write_attempt_panel_says_nothing_was_changed() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway".into(), path_like: false };
+    let payload = PromptPayload::WriteAttempt { program: "rm".into(), argv: vec!["notes.txt".into()] };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("Always allow cargo * in this project"), "the design system's own permission copy, verbatim: {out:?}");
-    assert!(out.contains("Allow cargo test -p gateway for this session"), "and the exact command on the session row: {out:?}");
-}
 
-/// The degenerate case the program unit still has to handle: a target
-/// with no broader form than itself. Every row still quotes a rule — the
-/// target itself — rather than one of them quietly widening to a glob the
-/// developer cannot see on the row they are picking.
-#[test]
-fn a_target_with_no_broader_form_quotes_itself_on_every_row() {
-    let mut app = app();
-    let payload = PromptPayload::Tool { kind: "read".into(), target: "main.rs".into(), path_like: true };
-    app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
-    let out = rendered(&mut app, 100, 34);
-    assert!(out.contains("Allow main.rs for this session"), "the session row states its rule: {out:?}");
-    assert!(out.contains("Always allow main.rs in this project"), "and so does the project row, with no invented glob: {out:?}");
-    assert!(!out.contains("Tab "), "there is no scope toggle to offer: {out:?}");
+    assert!(out.contains("declared a read and tried to write"), "{out:?}");
+    assert!(out.contains("Nothing was changed"), "{out:?}");
+    assert!(out.contains("Allow rm writes for this session"), "and the rows answer at write class: {out:?}");
 }
 
 /// Moving `App::decision_selected` (as Down would via `App::handle_decision_key`
@@ -1233,35 +1225,23 @@ fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
     // would otherwise inflate this count by one independent of the
     // panel content this test actually cares about.
     let long_target = "q".repeat(200);
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: long_target.clone(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec![long_target.clone()], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     let out = rendered(&mut app, 60, 44);
-    // Not a single contiguous run: each wrapped row now gets its own
-    // fresh `BOX_PAD_H` left inset (the fix for the follow-up "known
-    // limitation" complaint below), which breaks up the run of 'q's with
-    // one inset space per wrapped row — counting characters, not
-    // matching a literal substring, is what actually proves nothing was
-    // dropped.
-    //
-    // Since ADR 0003 the target is also quoted by each of the three
-    // persisting/session sentences, elided to whatever room that row's
-    // own words leave it — so the expected count is the command block's
-    // full 200 plus what survives elision on each of those three rows.
-    // Derived from the constants rather than written out, so tuning a
-    // row's budget can't silently turn this into a test of nothing.
-    //
-    // `- 1` for the `…` itself: `grid::elide` bounds the *whole* result
-    // to `max` cells, the trailing glyph included, since its callers are
-    // hand-composed rows that have exactly that many cells to spend. The
-    // quoted pattern leads with the target's own characters in every
-    // case (the program glob is the 200 `q`s plus ` *`), so everything
-    // that survives elision is a `q`.
-    let quoted = |head: &str, tail: &str| 60 - (LABEL_COL + MARGIN_X + head.len() + tail.len()) - 1;
-    let expected = 200
-        + quoted("Allow ", " for this session")
-        + quoted("Always allow ", " in this project")
-        + quoted("Always allow ", " everywhere");
-    assert_eq!(out.matches('q').count(), expected, "all 200 characters of a long prompt target must be shown, wrapped rather than clipped: {out:?}");
+
+    // Wrapped, not clipped: the argument fills the panel's body width and
+    // continues onto the next row, rather than being cut at the frame's
+    // right edge. A filled row is the observable half of that — a clipped
+    // one would stop at the panel's edge with the rest simply gone.
+    assert!(out.matches('q').count() >= 40, "the argument must reach the panel at its full body width: {out:?}");
+
+    // All 200 characters, with eight option rows beside them and nothing
+    // elided. This is what spending the card's padding before its content
+    // buys: the panel gives back its blanks — see `Padding` — and the
+    // argument the developer is being asked about survives whole.
+    assert_eq!(out.matches('q').count(), 200, "every character must reach the panel: {out:?}");
+    assert!(!out.contains("more lines not shown"), "and nothing needed eliding: {out:?}");
+    assert!(out.contains("8  Never allow cargo"), "with every option still on screen: {out:?}");
 }
 
 /// Regression test for the actual reported defect, not just the
@@ -1276,7 +1256,7 @@ fn a_long_permission_prompt_wraps_in_the_panel_instead_of_being_clipped() {
 #[test]
 fn a_wrapped_card_row_keeps_its_full_width_background_fill() {
     let mut app = app();
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "y".repeat(200), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["y".repeat(200)], declared: Class::Write };
     app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
     // Tall enough that the wrapped command block survives `clamp_panel`
     // alongside the panel's own chrome (band, options rule, footer).
@@ -1891,7 +1871,8 @@ fn the_empty_state_shows_the_wordmark_and_the_three_facts_of_this_directory() {
     assert!(out.contains("  M J O L N I R  "), "the mark identifies a frame with no transcript to identify it: {out:?}");
     assert!(out.contains("anthropic"), "the provider row names the catalogue row this session runs on: {out:?}");
     assert!(out.contains("claude-sonnet-5"), "beside the model it answers with: {out:?}");
-    assert!(out.contains("read:deny") && out.contains("shell:deny") && out.contains("edit:deny"), "and what this directory permits");
+    assert!(out.contains("access") && out.contains("not set"), "and the rung this directory stands at: {out:?}");
+    assert!(out.contains("edits always ask"), "with the one fact no rung changes: {out:?}");
     assert!(out.contains("Ask for a change, or / for commands."), "the one line saying what to do next: {out:?}");
     assert_eq!(intro_content(&app, ctx(80)).len(), super::transcript::INTRO_ROWS, "intro_content must stay in sync with INTRO_ROWS");
 }

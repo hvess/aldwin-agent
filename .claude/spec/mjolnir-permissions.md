@@ -1,241 +1,191 @@
 # mjolnir-permissions
 
-Default-deny permission engine — three persistent scopes, tiered prompts, friction by design.
+Default-deny permission engine — a grant is a program and a class, a deny is
+a lock, and a read declaration is enforced rather than believed.
 
-**Status:** active — one known gap, see Progress below
-**Scope:** mjolnir-permissions crate only. Policy engine, allowlist shape, prompt round-trip. Excludes TUI rendering, YAML I/O (config), and tool implementations.
+**Status:** active
+**Scope:** mjolnir-permissions crate. Policy engine, entry shape, prompt
+round-trip. Excludes TUI rendering, YAML I/O (config), tool implementations
+and the sandbox (all mjolnir-tools).
 **Owner:** Maximilian
-**Last Updated:** 2026-05-20
+**Last Updated:** 2026-09-20
 
-**Progress (2026-09-19, ADR 0003 — the TUI stops toggling scope):** Nothing in
-this crate changed, and that is the point worth recording: the engine's
-`kind:pattern` grammar, its glob matcher and every persisted entry are exactly
-as this spec describes them.
+**Progress (2026-09-20, ADR 0004 — the model was reopened from first
+principles):** Everything below is new. The previous model — `kind:pattern`
+grants, a four-tier prompt, a `shell` tool taking one opaque command string —
+is gone, along with ADR 0001 which superseded it and the parts of ADR 0003
+that described the option list. Read
+`.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md`
+first; this spec is its implementation.
 
-What changed is again *which patterns the TUI offers*, and the earlier
-Progress entries below now describe a mechanism that no longer exists. The
-`Tab` scope toggle, `PatternScope`, `GrantSummary` and its `unit` are removed.
-Scope is now a property of each option row: `once` and `session` send the
-exact target, `project` and `always` send ADR 0001's broad unit, and the row's
-own sentence quotes the rule it would write ("Always allow `cargo *` in this
-project"). Both scopes are therefore visible at once rather than one being
-reachable by keypress.
+The short version of what moved:
 
-**One consequence lands in this spec's territory.** The session tier now sends
-the exact target where it used to send the broad unit, so two different
-`cargo` invocations in one session produce two prompts. That is narrower than
-ADR 0001's default and is ADR 0003's stated, accepted cost — not a regression
-in the engine, which never chose the pattern. Reading the 2026-09-06 entry
-below as current will mislead on exactly this point.
+- **`shell` is gone.** `run` takes a program and an argument list and
+  `execve`s it. There is no interpreter, so no grant can be walked past with
+  `&&`.
+- **A grant is `program: class`.** The class belongs to the *call* — `git
+  status` is a read, `git push` is a write — which is what makes a read/write
+  axis sound where ADR 0001 found it unsound.
+- **The agent declares the class; the sandbox enforces it.** A read-declared
+  call runs with the tree read-only and no TCP. A wrong declaration costs a
+  prompt, not a tree.
+- **A deny is a lock.** Nothing narrower overrides it, and a locked call draws
+  no prompt at all — there is no answer that would change it.
+- **Each scope carries a standing rung** (`ask` → `read` → `write`), and the
+  narrower file wins outright.
+- **`edit` left the model entirely.** Not a grant, not a rung, not a row.
 
-**Progress (2026-08-29):** Everything else in this spec is implemented and
-tested — `6c60023`. Not yet built: the "MCP tool calls use the standard
-tool prompt, extended once with an edit-shape follow-up" Decision (line
-57) and the matching Design bullet on MCP edit-shape detection. Building
-it needs a new prompt payload/response shape here plus a new persisted
-field in mjolnir-config (grant strings are deliberately opaque
-`kind:pattern`, not a good fit for the path-arg/content-arg mapping) — a
-real, separable follow-up, not a prerequisite for the rest of this spec.
-Every MCP tool currently goes through the plain four-tier prompt with
-`edit_class: false`. Keep this spec active until that's built.
-
-**Progress (2026-08-30, storage race audit-fix):** A rust-skills audit
-(m01-ownership through m15-anti-pattern, unsafe-checker, coding-guidelines)
-plus a follow-up 3-pass verification found this spec's own "Persisted
-denies silently overwritten by later allow" Pitfall was live, just not in
-the form it names: mjolnir-config's `Config::with_permissions_mut` (and the
-`with_mcp_mut`/`with_context_files_mut`/`set_provider`/`set_tui` siblings)
-released its read lock before mutating and only reacquired a write lock for
-the final swap, leaving a window where `/reload-config` (interceptor task)
-could land its own read-modify-write between a grant write's disk write and
-its in-memory swap and get silently reverted — a real lost-update, not just
-an allow/deny ordering bug. Fixed by holding a single write lock across the
-whole read → mutate → persist → swap sequence in every one of those
-helpers; see mjolnir-config's `store.rs` and its new
-`concurrent_grant_writes_do_not_lose_updates` regression test.
-
-**Progress (2026-09-02, directory-scope prompt option):** Developer report:
-permissions felt "aggressive" for ordinary reading — each new file under an
-already-trusted directory re-triggered its own prompt, since the tool
-four-tier prompt only ever persisted an exact-match grant of the literal
-target the check ran against, even though the Grammar (line 45,
-`read:./**`) already supports a path-glob pattern. The gap was pure
-wiring, not the engine: `record_tool_decision`'s `pattern` param was
-already caller-chosen (its own doc comment says so), but the one real
-caller (mjolnir-tools' dispatcher) always passed the original `target`
-verbatim, and nothing upstream ever offered the developer a coarser
-option. Fixed without changing the engine's Model/Decisions at all —
-`check_tool` gained a `path_like: bool` param (threaded from a new
-`Tool::permission_target_is_path` in mjolnir-tools), carried unchanged
-into `PromptPayload::Tool` for the TUI to act on; `PromptResponse::Tool`
-gained a `pattern: String` field so the developer's own chosen grant
-(exact target, or a `<dir>/**` glob when they toggled to it) is what
-actually gets persisted, not always the target `check_tool` was called
-with. mjolnir-tui's decision panel now shows a humanized "Claude wants to
-read a file" title with the literal `kind: target` dimmed underneath (a
-separate developer complaint that the raw title alone didn't say what was
-being asked), plus a Tab-toggle scope hint line for any path-like target
-with an enclosing directory — the four-tier options list itself is
-unchanged (still 8 labeled entries; the toggle picks which pattern they'd
-persist, not a ninth option, per this spec's own Pitfall on the tier list
-growing). Edit-class prompts are untouched: `check_tool`'s edit_class
-branch and `record_tool_decision`'s edit_class refusal both short-circuit
-before `path_like`/`pattern` ever come into play, per this spec's Edit
-Exception and mjolnir's own non-negotiable "Edit is never allowlistable"
-constraint — no scope toggle, no directory grant, no tier list, ever, for
-Edit. See mjolnir-tools.md and mjolnir-tui.md's matching Progress notes.
-
-**Progress (2026-09-02, permissions.yaml lost its explanation on the first
-write):** Developer report: "the permissions model is not clear, and editing
-permissions.yaml doesn't really appear to make any sense." Root cause was
-entirely in mjolnir-config, not this engine — see that (archived) spec's
-matching 2026-09-02 post-archive fix for the full account. In short: the
-annotated, comment-explained `permissions.yaml` mjolnir-config writes on
-first launch lost every comment the moment any grant was persisted (which in
-ordinary use is almost immediately — the first "for this project"/"always"
-choice at a four-tier prompt), because the write path re-serializes the
-in-memory value from scratch with no way to carry a source file's original
-comments along. A developer opening their real, in-use `permissions.yaml`
-therefore found a bare `version`/`allow: [...]`/`deny: [...]` with no
-explanation of the `kind:pattern` grammar, the session/project/global scope
-model, or that a hand-added `edit:...` entry parses fine but has no effect
-(Edit is never allowlistable — see the Edit Exception below). Fixed by
-threading each domain's header through every write, not just the first one,
-and expanding what the permissions header actually explains — this spec's
-Model/Decisions/Grammar were already correct and needed no change; the gap
-was purely in how (and how much of the time) that model got explained to the
-developer looking at the file. Kept as one line here since this is the spec
-a developer investigating "permissions felt confusing" would open first —
-this file's own 2026-09-02 directory-scope entry above is the other half of
-the same live-session feedback batch.
-
-**Progress (2026-09-03, the prompt now says what it would write; the deny
-tiers stopped being offered):** Follow-up feedback on the same theme as the
-entry above — "permissions are not clear, are we approving the tool? are we
-approving the directory? what are we concretely doing" — and, alongside it,
-"do we need all of the deny options?" Both were answered entirely in
-mjolnir-tui (see its matching Progress note): the decision panel now states
-the literal `kind:pattern` rule a saved answer would add, in exactly the
-form it takes in `permissions.yaml`, and each option says how long it lasts
-and which file, if any, it lands in. Nothing in this engine changed — no
-Model, Grammar, Decisions, or API — which is the point worth recording here:
-the four-tier prompt's symmetry (allow and deny at every tier) was a
-*presentation* choice this spec never required, and `record_tool_decision`
-still accepts `Decision::Deny` at any `ToolTier` for a caller that wants it.
-What the panel offers is now four allow tiers and a single non-persisting
-deny; a standing "never do this" rule is a deliberate `permissions.yaml`
-edit, which is also the reading this spec's own annotated header teaches. The
-tier-list Pitfall below still holds and is not weakened by this: it guards
-against the list *growing* a ninth option, and the list got shorter.
+Every persisted grant from the old model is meaningless, and a v1
+`permissions.yaml` is moved aside to `permissions.yaml.v1` rather than
+reinterpreted — see mjolnir-config's `retire_v1_permissions`.
 
 ## Why
 
-Every tool call, shell invocation, CLAUDE.md ingestion, and MCP tool request runs through this engine. It owns scope precedence, pattern matching, the tiered prompt round-trip, and the in-memory shape of allowlists and denylists. Cross-cutting — any crate that gates an action calls into this one rather than reimplementing the policy.
+Every tool call and context-file ingestion runs through this engine. It owns
+precedence, the standing rung, and the in-memory session layer. Cross-cutting:
+any crate that gates an action calls in rather than reimplementing policy.
+
+One thing it deliberately does **not** own, and the division is the design:
+**it never judges what a command does.** It is handed a declared class and
+weighs it against the rules. Verifying the declaration is the sandbox's job at
+execution time (mjolnir-tools). A policy engine that also guessed at a
+command's nature would be making the guess the whole model exists to avoid,
+and a wrong guess there *runs the command*.
 
 ## Vocabulary
 
-- **Guarded Action:** Anything the engine gates. Three families: tool invocations (built-in or MCP-bridged), context-file injection (CLAUDE.md / AGENTS.md), and Edit (always per-call, never allowlistable). MCP connection is not guarded — the config entry that names the server is the consent.
-- **Scope:** A persistence tier. Three: session (in-memory, until process exit), project (per project root), global (per user). Precedence is session > project > global; within a scope, deny beats allow.
-- **Grant:** A persisted (allow | deny) decision keyed by `kind:pattern`, stored at one scope.
-- **Pattern:** Grammar for guarded-action targets. Tool args via glob (`shell:cargo test*`), file paths via path glob (`read:./**`). Exact match is a glob with no wildcards.
-- **Prompt:** Blocking round-trip on a Deny-by-absence check. Three shapes: tool four-tier (allow once / for session / persist project / persist always — symmetric for deny), context-file two-tier (persist project / just this session), Edit binary (approve / deny this one edit).
+- **Program:** the grant key. For `run`, the binary (`git`). For a built-in,
+  the tool's own name (`read`, `explain`). For an MCP tool, its namespaced
+  name.
+- **Class:** what a call does — `read`, `write`, or `edit`. A property of the
+  *call*, not the program. `write` covers `read`; nothing covers `edit`.
+- **Entry:** one line of an allow or deny list — a program, optionally
+  qualified by a class. `git: read`, or bare `curl` for every class.
+- **Rung:** a scope's standing answer for any call no entry covers. `ask` →
+  `read` → `write`, widening.
+- **Scope:** turn, session, project, global. Turn and session never touch
+  disk; project and global are `permissions.yaml` files.
+- **Lock:** a deny. It cannot be overridden by anything narrower.
+- **Declaration:** the class the agent states for a call. An input, never a
+  finding.
 
 ## Model
 
-- **Default Deny:** Every guarded action starts denied. No "obviously safe" carve-out — Read, Explain, shell, and every MCP tool are gated identically. Edit is the only structural exception and has its own binary prompt (see edit_exception). In a new project the first session triggers a permission prompt for every tool the agent attempts to use, since nothing is pre-allowed. That initial burst of prompts is intentional — it is how the developer builds the allowlist by encounter rather than by upfront configuration.
-- **Precedence:** Session > project > global, higher wins in both directions. A session allow overrides a global deny for the session's duration; a session deny overrides a global allow for the session's duration. Nothing the session decides propagates to disk. Within a scope, deny beats allow.
-- **Grammar:** Grants are (kind, pattern, decision) per scope. Tool invocations key by `kind:pattern` against the assembled argv. Path-based actions key by `kind:path-glob`.
-- **Prompt Round Trip:** On Deny-by-absence: engine emits PromptRequested with action, args, and shape; caller awaits PromptResponse and calls back to record. Session decisions persist to in-memory engine state; project / global decisions persist via mjolnir-config.
-- **Context Files:** CLAUDE.md / AGENTS.md ingestion gated by the two-tier prompt. Decline means do not inject. Decisions are path-keyed by absolute path with no content hash — see decision below. The session initializer (cli crate) tests each candidate file before composing the additional-context string.
-- **MCP Connection:** Adding an MCP server to config implicitly authorises spawn-and-enumerate; no connect-time prompt. Each tool the server advertises is default-denied and flows through the four-tier prompt on first invocation. The first-invocation prompt also asks whether the tool is edit-shaped — if yes, the developer supplies the path-arg and content-arg names and subsequent calls route through the Edit binary approval gate. Tools whose shape cannot be pre-diffed (arbitrary patch / partial edit / mutation by query) cannot inherit the gate and stay on the standard four-tier prompt.
-- **Edit Exception:** Edit is never allowlistable in any scope. The prompt shape collapses to approve/deny per invocation. Enforcement is keyed to an edit_class flag on tool registration, not the tool name — a tool author cannot escape by renaming.
-- **First Launch:** No interactive wizard. mjolnir-config writes a fully-denied annotated YAML and points at the README.
+- **Default deny.** Every call starts denied. No "obviously safe" carve-out.
+- **Resolution order**, and it is the order because of what each step means:
+  1. `edit` never resolves here — it always asks, and `record` refuses it at
+     every row including the ones that persist nothing.
+  2. **Deny, across every scope.** Checked before anything that could allow,
+     including a narrower scope. That precedence *is* what distinguishes a
+     lock from a pre-answer.
+  3. **Allow, across every scope.** Any allow covering the call suffices;
+     allows do not compete.
+  4. **The standing rung**, narrower file winning outright.
+  5. Otherwise, ask.
+- **Entries outrank the rung, both ways.** A denied program stays denied under
+  `write`; an allowed one runs under `ask`. That falls out of 2 and 3 running
+  before 4.
+- **Deny is asymmetric with allow on class.** An allow of `read` does not
+  cover a write. A deny of `read` *does* cover a write — permitting writing
+  while forbidding reading describes no coherent posture.
+- **A rung of `None` is not `ask`.** A file that states no rung falls through
+  to the wider one; a file that states `ask` overrides it. They behave
+  identically at a check and differ in the panel, which shows "not set"
+  rather than asserting a rung nobody chose.
+- **Eight rows.** Four allow tiers and four deny tiers, mirrored. Rows 2–4 and
+  6–7 are class-qualified; row 8 (`never allow <program>`) is the whole
+  program, everywhere, and is the lock.
+- **Context files** keep the two-tier prompt (project / session), path-keyed,
+  no content hash. Untouched by ADR 0004.
 
 ## Interfaces
 
-- **Check:** Synchronous: given a guarded action and args, return Allow / Deny / PromptRequired. PromptRequired carries the prompt shape; the caller emits PromptRequested, awaits PromptResponse, and calls back to record the decision and resolve.
-- **Effective View:** Immutable snapshot of the merged session view with per-grant scope attribution. TUI re-fetches on PermissionsChanged.
-- **Events:**
-  - PromptRequested — action, args, shape (tool four-tier | context-file two-tier | edit binary); flows through core event stream
-  - PermissionsChanged — a grant added, removed, or modified at some scope; flows through core event stream
-- **Commands:**
-  - PromptResponse — developer's choice for an outstanding PromptRequested; received via core command channel
+- **`check(program, class, argv) -> Outcome`**: `Allow`, `Locked { scope,
+  rule }`, or `Ask(PromptPayload)`. `Locked` and `Ask` are different answers:
+  a locked call draws no prompt.
+- **`record(program, class, choice)`**: writes the row's rule at the row's
+  scope. Refuses `edit`.
+- **`effective_rung()`**, **`set_rung(scope, rung)`**: the standing answer.
+  Not reachable from a prompt — a per-call moment is the wrong place to change
+  the standing rule for everything.
+- **`effective_view()`**: snapshot with per-entry scope attribution, for the
+  panel.
+- **Events**: `PromptRequested`, `PermissionsChanged` — through core's stream.
+- **Commands**: `PromptResponse` — through core's command channel.
 
 ## Decisions
 
-- **Default-deny is the floor; no carve-out for "obviously safe" tools.** — A "Read is always safe" exception would invite future "shell ls is always safe" exceptions. Uniformity of friction is structural, not negotiable.
+- **Default-deny is the floor; no carve-out.** A "read is always safe"
+  exception invites "`ls` is always safe" next. Uniformity of friction is
+  structural.
 
-- **Cross-scope precedence is higher-wins for both allow and deny.** — The session is the developer's deliberate space; honour a session-scope override in either direction. Within a scope, deny beats allow.
+- **A grant is a program and a class, not a command string or a glob.** The
+  old unit could not carry a read/write distinction and could be walked past
+  by a metacharacter. Program-plus-class is what a developer can actually hold
+  in their head, and the sandbox is what bounds it.
 
-- **Four-tier tool prompt (once / session / project / always), symmetric for allow and deny.** — Reaching every scope from the prompt itself avoids punting persistence to follow-up config edits. Locking something down does not deserve to be a hidden ceremony.
+- **The declaration is never trusted, and never needs to be.** Enforced, not
+  believed: no veto list, no table of read-safe invocations, no trial run. All
+  three were considered; each puts our judgement in the path of a decision
+  that runs a command.
 
-- **Context-file prompts are two-tier (project / session); no "once", no global.** — Context-file paths are intrinsically project-scoped (a global tier has no future-project path to pre-trust). Injection is system-prompt-level, so "once" has no meaningful boundary.
+- **Deny is a lock, not a pre-answer.** A denylist anything can shrug off is
+  not a guarantee. The cost is real — undoing one means editing a file, mid-
+  task — and accepted, because a denylist that a session can override
+  promises more than it delivers.
 
-- **Context-file decisions are path-keyed only, no content hash.** — Path + content hash would re-prompt on every typo fix, training the developer to click through as reflex — worse safety than trusting them to vet upstream changes to a project file they already approved.
+- **The narrower file wins outright.** Most-restrictive-wins was rejected: it
+  makes a single project impossible to open up without loosening every
+  project, which inverts how anyone works.
 
-- **Grammar supports arg-pattern matching, not just per-binary toggles.** — `shell:cargo test*` ≠ `shell:cargo install*`. Coarse per-binary grants would dominate in practice and erode deliberate allowance.
+- **`edit` is outside the model.** Not a rung, not a grant, not a row. This is
+  what makes the rest safe to coarsen — the one tool whose purpose is
+  modifying the tree cannot be granted at all.
 
-- **MCP tool calls use the standard tool prompt, extended once with an edit-shape follow-up.** — The four-tier prompt is the deliberation moment. A parallel "show me args every call even when allowed" review layer would split mental models without adding structural protection. The one exception is the edit-shape question at first invocation — if marked, subsequent calls route through the Edit binary approval gate so MCP cannot bypass the friction Mjolnir's own Edit tool enforces. Marking happens at first call, never at upfront config — see pitfall below.
+- **Every MCP tool is a write, whatever the server says.** An MCP call runs
+  inside the server's process, where the sandbox cannot hold a declaration to
+  its word. With no enforcement, believing a hint is the trust-the-declaration
+  design ADR 0004 rejected, minus the thing that made it safe. Letting the
+  developer classify one — with the server's claim shown as a claim — is
+  ADR 0004 §4's intent and is not built.
 
-- **Adding an MCP server to config is implicit consent to spawn-and-enumerate.** — The config edit is the consent. The tool-call layer remains default-denied per tool.
-
-- **Edit is never allowlistable; enforcement via edit_class flag on tool registration.** — Keying on the flag rather than the tool name prevents bypass by renaming. The engine rejects any attempt to attach a non-binary prompt to an edit_class tool.
-
-- **No first-run wizard; first launch writes a fully-denied annotated YAML.** — A wizard trains the developer to set permissions in the abstract. Understanding develops by encounter, not by upfront configuration.
+- **No first-run wizard.** First launch writes an annotated, fully-denied
+  file. First run asks one access question and writes it as the project's
+  rung — the same setting a developer can change later, not a preset that
+  expands into grants and vanishes.
 
 ## Pitfalls
 
-- A "Read is always safe" carve-out drifting in under the banner of ergonomics — every carve-out is permanent.
-- The four-tier prompt growing a fifth option ("allow for this subtree", "until next reload") — each tier doubles cognitive load.
-- Persisted denies silently overwritten by later allow at the same scope — storage must express deny-wins, not last-write-wins.
-- effective_view snapshot going stale because the TUI polled instead of subscribing to PermissionsChanged.
-- edit_class enforcement keyed to tool name instead of the registration flag — escapable by renaming.
-- Session-scope allowances leaking into project storage via a confused "remember this" path — pass the persist tier end-to-end.
-- Path-keyed context-file decisions accumulating cruft as projects move or files rename — GC deferred past V0.
-- Edit-shape marking for MCP tools migrating into upfront config (asked at server registration rather than at first call) — defeats the encounter-driven design and re-creates the wizard this spec rejects.
+- A "read is always safe" carve-out arriving as ergonomics.
+- The prompt growing a ninth row. Eight is already at the edge of what a
+  developer reads under time pressure; the deny half earns its place only
+  because a lock must be reachable.
+- **Treating the declaration as a finding.** Any code path that lets a
+  declared class decide something the sandbox does not then enforce has
+  reintroduced self-granting. MCP is the live example and is why it is
+  hard-coded to `write`.
+- A deny becoming overridable by a narrower scope "for convenience".
+- The rung being settable from a prompt.
+- An `edit` entry becoming expressible. `Class` deserializes only `read` and
+  `write` precisely so a hand-written `edit:` in YAML is a load error rather
+  than a rule that silently does nothing.
+- The incidental-write allowlist growing. It is the one place our judgement
+  re-enters; `.git/` was kept out of it on purpose (see mjolnir-tools).
+- Session grants leaking to disk via a confused "remember this" path.
 
 ## Out of Scope
 
-- On-disk YAML schema and scope-storage file layout — mjolnir-config.
-- TUI rendering of prompts and the permissions panel — mjolnir-tui.
-- Tool implementations (Read, Explain, Edit, shell, MCP) — mjolnir-tools.
-- MCP transport, subprocess lifecycle, tool discovery — mjolnir-tools via rmcp.
-- Edit approval surface (diff format, syntax highlighting) — mjolnir-tools.
-- Session persistence and prompt history — out of V0 per parent.
-- GC of unreachable context-file paths — flagged, deferred past V0.
-- Audit log of grant changes — out of V0; TUI shows current state only.
-
-**Progress (2026-09-06, ADR 0001 — the grant unit):** A grant is no longer an
-exact argv or a single file path by default. See
-`.claude/adr/0001-tool-level-permission-grants.md` for the decision and its
-alternatives; the short version is that tools are classified three ways and
-the class picks the unit — `read`/`explain` grant over a **directory**,
-`shell` grants over a **program** (`argv[0]`, so `shell:cargo *`), and `edit`
-is not grantable at all and is now formally out of the permissions model.
-
-The engine is untouched: `kind:pattern` and the glob matcher are exactly as
-this spec describes them, and every persisted entry — including exact-argv
-ones from earlier builds — still matches as before, so there is no migration.
-What changed is which patterns the TUI *offers*: `PatternScope` is now
-`Broad` (default) / `Exact` rather than `Exact` (default) / `Directory`, and
-Tab narrows where it used to widen. `GrantSummary` gained a `unit` so the Tab
-hint can say "this whole directory" or "every cargo command" rather than one
-wording that was wrong for half the prompts.
-
-This closes the "are we approving the tool? the directory?" feedback recorded
-at `app.rs:127` in its own terms rather than by restating the rule more
-precisely, which is what the previous pass did.
-
-**Deliberately still true:** Edit is refused at `engine.rs:92` before any list
-is consulted, and no first-run tier writes an `edit:` rule. The claim the
-harness can make is "no `edit` lands without a diff you accepted" — *not*
-"nothing writes without your approval", since a program-level shell grant can
-still write (`cargo test` runs build scripts, `git checkout` mutates). The
-design system's readme overstates this and wants rewording to name `edit`.
-
+- On-disk schema and file layout — mjolnir-config.
+- Prompt rendering and the permissions panel — mjolnir-tui.
+- The sandbox, `run`, argument containment — mjolnir-tools.
+- Developer classification of MCP tools — ADR 0004 §4, not built.
+- Naming *which* path a refused read reached for — needs syscall
+  interception; the guarantee does not depend on it.
+- Audit log of grant changes — out of V0.
 
 ## References
 
-- .claude/spec/mjolnir.md — parent; default-deny and friction-as-feature decisions.
-- .claude/spec/mjolnir-core.md — core's command/event surface the prompt round-trip plugs into.
-- .claude/spec/mjolnir-config.md — on-disk persistence of project/global grants.
+- `.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — the decision this implements.
+- `.claude/adr/0003-the-permission-option-row-is-a-sentence.md` — §1 still governs each row's shape.
+- `.claude/spec/mjolnir-tools.md` — `run`, the sandbox, argument containment.
+- `.claude/spec/mjolnir.md` — parent; default-deny and friction-as-feature.

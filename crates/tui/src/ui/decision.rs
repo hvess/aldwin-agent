@@ -7,7 +7,7 @@
 //! a recessed diff field or a command block), the grant the answer would
 //! save, a separator band, the numbered options, and a key-hint footer.
 
-use mjolnir_permissions::PromptPayload;
+use mjolnir_permissions::{Class, PromptPayload};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
@@ -149,19 +149,52 @@ struct PromptView {
     shell:    bool,
 }
 
+/// The command as a developer would read it back. Not a shell line — there
+/// is no shell (ADR 0004 §1) — just the program and its arguments, which is
+/// exactly what will be handed to `execve`.
+fn render_argv(program: &str, argv: &[String]) -> String {
+    if argv.is_empty() {
+        return program.to_string();
+    }
+    format!("{program} {}", argv.join(" "))
+}
+
 impl PromptView {
     fn of(payload: &PromptPayload) -> Self {
         match payload {
-            PromptPayload::Tool { kind, target, .. } => Self {
-                sentence: match kind.as_str() {
+            PromptPayload::Tool { program, argv, declared } => Self {
+                sentence: match program.as_str() {
                     "read" => "The agent wants to read a file.".into(),
-                    "shell" => "The agent wants to run a shell command.".into(),
                     "explain" => "The agent wants to inspect code.".into(),
-                    other => format!("The agent wants to use \"{other}\"."),
+                    // The declaration is shown, not summarised away: it is
+                    // the claim the developer is being asked to weigh, and
+                    // under ADR 0004 §4 it is also the claim the sandbox
+                    // will hold the call to.
+                    //
+                    // A read declaration says what that enforcement *is*,
+                    // here rather than in `5a`'s `writes` / `network` fact
+                    // rows. Those rows were unsourceable when the panel was
+                    // drawn and are real facts now — but three more rows is
+                    // exactly what the eight-option list spent, and a fact
+                    // stated in the sentence is worth more than one elided
+                    // out of a table.
+                    other if *declared == Class::Read => {
+                        format!("The agent wants to run {other}, declared a read. It runs read-only, with no network.")
+                    }
+                    other => format!("The agent wants to run {other}, declared a {}.", declared.label()),
                 },
-                badge:    kind.clone(),
-                target:   target.clone(),
-                shell:    kind == "shell",
+                badge:    program.clone(),
+                target:   render_argv(program, argv),
+                shell:    !matches!(program.as_str(), "read" | "explain"),
+            },
+            // The call said it only read, and could not finish with the
+            // project read-only. Nothing landed — which is the fact that
+            // makes this a question rather than a report.
+            PromptPayload::WriteAttempt { program, argv } => Self {
+                sentence: format!("{program} was declared a read and tried to write. Nothing was changed."),
+                badge:    program.clone(),
+                target:   render_argv(program, argv),
+                shell:    true,
             },
             PromptPayload::ContextFile { path } => Self {
                 sentence: format!("The agent wants to load {} as context.", path.display()),
@@ -239,29 +272,38 @@ fn approval_card(diff_text: &str, tail: Vec<Line<'static>>, card_rows: Option<us
 
 /// The permission-prompt card — the live panel's body for a `PromptPayload`,
 /// with the same `tail` contract as [`approval_card`].
-fn prompt_card(payload: &PromptPayload, cwd: Option<&str>, tail: Vec<Line<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
+fn prompt_card(payload: &PromptPayload, cwd: Option<&str>, tail: Vec<Line<'static>>, padding: Padding, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let card = Row::card(pal.bar);
     let view = PromptView::of(payload);
 
-    let mut lines = vec![card.blank(ctx)];
-    lines.extend(card.text(&view.sentence, pal.body, ctx));
-    // Every prompt gets the field, not just a shell command (item 30). The
-    // frame's rows here are: blank, sentence, blank, field. A path used to
-    // render as `read: ./x.rs` in `label` at the margin with no field and
-    // no blank, so on every non-shell prompt — the majority — the panel had
-    // no quoted object at all and nothing inside it sat on a column the
-    // rest of the frame uses.
-    lines.push(card.blank(ctx));
-    lines.extend(command_block(&view.target, view.shell, ctx));
-    // `5a`'s 3-row key/value table, of which Mjolnir can honestly source
-    // one row. The design's `in` / `writes` / `network` need the working
-    // directory, a static analysis of what a command touches, and a network
-    // posture; only the first exists here. The other two are not invented —
-    // see the conformance spec's item 16, which is explicit that the
-    // columns are buildable and the facts are not.
-    if let Some(cwd) = cwd {
+    let mut lines = Vec::new();
+    if padding == Padding::Full {
         lines.push(card.blank(ctx));
+    }
+    lines.extend(card.text(&view.sentence, pal.body, ctx));
+    // Every prompt gets the field, not just a shell command. A path used to
+    // render as `read: ./x.rs` in `label` at the margin with no field, so on
+    // every non-shell prompt — the majority — the panel had no quoted object
+    // at all and nothing inside it sat on a column the rest of the frame
+    // uses.
+    //
+    // The blank that used to sit between the sentence and the field is gone:
+    // the field brings its own top pad, so the two together drew a doubled
+    // blank, and a doubled blank is exactly the row an eight-option panel
+    // cannot afford.
+    lines.extend(command_block(&view.target, view.shell, padding, ctx));
+    // `5a`'s key/value table, of which Mjolnir can honestly source one row.
+    // The design's `in` / `writes` / `network` wanted a working directory, a
+    // static analysis of what a command touches, and a network posture; only
+    // the first existed, and the other two were deliberately not invented.
+    //
+    // **Two of the three are now real facts rather than guesses** — ADR 0004
+    // §4 runs a read-declared call with the project read-only and the network
+    // unreachable — but they are stated in the sentence above rather than as
+    // their own rows, because three more rows is precisely what the eight-row
+    // options list spent. See `PromptView::of`.
+    if let Some(cwd) = cwd {
         lines.extend(fact_row("in", cwd, ctx));
     }
     lines.extend(tail);
@@ -299,7 +341,7 @@ fn fact_row(label: &str, value: &str, ctx: Ctx) -> Vec<Line<'static>> {
 /// ran the full width of the panel — "the command row is not a box like in
 /// the design but instead completely fills the entire dialog edge-to-edge
 /// with no margin."
-fn command_block(target: &str, shell: bool, ctx: Ctx) -> Vec<Line<'static>> {
+fn command_block(target: &str, shell: bool, padding: Padding, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let row = Row::card(pal.ground).inset(MARGIN_X, pal.bar).pad(COMMAND_BLOCK_PAD);
     let mut spans = Vec::with_capacity(2);
@@ -307,10 +349,33 @@ fn command_block(target: &str, shell: bool, ctx: Ctx) -> Vec<Line<'static>> {
         spans.push(Span::styled("$ ", Style::default().fg(pal.speaker_you)));
     }
     spans.push(Span::styled(target.to_string(), Style::default().fg(pal.text)));
-    let mut lines = vec![row.blank(ctx)];
+
+    let mut lines = Vec::new();
+    if padding == Padding::Full {
+        lines.push(row.blank(ctx));
+    }
     lines.extend(row.build(spans, ctx));
-    lines.push(row.blank(ctx));
+    if padding == Padding::Full {
+        lines.push(row.blank(ctx));
+    }
     lines
+}
+
+/// Whether a prompt card draws its separating blanks.
+///
+/// **Padding is what a tight panel spends, and content is what it keeps.**
+/// ADR 0004 §8 makes the options list eight rows where the design's own row
+/// arithmetic assumed four, and the design fixes the panel at
+/// `--panel-permission-h`; the two cannot both hold at every frame size, so
+/// something gives. Before this it was the wrong thing: the card's blanks
+/// were protected as part of the head and the *quoted command* was elided,
+/// so at 80x24 the panel offered eight grant sentences about a call it no
+/// longer showed. A judge reading those frames could not see what was being
+/// approved, which is the one thing a permission prompt exists to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Padding {
+    Full,
+    Tight,
 }
 
 /// `CommandBlock.jsx`'s own `padding-left: 18px` — 2 cells inside the
@@ -613,9 +678,18 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             // each option's own sentence, where it is read on the row being
             // picked rather than two rows above it at `--tui-dim`.
             let view = PromptView::of(&pending.payload);
-            let body = prompt_card(&pending.payload, app.status.cwd.as_deref(), Vec::new(), ctx);
-            let head = body.len();
             let options = option_rows(&rows, app.decision_selected, ctx);
+            // Full padding if the whole panel fits with it, tight if not.
+            // Measured rather than guessed, because how many rows the
+            // sentence wraps to depends on the frame's width — at 80 cells
+            // it is two rows where at 120 it is one, and that single row is
+            // the difference between showing the command and eliding it.
+            let cwd = app.status.cwd.as_deref();
+            let mut body = prompt_card(&pending.payload, cwd, Vec::new(), Padding::Full, ctx);
+            if body.len() + options.len() > budget {
+                body = prompt_card(&pending.payload, cwd, Vec::new(), Padding::Tight, ctx);
+            }
+            let head = body.len();
             // Measured before anything is built: the separator keeps its
             // blank row only if the whole panel fits with it.
             //
@@ -695,6 +769,18 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     lines
 }
 
+/// Last-resort trim for a panel that is still one row over after
+/// [`clamp_panel`] gave back its head padding: drop leading rows until it
+/// fits. Only the head can be cut here — the marker and the options list are
+/// the two things that must survive, since one says content was hidden and
+/// the other is what the developer is choosing between.
+fn clamp_tail(mut lines: Vec<Line<'static>>, max: usize) -> Vec<Line<'static>> {
+    while lines.len() > max && !lines.is_empty() {
+        lines.remove(0);
+    }
+    lines
+}
+
 /// Caps the panel to `max` rows as a last resort, keeping the leading rows
 /// (blank padding + sentence) and the caller-supplied `tail` (the options
 /// list, any queue-count note) intact and collapsing whatever body content
@@ -758,8 +844,25 @@ fn clamp_panel(lines: Vec<Line<'static>>, max: usize, head: usize, tail: usize, 
         if keep == 0 || head_lines.len() + keep + marker.len() + tail_lines.len() <= max {
             let mut out = head_lines;
             out.extend(lines.into_iter().take(keep));
+            let marker_at = out.len();
             out.extend(marker);
             out.extend(tail_lines);
+
+            // `keep == 0` is a floor, not a licence to overrun. With an
+            // eight-row options list (ADR 0004 §8) a full-height head plus
+            // the marker can exceed `max` on its own, and returning that
+            // made the panel 19 rows where `--panel-permission-h` says 18 —
+            // one row taller than the band the design fixes, which the
+            // snapshot test measures.
+            //
+            // The rows given back are the head's *trailing* ones, which are
+            // the card's own bottom padding: the sentence and the command it
+            // is asking about sit above them and still survive, which is
+            // what the head is protecting.
+            if out.len() > max && marker_at > 0 {
+                out.remove(marker_at - 1);
+                return clamp_tail(out, max);
+            }
             return out;
         }
         keep -= 1;

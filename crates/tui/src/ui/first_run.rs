@@ -604,7 +604,7 @@ mod tests {
         assert!(!before.contains("alpha-large"), "no model list before the model step is open: {before:?}");
         assert!(before.contains("which model, once the provider is set"), "it previews instead: {before:?}");
         assert!(before.contains("what runs without asking"), "so does access: {before:?}");
-        assert!(!before.contains("every tool asks"), "and the access list is not drawn yet: {before:?}");
+        assert!(!before.contains("every call asks"), "and the access list is not drawn yet: {before:?}");
 
         let state = FirstRun { index: 1, ..Default::default() };
         let buffer = render(&state, 120, 36);
@@ -693,7 +693,7 @@ mod tests {
         let buffer = render(&state, 120, 36);
         let banded: Vec<u16> = (0..36u16).filter(|y| (0..120).any(|x| buffer[(x, *y)].bg == DARK.band)).collect();
         assert_eq!(banded.len(), 1, "still one — the two settled steps show answers, not selections");
-        assert!(row_text(&buffer, banded[0]).contains("reads and any command run"), "the chosen tier is banded");
+        assert!(row_text(&buffer, banded[0]).contains("reads and writes run"), "the chosen tier is banded");
     }
 
     /// A settled step's `●` uses `step_done`, which is a different role from
@@ -788,7 +788,7 @@ mod tests {
             let state = FirstRun { expanded: true, index, ..Default::default() };
             let buffer = render(&state, 120, 36);
             let last = step_row(&buffer, "access");
-            let bottom = if index == 2 { find_row(&buffer, "reads and any command run") } else { last };
+            let bottom = if index == 2 { find_row(&buffer, "reads and writes run") } else { last };
             assert!(bottom < 36 - FOOTER_ROWS, "on step {index} the spine must clear the footer, not be clipped by it");
         }
         assert_eq!(SAMPLE_CURATED, 3, "the sample is shaped like the real catalogue");

@@ -7,6 +7,59 @@ ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 **Owner:** Maximilian
 **Last Updated:** 2026-05-20
 
+**Progress (2026-09-20, ADR 0004 — `shell` is gone and a sandbox arrived):**
+The largest change this crate has had. Read
+`.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md`
+and the rewritten `mjolnir-permissions.md` before anything below; several
+sections further down still describe the world this replaced and are marked
+where they do.
+
+- **`shell` is replaced by `run`** (`tools/run.rs`). It takes a **program and
+  an argument list** and `execve`s them. There is no interpreter, so `&&`,
+  `|`, `;` and `$(...)` are ordinary argument characters — the "a glob has no
+  concept of a metacharacter" limitation `shell.rs` documented as an accepted
+  risk is not mitigated, it is *gone*, because there is no command line to
+  chain onto. Pipelines and redirection are lost with it; if they return, they
+  return as a list of stages each with its own grant.
+- **Every call carries a declared class.** `Tool::permission` replaces
+  `permission_target`/`permission_target_is_path` and returns a
+  `PermissionRequest { program, class, argv }`. `read`/`explain` are
+  structurally `read`; `edit` is `edit` and never reaches the permission path;
+  `run` takes the agent's declaration from its input; **every MCP tool is
+  `write`** — see `mcp::tool`'s `permission` for why a server's own hint
+  cannot be believed here.
+- **`sandbox/` is new, and the model rests on it.** A `run` call declared
+  `read` executes under a Landlock ruleset: the whole filesystem readable,
+  nothing writable but a short incidental list, and — from ABI 4 — no TCP. A
+  declaration that turns out to be wrong produces `ToolError::ReadRefused`,
+  which the dispatcher turns into the developer-facing question rather than a
+  model-facing error. Nothing landed when it is raised, which is what makes
+  the re-run after a yes safe.
+- **Read is allowed broadly inside the sandbox, on purpose.** A program must
+  read its interpreter, libraries and `/etc` to run at all. Reach is bounded
+  by `paths.rs`'s argument containment instead, which is why the claim is *no
+  tool is pointed outside your project by us* rather than *nothing outside
+  your project is touched*.
+- **`.git/` is deliberately not on the incidental-write list.** Letting a read
+  write anywhere under it would let `git commit` — which touches nothing else
+  — succeed while claiming to be a read. `GIT_OPTIONAL_LOCKS=0` is set for
+  read-declared calls instead, which is git's own switch for exactly this and
+  is what makes `git status` work.
+- **Two gaps, stated rather than hidden.** Landlock's network control covers
+  TCP only; UDP and unix sockets are outside it. And a denial reaches us as an
+  ordinary failure from the child, so the prompt says a read-declared call
+  *could not complete with the project read-only* — it does not name the path
+  it reached for. Naming it needs syscall interception; the guarantee comes
+  from the write being impossible, not from our seeing it.
+
+**Sections below that ADR 0004 invalidated** and that are left in place rather
+than silently edited, because the reasoning in them is still worth reading:
+the **shell** bullet under Built-ins (line ~160) and the V0-built-in-set
+Decision (line ~179) describe the argv-glob model; `Explain`'s reference to
+`shell:git diff*` is now `run` with program `git`; and "Sandboxing of shell
+execution (seccomp, landlock, containers) — out of V0 per parent" in Out of
+Scope is no longer true — it is in, and it is the load-bearing piece.
+
 **Progress (2026-09-19, `explain` surfaced a retriable LSP error as a
 failure):** `LspClient::request` now re-sends a request the server answered
 with `ContentModified` (-32801), five attempts over ~1.5s, that code and no

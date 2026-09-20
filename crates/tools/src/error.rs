@@ -29,11 +29,31 @@ pub enum ToolError {
     #[error("{path}: file changed on disk while the edit was awaiting approval; re-read it and retry")]
     ConcurrentModification { path: PathBuf },
 
-    #[error("denied by permission policy")]
+    #[error("denied")]
     Denied,
 
-    #[error("command timed out after {secs}s")]
-    Timeout { secs: u64 },
+    /// A deny is a lock (ADR 0004 §7), so this is not "you were not allowed"
+    /// but "nothing you can answer here will allow it". The message names the
+    /// file to go and change, because that is the only way out.
+    #[error("{program} is denied by a rule in {where_it_lives} — no answer here can override it")]
+    Locked { program: String, where_it_lives: &'static str },
+
+    /// Not really an error: a call declared a read did not complete with the
+    /// project read-only. Nothing landed. The dispatcher turns this into the
+    /// second prompt of ADR 0004 §4 rather than reporting it to the model.
+    #[error("{program} was declared a read and could not complete with the project read-only")]
+    ReadRefused { program: String, args: Vec<String> },
+
+    /// Reads cannot be enforced here, so a read declaration cannot be
+    /// honoured — the call is refused rather than run unconfined.
+    #[error("this call was declared a read, but reads cannot be enforced on this system: {source}")]
+    SandboxUnavailable { #[source] source: std::io::Error },
+
+    #[error("no such program: {program}")]
+    ProgramNotFound { program: String },
+
+    #[error("command timed out after {seconds}s")]
+    Timeout { seconds: u64 },
 
     #[error("permission engine error: {0}")]
     Permission(#[from] mjolnir_permissions::PermissionError),

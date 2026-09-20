@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mjolnir_config::Config;
-use mjolnir_permissions::{Engine, PromptPayload};
+use mjolnir_permissions::{Class, Engine, PromptPayload};
 use mjolnir_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -569,14 +569,14 @@ fn approval_large(app: &mut App) {
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
     app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
 
 fn prompt_path(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "what does the dispatcher do on a deny-by-absence?".into() });
-    let payload = PromptPayload::Tool { kind: "read".into(), target: "./crates/tools/src/dispatcher.rs".into(), path_like: true };
+    let payload = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/tools/src/dispatcher.rs".into()], declared: Class::Read };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-3".into(), payload: payload.clone(), resolution: None });
     app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
 }
@@ -588,7 +588,7 @@ fn prompt_scoped(app: &mut App) {
     prompt_path(app);
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.decision_selected = 3;
-    let queued = PromptPayload::Tool { kind: "read".into(), target: "./crates/core/src/lib.rs".into(), path_like: true };
+    let queued = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/core/src/lib.rs".into()], declared: Class::Read };
     app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-4".into(), payload: queued });
 }
 
@@ -604,7 +604,7 @@ fn long(app: &mut App) {
     app.log.push(LogEntry::ApprovalCard { call_id: "done-1".into(), diff: SMALL_DIFF.into(), resolution: Some(true) });
     app.log.push(LogEntry::PermissionPrompt {
         call_id:    "done-2".into(),
-        payload:    PromptPayload::Tool { kind: "shell".into(), target: "ls -la".into(), path_like: false },
+        payload:    PromptPayload::Tool { program: "ls".into(), argv: vec!["-la".into()], declared: Class::Write },
         resolution: Some(mjolnir_tui::PromptResolution { allowed: true, label: "allowed once".into() }),
     });
     app.status.turn = Some(9);

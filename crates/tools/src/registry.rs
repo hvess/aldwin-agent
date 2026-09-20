@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
+use mjolnir_permissions::Class;
 
 /// Where a registered tool came from — surfaced by the Registry View
 /// interface so the TUI can label built-ins vs. MCP-bridged tools.
@@ -30,30 +31,36 @@ pub struct ToolDescriptor {
     pub source:       ToolSource,
 }
 
-/// One concrete tool. `permission_target` and `call` are split so the
-/// dispatcher can run the generic four-tier permission check (for
-/// `edit_class: false` tools) without each tool re-implementing that flow —
-/// it only needs to say *what string* grant patterns should match against.
-/// Approval-gated tools (`edit_class: true`) skip that generic check
-/// entirely and drive `ApprovalGate::request_approval` from inside `call`
-/// instead; `permission_target` is never invoked for them.
+/// What a call is asking permission to do: a program, the class the caller
+/// declares for it, and the argv for the developer to read.
+///
+/// `program` is the grant key — the thing an allow or deny entry names. For
+/// the built-in tools that is the tool's own name (`read`, `explain`); for
+/// `run` it is the program being run (`git`), which is why a `git: read`
+/// grant covers every read `git` does rather than one command line.
+///
+/// `class` is a **declaration, not a finding**. Nothing in the permission
+/// path verifies it. A [`Class::Read`] declaration is held to its word at
+/// execution time by the sandbox instead (ADR 0004 §4), which is the only
+/// place it can be held to its word without guessing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRequest {
+    pub program: String,
+    pub class:   Class,
+    pub argv:    Vec<String>,
+}
+
+/// One concrete tool. `permission` and `call` are split so the dispatcher can
+/// run the permission check without each tool re-implementing that flow — a
+/// tool only has to say what it is asking to do. Approval-gated tools
+/// (`edit_class: true`) skip the check entirely and drive
+/// `ApprovalGate::request_approval` from inside `call`; `permission` is never
+/// invoked for them.
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn descriptor(&self) -> &ToolDescriptor;
 
-    fn permission_target(&self, input: &Value) -> Result<String, ToolError>;
-
-    /// Whether this call's `permission_target` is a project-relative file
-    /// path rather than an argv/JSON blob — carried into
-    /// `PromptPayload::Tool::path_like` so the TUI's decision panel can
-    /// offer a "this directory" scope alongside the exact-match pattern
-    /// (mjolnir-permissions.md's grammar already supports a path-glob grant
-    /// like `read:./**`; this is what lets the prompt reach for one).
-    /// Defaults to `false`, the conservative choice — only tools whose
-    /// target is genuinely a path need to opt in.
-    fn permission_target_is_path(&self, _input: &Value) -> bool {
-        false
-    }
+    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError>;
 
     async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError>;
 }
@@ -121,8 +128,8 @@ mod tests {
         fn descriptor(&self) -> &ToolDescriptor {
             &self.0
         }
-        fn permission_target(&self, _input: &Value) -> Result<String, ToolError> {
-            Ok(String::new())
+        fn permission(&self, _input: &Value) -> Result<PermissionRequest, ToolError> {
+            Ok(PermissionRequest { program: "stub".into(), class: Class::Read, argv: Vec::new() })
         }
         async fn call(&self, _call_id: &str, _input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
             Ok("ok".into())

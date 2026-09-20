@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
 use crate::lsp::{self, LspClient};
-use crate::registry::{Tool, ToolDescriptor, ToolSource};
+use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use mjolnir_permissions::Class;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -98,23 +99,18 @@ impl Tool for ExplainTool {
         &self.descriptor
     }
 
-    /// `read:`-style target: the file path for position-based ops, the
-    /// search string for `workspace_symbols`.
-    fn permission_target(&self, input: &Value) -> Result<String, ToolError> {
-        if let Some(path) = input.get("path").and_then(Value::as_str) {
-            Ok(path.to_string())
+    /// Like `read`, `explain` only ever observes. `argv` carries whichever
+    /// of the two shapes the call used, so the prompt can show what is being
+    /// looked at.
+    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
+        let subject = if let Some(path) = input.get("path").and_then(Value::as_str) {
+            path.to_string()
         } else if let Some(query) = input.get("query").and_then(Value::as_str) {
-            Ok(query.to_string())
+            query.to_string()
         } else {
-            Err(invalid("requires either \"path\" or \"query\""))
-        }
-    }
-
-    /// True only for the position-based ops (`path` present) — a
-    /// `workspace_symbols` call's target is a search string, not a path,
-    /// so it gets no directory-scope offer.
-    fn permission_target_is_path(&self, input: &Value) -> bool {
-        input.get("path").and_then(Value::as_str).is_some()
+            return Err(invalid("requires either \"path\" or \"query\""));
+        };
+        Ok(PermissionRequest { program: "explain".into(), class: Class::Read, argv: vec![subject] })
     }
 
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
@@ -268,9 +264,11 @@ mod tests {
     #[test]
     fn permission_target_prefers_path_then_query() {
         let tool = ExplainTool::new(PathBuf::from("."));
-        assert_eq!(tool.permission_target(&json!({"path": "src/main.rs"})).unwrap(), "src/main.rs");
-        assert_eq!(tool.permission_target(&json!({"query": "MyStruct"})).unwrap(), "MyStruct");
-        assert!(tool.permission_target(&json!({})).is_err());
+        let by_path = tool.permission(&json!({"path": "src/main.rs"})).unwrap();
+        assert_eq!(by_path.argv, vec!["src/main.rs".to_string()]);
+        assert_eq!(by_path.class, Class::Read);
+        assert_eq!(tool.permission(&json!({"query": "MyStruct"})).unwrap().argv, vec!["MyStruct".to_string()]);
+        assert!(tool.permission(&json!({})).is_err());
     }
 
     #[test]

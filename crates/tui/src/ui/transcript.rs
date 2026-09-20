@@ -16,7 +16,8 @@ use super::row::{band_row, Row};
 use super::wrap::wrap_line;
 use mjolnir_permissions::PromptPayload;
 
-use crate::app::{App, PermState};
+use crate::app::App;
+use mjolnir_permissions::Rung;
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
@@ -619,12 +620,16 @@ fn tool_line(kind: &str, target: &str, ok: bool, summary: Vec<Span<'static>>, ct
     justified_line(left, summary, width)
 }
 
-/// The `kind` and `target` a `PromptPayload` was asking about — the same
+/// The program and the call a `PromptPayload` was asking about — the same
 /// two facts the decision panel's own `PromptView` reads off it, in the
 /// shape a tool line wants them.
 fn payload_call(payload: &PromptPayload) -> (String, String) {
     match payload {
-        PromptPayload::Tool { kind, target, .. } => (kind.clone(), target.clone()),
+        // The arguments alone: the tool line draws the program beside them,
+        // so repeating it here rendered `touch touch hello.html`.
+        PromptPayload::Tool { program, argv, .. } | PromptPayload::WriteAttempt { program, argv } => {
+            (program.clone(), argv.join(" "))
+        }
         PromptPayload::ContextFile { path } => ("context".into(), path.display().to_string()),
         PromptPayload::Edit { kind } => ("edit".into(), kind.clone()),
     }
@@ -766,13 +771,7 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
         None => vec![Span::styled(status.model_name.clone(), Style::default().fg(pal.value))],
     };
 
-    let mut access = Vec::new();
-    for (i, (name, state)) in [("read", status.read), ("shell", status.shell), ("edit", status.edit)].into_iter().enumerate() {
-        if i > 0 {
-            access.push(Span::raw("  "));
-        }
-        access.extend(access_spans(name, state, ctx));
-    }
+    let access = access_spans(status.access, ctx);
 
     let mut content: Vec<Line<'static>> = Vec::with_capacity(INTRO_ROWS);
     content.push(super::first_run::wordmark(ctx));
@@ -822,19 +821,23 @@ pub(super) const INTRO_ROWS: usize = 7;
 /// this row as deleted lines, and in the light theme `deny` at #b0122e was
 /// the most saturated thing in a deliberately shallow frame.
 ///
+/// The `access` fact: the rung in force, and the one thing no rung changes.
+///
 /// `value` is not a guess: `--tui-value` is the role named for "right-flush
 /// facts and permission \"off\" values", which is literally this. It also
-/// makes the row consistent with its own siblings — `in` and `provider`
-/// two rows up are already `value`, so the hero now reads as one key/value
-/// block instead of two rows of facts and one of signals.
-fn access_spans(label: &str, state: PermState, ctx: Ctx) -> Vec<Span<'static>> {
-    let word = match state {
-        PermState::Allowed => "allow",
-        PermState::Denied => "deny",
-    };
+/// makes the row consistent with its own siblings — `in` and `provider` two
+/// rows up are already `value`, so the hero reads as one key/value block.
+///
+/// The trailing clause is quieter than the rung because it is not a setting:
+/// under ADR 0004 §3 editing is outside the permissions model, so "edits
+/// always ask" is true at every rung and cannot be turned off. Stating it
+/// beside the rung is what stops the row reading as though `write` meant
+/// everything runs.
+fn access_spans(rung: Option<Rung>, ctx: Ctx) -> Vec<Span<'static>> {
+    let word = rung.map_or("not set", Rung::label);
     vec![
-        Span::styled(format!("{label}:"), Style::default().fg(ctx.pal.label)),
-        Span::styled(format!("{word} "), Style::default().fg(ctx.pal.value)),
+        Span::styled(word.to_string(), Style::default().fg(ctx.pal.value)),
+        Span::styled("  ·  edits always ask".to_string(), Style::default().fg(ctx.pal.dim)),
     ]
 }
 

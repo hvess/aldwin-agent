@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
-use crate::registry::{Tool, ToolDescriptor, ToolSource};
+use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use mjolnir_permissions::Class;
 
 pub struct ReadTool {
     descriptor:   ToolDescriptor,
@@ -49,12 +50,14 @@ impl Tool for ReadTool {
     /// the raw path as given by the model, not the resolved absolute path —
     /// that's what the pattern grammar examples in mjolnir-permissions.md
     /// assume.
-    fn permission_target(&self, input: &Value) -> Result<String, ToolError> {
-        path_arg(input)
-    }
-
-    fn permission_target_is_path(&self, _input: &Value) -> bool {
-        true
+    /// `read` is a read whatever it is pointed at — the class is a property
+    /// of the tool here, not something a caller declares.
+    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
+        Ok(PermissionRequest {
+            program: "read".into(),
+            class:   Class::Read,
+            argv:    vec![path_arg(input)?],
+        })
     }
 
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
@@ -109,13 +112,16 @@ mod tests {
     #[test]
     fn missing_path_field_is_invalid_input() {
         let tool = ReadTool::new(PathBuf::from("."));
-        let err = tool.permission_target(&json!({})).unwrap_err();
+        let err = tool.permission(&json!({})).unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[test]
-    fn permission_target_is_the_raw_given_path() {
+    fn the_permission_request_is_always_a_read_of_the_given_path() {
         let tool = ReadTool::new(PathBuf::from("."));
-        assert_eq!(tool.permission_target(&json!({"path": "./src/main.rs"})).unwrap(), "./src/main.rs");
+        let request = tool.permission(&json!({"path": "./src/main.rs"})).unwrap();
+        assert_eq!(request.program, "read");
+        assert_eq!(request.class, Class::Read);
+        assert_eq!(request.argv, vec!["./src/main.rs".to_string()]);
     }
 }

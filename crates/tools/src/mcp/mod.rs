@@ -98,7 +98,13 @@ mod tests {
         #[async_trait::async_trait]
         impl Tool for Stub {
             fn descriptor(&self) -> &ToolDescriptor { &self.0 }
-            fn permission_target(&self, _input: &serde_json::Value) -> Result<String, ToolError> { Ok(String::new()) }
+            fn permission(&self, _input: &serde_json::Value) -> Result<crate::registry::PermissionRequest, ToolError> {
+                Ok(crate::registry::PermissionRequest {
+                    program: "stub".into(),
+                    class:   mjolnir_permissions::Class::Write,
+                    argv:    Vec::new(),
+                })
+            }
             async fn call(&self, _call_id: &str, _input: serde_json::Value, _gate: &dyn crate::gate::ApprovalGate) -> Result<String, ToolError> {
                 Ok(String::new())
             }

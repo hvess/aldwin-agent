@@ -1,12 +1,15 @@
 //! `ToolDispatcher` impl, built-in tool set, and the Edit approval gate. See
 //! `.claude/spec/mjolnir-tools.md`.
 //!
-//! Covers the registry, dispatch flow, permissions wiring, all four V0
-//! built-ins (Read, Edit, shell, Explain), the LSP client Explain uses, and
-//! the MCP bridge (`mcp`). One MCP sub-feature is deliberately not built
-//! yet: the first-invocation edit-shape follow-up that lets an MCP tool
-//! graduate to Edit's binary approval gate — see `mcp::tool`'s doc comment.
-//! Every MCP tool goes through the standard four-tier prompt for now.
+//! Covers the registry, dispatch flow, permissions wiring, all four
+//! built-ins (Read, Edit, Run, Explain), the read-enforcing `sandbox`, the
+//! LSP client Explain uses, and the MCP bridge (`mcp`).
+//!
+//! One piece of ADR 0004 is deliberately not built yet: letting the
+//! developer classify an MCP tool, with the server's own claim shown as a
+//! claim. Until it is, every MCP tool is a write — see `mcp::tool`'s
+//! `permission` for why that is the only reading that cannot quietly be
+//! wrong.
 
 mod diff;
 mod dispatcher;
@@ -16,6 +19,7 @@ mod lsp;
 mod mcp;
 mod paths;
 mod registry;
+pub mod sandbox;
 mod tools;
 
 #[cfg(test)]
@@ -25,18 +29,18 @@ pub use dispatcher::Dispatcher;
 pub use error::ToolError;
 pub use gate::ApprovalGate;
 pub use mcp::{register_mcp_tools, McpBridge, McpError, McpTool};
-pub use registry::{Registry, Tool, ToolDescriptor, ToolSource};
-pub use tools::{EditTool, ExplainTool, ReadTool, ShellTool};
+pub use registry::{PermissionRequest, Registry, Tool, ToolDescriptor, ToolSource};
+pub use tools::{EditTool, ExplainTool, ReadTool, RunTool};
 
 use std::path::PathBuf;
 
-/// Registers the four V0 built-ins (Read, Edit, shell, Explain) rooted at
+/// Registers the four V0 built-ins (Read, Edit, Run, Explain) rooted at
 /// `project_root`.
 pub fn builtin_registry(project_root: PathBuf) -> Registry {
     let mut registry = Registry::new();
     registry.register(std::sync::Arc::new(ReadTool::new(project_root.clone()))).expect("built-in names are unique");
     registry.register(std::sync::Arc::new(EditTool::new(project_root.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(ShellTool::new(project_root.clone()))).expect("built-in names are unique");
+    registry.register(std::sync::Arc::new(RunTool::new(project_root.clone()))).expect("built-in names are unique");
     registry.register(std::sync::Arc::new(ExplainTool::new(project_root))).expect("built-in names are unique");
     registry
 }
@@ -50,6 +54,6 @@ mod tests {
         let registry = builtin_registry(PathBuf::from("."));
         let mut names: Vec<String> = registry.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
-        assert_eq!(names, vec!["edit".to_string(), "explain".to_string(), "read".to_string(), "shell".to_string()]);
+        assert_eq!(names, vec!["edit".to_string(), "explain".to_string(), "read".to_string(), "run".to_string()]);
     }
 }

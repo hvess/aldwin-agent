@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use mjolnir_core::{Command, Event, StepId};
-use mjolnir_permissions::{CheckOutcome, ContextFileTier, Decision, Engine, PromptPayload, PromptResponse, ToolTier};
+use mjolnir_permissions::{Choice, Class, ContextFileTier, Engine, PromptPayload, PromptResponse, Rung};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::log::{summarise, LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus};
@@ -108,14 +108,17 @@ pub struct DecisionOption {
 /// renders as a right-flush result summary beside a tool line.
 fn describe_response(response: &PromptResponse) -> PromptResolution {
     match response {
-        PromptResponse::Tool { decision: Decision::Deny, .. } => PromptResolution { allowed: false, label: "denied".into() },
-        PromptResponse::Tool { tier, .. } => PromptResolution {
-            allowed: true,
-            label:   match tier {
-                ToolTier::Once => "allowed once",
-                ToolTier::Session => "allowed for this session",
-                ToolTier::Project => "allowed for this project",
-                ToolTier::Always => "always allowed",
+        PromptResponse::Tool { choice } | PromptResponse::WriteAttempt { choice } => PromptResolution {
+            allowed: choice.is_allow(),
+            label:   match choice {
+                Choice::AllowOnce => "allowed once",
+                Choice::AllowSession => "allowed for this session",
+                Choice::AllowProject => "allowed for this project",
+                Choice::AllowEverywhere => "always allowed",
+                Choice::DenyOnce => "denied",
+                Choice::DenySession => "denied for this session",
+                Choice::DenyProject => "denied for this project",
+                Choice::NeverAllow => "never allowed",
             }
             .into(),
         },
@@ -132,74 +135,35 @@ fn describe_response(response: &PromptResponse) -> PromptResolution {
     }
 }
 
-/// Derives the enclosing-directory glob for a path-shaped grant target —
-/// `"./crates/tui/src/ui.rs"` -> `Some("./crates/tui/src/**")`,
-/// `"main.rs"` (no directory component) -> `None`. Matches
-/// mjolnir-permissions.md's Pattern grammar (`*` matches any run of
-/// characters including path separators, so a single trailing `/**`
-/// covers the whole subtree) and its own worked example, `read:./**`, for
-/// the degenerate case of a top-level file (`"./main.rs"` -> `"./**"`,
-/// i.e. "the whole project"). Operates on the raw target string given by
-/// the model, not a resolved filesystem path — same convention
-/// `ReadTool::permission_target`'s own doc comment establishes.
-fn directory_glob(target: &str) -> Option<String> {
-    let idx = target.rfind('/')?;
-    let dir = &target[..idx];
-    if dir.is_empty() {
-        return None;
-    }
-    Some(format!("{dir}/**"))
-}
-
-/// Derives the program-level glob for a shell grant target —
-/// `"cargo test -p gateway limit::"` -> `Some("cargo *")`. `argv[0]` is the
-/// first whitespace-separated token of the assembled command line the
-/// dispatcher handed the engine.
+/// The eight rows of ADR 0004 §8, for one program and the class of the call
+/// that raised the prompt.
 ///
-/// The trailing `" *"` is deliberate, and deliberately does *not* match a
-/// bare `cargo` with no arguments: the pattern carries a literal space, and
-/// `glob_match` has nothing to match it against in a one-token command. That
-/// fails closed — an argument-less invocation re-prompts rather than
-/// slipping through — and it keeps the written rule identical to the form
-/// the design system's permission copy specifies.
-///
-/// Returns `None` for an empty or whitespace-only target, which has no
-/// program to name.
-fn program_glob(target: &str) -> Option<String> {
-    let program = target.split_whitespace().next()?;
-    Some(format!("{program} *"))
-}
-
-/// The broad grant pattern for one prompt, or `None` when the target has no
-/// broader form than itself (a bare filename with no directory component, a
-/// command with no program token).
-///
-/// Per ADR 0001 a grant names a capability the agent has in this project,
-/// not one invocation of it, and what "broad" means depends on the tool's
-/// class:
-///
-/// * a path-shaped tool (`read`, `explain`) broadens to the **enclosing
-///   directory** — `read:./crates/tui/src/**`;
-/// * `shell` broadens to the **program**, `argv[0]` — `shell:cargo *`,
-///   which is the form the design system's own permission copy has always
-///   used ("Always allow `cargo *` in this project");
-/// * `edit` has no grant at all and never reaches here.
-///
-/// ADR 0003 made this the pattern of the two *persisting* rows rather than
-/// a mode the whole list sits in: there is no longer an exact/broad toggle,
-/// so the `None` case is answered by the caller quoting the target itself.
-fn broad_pattern(target: &str, path_like: bool) -> Option<String> {
-    if path_like {
-        directory_glob(target)
-    } else {
-        program_glob(target)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermState {
-    Allowed,
-    Denied,
+/// There is no pattern to compute here, and that absence is the change: a
+/// grant is a program and a class, so every row already knows its own rule
+/// from the two things it was handed. The old model needed
+/// `broad_pattern`/`directory_glob`/`program_glob` to guess how wide a glob
+/// to write from a target string, and needed a `Tab` toggle so the developer
+/// could correct the guess.
+fn tool_options(program: &str, class: Class) -> Vec<DecisionOption> {
+    Choice::ORDER
+        .iter()
+        .map(|&choice| {
+            let label = choice.sentence(program, class);
+            // `5a` draws the quoted rule one step quieter than the sentence
+            // around it. The range is computed here, where the sentence is
+            // assembled, so nothing downstream has to re-find a substring
+            // that may legitimately repeat.
+            let quoted = choice
+                .rule(program, class)
+                .and_then(|rule| label.find(&rule).map(|at| at..at + rule.len()));
+            DecisionOption {
+                label,
+                detail: String::new(),
+                pattern: quoted,
+                outcome: DecisionOutcome::Prompt(PromptResponse::Tool { choice }),
+            }
+        })
+        .collect()
 }
 
 /// A tool call currently in flight, for the status line's "active tools"
@@ -232,20 +196,20 @@ pub struct StatusInfo {
     pub turn:          Option<u64>,
     pub step:          Option<u64>,
     pub running_tools: Vec<RunningTool>,
-    pub read:          PermState,
-    pub shell:         PermState,
-    pub edit:          PermState,
+    /// The rung in force here, or `None` when neither file states one.
+    ///
+    /// Not a set of per-tool states any more. Under ADR 0004 what a program
+    /// may do depends on the program and the class, so "is `shell` allowed"
+    /// stopped having an answer — and the row that used to print
+    /// `read:deny shell:deny edit:deny` was three answers to a question the
+    /// model no longer asks. What a scope actually carries is one rung
+    /// (§6), and that is what a developer glances at this bar for.
+    pub access:        Option<Rung>,
 }
 
 impl StatusInfo {
     fn refresh_permissions(&mut self, engine: &Engine) {
-        self.read = perm_state(engine, "read", false);
-        self.shell = perm_state(engine, "shell", false);
-        // Always Denied by construction — edit_class: true never returns
-        // Allow — but computed the same way as the others rather than
-        // hardcoded, so a future change to Engine's edit_class handling
-        // can't silently desync the status bar from reality.
-        self.edit = perm_state(engine, "edit", true);
+        self.access = engine.effective_rung();
     }
 }
 
@@ -263,17 +227,6 @@ pub(crate) fn current_dir_display() -> Option<String> {
     match cwd.strip_prefix(&home) {
         Ok(rest) if !rest.as_os_str().is_empty() => Some(format!("~/{}", rest.display())),
         _ => Some(cwd.display().to_string()),
-    }
-}
-
-/// `CheckOutcome::PromptRequired` (deny-by-absence) counts as Denied here —
-/// matches mjolnir-tui.md's two-state "allowed or denied" status bar
-/// vocabulary; this is a glanceable summary against an empty target (the
-/// broadest possible grant), not a precise per-pattern oracle.
-fn perm_state(engine: &Engine, kind: &str, edit_class: bool) -> PermState {
-    match engine.check_tool(kind, "", edit_class, false) {
-        CheckOutcome::Allow => PermState::Allowed,
-        CheckOutcome::Deny | CheckOutcome::PromptRequired(_) => PermState::Denied,
     }
 }
 
@@ -428,9 +381,7 @@ impl App {
             turn: None,
             step: None,
             running_tools: vec![],
-            read: PermState::Denied,
-            shell: PermState::Denied,
-            edit: PermState::Denied,
+            access: None,
         };
         status.refresh_permissions(&permissions);
         Self {
@@ -1036,73 +987,28 @@ impl App {
                 DecisionOption { label: "Deny".into(), detail: "nothing is written; the agent is told no".into(), pattern: None, outcome: DecisionOutcome::Approve(false) },
             ],
             PendingFront::Prompt(pending) => match &pending.payload {
-                // Four allow tiers (once→session→project→always) and exactly
-                // one deny. The deny side used to mirror the allow side tier
-                // for tier, making an eight-row list where the bottom half
-                // was near-dead weight — asked directly by the developer:
-                // "do we need all of the deny options?" A persistent deny is
-                // a standing rule about what the agent may never do, which
-                // belongs in `permissions.yaml` as a deliberate edit, not as
-                // options 6-8 of a prompt answered under time pressure; the
-                // engine still supports every deny tier (`ToolTier`), the
-                // panel just no longer offers them. What a *declining*
-                // developer actually needs is the one thing this keeps: stop
-                // this call.
+                // ADR 0004 §8: four allow tiers and four deny tiers,
+                // mirrored, in one vertical list. The symmetry is the point
+                // — a deny is a lock (§7), and a lock the developer can only
+                // reach by hand-editing a file is a lock they will not set.
                 //
-                // Each row is a sentence that states its own rule, per ADR
-                // 0003 and the design system's `5a` — so the pattern is a
-                // property of the row rather than one mode the whole list
-                // sits in. The session row quotes the invocation; the two
-                // persisting rows quote ADR 0001's broad unit. There is no
-                // longer a `Tab` toggle, and no separate summary row above
-                // the list restating what the selected row already says.
-                //
-                // Where a target has no broader form than itself — a bare
-                // filename, a command with no program token — rows 3 and 4
-                // quote the target, which is `broad_pattern` returning
-                // `None` and this `unwrap_or` answering it.
-                PromptPayload::Tool { target, path_like, .. } => {
-                    let broad = broad_pattern(target, *path_like).unwrap_or_else(|| target.clone());
-                    // `5a` draws the quoted pattern one step quieter than
-                    // the sentence around it; the range is where it landed,
-                    // computed here because this is where the sentence is
-                    // assembled and nothing downstream should have to
-                    // re-find a substring that may legitimately repeat.
-                    let sentence = |prefix: &str, pattern: &str, suffix: &str| {
-                        let label = format!("{prefix}{pattern}{suffix}");
-                        let at = prefix.len()..prefix.len() + pattern.len();
-                        (label, Some(at))
-                    };
-                    vec![
-                        // Nothing is saved, so there is no rule to quote —
-                        // the sentence is `5a`'s verbatim.
-                        (Decision::Allow, ToolTier::Once, ("Allow once".to_string(), None)),
-                        (Decision::Allow, ToolTier::Session, sentence("Allow ", target, " for this session")),
-                        (Decision::Allow, ToolTier::Project, sentence("Always allow ", &broad, " in this project")),
-                        (Decision::Allow, ToolTier::Always, sentence("Always allow ", &broad, " everywhere")),
-                        // `5a` reads "Deny and tell the agent why".
-                        // `PromptResponse::Tool` carries no reason and no
-                        // step collects one, so that sentence would name a
-                        // thing the product does not do — ADR 0003 §4.
-                        (Decision::Deny, ToolTier::Once, ("Deny".to_string(), None)),
-                    ]
-                    .into_iter()
-                    .map(|(decision, tier, (label, pattern))| {
-                        // The tier alone decides persistence (see
-                        // `ToolTier`); what each row *writes* is the
-                        // pattern its own sentence quoted.
-                        let written = match tier {
-                            ToolTier::Project | ToolTier::Always => broad.clone(),
-                            ToolTier::Once | ToolTier::Session => target.clone(),
-                        };
-                        DecisionOption {
-                            label,
-                            detail: String::new(),
-                            pattern,
-                            outcome: DecisionOutcome::Prompt(PromptResponse::Tool { decision, tier, pattern: written }),
-                        }
-                    })
-                    .collect()
+                // Each row is a sentence that states its own rule (ADR 0003
+                // §1, which 0004 leaves standing), and the class is quoted
+                // inside it: these rows are about this program's *reads* or
+                // its *writes*, so a `git: read` grant survives a `git:
+                // write` deny. Row 8 is the one deliberately blunter row —
+                // the whole program, everywhere.
+                PromptPayload::Tool { program, declared, .. } => {
+                    tool_options(program, *declared)
+                }
+                // The second question of ADR 0004 §4. The call claimed to be
+                // a read and could not complete with the project read-only;
+                // nothing landed. The rows are the same eight, because the
+                // answer persists in exactly the same way — what differs is
+                // that the class is now `write`, which is what the call
+                // turned out to be.
+                PromptPayload::WriteAttempt { program, .. } => {
+                    tool_options(program, Class::Write)
                 }
                 PromptPayload::ContextFile { .. } => vec![
                     DecisionOption {
@@ -1152,8 +1058,11 @@ impl App {
                 // record_tool_decision`'s `Once` arm), so the exact target
                 // is passed here purely for a well-formed `PromptResponse`,
                 // not because it takes effect.
-                PromptPayload::Tool { target, .. } => {
-                    Some(DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: target.clone() }))
+                PromptPayload::Tool { .. } => {
+                    Some(DecisionOutcome::Prompt(PromptResponse::Tool { choice: Choice::DenyOnce }))
+                }
+                PromptPayload::WriteAttempt { .. } => {
+                    Some(DecisionOutcome::Prompt(PromptResponse::WriteAttempt { choice: Choice::DenyOnce }))
                 }
                 PromptPayload::ContextFile { .. } => Some(DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: false, tier: None })),
                 PromptPayload::Edit { .. } => None,
@@ -1730,7 +1639,7 @@ mod tests {
     #[test]
     fn a_pending_approval_takes_priority_over_an_already_pending_prompt() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
+        let payload = tool_prompt("git", &["status"], Class::Read);
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.apply_event(Event::ToolApprovalRequested { turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "diff".into() });
 
@@ -1747,7 +1656,7 @@ mod tests {
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git *".into() });
+                assert_eq!(response, PromptResponse::Tool { choice: Choice::AllowProject });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1765,14 +1674,14 @@ mod tests {
     #[test]
     fn ctrl_c_declines_a_pending_tool_prompt_instead_of_being_swallowed() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "rm -rf /".into(), path_like: false }).unwrap();
+        let payload = tool_prompt("rm", &["-rf", "/"], Class::Write);
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         app.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.pending_prompts.is_empty(), "Ctrl+C must resolve a pending permission prompt, not get stuck");
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "rm -rf /".into() });
+                assert_eq!(response, PromptResponse::Tool { choice: Choice::DenyOnce });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1797,17 +1706,17 @@ mod tests {
     #[test]
     fn permission_prompt_resolves_on_a_numbered_selection_and_records_resolution() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
+        let payload = tool_prompt("git", &["status"], Class::Read);
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
         assert!(!app.pending_prompts.is_empty());
-        assert_eq!(app.decision_options()[2].label, "Always allow git * in this project");
+        assert_eq!(app.decision_options()[2].label, "Always allow git reads in this project");
 
         app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
         assert!(app.pending_prompts.is_empty());
         match app.outbox.last() {
             Some(Command::PromptResponse { payload, .. }) => {
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git *".into() });
+                assert_eq!(response, PromptResponse::Tool { choice: Choice::AllowProject });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1820,7 +1729,7 @@ mod tests {
     #[test]
     fn two_pending_prompts_are_queued_not_overwritten_and_resolve_in_order() {
         let mut app = app();
-        let payload_1 = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "git status".into(), path_like: false }).unwrap();
+        let payload_1 = tool_prompt("git", &["status"], Class::Read);
         let payload_2 = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: payload_1 });
         app.apply_event(Event::PromptRequested { call_id: "call-2".into(), payload: payload_2 });
@@ -1832,7 +1741,7 @@ mod tests {
             Command::PromptResponse { call_id, payload } => {
                 assert_eq!(call_id, "call-1");
                 let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(response, PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "git *".into() });
+                assert_eq!(response, PromptResponse::Tool { choice: Choice::AllowProject });
             }
             other => panic!("expected PromptResponse, got {other:?}"),
         }
@@ -1922,11 +1831,11 @@ mod tests {
     #[test]
     fn permissions_changed_refreshes_the_status_bar() {
         let mut app = app();
-        assert_eq!(app.status.read, PermState::Denied);
+        assert_eq!(app.status.access, None, "a project that has answered nothing states no rung");
         app.apply_event(Event::PermissionsChanged { payload: serde_json::Value::Null });
-        // Still denied (no grant recorded) but proves the refresh path runs
+        // Still unset (nothing was recorded) but proves the refresh path runs
         // without panicking on an opaque payload it doesn't need to parse.
-        assert_eq!(app.status.read, PermState::Denied);
+        assert_eq!(app.status.access, None);
     }
 
     #[test]
@@ -2018,187 +1927,84 @@ mod tests {
         assert!(app.pending_prompts.is_empty());
     }
 
-    #[test]
-    fn directory_glob_broadens_a_path_to_its_enclosing_directory() {
-        assert_eq!(directory_glob("./crates/tui/src/ui.rs"), Some("./crates/tui/src/**".into()));
-        assert_eq!(directory_glob("src/main.rs"), Some("src/**".into()));
+    fn tool_prompt(program: &str, argv: &[&str], class: Class) -> serde_json::Value {
+        serde_json::to_value(PromptPayload::Tool {
+            program:  program.into(),
+            argv:     argv.iter().map(|a| a.to_string()).collect(),
+            declared: class,
+        })
+        .unwrap()
     }
 
+    /// Every row states its own rule in its own sentence (ADR 0003 §1), and
+    /// under ADR 0004 the rule is the program and the class — not a glob
+    /// derived from the one command line that happened to trigger the
+    /// prompt. `cargo test -p gateway` and `cargo build` produce the same
+    /// eight sentences, which is the friction the old model could not
+    /// remove.
     #[test]
-    fn directory_glob_is_none_for_a_bare_filename() {
-        assert_eq!(directory_glob("main.rs"), None);
-    }
-
-    #[test]
-    fn directory_glob_of_a_top_level_file_is_the_whole_project() {
-        // No directory component beyond the leading "./" itself — matches
-        // mjolnir-permissions.md's own worked example for "grant everything
-        // under the project root": `read:./**`.
-        assert_eq!(directory_glob("./main.rs"), Some("./**".into()));
-    }
-
-    fn path_like_tool_prompt(target: &str) -> serde_json::Value {
-        serde_json::to_value(PromptPayload::Tool { kind: "read".into(), target: target.into(), path_like: true }).unwrap()
-    }
-
-    /// Every allow row states its own rule in its own sentence (ADR 0003),
-    /// so the two that persist name ADR 0001's broad unit — the capability,
-    /// not the one file that triggered the prompt.
-    #[test]
-    fn a_path_like_prompts_sentences_quote_the_enclosing_directory() {
+    fn every_row_quotes_the_program_and_the_class_not_the_command_line() {
         let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.apply_event(Event::PromptRequested {
+            call_id: "call-1".into(),
+            payload: tool_prompt("cargo", &["test", "-p", "gateway"], Class::Write),
+        });
+
         let labels: Vec<String> = app.decision_options().into_iter().map(|o| o.label).collect();
         assert_eq!(
             labels,
             vec![
                 "Allow once",
-                "Allow ./crates/tui/src/ui.rs for this session",
-                "Always allow ./crates/tui/src/** in this project",
-                "Always allow ./crates/tui/src/** everywhere",
-                "Deny",
+                "Allow cargo writes for this session",
+                "Always allow cargo writes in this project",
+                "Always allow cargo writes everywhere",
+                "Deny once",
+                "Deny cargo writes for this session",
+                "Deny cargo writes in this project",
+                "Never allow cargo",
             ]
         );
     }
 
-    /// A `shell` prompt quotes the *program*. This is the half a shell
-    /// prompt has always needed most — the old model wrote the exact
-    /// command string, so approving `cargo test` said nothing about
-    /// `cargo build` and a test-running session answered the same question
-    /// over and over.
+    /// The class is quoted too, so the same program asks two distinguishable
+    /// questions. This is the distinction the old `kind:pattern` grammar
+    /// could not make at all.
     #[test]
-    fn a_shell_prompts_persisting_sentences_quote_the_program() {
+    fn a_read_prompt_and_a_write_prompt_offer_different_rules() {
+        let mut reading = app();
+        reading.apply_event(Event::PromptRequested {
+            call_id: "call-1".into(),
+            payload: tool_prompt("git", &["status"], Class::Read),
+        });
+        assert_eq!(reading.decision_options()[2].label, "Always allow git reads in this project");
+
+        let mut writing = app();
+        writing.apply_event(Event::PromptRequested {
+            call_id: "call-2".into(),
+            payload: tool_prompt("git", &["push"], Class::Write),
+        });
+        assert_eq!(writing.decision_options()[2].label, "Always allow git writes in this project");
+    }
+
+    /// The second prompt of ADR 0004 §4 offers the same eight rows, because
+    /// the answer persists the same way — what changed is that the call is
+    /// now known to be a write.
+    #[test]
+    fn the_write_attempt_prompt_offers_the_same_rows_at_write_class() {
         let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::Tool { kind: "shell".into(), target: "cargo test -p gateway limit::".into(), path_like: false }).unwrap();
+        let payload = serde_json::to_value(PromptPayload::WriteAttempt {
+            program: "rm".into(),
+            argv:    vec!["notes.txt".into()],
+        })
+        .unwrap();
         app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+
         let options = app.decision_options();
-        assert_eq!(options[2].label, "Always allow cargo * in this project", "the design system's own permission copy, verbatim");
-        assert_eq!(options[3].label, "Always allow cargo * everywhere");
-        assert_eq!(
-            options[1].label, "Allow cargo test -p gateway limit:: for this session",
-            "the session row quotes the invocation — `5a`'s own scoping, and ADR 0003's stated cost"
-        );
+        assert_eq!(options.len(), 8);
+        assert_eq!(options[1].label, "Allow rm writes for this session");
+        assert_eq!(options[7].label, "Never allow rm");
     }
 
-    /// Where a target has no broader form than itself, the persisting rows
-    /// quote the target. Nothing may invent a wildcard that would grant
-    /// more than the developer can see on the row.
-    #[test]
-    fn a_target_with_no_broader_form_is_quoted_as_itself() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("main.rs") });
-        let options = app.decision_options();
-        assert_eq!(options[2].label, "Always allow main.rs in this project");
-        assert_eq!(options[1].label, "Allow main.rs for this session");
-    }
-
-    /// `5a` draws "the matched pattern one step quieter", so the sentence
-    /// has to say where its pattern sits. The rows that quote no pattern —
-    /// `once`, `deny` — must say so rather than pointing at an empty range.
-    #[test]
-    fn only_the_rows_that_quote_a_pattern_carry_a_span_for_it() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./src/main.rs") });
-        let options = app.decision_options();
-        assert!(options[0].pattern.is_none(), "`Allow once` saves nothing, so it quotes no rule");
-        assert!(options[4].pattern.is_none(), "nor does `Deny`");
-        for option in &options[1..=3] {
-            let at = option.pattern.clone().expect("every persisting row quotes its own rule");
-            assert!(
-                option.label[at].starts_with("./"),
-                "the span must land on the pattern itself, not on the words around it: {:?}",
-                option.label
-            );
-        }
-    }
-
-    /// A ContextFile prompt persists an approved *path*, not a grant
-    /// pattern — there is no `kind:pattern` rule to quote, and its rows
-    /// keep `5c`'s name + detail pair rather than `5a`'s sentence.
-    #[test]
-    fn a_context_file_prompt_keeps_the_pair_shape_and_quotes_no_rule() {
-        let mut app = app();
-        let payload = serde_json::to_value(PromptPayload::ContextFile { path: "AGENTS.md".into() }).unwrap();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
-        let options = app.decision_options();
-        assert!(options.iter().all(|o| o.pattern.is_none()));
-        assert!(options.iter().all(|o| !o.detail.is_empty()), "the pair shape keeps its detail column");
-    }
-
-    /// Edit is not in the permissions model at all (ADR 0001): no grant, no
-    /// pattern, because `Engine::check_tool` refuses `edit_class` before
-    /// consulting any list.
-    #[test]
-    fn an_edit_approval_quotes_no_rule() {
-        let mut app = app();
-        app.pending_approvals.push_back(PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-        let options = app.decision_options();
-        assert!(options.iter().all(|o| o.pattern.is_none()), "an edit is a conscious approval, never a grant");
-    }
-
-    /// The list the developer sees is the answer to "do we need all of the
-    /// deny options?" — four allow tiers and exactly one deny, whose tier is
-    /// `Once` so declining can never write a standing rule.
-    #[test]
-    fn a_tool_prompt_offers_four_allow_tiers_and_a_single_deny() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./src/main.rs") });
-        let options = app.decision_options();
-        assert_eq!(options.len(), 5);
-        assert!(
-            options.iter().all(|o| o.detail.is_empty()),
-            "a permission row is `5a`'s sentence, which carries no detail column (ADR 0003)"
-        );
-        assert_eq!(
-            options[4].outcome,
-            DecisionOutcome::Prompt(PromptResponse::Tool { decision: Decision::Deny, tier: ToolTier::Once, pattern: "./src/main.rs".into() }),
-            "the one deny must be the non-persisting Once tier"
-        );
-    }
-
-    /// The point of the model: picking a *persisting* row writes the
-    /// broadened `<dir>/**` glob, not the one file that triggered it — so a
-    /// developer approves reading a directory once instead of re-approving
-    /// every file in it.
-    #[test]
-    fn picking_a_persisting_row_writes_the_broad_pattern() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        app.handle_key(press(KeyCode::Char('3'))); // option 3: allow, project tier
-
-        match app.outbox.last() {
-            Some(Command::PromptResponse { payload, .. }) => {
-                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(
-                    response,
-                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Project, pattern: "./crates/tui/src/**".into() }
-                );
-            }
-            other => panic!("expected PromptResponse, got {other:?}"),
-        }
-    }
-
-    /// ADR 0003's stated cost, pinned so it is a decision rather than a
-    /// drift: the session row writes the exact target, which is `5a`'s own
-    /// scoping and narrower than ADR 0001's default. A developer wanting
-    /// the program picks row 3 instead.
-    #[test]
-    fn picking_the_session_row_writes_the_exact_target() {
-        let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
-        app.handle_key(press(KeyCode::Char('2'))); // option 2: allow, session tier
-
-        match app.outbox.last() {
-            Some(Command::PromptResponse { payload, .. }) => {
-                let response: PromptResponse = serde_json::from_value(payload.clone()).unwrap();
-                assert_eq!(
-                    response,
-                    PromptResponse::Tool { decision: Decision::Allow, tier: ToolTier::Session, pattern: "./crates/tui/src/ui.rs".into() }
-                );
-            }
-            other => panic!("expected PromptResponse, got {other:?}"),
-        }
-    }
 
     /// `Tab` was the scope toggle before ADR 0003 moved scope onto the rows
     /// themselves. It is no longer bound in the panel, and must be dropped
@@ -2206,7 +2012,7 @@ mod tests {
     #[test]
     fn tab_is_no_longer_bound_in_the_decision_panel() {
         let mut app = app();
-        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: path_like_tool_prompt("./crates/tui/src/ui.rs") });
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload: tool_prompt("read", &["./crates/tui/src/ui.rs"], Class::Read) });
         let before: Vec<String> = app.decision_options().into_iter().map(|o| o.label).collect();
         let outbox = app.outbox.len();
 
@@ -2327,7 +2133,7 @@ mod tests {
         app.handle_key(press(KeyCode::Enter));
         app.apply_event(Event::PromptRequested {
             call_id: "call-1".into(),
-            payload: path_like_tool_prompt("./src/main.rs"),
+            payload: tool_prompt("read", &["./src/main.rs"], Class::Read),
         });
         app.handle_key(press(KeyCode::Down));
         assert_eq!(app.decision_selected, 1, "the decision list is what moved");

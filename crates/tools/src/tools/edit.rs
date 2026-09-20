@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use crate::diff;
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
-use crate::registry::{Tool, ToolDescriptor, ToolSource};
+use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use mjolnir_permissions::Class;
 
 /// Propose a single edit (path, before, after). Always per-call approval —
 /// the gate lives inside this future, not the dispatcher (see
@@ -63,10 +64,12 @@ impl Tool for EditTool {
         &self.descriptor
     }
 
-    /// Never consulted — `edit_class: true` routes this tool around the
-    /// generic four-tier check entirely.
-    fn permission_target(&self, _input: &Value) -> Result<String, ToolError> {
-        Ok(String::new())
+    /// Never consulted. `edit_class: true` routes this tool around the
+    /// permission path entirely, which is what ADR 0004 §3 means by editing
+    /// being outside the model — there is no class it could return that any
+    /// grant would match.
+    fn permission(&self, _input: &Value) -> Result<PermissionRequest, ToolError> {
+        Ok(PermissionRequest { program: "edit".into(), class: Class::Edit, argv: Vec::new() })
     }
 
     async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError> {

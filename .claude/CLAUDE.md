@@ -94,9 +94,10 @@ alter a stated constraint or a persisted format. Read them before reopening
 a decision they cover.
 
 - **0001 — Grants are per tool and per program, not per command string.**
-  Tool classes pick the grant unit; `edit` is out of the permissions model
-  entirely and stays a conscious diff. Also re-derives first run's access
-  scale to three points.
+  *Superseded in full by 0004.* Tool classes pick the grant unit; `edit` is
+  out of the permissions model entirely and stays a conscious diff. Kept for
+  its reasoning about why a read/write axis looked unsound over a `shell` that
+  took a whole command line — 0004 answers it by removing that tool.
 - **0002 — A markdown table is drawn, and it is the only stroked thing in
   the frame.** Carves one exception out of Turn 13's no-stroke rule and the
   closed glyph table, on the grounds that a one-dimensional ground ladder
@@ -109,9 +110,21 @@ a decision they cover.
   would write. Two stated costs — the session tier grants the exact target,
   and the panel no longer names the file a grant lands in.
 
+- **0004 — A permission is a declared class, an enforced sandbox, and a lock.**
+  Supersedes 0001 entirely and amends 0003's option list. There is no arbitrary
+  command: a program runs only if a grant names it, and argv is executed
+  directly rather than through a shell. A grant is a program and a class
+  (`git: read`); the class belongs to the *call*, which is what makes a
+  read/write axis sound where 0001 found it unsound. The agent declares the
+  class and the sandbox enforces it — a read-declared call runs with the tree
+  read-only and the network unreachable, so a wrong declaration costs a prompt
+  rather than a tree. Deny is a lock nothing narrower can override.
+
 ## Key Constraints (non-negotiable)
 
 - Default-deny permissions: no tool may act without an explicit grant. No "obviously safe" carve-out.
 - Edit is never allowlistable: friction on Edit is structural, not a setting.
+- No arbitrary commands: argv is executed directly, never through a shell, and a program runs only if a grant names it (ADR 0004).
+- A read-declared call is enforced, not trusted: it runs where writing is impossible.
 - Discussion-first: resting state is conversation. Action only on explicit developer signal.
 - No Anthropic wire types past `LlmClient`: audit at the trait boundary, not after.

@@ -121,10 +121,10 @@ pub fn script(name: &str) -> Result<Script> {
         // What each of these reaches is decided by the *grants it seeds*, not
         // by faking a panel: an allowed tool runs, an unallowed one asks, and
         // an edit always asks with a diff because `edit` is outside the
-        // permissions model entirely (ADR 0001).
+        // permissions model entirely (ADR 0004 §3).
         "tools" => Script {
             name:    "tools",
-            grants:  vec!["read:**"],
+            grants:  vec!["read: read"],
             replies: vec![
                 fake::tool_call("call-1", "read", serde_json::json!({ "path": DISPATCHER })),
                 fake::text("The dispatcher denies by absence: a tool with no registration is refused before any permission check runs."),
@@ -152,39 +152,34 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // Two calls in one turn, so the second queues behind the first.
+        // **The name is historical and the scene has been repurposed.** It
+        // existed to widen a grant with `Tab` and show the panel naming the
+        // broadened rule; ADR 0003 removed the toggle and ADR 0004 removed
+        // the pattern it toggled between, so there was nothing left for it
+        // to show — it rendered a panel byte-identical to `prompt`'s, which
+        // a stage 5 judge noticed and correctly could not make anything of.
         //
-        // **The name is now historical.** This scene existed to widen a
-        // grant with `Tab` and show the panel naming the broadened rule.
-        // ADR 0003 removed the toggle: scope is a property of each option
-        // row, so every prompt scene shows both scopes at once and none of
-        // them needs a keypress to get there. `Tab` is no longer sent.
-        //
-        // What it still covers, and the reason to keep it: a *queued*
-        // second prompt — the `1 more waiting` note and the panel's
-        // behaviour with a non-default row selected. Renaming it is a
+        // It now carries the one prompt shape nothing else covers: a `run`
+        // call declared a **write**. `prompt` and `prompt_path` are both
+        // `read`-class built-ins, so without this the whole catalogue showed
+        // one side of ADR 0004 §2's class axis. Renaming it is a
         // catalogue-and-baseline change, deliberately not taken here.
-        //
-        // A long-standing caveat that outlived the toggle: through injected
-        // input `Tab` never took effect anyway — neither the legacy `\t`
-        // nor the disambiguated `CSI 9 u` — while digits and arrows on the
-        // same panel did. Whatever that was, it is no longer reachable from
-        // this scene.
         "prompt_scoped" => Script {
             name:    "prompt_scoped",
             grants:  vec![],
-            replies: vec![fake::tool_calls(&[
-                ("call-3", "read", serde_json::json!({ "path": DISPATCHER })),
-                ("call-4", "read", serde_json::json!({ "path": "crates/core/src/lib.rs" })),
-            ])],
-            files:   vec![(DISPATCHER, "// the dispatcher\n"), ("crates/core/src/lib.rs", "// core\n")],
-            keys:    "\"what does the dispatcher do on a deny-by-absence?\",Enter,Down,Down,Down",
+            replies: vec![fake::tool_call(
+                "call-4",
+                "run",
+                serde_json::json!({ "program": "git", "args": ["commit", "-m", "wire the dispatcher"], "class": "write" }),
+            )],
+            files:   vec![],
+            keys:    "\"commit what we have\",Enter",
             provider: true,
         },
 
         "approval" => Script {
             name:    "approval",
-            grants:  vec!["read:**"],
+            grants:  vec!["read: read"],
             replies: vec![fake::tool_call(
                 "call-1",
                 "edit",
@@ -197,7 +192,7 @@ pub fn script(name: &str) -> Result<Script> {
 
         "approval_large" => Script {
             name:    "approval_large",
-            grants:  vec!["read:**"],
+            grants:  vec!["read: read"],
             replies: vec![fake::tool_call(
                 "call-1",
                 "edit",
@@ -271,9 +266,13 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         // has been declared; an empty allow list is a real answer.
         let project = cwd.join(".mjolnir");
         std::fs::create_dir_all(&project)?;
-        let allow = script.grants.iter().map(|g| format!("  - \"{g}\"\n")).collect::<String>();
+        // v2 (ADR 0004): entries are `program: class`, not `kind:pattern`.
+        // Writing a v1 file here would not merely be stale — `Config::open`
+        // retires one, so the scene would silently start with no grants at
+        // all and every seeded scene would draw a prompt it was not meant to.
+        let allow = script.grants.iter().map(|g| format!("  - {g}\n")).collect::<String>();
         let allow = if allow.is_empty() { "allow: []\n".to_string() } else { format!("allow:\n{allow}") };
-        std::fs::write(project.join("permissions.yaml"), format!("version: 1\n{allow}deny: []\n"))?;
+        std::fs::write(project.join("permissions.yaml"), format!("version: 2\n{allow}deny: []\n"))?;
     }
 
     for (path, contents) in &script.files {

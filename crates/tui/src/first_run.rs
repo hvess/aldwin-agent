@@ -46,59 +46,16 @@ use futures::StreamExt;
 use crate::palette::Theme;
 use crate::ui;
 
-/// How much runs without asking in this directory.
+/// First run's access question is [`Rung`] itself — the same three-point
+/// ladder the permissions files hold, not a parallel vocabulary that expands
+/// into one.
 ///
-/// Three points, not the design system's four — see ADR 0001. The fourth
-/// (`write`) described a state that cannot exist once editing is de-scoped,
-/// and a drafted replacement (`run`) would have written exactly the same
-/// grants as `read`. Each point below writes a different set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccessTier {
-    Ask,
-    Read,
-    All,
-}
-
-impl AccessTier {
-    /// In order, widening — the order the rows are shown in.
-    pub const ORDER: [AccessTier; 3] = [AccessTier::Ask, AccessTier::Read, AccessTier::All];
-
-    /// The lowercase name in the option's 16-cell field.
-    pub fn label(self) -> &'static str {
-        match self {
-            AccessTier::Ask => "ask",
-            AccessTier::Read => "read",
-            AccessTier::All => "all",
-        }
-    }
-
-    /// What picking it does. Every option row in the system carries one of
-    /// these; it says what the choice *does*, not what it is called.
-    ///
-    /// Each names edits explicitly rather than leaving them implied. The
-    /// design's own copy for its top tier was "everything runs, nothing
-    /// asks", which would be false here in the one place a developer most
-    /// needs it to be true.
-    pub fn purpose(self) -> &'static str {
-        match self {
-            AccessTier::Ask => "every tool asks, every time",
-            AccessTier::Read => "reads run; commands and edits ask",
-            AccessTier::All => "reads and any command run; edits ask",
-        }
-    }
-
-    /// The `kind:pattern` allow entries this tier writes. Deliberately no
-    /// `edit:` entry at any tier — the engine would ignore one, and writing
-    /// a rule that does nothing would misrepresent the harness in its own
-    /// config file.
-    pub fn grants(self) -> Vec<String> {
-        match self {
-            AccessTier::Ask => Vec::new(),
-            AccessTier::Read => vec!["read:**".into(), "explain:**".into()],
-            AccessTier::All => vec!["read:**".into(), "explain:**".into(), "shell:*".into()],
-        }
-    }
-}
+/// It used to be a separate `AccessTier` that wrote a list of grants
+/// (`read:**`, `shell:*`) and then ceased to exist, so a developer who
+/// picked "read" had no standing setting afterwards and nothing to change.
+/// Under ADR 0004 §6 the answer *is* the setting: it is written to the
+/// project's `default:`, and changing it later is the same one-word edit.
+pub use mjolnir_permissions::Rung as AccessTier;
 
 /// One model row: the id that lands in `provider.yaml`, and what picking it
 /// does. The same shape as a [`ProviderChoice`] because they are drawn on
@@ -610,6 +567,7 @@ impl Default for FirstRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mjolnir_permissions::Class;
 
     fn key(state: &mut FirstRun, code: KeyCode) -> bool {
         state.handle_key(code, KeyModifiers::NONE)
@@ -677,7 +635,7 @@ mod tests {
     fn access_starts_on_ask_the_tier_that_grants_nothing() {
         let state = FirstRun::default();
         assert_eq!(AccessTier::ORDER[state.access], AccessTier::Ask);
-        assert!(AccessTier::ORDER[state.access].grants().is_empty(), "the preselected tier must grant nothing");
+        assert_eq!(AccessTier::ORDER[state.access], AccessTier::Ask, "the preselected rung must grant nothing");
     }
 
     /// Enter is never a no-op. Before `ask` was preselected, enter on an
@@ -849,7 +807,7 @@ mod tests {
             Some(Some(Answers {
                 provider: Some("bravo".into()),
                 model:    Some("bravo-small".into()),
-                access:   Some(AccessTier::All),
+                access:   Some(AccessTier::Write),
             }))
         );
     }
@@ -938,25 +896,29 @@ mod tests {
         assert_eq!(state.finished, Some(None), "quitting must yield no answers at all, not defaults");
     }
 
-    /// Editing is not grantable at any tier (ADR 0001), so no tier may
-    /// write an `edit:` rule — one would be silently ignored by the engine
-    /// and would misstate the harness in its own config file.
+    /// Editing is outside the permissions model entirely (ADR 0004 §3), so
+    /// no rung may cover it. This used to be checkable by looking for an
+    /// `edit:` string in a list of grants the tier wrote; now it is a
+    /// property of the ladder itself, which is a stronger place for it —
+    /// there is no longer any way to *express* an edit grant to check for.
     #[test]
-    fn no_tier_grants_edit() {
-        for tier in AccessTier::ORDER {
-            assert!(!tier.grants().iter().any(|g| g.starts_with("edit:")), "{} must not grant edit", tier.label());
+    fn no_rung_covers_an_edit() {
+        for rung in AccessTier::ORDER {
+            assert!(!rung.covers(Class::Edit), "{} must not cover an edit", rung.label());
         }
     }
 
-    /// Each tier writes a strictly different set — the reason there are
-    /// three points and not the design's four.
+    /// Each rung is a strictly different answer — the reason there are three
+    /// points and not the design's four. Under ADR 0004 they differ by what
+    /// they let run rather than by what they write, which is what makes the
+    /// setting something a developer can change later instead of a preset
+    /// that expanded once and vanished.
     #[test]
-    fn every_tier_writes_a_distinct_grant_set() {
-        let sets: Vec<Vec<String>> = AccessTier::ORDER.iter().map(|t| t.grants()).collect();
-        assert_eq!(sets[0].len(), 0, "ask writes nothing at all");
-        for pair in sets.windows(2) {
-            assert_ne!(pair[0], pair[1], "a named tier that writes what its neighbour writes is not a choice");
-            assert!(pair[0].len() < pair[1].len(), "the scale must widen in order");
-        }
+    fn every_rung_answers_differently() {
+        let answers: Vec<(bool, bool)> = AccessTier::ORDER
+            .iter()
+            .map(|r| (r.covers(Class::Read), r.covers(Class::Write)))
+            .collect();
+        assert_eq!(answers, vec![(false, false), (true, false), (true, true)]);
     }
 }

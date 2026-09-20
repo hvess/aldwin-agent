@@ -126,6 +126,42 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Builds `target/debug/mjolnir` and returns its path.
+///
+/// **Building it here rather than checking it exists is the whole point.**
+/// This used to be an existence check, and an existence check cannot tell a
+/// current binary from one built an hour and several commits ago. It silently
+/// did exactly that: a rename landed in the library, every hermetic test in
+/// `crates/tui` agreed with it, `cargo build --release` was run — and capture
+/// spawned a stale *debug* binary nothing had rebuilt, so the judge spent its
+/// whole budget on a screen whose pixels predated the change under review and
+/// reported the old copy as a finding.
+///
+/// That is the most expensive way this loop can fail. Stage 5 is the one
+/// stage that is neither cheap nor reproducible, and pointing it at stale
+/// pixels wastes it *and* produces a finding that looks real, cannot be
+/// reproduced from the source, and costs a round trip to disbelieve.
+///
+/// `cargo build` is incremental, so on an up-to-date tree this is a few
+/// hundred milliseconds against a capture measured in minutes.
+fn build_app(root: &Path) -> std::io::Result<PathBuf> {
+    let out = std::process::Command::new("cargo")
+        .current_dir(root)
+        .args(["build", "--bin", "mjolnir"])
+        .output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "the frames capture spawns target/debug/mjolnir, and building it failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let binary = root.join("target/debug/mjolnir");
+    if !binary.exists() {
+        return Err(std::io::Error::other(format!("{} still does not exist after a successful build", binary.display())));
+    }
+    Ok(binary)
+}
+
 /// Capture every scene into a fresh directory, for stage 5 to look at.
 ///
 /// No assertions: everything that reads declared cells is a hermetic test in
@@ -133,10 +169,7 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
 /// `TestBackend` cannot do.
 fn capture_all(root: &Path, base: &Baseline, theme: Option<Theme>, quiet_ms: u64) -> std::io::Result<PathBuf> {
     let dir = frames_dir(root)?;
-    let binary = root.join("target/debug/mjolnir");
-    if !binary.exists() {
-        return Err(std::io::Error::other(format!("{} does not exist — cargo build first", binary.display())));
-    }
+    let binary = build_app(root)?;
     let comp = Compositor::start(&dir)?;
     let cell = measure_cell(&comp, &base.font)?;
     if cell != base.cell {
@@ -232,7 +265,9 @@ fn main() -> std::io::Result<()> {
                 }
                 None => frames_dir(&root)?,
             };
-            let binary = root.join("target/debug/mjolnir");
+            // Same reason as `capture_all`: never spawn a binary nobody
+            // just built.
+            let binary = build_app(&root)?;
             let comp = Compositor::start(&dir)?;
             let cell = measure_cell(&comp, &base.font)?;
             let names: Vec<&str> = match &one {

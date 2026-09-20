@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use crate::{
     annotated,
     domain::{
-        ContextFilesConfig, McpConfig, McpServer, PermissionsConfig, ProviderConfig,
+        ContextFilesConfig, GrantEntry, McpConfig, McpServer, PermissionsConfig, ProviderConfig, Rung,
         CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION, TUI_VERSION,
     },
     domain::TuiConfig,
@@ -46,6 +46,10 @@ pub struct ReloadFailure {
 struct Inner {
     project_dir: PathBuf,
     global_dir:  PathBuf,
+
+    /// Permissions files moved aside by [`retire_v1_permissions`] during this
+    /// open — reported once at startup, never acted on again.
+    retired_permissions: Vec<PathBuf>,
 
     project_permissions: RwLock<PermissionsConfig>,
     global_permissions:  RwLock<PermissionsConfig>,
@@ -107,6 +111,31 @@ fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
     }
 }
 
+/// A v1 `permissions.yaml` described a world that no longer exists: its
+/// entries were `kind:pattern` strings naming a tool and a glob, and ADR 0004
+/// replaced both halves — a grant is now a program and a class, and the tool
+/// those globs were written against (`shell`, taking one opaque command
+/// string) is gone.
+///
+/// There is no honest reading of the old entries, so this does not attempt
+/// one. It moves the file aside to `permissions.yaml.v1` and lets the caller
+/// start from an empty v2 file, which the annotated header then explains.
+/// Reinterpreting the old lines would be the worse failure: a developer would
+/// keep a file they recognise while the rules inside it quietly meant
+/// something else.
+///
+/// Returns the backup path when it moved something, so the caller can say so.
+fn retire_v1_permissions(path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let probe: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).ok()?;
+    if probe.get("version").and_then(serde_yaml_ng::Value::as_u64) != Some(1) {
+        return None;
+    }
+    let backup = path.with_extension("yaml.v1");
+    std::fs::rename(path, &backup).ok()?;
+    Some(backup)
+}
+
 impl Config {
     /// Read every existing layer once, resolving global scope to
     /// `~/.mjolnir/`. See [`Config::open_at`] for the same thing with an
@@ -129,6 +158,13 @@ impl Config {
     ) -> Result<Self, ConfigError> {
         let global_dir = global_dir.into();
         let project_dir = project_root.as_ref().join(".mjolnir");
+
+        let mut retired = Vec::new();
+        for dir in [&project_dir, &global_dir] {
+            if let Some(backup) = retire_v1_permissions(&dir.join("permissions.yaml")) {
+                retired.push(backup);
+            }
+        }
 
         let project_permissions =
             fsio::read_versioned(&project_dir.join("permissions.yaml"), PERMISSIONS_VERSION)?
@@ -158,6 +194,7 @@ impl Config {
             inner: Arc::new(Inner {
                 project_dir,
                 global_dir,
+                retired_permissions: retired,
                 project_permissions: RwLock::new(project_permissions),
                 global_permissions:  RwLock::new(global_permissions),
                 project_provider:    RwLock::new(project_provider),
@@ -263,19 +300,30 @@ impl Config {
         self.with_domain_mut(self.permissions_lock(scope), &self.domain_path(scope, "permissions"), annotated::PERMISSIONS_HEADER, f)
     }
 
-    pub fn add_grant(
-        &self,
-        scope: Scope,
-        list:  GrantList,
-        entry: impl Into<String>,
-    ) -> Result<(), ConfigError> {
-        let entry = entry.into();
+    /// Adds `entry` to one list, replacing any existing entry for the same
+    /// program in that list. Replacement rather than append because two
+    /// entries for one program in one list would make the file's meaning
+    /// depend on their order — `git: read` then `git: write` reads as a
+    /// widening, but a reader has to know which of the two wins to be sure.
+    /// One program, one line, per list.
+    pub fn add_grant(&self, scope: Scope, list: GrantList, entry: GrantEntry) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| {
             let target = match list { GrantList::Allow => &mut cfg.allow, GrantList::Deny => &mut cfg.deny };
-            if !target.contains(&entry) {
-                target.push(entry);
-            }
+            target.retain(|e| e.program != entry.program);
+            target.push(entry);
         })
+    }
+
+    /// Sets this scope's standing rung — the answer for any call no entry
+    /// covers (ADR 0004 §6).
+    pub fn set_default_rung(&self, scope: Scope, rung: Rung) -> Result<(), ConfigError> {
+        self.with_permissions_mut(scope, |cfg| cfg.default = Some(rung))
+    }
+
+    /// Permissions files this open moved aside because they were still on the
+    /// pre-ADR-0004 schema. Empty in the ordinary case.
+    pub fn retired_permissions(&self) -> &[PathBuf] {
+        &self.inner.retired_permissions
     }
 
     /// Writes `permissions.yaml` for `scope` if it does not exist yet,
@@ -291,10 +339,12 @@ impl Config {
         self.with_permissions_mut(scope, |_| {})
     }
 
-    pub fn remove_grant(&self, scope: Scope, list: GrantList, entry: &str) -> Result<(), ConfigError> {
+    /// Removes whatever entry names `program` in one list, whatever class it
+    /// carried.
+    pub fn remove_grant(&self, scope: Scope, list: GrantList, program: &str) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| {
             let target = match list { GrantList::Allow => &mut cfg.allow, GrantList::Deny => &mut cfg.deny };
-            target.retain(|e| e != entry);
+            target.retain(|e| e.program != program);
         })
     }
 
@@ -513,6 +563,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{Class, GrantEntry, Rung};
     use crate::domain::McpTransport;
     use tempfile::tempdir;
 
@@ -590,7 +641,7 @@ mod tests {
         let mjolnir_dir = project.path().join(".mjolnir");
         assert!(!mjolnir_dir.exists());
 
-        config.add_grant(Scope::Project, GrantList::Allow, "read:**").unwrap();
+        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
         assert!(mjolnir_dir.is_dir());
         assert!(mjolnir_dir.join("permissions.yaml").is_file());
     }
@@ -606,8 +657,12 @@ mod tests {
             assert!(global_dir.join(f).is_file(), "missing {f}");
         }
 
-        // In-memory snapshot reflects what was just written, not stale defaults.
-        assert_eq!(config.global_permissions(), PermissionsConfig::empty());
+        // In-memory snapshot reflects what was just written, not stale defaults —
+        // including the annotated file's explicit `default: ask`.
+        assert_eq!(
+            config.global_permissions(),
+            PermissionsConfig { default: Some(Rung::Ask), ..PermissionsConfig::empty() }
+        );
 
         // Idempotent: a second call sees everything already there.
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::AlreadyPresent);
@@ -649,12 +704,12 @@ mod tests {
     fn allow_and_deny_stay_separate_lists_never_merged() {
         let (_project, _global, config) = fresh();
 
-        config.add_grant(Scope::Project, GrantList::Allow, "shell:git *").unwrap();
-        config.add_grant(Scope::Project, GrantList::Deny, "shell:git *").unwrap();
+        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
+        config.add_grant(Scope::Project, GrantList::Deny, GrantEntry::classed("git", Class::Write)).unwrap();
 
         let cfg = config.project_permissions();
-        assert_eq!(cfg.allow, vec!["shell:git *".to_string()]);
-        assert_eq!(cfg.deny, vec!["shell:git *".to_string()]);
+        assert_eq!(cfg.allow, vec![GrantEntry::classed("git", Class::Read)]);
+        assert_eq!(cfg.deny, vec![GrantEntry::classed("git", Class::Write)]);
     }
 
     /// Regression test for the lost-update race the audit found: the
@@ -673,7 +728,7 @@ mod tests {
             .map(|i| {
                 let config = config.clone();
                 std::thread::spawn(move || {
-                    config.add_grant(Scope::Project, GrantList::Allow, format!("read:file{i}")).unwrap();
+                    config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed(format!("prog{i}"), Class::Read)).unwrap();
                 })
             })
             .collect();
@@ -684,16 +739,20 @@ mod tests {
         let allow = config.project_permissions().allow;
         assert_eq!(allow.len(), 8, "every concurrent grant must survive, got {allow:?}");
         for i in 0..8 {
-            assert!(allow.contains(&format!("read:file{i}")), "missing grant read:file{i} in {allow:?}");
+            assert!(allow.contains(&GrantEntry::classed(format!("prog{i}"), Class::Read)), "missing grant for prog{i} in {allow:?}");
         }
     }
 
+    /// One program gets one line per list. Re-granting it at a different
+    /// class replaces the line rather than appending a second one, so the
+    /// file never holds two rules for `git` whose combined meaning depends
+    /// on which order a reader takes them in.
     #[test]
-    fn add_grant_is_idempotent_within_a_list() {
+    fn add_grant_keeps_one_line_per_program_in_a_list() {
         let (_project, _global, config) = fresh();
-        config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
-        assert_eq!(config.global_permissions().allow, vec!["read:**".to_string()]);
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Write)).unwrap();
+        assert_eq!(config.global_permissions().allow, vec![GrantEntry::classed("git", Class::Write)]);
     }
 
     /// Regression test for the bug reported directly as "editing
@@ -710,17 +769,17 @@ mod tests {
     #[test]
     fn permissions_yaml_keeps_its_explanatory_header_after_a_grant_is_persisted() {
         let (project, global, config) = fresh();
-        config.add_grant(Scope::Project, GrantList::Allow, "read:./src/**").unwrap();
-        config.add_grant(Scope::Global, GrantList::Deny, "shell:rm -rf*").unwrap();
+        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
 
         let project_text = std::fs::read_to_string(project.path().join(".mjolnir").join("permissions.yaml")).unwrap();
         let global_text = std::fs::read_to_string(global.path().join(".mjolnir").join("permissions.yaml")).unwrap();
         for text in [&project_text, &global_text] {
             assert!(text.starts_with("# Mjolnir permissions"), "grant persistence must not strip the annotated header: {text:?}");
-            assert!(text.contains("kind:pattern"), "header should still explain the entry grammar: {text:?}");
+            assert!(text.contains("program"), "header should still explain the entry shape: {text:?}");
         }
-        assert!(project_text.contains("read:./src/**"));
-        assert!(global_text.contains("shell:rm -rf*"));
+        assert!(project_text.contains("git: read"));
+        assert!(global_text.contains("curl"));
     }
 
     /// Same bug, the other three annotated domains — `set_provider`,
@@ -752,14 +811,79 @@ mod tests {
     #[test]
     fn remove_grant_only_touches_its_own_list() {
         let (_project, _global, config) = fresh();
-        config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
-        config.add_grant(Scope::Global, GrantList::Deny, "read:**").unwrap();
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rg")).unwrap();
 
-        config.remove_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
+        config.remove_grant(Scope::Global, GrantList::Allow, "rg").unwrap();
 
         let cfg = config.global_permissions();
         assert!(cfg.allow.is_empty());
-        assert_eq!(cfg.deny, vec!["read:**".to_string()]);
+        assert_eq!(cfg.deny, vec![GrantEntry::program("rg")]);
+    }
+
+    /// A v1 permissions.yaml described a world ADR 0004 deleted — its entries
+    /// were `kind:pattern` globs over a `shell` tool that took one opaque
+    /// command string. Opening a project that still holds one must not fail
+    /// to start, and must not reinterpret the old lines as if they meant
+    /// something under the new grammar: the file is moved aside intact and
+    /// the developer starts from an empty, annotated v2 file.
+    /// What a developer actually opens. The file is the model's public
+    /// face — the reason this whole area was reopened was "the permissions
+    /// model is not clear, and editing permissions.yaml doesn't really
+    /// appear to make any sense" — so its shape is pinned rather than left
+    /// to whatever serde happens to emit.
+    #[test]
+    fn a_written_permissions_file_reads_as_the_model_it_implements() {
+        let (_project, global, config) = fresh();
+        config.set_default_rung(Scope::Global, Rung::Read).unwrap();
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
+
+        let text = std::fs::read_to_string(global.path().join(".mjolnir").join("permissions.yaml")).unwrap();
+        let body = text.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
+
+        let expected = [
+            "version: 2",
+            "default: read",
+            "allow:",
+            "- git: read",
+            "- cargo: write",
+            "deny:",
+            "- curl",
+        ]
+        .join("\n");
+        assert_eq!(
+            body.trim(),
+            expected,
+            "the file a developer opens must read as program-and-class rules, not as a serialisation: {text}"
+        );
+
+        // And the explanation survives the writes, which is the half that
+        // regressed last time.
+        assert!(text.starts_with("# Mjolnir permissions"), "{text}");
+    }
+
+    #[test]
+    fn a_v1_permissions_file_is_moved_aside_rather_than_reinterpreted() {
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let dir = project.path().join(".mjolnir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("permissions.yaml"),
+            "version: 1\nallow: [\"shell:cargo test*\", \"read:./**\"]\ndeny: []\n",
+        )
+        .unwrap();
+
+        let config = Config::open_at(project.path(), global.path().join(".mjolnir")).unwrap();
+
+        assert_eq!(config.project_permissions(), PermissionsConfig::empty());
+        assert_eq!(config.retired_permissions(), [dir.join("permissions.yaml.v1")]);
+
+        let kept = std::fs::read_to_string(dir.join("permissions.yaml.v1")).unwrap();
+        assert!(kept.contains("shell:cargo test*"), "the old file must survive verbatim: {kept:?}");
+        assert!(!dir.join("permissions.yaml").exists(), "the v1 file is moved, not copied");
     }
 
     #[test]
@@ -770,7 +894,7 @@ mod tests {
         std::fs::write(dir.join("permissions.yaml"), "version: 99\nallow: []\ndeny: []\n").unwrap();
 
         let err = Config::open_at(project.path(), _global.path().join(".mjolnir")).unwrap_err();
-        assert!(matches!(err, ConfigError::UnknownVersion { found: 99, expected: 1, .. }));
+        assert!(matches!(err, ConfigError::UnknownVersion { found: 99, expected: PERMISSIONS_VERSION, .. }));
     }
 
     #[test]
@@ -890,8 +1014,8 @@ mod tests {
     #[test]
     fn reload_all_retains_previous_snapshot_on_parse_failure_but_names_the_file() {
         let (project, _global, config) = fresh();
-        config.add_grant(Scope::Project, GrantList::Allow, "read:**").unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, "shell:*").unwrap();
+        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
 
         // Hand-edit project permissions.yaml into garbage, but leave global alone.
         let dir = project.path().join(".mjolnir");
@@ -903,9 +1027,9 @@ mod tests {
         assert_eq!(failures[0].path, dir.join("permissions.yaml"));
 
         // Previous snapshot retained for the broken layer...
-        assert_eq!(config.project_permissions().allow, vec!["read:**".to_string()]);
+        assert_eq!(config.project_permissions().allow, vec![GrantEntry::classed("rg", Class::Read)]);
         // ...while an unrelated, still-valid layer still reloads fine.
-        assert_eq!(config.global_permissions().allow, vec!["shell:*".to_string()]);
+        assert_eq!(config.global_permissions().allow, vec![GrantEntry::classed("cargo", Class::Write)]);
     }
 
     #[test]
@@ -913,18 +1037,20 @@ mod tests {
         let (project, _global, config) = fresh();
         let dir = project.path().join(".mjolnir");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("permissions.yaml"), "version: 1\nallow: [\"edited:in\"]\ndeny: []\n")
+        std::fs::write(dir.join("permissions.yaml"), "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\ndeny: []\n")
             .unwrap();
 
         config.reload_all().unwrap();
-        assert_eq!(config.project_permissions().allow, vec!["edited:in".to_string()]);
+        let cfg = config.project_permissions();
+        assert_eq!(cfg.default, Some(Rung::Read));
+        assert_eq!(cfg.allow, vec![GrantEntry::classed("git", Class::Read), GrantEntry::program("curl")]);
     }
 
     #[test]
     fn clones_share_the_same_in_memory_state() {
         let (_project, _global, config) = fresh();
         let other = config.clone();
-        config.add_grant(Scope::Global, GrantList::Allow, "read:**").unwrap();
-        assert_eq!(other.global_permissions().allow, vec!["read:**".to_string()]);
+        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
+        assert_eq!(other.global_permissions().allow, vec![GrantEntry::classed("rg", Class::Read)]);
     }
 }

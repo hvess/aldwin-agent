@@ -22,62 +22,113 @@
 //! happening in the first place the way the type system would.
 
 pub const PERMISSIONS_HEADER: &str = "\
-# Mjolnir permissions — one scope layer of a default-deny grant list.
+# Mjolnir permissions — one scope layer. Nothing runs that a rule here, or a
+# prompt you answered, has not allowed.
 #
-# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies to
-# every project) and <project>/.mjolnir/permissions.yaml (this project
-# only), and merges them — whichever file you're looking at right now is one
-# of those two, never both. A third layer, session-only grants (picked with
-# \"just this session\" at a prompt), never touches disk at all and is gone
-# the moment Mjolnir exits. Precedence: session > project > global; within a
-# single file, deny always wins over allow regardless of which list an entry
-# is in.
+# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies in
+# every project) and <project>/.mjolnir/permissions.yaml (this project only).
+# Whichever file you are looking at is one of those two, never both. Two more
+# layers never touch disk: session grants, gone when Mjolnir exits, and a
+# single turn\'s \"allow once\", gone immediately.
 #
-# Entries are \"kind:pattern\" strings, e.g. \"read:./src/**\" or
-# \"shell:cargo test*\". kind is a tool's own name — read, shell, and explain
-# are built in; every MCP tool you approve adds its own name here too. edit
-# is never listed here on purpose: Edit always prompts per call and can't be
-# persisted at any tier (see mjolnir's \"Edit is never allowlistable\"
-# constraint), so a hand-added \"edit:...\" entry would parse fine but has no
-# effect. pattern's only wildcard is \"*\", matching any run of characters
-# including \"/\" — \"**\" behaves exactly like a single \"*\" here, not the
-# recursive-directory match some other tools give it.
+#   default:  what runs when no entry below covers the call.
+#               ask    every call asks, every time
+#               read   reads run; writes and edits ask
+#               write  reads and writes run; edits ask
 #
-# You'll rarely need to hand-edit this file: choosing \"for this project\" or
-# \"always\" at a permission prompt writes the grant here for you, and the
-# comments above stay right where they are (see fsio::write_atomic_with_header).
-# If you do edit it directly while Mjolnir is running, run /reload-config to
-# pick the change up without restarting the session.
+#             Where this file and the other one disagree, the narrower file
+#             wins outright — a project may be opened up without loosening
+#             every project, or locked down without touching the global file.
+#
+#   allow:    programs that may run, and the class they may run at.
+#   deny:     programs that may not. A deny is a lock: nothing narrower can
+#             override it — not the other file, not a session, not a single
+#             turn. Undoing one is an edit to this file, made deliberately,
+#             outside the moment that wanted it.
+#
+# An entry is a program and a class:
+#
+#   allow:
+#     - git: read      # any git call that reads
+#     - cargo: write   # any cargo call at all — write includes read
+#     - rg             # every class, the widest grant there is
+#   deny:
+#     - curl           # locked entirely
+#     - npm: write     # npm may still read
+#
+# The class belongs to the CALL, not the program: `git status` is a read and
+# `git push` is a write, and they are the same binary. The agent declares a
+# class for each call, and a call it declares a read is executed with your
+# source tree read-only and the network unreachable — so a declaration that
+# was wrong costs you a prompt, not a tree. There is no entry for the whole
+# command line: argv is run directly, never through a shell, so `&&`, `|`
+# and `$(...)` are ordinary characters and cannot chain a second command
+# onto an approved first one.
+#
+# `edit` is not a class you can write here. Editing a file always shows you
+# the diff and waits, under every setting in this file, with no way to turn
+# it off. An `edit` entry is a load error rather than a rule that quietly
+# does nothing.
+#
+# You will rarely hand-edit this: answering a permission prompt writes the
+# rule for you, and these comments stay where they are. If you do edit it
+# while Mjolnir is running, /reload-config picks the change up.
 ";
 
 pub const PERMISSIONS: &str = "\
-# Mjolnir permissions — one scope layer of a default-deny grant list.
+# Mjolnir permissions — one scope layer. Nothing runs that a rule here, or a
+# prompt you answered, has not allowed.
 #
-# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies to
-# every project) and <project>/.mjolnir/permissions.yaml (this project
-# only), and merges them — whichever file you're looking at right now is one
-# of those two, never both. A third layer, session-only grants (picked with
-# \"just this session\" at a prompt), never touches disk at all and is gone
-# the moment Mjolnir exits. Precedence: session > project > global; within a
-# single file, deny always wins over allow regardless of which list an entry
-# is in.
+# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies in
+# every project) and <project>/.mjolnir/permissions.yaml (this project only).
+# Whichever file you are looking at is one of those two, never both. Two more
+# layers never touch disk: session grants, gone when Mjolnir exits, and a
+# single turn\'s \"allow once\", gone immediately.
 #
-# Entries are \"kind:pattern\" strings, e.g. \"read:./src/**\" or
-# \"shell:cargo test*\". kind is a tool's own name — read, shell, and explain
-# are built in; every MCP tool you approve adds its own name here too. edit
-# is never listed here on purpose: Edit always prompts per call and can't be
-# persisted at any tier (see mjolnir's \"Edit is never allowlistable\"
-# constraint), so a hand-added \"edit:...\" entry would parse fine but has no
-# effect. pattern's only wildcard is \"*\", matching any run of characters
-# including \"/\" — \"**\" behaves exactly like a single \"*\" here, not the
-# recursive-directory match some other tools give it.
+#   default:  what runs when no entry below covers the call.
+#               ask    every call asks, every time
+#               read   reads run; writes and edits ask
+#               write  reads and writes run; edits ask
 #
-# You'll rarely need to hand-edit this file: choosing \"for this project\" or
-# \"always\" at a permission prompt writes the grant here for you, and the
-# comments above stay right where they are (see fsio::write_atomic_with_header).
-# If you do edit it directly while Mjolnir is running, run /reload-config to
-# pick the change up without restarting the session.
-version: 1
+#             Where this file and the other one disagree, the narrower file
+#             wins outright — a project may be opened up without loosening
+#             every project, or locked down without touching the global file.
+#
+#   allow:    programs that may run, and the class they may run at.
+#   deny:     programs that may not. A deny is a lock: nothing narrower can
+#             override it — not the other file, not a session, not a single
+#             turn. Undoing one is an edit to this file, made deliberately,
+#             outside the moment that wanted it.
+#
+# An entry is a program and a class:
+#
+#   allow:
+#     - git: read      # any git call that reads
+#     - cargo: write   # any cargo call at all — write includes read
+#     - rg             # every class, the widest grant there is
+#   deny:
+#     - curl           # locked entirely
+#     - npm: write     # npm may still read
+#
+# The class belongs to the CALL, not the program: `git status` is a read and
+# `git push` is a write, and they are the same binary. The agent declares a
+# class for each call, and a call it declares a read is executed with your
+# source tree read-only and the network unreachable — so a declaration that
+# was wrong costs you a prompt, not a tree. There is no entry for the whole
+# command line: argv is run directly, never through a shell, so `&&`, `|`
+# and `$(...)` are ordinary characters and cannot chain a second command
+# onto an approved first one.
+#
+# `edit` is not a class you can write here. Editing a file always shows you
+# the diff and waits, under every setting in this file, with no way to turn
+# it off. An `edit` entry is a load error rather than a rule that quietly
+# does nothing.
+#
+# You will rarely hand-edit this: answering a permission prompt writes the
+# rule for you, and these comments stay where they are. If you do edit it
+# while Mjolnir is running, /reload-config picks the change up.
+version: 2
+default: ask
 allow: []
 deny: []
 ";
@@ -144,7 +195,10 @@ mod tests {
     #[test]
     fn every_annotated_file_parses_under_its_own_schema() {
         let permissions: PermissionsConfig = serde_yaml_ng::from_str(PERMISSIONS).unwrap();
-        assert_eq!(permissions, PermissionsConfig::empty());
+        // The first-launch file states `ask` outright rather than leaving the
+        // field absent: it is a teaching file, and the one rung that grants
+        // nothing is the one worth showing a developer written down.
+        assert_eq!(permissions, PermissionsConfig { default: Some(crate::domain::Rung::Ask), ..PermissionsConfig::empty() });
 
         let mcp: McpConfig = serde_yaml_ng::from_str(MCP).unwrap();
         assert_eq!(mcp, McpConfig::empty());

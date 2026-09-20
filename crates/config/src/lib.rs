@@ -6,8 +6,8 @@ mod scope;
 mod store;
 
 pub use domain::{
-    ContextFilesConfig, McpConfig, McpServer, McpTransport, PermissionsConfig, ProviderConfig,
-    ProviderKind, TuiConfig, PROVIDER_VERSION,
+    Class, ContextFilesConfig, GrantEntry, McpConfig, McpServer, McpTransport, PermissionsConfig,
+    ProviderConfig, ProviderKind, Rung, TuiConfig, PROVIDER_VERSION,
 };
 pub use error::ConfigError;
 pub use scope::Scope;

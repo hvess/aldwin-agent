@@ -1,6 +1,13 @@
 # ADR 0003 — A permission option is a sentence that states its own rule
 
-**Status:** accepted, 2026-09-19
+**Status:** accepted, 2026-09-19 — §2 and §4 amended by ADR 0004
+
+> **Note, 2026-09-20.** ADR 0004 replaces this record's option list: eight
+> rows rather than five, with the deny side mirrored, and each row quoting a
+> program and a class rather than a pattern. **§1 stands unchanged** and still
+> governs every row — one sentence, one column, the rule it would write drawn
+> one step quieter. §3's removal of the grant-summary row also stands, for the
+> same reason it was made.
 **Amends:** ADR 0001 §3 — scope stops being an orthogonal axis the developer
 toggles and becomes a property of the row they pick
 **Affects:** `mjolnir-tui`, `mjolnir-design-conformance` (Class B 2, B 3, B 4)

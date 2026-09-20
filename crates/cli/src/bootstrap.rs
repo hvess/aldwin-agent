@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use mjolnir_config::{Config, GrantList, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
+use mjolnir_config::{Config, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
 use mjolnir_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
 use mjolnir_permissions::Engine;
 use mjolnir_tools::{register_mcp_tools, Dispatcher, McpBridge};
@@ -289,21 +289,19 @@ pub async fn run() -> Result<(), StartupError> {
                 None => config.set_provider(Scope::Global, next).map_err(StartupError::FirstRunWrite)?,
             }
         }
-        // Again, answered only when it was asked. `add_grant` only ever adds,
-        // so writing an unasked answer into a directory that already has a
-        // `permissions.yaml` could only widen an allow list the developer had
-        // already settled — the one direction a default-deny harness must
+        // Again, answered only when it was asked. Writing an unasked answer
+        // into a directory that already has a `permissions.yaml` would
+        // overwrite a standing rung the developer had already settled — and
+        // could only widen it, the one direction a default-deny harness must
         // never move on its own.
         //
         // Written even when the tier grants nothing: the file's existence is
         // what records that this directory's question has been answered, so
         // an `ask` answer has to leave one behind or it would be asked again
         // on the next start.
-        if let Some(tier) = answers.access {
+        if let Some(rung) = answers.access {
             config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
-            for entry in tier.grants() {
-                config.add_grant(Scope::Project, GrantList::Allow, entry).map_err(StartupError::FirstRunWrite)?;
-            }
+            config.set_default_rung(Scope::Project, rung).map_err(StartupError::FirstRunWrite)?;
         }
     }
 

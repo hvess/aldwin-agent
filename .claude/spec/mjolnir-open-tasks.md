@@ -8,7 +8,7 @@ they belonged to the screenshot harness and its conformance catalogue, both
 deleted when the review loop replaced them — see
 `.claude/spec/mjolnir-review.md`'s Progress entry. New numbering starts at 1.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-19
+**Last Updated:** 2026-09-20
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -86,6 +86,65 @@ contradicts) and the entry says so before it goes.
     it without a compositor in the runner — but `cargo test` and `cargo clippy`
     could, and the workspace is currently clippy-clean, which is the cheap
     moment to start enforcing it.
+
+## Permissions (ADR 0004)
+
+12. **An MCP tool cannot be classified by the developer, so every one is a
+    write.** `mcp::tool`'s `permission` hard-codes `Class::Write` regardless of
+    what the server advertises, because an MCP call runs inside the server's
+    process where the sandbox cannot hold a read declaration to its word.
+    ADR 0004 §4 intends the developer to classify each tool at first
+    encounter, with the server's own claim shown as a claim. Closing it needs
+    a place to persist that classification (a new config domain, or a third
+    list in `permissions.yaml`) and a prompt shape that asks the question once
+    rather than per call.
+
+13. **An MCP tool that edits files does so without a diff.** Consequence of
+    12, and the one hole in the edit guarantee. `Class::Edit` exists and
+    `edit` holds it; an MCP tool could too, but only once the developer has
+    said which of its arguments is the path and which is the new content —
+    without that mapping there is nothing to render a diff from. Until it is
+    built, the claim is worded narrowly and deliberately: *Mjolnir's `edit`
+    tool never lands without a diff you accepted.* The design system's readme
+    still says "no write lands without a diff the user has accepted", which
+    overstates it and wants rewording upstream (see entry 1 — it goes in the
+    same re-sync).
+
+14. **A refused read is reported as a refusal, not as a named write.**
+    `sandbox` returns `ToolError::ReadRefused` when a read-declared call fails
+    under the read-only ruleset, and the prompt says the call could not
+    complete — it does not say *it tried to write `.git/config`*. The kernel
+    hands the child an ordinary permission error; naming the path needs
+    syscall interception (seccomp user-notification, or ptrace) on top of
+    Landlock. Worth building for the message alone. **Not needed for the
+    guarantee**, which comes from the write being impossible rather than from
+    our seeing it — and a false positive here is bounded: a read that failed
+    for an unrelated reason offers to re-run as a write, which then fails
+    again with its own error in view.
+
+15. **Reads can only be enforced on Linux.** `sandbox::availability` reports
+    `Unavailable` everywhere else, and `ReadOnly::build` refuses, so a
+    read-declared call is refused rather than run unconfined — correct, and
+    a worse product on macOS and Windows. macOS has an equivalent primitive
+    worth wiring up; Windows effectively does not, and there a `read` rung
+    cannot honestly be offered at all. The fallback is currently the same in
+    both cases and should probably differ.
+
+16. **Landlock's network control covers TCP only.** UDP and unix sockets are
+    outside it, so a read-declared call cannot open a TCP connection but could
+    still send a UDP datagram. A network namespace would close it completely
+    and was verified to work unprivileged on this machine
+    (`unshare -Urn`); it was not taken in this pass because it needs uid-map
+    plumbing in `pre_exec`, which is a larger and more failure-prone change
+    than the two syscalls `engage` currently makes.
+
+17. **A long command elides sooner than it used to.** The options list is
+    eight rows where it was five, the design fixes the panel at
+    `--panel-permission-h`, so a long argument's tail is the first thing to
+    go — announced by the panel's own marker, never at the cost of an option
+    row. Pinned by `a_long_permission_prompt_wraps_in_the_panel_instead_of_
+    being_clipped`. If it bites in use, the fix is a scrollable command block
+    rather than a taller panel, which the design's band height forbids.
 
 ## References
 

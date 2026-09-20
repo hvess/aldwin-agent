@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use super::bridge::McpBridge;
 use crate::error::ToolError;
+use mjolnir_permissions::Class;
 use crate::gate::ApprovalGate;
-use crate::registry::{Tool, ToolDescriptor, ToolSource};
+use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 
 /// One remote MCP tool, proxied through `McpBridge`. `edit_class` is always
 /// `false` at registration — per mjolnir-tools.md, MCP tools only ever
@@ -47,9 +48,25 @@ impl Tool for McpTool {
     /// MCP tool arguments vary arbitrarily by tool, unlike Read/shell's
     /// single clear string field — the whole serialised argument object is
     /// the coarsest-but-workable match target; a developer can still grant
-    /// broadly ("always") rather than needing a precise glob over it.
-    fn permission_target(&self, input: &Value) -> Result<String, ToolError> {
-        Ok(serde_json::to_string(input).unwrap_or_default())
+    /// **Every MCP tool is a write**, whatever the server says about it.
+    ///
+    /// A server advertises its own hints, and a server is exactly the party
+    /// whose word cannot be taken here: unlike `run`, an MCP call executes
+    /// inside the server's process, where the sandbox cannot hold a read
+    /// declaration to its word. With no way to enforce the claim, believing
+    /// it would be the trust-the-declaration design ADR 0004 rejected, minus
+    /// the enforcement that made it safe for `run`.
+    ///
+    /// Letting the developer classify a tool themselves — with the server's
+    /// claim shown as a claim — is ADR 0004 §4's intent and is not built yet.
+    /// Until it is, `write` is the conservative reading and the one that
+    /// cannot quietly be wrong.
+    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
+        Ok(PermissionRequest {
+            program: self.descriptor().name.clone(),
+            class:   Class::Write,
+            argv:    vec![serde_json::to_string(input).unwrap_or_default()],
+        })
     }
 
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
@@ -121,10 +138,12 @@ mod tests {
     }
 
     #[test]
-    fn permission_target_is_the_serialised_arguments() {
+    fn the_permission_request_is_a_write_whatever_the_server_says() {
         let bridge = StdArc::new(McpBridge::new(vec![]));
         let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
-        let target = tool.permission_target(&json!({"text": "hi"})).unwrap();
-        assert_eq!(target, r#"{"text":"hi"}"#);
+        let request = tool.permission(&json!({"text": "hi"})).unwrap();
+        assert_eq!(request.class, mjolnir_permissions::Class::Write);
+        assert_eq!(request.program, "fake:echo");
+        assert_eq!(request.argv, vec![r#"{"text":"hi"}"#.to_string()]);
     }
 }

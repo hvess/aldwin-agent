@@ -1,6 +1,17 @@
 # ADR 0001 — Grants are per tool and per program, not per command string
 
-**Status:** accepted, 2026-09-06
+**Status:** superseded in full by ADR 0004, 2026-09-20
+
+> **Note, 2026-09-20.** Everything this record decides has been replaced.
+> `shell` no longer exists, so the grant unit it reasons about has no
+> referent, and §5's three-point access scale is now the `ask`/`read`/`write`
+> rung held in `permissions.yaml` rather than a preset that expands into
+> grants. The body is left as written because its central argument — that a
+> read/write axis is unsound over a tool taking a whole command line — is
+> correct, and ADR 0004 answers it by deleting the tool rather than by
+> disagreeing.
+
+**Originally accepted:** 2026-09-06
 **Supersedes:** the exact-argv grant unit described in `mjolnir-permissions.md`
 **Affects:** `mjolnir-permissions`, `mjolnir-tui` (prompt copy, first run), `.mjolnir/permissions.yaml`
 

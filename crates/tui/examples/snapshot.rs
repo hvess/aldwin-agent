@@ -30,7 +30,7 @@ use std::io;
 use std::sync::Arc;
 
 use mjolnir_config::Config;
-use mjolnir_permissions::{Engine, PromptPayload};
+use mjolnir_permissions::{Class, Engine, PromptPayload};
 use mjolnir_tui::{App, LogEntry, ModelChoice, PromptResolution, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -306,7 +306,7 @@ fn approval(app: &mut App) {
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
-    let payload = PromptPayload::Tool { kind: "shell".into(), target: "cargo test --workspace".into(), path_like: false };
+    let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
     app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
@@ -318,7 +318,7 @@ fn resolved(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "make me an empty html file in Downloads".into() });
     app.log.push(LogEntry::PermissionPrompt {
         call_id: "call-4".into(),
-        payload: PromptPayload::Tool { kind: "shell".into(), target: "touch ~/Downloads/hello.html".into(), path_like: false },
+        payload: PromptPayload::Tool { program: "touch".into(), argv: vec!["~/Downloads/hello.html".into()], declared: Class::Write },
         resolution: Some(PromptResolution { allowed: true, label: "allowed once".into() }),
     });
     app.log.push(LogEntry::ApprovalCard { call_id: "call-5".into(), diff: DIFF.into(), resolution: Some(true) });

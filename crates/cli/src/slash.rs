@@ -584,7 +584,13 @@ mod tests {
         let config = Config::open_at(project.path(), global.path()).unwrap();
         // Establish the project dir, then hand-corrupt permissions.yaml so
         // reload_all() fails on that one layer.
-        config.add_grant(mjolnir_config::Scope::Project, mjolnir_config::GrantList::Allow, "read:**").unwrap();
+        config
+            .add_grant(
+                mjolnir_config::Scope::Project,
+                mjolnir_config::GrantList::Allow,
+                mjolnir_config::GrantEntry::classed("rg", mjolnir_config::Class::Read),
+            )
+            .unwrap();
         let bad_path = project.path().join(".mjolnir").join("permissions.yaml");
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
 

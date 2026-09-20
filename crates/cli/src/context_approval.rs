@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use mjolnir_permissions::{CheckOutcome, ContextFileTier, Engine};
+use mjolnir_permissions::{ContextFileTier, Engine, Outcome};
 
 const CANDIDATE_FILENAMES: &[&str] = &["CLAUDE.md", "AGENTS.md"];
 
@@ -19,7 +19,7 @@ pub fn resolve(project_root: &Path, engine: &Engine) -> Vec<PathBuf> {
 
 fn resolve_with_io(candidates: &[PathBuf], engine: &Engine, input: &mut impl BufRead, output: &mut impl Write) -> Vec<PathBuf> {
     for candidate in candidates {
-        if let CheckOutcome::PromptRequired(_) = engine.check_context_file(candidate) {
+        if let Outcome::Ask(_) = engine.check_context_file(candidate) {
             prompt_and_record(candidate, engine, input, output);
         }
     }

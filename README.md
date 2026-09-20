@@ -2,56 +2,42 @@
 
 *A tool for thought.*
 
-A coding agent harness where the developer's understanding is the product,
-not the agent's throughput. Resting state is conversation — the agent reads,
-explains, and proposes; it edits only on explicit signal ("apply this", "go
-ahead"). Permissions are default-deny everywhere, and Edit is never
-allowlistable: friction on Edit is structural, not a setting.
+A terminal coding agent that would rather explain the code than rewrite it
+behind your back. It reads, it reasons, it proposes — and it edits only when
+you say so. Every write shows you a diff first. Every command asks before it
+runs. The point is that **you** finish the session understanding the code,
+not just holding a larger diff than when you started.
 
-See `.claude/spec/mjolnir.md` for the full design rationale.
+![Mjolnir answering a question about retry backoff](assets/conversation.png)
 
-## Status
+Built in Rust on [ratatui](https://ratatui.rs). Works with Anthropic or any
+OpenAI-compatible endpoint.
 
-V0, under active development. All seven crates in `.claude/spec/` are
-implemented; four (`mjolnir-core`, `mjolnir-config`, `mjolnir-llm`,
-`mjolnir-cli`) are feature-complete against their specs and archived under
-`.claude/spec/archive/`. Three (`mjolnir-permissions`, `mjolnir-tools`,
-`mjolnir-tui`) are active with one or two disclosed, non-blocking gaps —
-see the `Progress` note at the top of each spec file for specifics.
-
-Not yet run against a real terminal or the live Anthropic API in this
-project's own development environment — see those specs' notes before
-relying on it for anything you can't afford to babysit closely.
+> **Status:** 0.2.0 and actively developed. Linux is the best-supported
+> platform — see the macOS note under Install.
 
 ## Install
 
-The easiest path is a prebuilt binary from this repo's
-[Releases](../../releases) page — no Rust toolchain needed. Grab the archive
-for your platform, extract it, and put `mjolnir` on your `PATH`. Since this
-repo is private, you'll need GitHub access to it to download release assets.
-
-Two targets are built, named by their Rust triple:
+Grab a binary from [Releases](../../releases), extract, put `mjolnir` on your
+`PATH`. No toolchain required. (The repo is private, so you'll need access.)
 
 | archive | for |
 | --- | --- |
-| `mjolnir-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` | 64-bit Intel/AMD Linux |
-| `mjolnir-vX.Y.Z-aarch64-apple-darwin.tar.gz` | Apple Silicon Macs |
+| `…-x86_64-unknown-linux-gnu.tar.gz` | Intel/AMD Linux |
+| `…-aarch64-apple-darwin.tar.gz` | Apple Silicon Macs |
 
-Intel Macs are not built. Windows is not supported — `run` relies on Unix
-process APIs.
+No Intel Mac build. No Windows — `run` leans on Unix process APIs.
 
-**On macOS, reads cannot be enforced.** The sandbox that holds a
-read-declared call to its word is Linux-only (see [Permissions](#permissions)),
-so a macOS build asks about every call instead of running reads unattended.
-That is the honest fallback rather than a silent downgrade, but it is a
-materially different experience and worth knowing before you install.
+**macOS caveat worth knowing before you install:** the sandbox that enforces
+a read-only call is Linux-only (Landlock). On macOS there's nothing to hold a
+call to its word, so instead of quietly trusting it, Mjolnir asks about every
+call. Safe, correct, and noticeably chattier.
 
-### Verifying a release
+### Verify what you downloaded
 
-Each release carries a `SHA256SUMS` covering every archive, and a signature
-over that file. **Take `allowed_signers` from this repository, not from the
-release page** — a key served from the same place as the signature proves
-nothing.
+Each release ships `SHA256SUMS` and a signature over it. Take
+`allowed_signers` from **this repo**, not the release page — a key served
+next to its own signature proves nothing.
 
 ```sh
 ssh-keygen -Y verify -f allowed_signers \
@@ -61,19 +47,25 @@ ssh-keygen -Y verify -f allowed_signers \
 sha256sum -c SHA256SUMS
 ```
 
-No extra tools: `ssh-keygen` ships with SSH, which you already have.
+No new tools: `ssh-keygen` came with SSH.
 
-Verification is worth doing on a tool like this specifically: Mjolnir's whole
-claim is that an edit cannot land without a diff you accepted and that a read
-is enforced rather than trusted. None of that survives running a binary that
-is not the one built from the reviewed source.
+This matters more here than for most downloads. Mjolnir's whole pitch is that
+its `edit` tool can't write without your say-so and that a read is enforced
+rather than trusted — none of which survives running a binary that isn't the
+one built from the source you can read.
 
-### Reproducing a release
+### Build from source
 
-The build is deterministic: the compiler is pinned in `rust-toolchain.toml`,
-dependencies by `Cargo.lock`, absolute source paths are remapped out of the
-binary, and the archive carries no timestamps or ownership. Rebuilding a tag
-gives byte-identical archives:
+Needs [rustup](https://rustup.rs) — `rust-toolchain.toml` pins the compiler
+to 1.98.1, and only rustup honours it.
+
+```sh
+cargo install --path crates/cli   # or: cargo build --release
+```
+
+Release builds are reproducible: pinned compiler, `Cargo.lock`, source paths
+remapped out of the binary, no timestamps in the archive. Rebuilding a tag
+gives byte-identical archives.
 
 ```sh
 git checkout vX.Y.Z
@@ -82,88 +74,9 @@ scripts/release.sh package
 sha256sum -c SHA256SUMS      # the one from the release
 ```
 
-`scripts/release.sh` *is* the release recipe — the GitHub workflow only
-chooses machines and moves files between them. A recipe living in workflow
-YAML can only be run by GitHub, which means it cannot be tested before it is
-pushed and cannot be reproduced by anyone checking a published binary.
-
-Two honest limits. The macOS archive reproduces only *on a Mac* — Apple's SDK
-licence restricts cross-compilation to Apple hardware. And without `rustup`,
-`rust-toolchain.toml` is not in effect; the script warns when it detects this,
-because a build with a different compiler is fine and simply will not match
-the published hash.
-
-### Signing a release (maintainers)
-
-One-time setup. Until it is done, pushing a `vX.Y.Z` tag fails at the
-workflow's guard rather than publishing an unsigned release.
-
-```sh
-ssh-keygen -t ed25519 -N "" -C mjolnir-release -f mjolnir_release
-```
-
-**No passphrase, deliberately.** `ssh-keygen` prompts on stdin and a CI
-runner has none, so a passphrase-protected key cannot sign — it fails rather
-than hanging, but it fails. The GitHub secret store is what protects it.
-
-- contents of `mjolnir_release` → repository secret **`RELEASE_SIGNING_KEY`**
-- `mjolnir_release.pub` → committed as `allowed_signers`, in the form
-  `release@mjolnir ssh-ed25519 AAAA… mjolnir-release`
-
-Losing the key is not a crisis: generate a new one, replace the secret,
-commit the new `allowed_signers`. Only signatures already published stop
-verifying.
-
-**Why not cosign.** It was the first choice and does not work for this. On
-3.x it has deprecated detached signatures and refuses offline key signing:
-`sign-blob --output-signature` errors with "must specify --bundle with
---new-bundle-format", and the bundle path errors with "--tlog-upload=false is
-not supported with --signing-config". Keeping a signature out of Sigstore's
-public log now requires hand-writing a signing-config — more moving parts for
-a worse result.
-
-## Prerequisites
-
-Only needed if you're building from source rather than using a release
-binary above.
-
-- **A Rust toolchain.** Once built, the resulting binary needs nothing
-  Rust-specific to run.
-
-  Use [rustup](https://rustup.rs/), not your OS package manager's `cargo` —
-  this repo's lockfile needs a reasonably recent cargo (1.75 is too old to
-  read it; 1.98 works) and rustup is the reliable way to get one:
-
-  ```sh
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-  source "$HOME/.cargo/env"
-  ```
-
-- **An API key for your provider.** Anthropic, or any OpenAI-compatible
-  endpoint (Mistral, a self-hosted proxy, etc.) — see [Run](#run) below for
-  the `provider.yaml` config for each.
-
-- **[rust-analyzer](https://rust-analyzer.github.io/)** on `PATH`, optional —
-  only needed for the `explain` tool's code-intelligence operations
-  (definition, references, hover, implementations, workspace symbols), and
-  only when working in a Rust project (the only language `explain` supports
-  in V0). Everything else works without it. If you installed Rust via
-  rustup: `rustup component add rust-analyzer`.
-
-## Build
-
-From the repo root:
-
-```sh
-cargo build --release
-```
-
-The binary is `target/release/mjolnir`. To put `mjolnir` on your `PATH`
-instead:
-
-```sh
-cargo install --path crates/cli
-```
+Two honest limits: the macOS archive only reproduces *on a Mac* (Apple's SDK
+licence), and without rustup the compiler pin does nothing — the script says
+so rather than letting you wonder why the hashes differ.
 
 ## Run
 
@@ -172,24 +85,17 @@ export ANTHROPIC_API_KEY=sk-...
 mjolnir
 ```
 
-Zero-arg binary — no flags or subcommands beyond `--help`/`--version`.
-Everything else is driven by config files, not CLI arguments.
+That's the whole CLI. No flags, no subcommands, nothing but `--help` and
+`--version`. Everything else lives in config files.
 
-### First launch
+**First launch** asks where the model runs, which one, and how much access
+this directory gets — then drops you straight into the session. Answers go to
+`~/.mjolnir/` (global) and `.mjolnir/` (this project), both fully commented,
+both meant to be read and edited.
 
-The first run writes an annotated, fully-commented config to `~/.mjolnir/`
-(`permissions.yaml`, `provider.yaml`, `mcp.yaml`, `tui.yaml`) and exits — read
-it, then run `mjolnir` again. If `~/.mjolnir/` already exists but is
-missing one of those four files, Mjolnir refuses to start rather than
-silently filling the gap; restore the missing file or remove the directory
-to reinitialize.
-
-By default `provider.yaml` points `api_key_env` at `ANTHROPIC_API_KEY` — that
-environment variable must be set before Mjolnir will start. Mjolnir never
-reads or stores the key itself in config, only the variable's name.
-
-To use an OpenAI-compatible provider instead (Mistral, a self-hosted proxy,
-etc.), edit `provider.yaml`:
+Mjolnir never stores your API key. `provider.yaml` holds the *name* of an
+environment variable, and reads it at startup. For an OpenAI-compatible
+endpoint:
 
 ```yaml
 version: 1
@@ -199,96 +105,105 @@ base_url: https://api.mistral.ai/v1/chat/completions
 api_key_env: MISTRAL_API_KEY
 ```
 
-`base_url` only takes effect under `provider: openai-compatible`; Anthropic
-always uses its own fixed endpoint regardless of what's set there.
+(`base_url` is ignored for `provider: anthropic`, which knows its own address.)
 
-If your project has a `CLAUDE.md` or `AGENTS.md`, you'll be asked — once,
-synchronously, before the TUI launches — whether to include it in the
-model's context, and at what scope (`[p]roject` persists the approval to
-`.mjolnir/context_files.yaml`, `[s]ession` approves for this run only,
-`[n]o` declines). Nothing not explicitly approved is ever read into context.
+If the project has a `CLAUDE.md` or `AGENTS.md`, you're asked once — before
+anything launches — whether it goes in the model's context. Nothing is read
+into context that you didn't approve.
 
-### Permissions
+## Permissions
 
-Every call starts denied, and the allowlist builds by encounter rather than
-by upfront configuration — so a first session in a new project asks about
-nearly everything. See `.claude/adr/0004-…` for why the model has the shape
-it does.
+Everything starts denied. The allowlist grows as you hit things, so your
+first session in a new project asks about almost everything and then settles
+down quickly.
 
-**A grant is a program and a class** — `git: read`, `cargo: write` — written
-to `permissions.yaml` in the project's `.mjolnir/` or in `~/.mjolnir/`. The
-class belongs to the *call*, not the program: `git status` is a read and
-`git push` is a write, and they are the same binary.
+![A permission prompt for git, declared a write, with eight options](assets/permission.png)
 
-**There is no shell.** A call names a program and an argument list, executed
-directly, so `&&`, `|`, `;` and `$(…)` are ordinary characters with no power
-to chain a second command onto an approved first one.
+**A grant is a program and a class** — `git: read`, `cargo: write`. The class
+belongs to the *call*, not the program, because `git status` and `git push`
+are very different requests to the same binary.
 
-**A read declaration is enforced, not believed.** The agent declares what
-each call does; a call it declares a read is executed with your source tree
-read-only and the network unreachable. If it tries to write anyway, nothing
-lands — you are asked whether to allow it as a write and it runs again. This
-is why a wrong declaration costs a prompt rather than a tree. *Linux only*:
-it needs Landlock, and where that is unavailable a `read` grant cannot be
-honoured, so every call asks.
+**There is no shell.** A call is a program plus an argument list, executed
+directly. `&&`, `|`, `;` and `$(…)` are just characters, with no power to
+staple a second command onto an approved first one.
 
-**A deny is a lock.** Nothing narrower overrides it — not the other file,
-not a session, not a single turn — so a locked call is refused without a
-prompt, because there is no answer that would lift it. Undoing one is a
-deliberate edit to the file that holds it.
+**A read is enforced, not believed.** When the agent declares a call a read,
+it runs with your tree read-only and the network unreachable. Declare wrong
+and nothing lands — you get asked whether to allow it as a write instead. A
+mistaken declaration costs a prompt, not a repository. *(Linux only; see the
+macOS note above.)*
 
-Each scope also carries a standing rung — `ask`, `read` or `write` — for
-anything no entry covers, and the narrower file wins outright.
+**A deny is a lock.** Nothing narrower overrides it — not a session, not a
+turn, not the other config file. A locked call is refused without a prompt,
+because there's no answer that would change it. Unlocking is a deliberate
+edit to the file holding it.
 
-**Editing is outside all of it.** Not a grant, not a rung, not a row on any
-prompt: every edit shows a diff and waits, under every setting, with no way
-to turn it off.
+Each scope also has a standing rung — `ask`, `read`, `write` — for anything
+no rule covers, and the narrower file wins.
 
-### Log rendering
+### Edits are outside all of that
 
-Each speaker gets its own color: user input is green, assistant text is
-bold white with a leading `●`, a slash command is dim (it never reaches the
-model), and tool/status text stays dim. Fenced code blocks (` ```lang `) in
-assistant output render as a bordered block with real syntax highlighting
-instead of raw backticks — an unrecognized or missing language tag falls
-back to unhighlighted (but still bordered) text rather than refusing to
-render.
+Not a grant, not a rung, not a row on any prompt. Every edit shows a diff and
+waits, under every setting, with no way to switch it off.
 
-### Keybindings
+![An edit approval showing a two-line diff with approve and deny](assets/edit.png)
 
-- **Input:** `Enter` submits, `Shift+Enter` inserts a newline (`Ctrl+J` as a
-  fallback on terminals that can't distinguish `Shift+Enter` from plain
-  `Enter`). `Ctrl+C` cancels the active turn, or exits if none is running.
-- **Scroll:** arrow keys or `j`/`k` (only when the input box is empty),
-  `PageUp`/`PageDown`, `G`/`End` to jump to the bottom.
-- **Edit approval card:** `y` approve, `n` deny.
-- **Permission prompt card:** `o`/`s`/`p`/`a` = allow once/session/
-  project/always; `O`/`S`/`P`/`A` = deny at the same tiers.
+The one gap, stated plainly: this covers Mjolnir's own `edit` tool. An MCP
+server's tools are its own code, and Mjolnir can't render a diff for a write
+it doesn't understand the shape of.
 
-### Slash commands
+## Sessions
 
-- `/help` — lists the commands below.
-- `/exit` — ends the session, same as `Ctrl+C` with no turn running.
-- `/reload-config` — reloads all config layers from disk. A file that fails
-  to parse keeps its previous in-memory snapshot (surfaced by path); files
-  that parse fine still pick up the edit.
+Conversations are written to disk as they happen, one JSONL transcript per
+session under `~/.mjolnir/history/`, mode `0600`. `/resume` lists past
+sessions in this project and picks one back up — into the transcript you see
+*and* the context the model has.
 
-## Project layout
+Nothing crosses between sessions on its own. Resume is something you ask for,
+by name; there's no cross-session memory and nothing gets summarised behind
+your back. A resumed session re-asks for permissions rather than inheriting
+them.
 
-Cargo workspace, seven crates under `crates/`. Trait definitions live in the
-crate that owns the boundary; concrete implementations live in siblings that
-depend on it. Read the relevant file in `.claude/spec/` (or
-`.claude/spec/archive/` for the finished ones) before changing any of them.
+Nothing prunes old transcripts yet. They're your files, in a directory you
+own.
 
-| Crate                  | Role                                                              |
-|-------------------------|--------------------------------------------------------------------|
-| `mjolnir-core`          | Agent loop, append-only log, event/command types, `LlmClient`/`ToolDispatcher` trait defs |
-| `mjolnir-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
-| `mjolnir-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
-| `mjolnir-tools`         | `ToolDispatcher` impl — Read, Edit, Run, Explain (LSP), the read-enforcing sandbox, MCP bridge (rmcp) |
-| `mjolnir-llm`           | `LlmClient` impls for Anthropic and OpenAI-compatible (Mistral, self-hosted proxies) providers — reqwest + SSE, retry, prompt caching |
-| `mjolnir-tui`           | ratatui frontend                                                   |
-| `mjolnir-cli` (`crates/cli`) | Binary crate (`mjolnir`) — startup sequence, wiring, slash commands |
+## Keys and commands
+
+| key | does |
+| --- | --- |
+| `Enter` / `Shift+Enter` | submit / newline (`Ctrl+J` where the terminal can't tell them apart) |
+| `Ctrl+C` | cancel the turn, or exit if nothing is running |
+| `↑` `↓` | move within a multi-line draft, then scroll the transcript |
+| `PgUp` `PgDn` `End` | scroll; `End` returns to the live end when the input is empty |
+| `1`–`9`, `Enter` | pick and confirm in any prompt or picker |
+
+The mouse wheel scrolls too — the terminal keeps the mouse, so selecting and
+copying text works the way it does anywhere else.
+
+`/help` lists the commands: `/clear`, `/exit`, `/model`, `/reload-config`,
+`/resume`, `/theme light|dark`. Bare `/model` and `/resume` open a picker
+instead of expecting you to know the answer.
+
+## Layout
+
+Cargo workspace, eight crates. `mjolnir-review` is a dev-only harness that
+lints, tests and screenshots the TUI, and never reaches a release build —
+the release workflow builds `-p mjolnir-cli` and nothing else. Traits live in
+the crate owning the boundary, impls in the siblings that depend on it.
+
+| crate | role |
+| --- | --- |
+| `mjolnir-core` | agent loop, conversation log, event/command types, `LlmClient` and `ToolDispatcher` traits |
+| `mjolnir-config` | YAML config per domain, project and global scope, refuses to start on a half-deleted one |
+| `mjolnir-permissions` | the default-deny engine |
+| `mjolnir-tools` | read, edit, run, explain (LSP), the read-enforcing sandbox, MCP bridge |
+| `mjolnir-llm` | Anthropic and OpenAI-compatible clients — reqwest, SSE, retry, prompt caching |
+| `mjolnir-tui` | the ratatui frontend |
+| `mjolnir-cli` | the `mjolnir` binary — startup, wiring, slash commands |
+| `mjolnir-review` | dev-only: the review loop and screenshot harness |
+
+Design notes live in `.claude/spec/`, and decisions that changed a stated
+constraint in `.claude/adr/`. Read the relevant one before changing a crate.
 
 ## Development
 
@@ -297,9 +212,12 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-One crate (`mjolnir-tools`) has an `#[ignore]`d integration test that
-exercises real rust-analyzer indexing (too slow for routine runs):
+Two tests are `#[ignore]`d because they spawn a real `rust-analyzer`:
 
 ```sh
-cargo test -p mjolnir-tools --lib tools::explain -- --ignored
+cargo test -p mjolnir-tools -- --ignored
 ```
+
+`cargo run -p mjolnir-review -- review --goal "…" --focus "…"` runs the full
+loop — lint, tests, design tokens, frame snapshots, and screenshots of the
+real binary driven through a real terminal.

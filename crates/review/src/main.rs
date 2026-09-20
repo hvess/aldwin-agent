@@ -32,9 +32,14 @@ enum Command {
         /// change did it, and stage 5 is handed this verbatim.
         #[arg(long)]
         goal: String,
-        /// The screens the change touched, comma-separated scene names.
-        /// Stage 5 judges these and ignores the rest — without it a judge
-        /// reports the whole app's backlog instead of this change.
+        /// The scenes the change touched, comma-separated and validated
+        /// against the catalogue. Stage 5 judges these and ignores the rest
+        /// — without it a judge reports the whole app's backlog instead of
+        /// this change.
+        ///
+        /// Scene names, not prose: the run prints the exact frame paths for
+        /// them, so the judge is handed a list rather than a directory to
+        /// glob and choose from. Put the prose in `--goal`.
         #[arg(long)]
         focus: String,
         /// Skip the capture. Stages 1–4 do not need it; stage 5 does, and
@@ -214,6 +219,16 @@ fn main() -> std::io::Result<()> {
         }
 
         Command::Review { goal, focus, no_capture, theme, quiet_ms } => {
+            let focused: Vec<&str> = focus.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            let unknown: Vec<&&str> = focused.iter().filter(|s| !scene::IMPLEMENTED.contains(s)).collect();
+            if focused.is_empty() || !unknown.is_empty() {
+                return Err(std::io::Error::other(format!(
+                    "--focus must be comma-separated scene names; {} is not one. Known: {}",
+                    if unknown.is_empty() { "(nothing)".to_string() } else { format!("{unknown:?}") },
+                    scene::IMPLEMENTED.join(", ")
+                )));
+            }
+
             let mut outcomes = stages::toolchain(&root, &base.toolchain)?;
             outcomes.extend(stages::lint(&root)?);
             outcomes.extend(stages::test(&root)?);
@@ -284,10 +299,26 @@ fn main() -> std::io::Result<()> {
 
             println!();
             match &frames {
-                Some(dir) => println!("frames for stage 5: {}", dir.display()),
+                Some(dir) => {
+                    // The exact frames, enumerated. A judge handed a
+                    // directory has to decide what to open, and deciding is
+                    // a variance source in a stage that has enough of them.
+                    println!("frames for stage 5 — the focused scenes only:");
+                    for scene_name in &focused {
+                        for size in Size::ALL {
+                            for theme in Theme::ALL {
+                                let stem = format!("{scene_name}-{size}-{theme}");
+                                if dir.join(format!("{stem}.png")).exists() {
+                                    println!("  {}", dir.join(format!("{stem}.png")).display());
+                                }
+                            }
+                        }
+                    }
+                    println!("\nEach has a .txt beside it: the declared grid, every character at its\nexact column. Use it for geometry and the .png only for colour.");
+                }
                 None => println!("no frames captured (--no-capture); stage 5 needs them"),
             }
-            println!("report: {}", written.display());
+            println!("\nreport: {}", written.display());
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }

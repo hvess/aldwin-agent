@@ -111,6 +111,12 @@ pub fn __design_fade(fg: ratatui::style::Color, onto: ratatui::style::Color) -> 
     palette::fade(fg, onto, palette::PANEL_TRANSCRIPT_OPACITY)
 }
 
+/// The permission panel's stated band height, from `cells.css`.
+#[doc(hidden)]
+pub fn __design_panel_rows() -> usize {
+    tokens::PANEL_PERMISSION_H
+}
+
 /// Same, for the first-run screen. It runs its own terminal loop
 /// (`first_run::run`) rather than being a mode inside `App`, so the
 /// snapshot harness cannot reach it through `__preview_draw` and needs the

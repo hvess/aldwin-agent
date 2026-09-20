@@ -126,6 +126,56 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
+/// The permission panel is the band height the design states.
+///
+/// `cells.css`'s `--panel-permission-h` is 18 rows and `HANDOFF.md:271`
+/// restates it. A token, so there is nothing to interpret — which is exactly
+/// why this belongs here rather than in a judge's prompt. Two stage 5 judges
+/// found it independently on the same run; a finding produced twice is a
+/// finding that should stop costing a model's attention.
+///
+/// **Scoped to the tool prompt.** `5a` is the screen the design draws. The
+/// edit-approval panel (`approval`, `approval_large`) is not in the design
+/// system at all — ADR 0003 §1 says so in as many words — so 18 is a number
+/// the reference never stated for it.
+///
+/// **Not at 80x24.** Eighteen rows plus a 3-row top bar plus the five rows
+/// `decision::max_height` reserves for the conversation is 26, and the frame
+/// is 24. The design specifies one frame and it is not that one.
+#[test]
+fn the_permission_panel_is_the_band_height_the_design_states() {
+    const PROMPTS: [&str; 3] = ["prompt", "prompt_path", "prompt_scoped"];
+    let expected = mjolnir_tui::__design_panel_rows();
+    for theme in [Theme::Dark, Theme::Light] {
+        for scene_name in PROMPTS {
+            for (width, height) in SIZES.iter().filter(|(_, h)| *h >= 36) {
+                let (width, height) = (*width, *height);
+                let mut app = fixed_identity(App::new("claude-sonnet-5".into(), engine()).with_theme(theme));
+                scene(scene_name, &mut app);
+                let buffer = render(&mut app, width, height);
+                // The panel runs from its title row to the bottom of the
+                // frame. The title row is found by its content rather than
+                // its tone: `permission` on the 3-cell margin is what
+                // `HANDOFF.md:273` specifies and what no other row carries.
+                let first = (0..height)
+                    .find(|y| row_text(&buffer, *y, width).trim_start().starts_with("permission"))
+                    .unwrap_or_else(|| panic!("{theme:?} {scene_name} {width}x{height}: no panel title row"));
+                let rows = height - first;
+                assert_eq!(
+                    rows as usize, expected,
+                    "{theme:?} {scene_name} {width}x{height}: the panel runs rows {first}..{} — {rows} rows, not the {expected} \
+                     that cells.css --panel-permission-h states",
+                    height - 1
+                );
+            }
+        }
+    }
+}
+
+fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
+    (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()
+}
+
 /// Which rows of a scene the **app** owns, as opposed to echoing from
 /// outside it.
 ///

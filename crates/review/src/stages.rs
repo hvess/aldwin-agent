@@ -62,8 +62,14 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
         cargo(root, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?,
         40,
         |out| {
-            let crates = out.lines().filter(|l| l.trim_start().starts_with("Checking ")).count();
-            format!("clippy clean across {crates} crate targets")
+            // Cargo prints a `Checking` line per target it actually builds,
+            // so a warm cache reports none. "0 crate targets" would read as
+            // a lint that checked nothing, which is the opposite of what a
+            // cached pass means.
+            match out.lines().filter(|l| l.trim_start().starts_with("Checking ")).count() {
+                0 => "clippy clean (cached)".to_string(),
+                n => format!("clippy clean across {n} crate targets"),
+            }
         },
     )])
 }

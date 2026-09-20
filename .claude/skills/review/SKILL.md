@@ -71,9 +71,22 @@ cause.
 
 ## 5. Confidence
 
-Spawn **one subagent per focused screen**, or one for the whole focus set if
-it is small. Give it the prompt below, filled in. It is deliberately strict:
-this is the flaky stage, and the prompt is the only thing mitigating that.
+Spawn **one subagent**. Give it the prompt below, filled in. It is
+deliberately strict: this is the only stage that is not reproducible, and the
+prompt is most of what bounds that.
+
+Three things the prompt does that matter, each for a measured reason:
+
+- **It enumerates the frames.** `review` prints the exact paths for the
+  focused scenes — hand it that list, not the directory. A judge that has to
+  decide what to open is a judge making a decision you did not ask it to make.
+- **It sends geometry to the `.txt` and colour to the `.png`.** Every frame
+  ships a declared grid beside it: 521 bytes against 28 KB, every character at
+  its exact column. Two judges once spent the bulk of 30-odd tool calls
+  pixel-sampling positions that were sitting in that file.
+- **It does not ask for a number.** The judge reports findings with a
+  severity; you compute the score. A model picking "80" cannot say what makes
+  it 80 rather than 70, and the arithmetic below can.
 
 > You are reviewing rendered frames of a terminal UI against the design system
 > they are meant to implement. You are blind to the code by design: you do not
@@ -82,63 +95,86 @@ this is the flaky stage, and the prompt is the only thing mitigating that.
 > **The change under review:** `<goal>`
 > **The screens it touched:** `<focus>`
 >
-> **Judge only those screens.** Other screens are in the frames; ignore them
-> entirely. Deviations elsewhere are not this change's business, and reporting
-> them is the single most common way this stage goes wrong.
+> **Judge only those screens.** Deviations elsewhere are not this change's
+> business, and reporting them is the single most common way this stage goes
+> wrong.
 >
-> Read, in this order:
+> Read, in this order, and read nothing else — not `crates/tui`, not
+> `.claude/spec`:
 > 1. `.claude/design/IMPORT.md`, then `HANDOFF.md`, then `tokens/*.css`.
 > 2. `.claude/adr/*.md` — numbered decisions that amend the design. A frame
 >    following one of these is conformant, not deviant.
 > 3. `crates/review/baseline.json`, the `contradictions` array — places the
->    design contradicts *itself*. Do not report these as defects.
+>    design contradicts *itself*. Do not report these.
 >
-> Read nothing else. Not `crates/tui`, not `.claude/spec`.
+> **The frames, and how to read them:**
 >
-> The frames are at `<frames dir>`, named `<scene>-<size>-<theme>.png`. The
-> grid is `tokens/cells.css`: margin 3, label column 8, gutter 2, so body text
-> lands on cell 13 — derive it; there is deliberately no `--body-col`. The
-> capture cell is 8×18px, so cell column N starts at pixel x = 8N.
+> `<the exact list review printed>`
 >
-> Produce exactly two things:
+> Each `.png` has a `.txt` beside it: the app's own declared grid, one line
+> per row, every character at its exact column. **Use the `.txt` for anything
+> positional** — columns, rows, alignment, spacing, copy. **Use the `.png`
+> only for colour.** Sampling a pixel to find a column is slow and gets you an
+> antialiased edge; the grid is exact.
 >
-> 1. **A confidence score, 0–100**: how confident you are that these screens
->    match their designs. Not how good they look — how closely they match.
-> 2. **A list of what does not match.** For each: what the design specifies
->    and where you measured that (file and line), what the frame draws
->    instead (cells, colours, rows), which frames show it, and how sure you
->    are.
+> The grid is `tokens/cells.css`: margin 3, label column 8, gutter 2, so body
+> text lands on cell 13 — derive it, there is deliberately no `--body-col`.
+> The capture cell is 8x18px, so cell column N starts at pixel x = 8N.
 >
-> If a screen matches, say so in one line. Do not pad the list. A finding you
-> cannot cite a design line for is not a finding.
+> **Report every finding in exactly this shape:**
+>
+> ```
+> severity: blocking | major | minor
+> design:   <file:line>, and what it states
+> frame:    <what is drawn, measured — cells, rows, hexes>
+> frames:   <which ones>
+> ```
+>
+> - **blocking** — the change under review does not do what it set out to do.
+> - **major** — a deviation from a value the design *states*, in the focused
+>   screens.
+> - **minor** — a nit, or anything you hold at low confidence.
+>
+> A finding you cannot cite a design file and line for is not a finding; drop
+> it. If a screen matches, say so in one line. Do not pad.
+>
+> Do **not** give an overall score. Report the findings and stop.
 
-**Append the result to `review.html`** by replacing the `<!-- stage-5 -->`
-marker and the placeholder paragraph that follows it: the score, the
-findings, and the verdict. Plain tags only — `<p>`, `<ul>`, `<table>`,
-`<h3>`, `<code>`, `<strong>`, `<em>` — and the page's own `ok` / `bad` /
-`count` / `note` classes where a result needs colour. Escape any `<`, `>` or
-`&` you quote from a tool.
+### Computing the score
 
-The binary deliberately leaves that section empty. It writes only what was
-measured, because the agent that made the change is the one that would
-otherwise write the verdict sentence, and "close, two stages clean" is
-nothing false and much less useful than the numbers.
+From the judge's severities, not from its opinion:
 
-Then:
+```
+100 − (25 × blocking) − (15 × major) − (5 × minor), floored at 0
+```
+
+So **90 means at most two minor deviations and nothing else**. Write the
+arithmetic into the report so a reader can check it.
 
 - **≥ 90** — stage 5 passes. The review is done.
 - **< 90** — fix what the judge found, then run the whole loop again from
-  stage 1. A fix that changes a frame changes which code paths that frame
-  exercises, so stages 1–4 have to re-run, not just stage 5.
+  stage 0. A fix that changes a frame changes which code paths that frame
+  exercises, so the deterministic stages have to re-run too.
 
 **Cap the loop at five iterations.** If it has not reached 90 by then, stop
-and take it to the developer: five failed passes is not a fix problem, it is a
-disagreement about what the design means, and another iteration will not
-settle it.
+and take it to the developer: five failed passes is a disagreement about what
+the design means, and another iteration will not settle it.
 
 **Spawn a fresh subagent every iteration.** One that remembers its last score
 anchors on it, and one that knows what you changed is biased toward seeing the
 change work.
+
+### Graduating a finding
+
+**Any finding this stage produces twice belongs in stage 4.** If two judges —
+or two runs — report the same deviation and it cites a *token* rather than
+prose, it is a deterministic check being run non-deterministically, expensively,
+and without a failure message. Write the assertion into
+`crates/tui/tests/render_snapshot.rs` and let the judge stop paying attention
+to it.
+
+That is what keeps this stage getting cheaper instead of accumulating a longer
+checklist. The panel's 18-row band arrived that way.
 
 ## When the judge is wrong
 

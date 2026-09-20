@@ -627,6 +627,34 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // session" save nothing at all, and "always allow" writes to the global
     // file instead. Where each answer lands is now stated per option, on
     // the option's own row (`DecisionOption::detail`).
+    // `5a` is a band of a stated height, not a box that shrinks to its
+    // contents: `cells.css`'s `--panel-permission-h` is 18 rows and
+    // `HANDOFF.md:271` says so again in prose. Mjolnir's panel came to 17,
+    // because it draws one fact row where the reference draws three and one
+    // separator row where the reference draws two — arithmetic that lands
+    // near the number without being it. Two independent stage 5 judges
+    // measured the gap on the same run.
+    //
+    // The slack goes directly above the footer, which is the one thing the
+    // reference fixes about this band's vertical arrangement: the footer
+    // "sits where the composer's status line would be", i.e. at the bottom.
+    // Everything else fills from the top.
+    //
+    // **Only a tool prompt.** `5a` is the screen the design actually draws.
+    // The edit-approval panel is not in the design system at all (ADR 0003
+    // §1), so 18 is a number the reference never stated for it, and padding
+    // it to match would be inventing a height rather than importing one.
+    let pad = matches!(app.pending_front(), PendingFront::Prompt(_))
+        .then(|| crate::tokens::PANEL_PERMISSION_H.saturating_sub(lines.len() + 1))
+        .unwrap_or(0);
+    // Never at the cost of the conversation: `max_height` already reserved
+    // the transcript's rows, and a band that grew past them would push the
+    // thing the decision is *about* off the screen.
+    let affordable = pad.min(budget.saturating_sub(lines.len().saturating_sub(1)));
+    for _ in 0..affordable {
+        lines.push(card.blank(ctx));
+    }
+
     lines.push(Row::card(pal.bar_bottom).split(footer_hint(options.len(), ctx), Vec::new(), ctx));
     lines
 }

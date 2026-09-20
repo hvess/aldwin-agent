@@ -216,6 +216,7 @@ pub(crate) const STEP_MARK_COL: usize = 10;
 pub(crate) const STEP_CONTENT_COL: usize = 29;
 pub(crate) const GUTTER_LINE_NO_INLINE: usize = 5;
 pub(crate) const DIFF_SIGN_COL: usize = 2;
+pub(crate) const PANEL_PERMISSION_H: usize = 18;
 
 // ---- Glyphs ---------------------------------------------------------
 //

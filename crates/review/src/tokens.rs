@@ -160,6 +160,7 @@ fn grid(cells: &str) -> Result<String> {
         ("step-content-col", "STEP_CONTENT_COL"),
         ("gutter-line-no-inline", "GUTTER_LINE_NO_INLINE"),
         ("diff-sign-col", "DIFF_SIGN_COL"),
+        ("panel-permission-h", "PANEL_PERMISSION_H"),
     ] {
         let value = resolved
             .get(token)

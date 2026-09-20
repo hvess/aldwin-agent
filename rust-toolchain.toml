@@ -1,0 +1,16 @@
+# The compiler is part of the release recipe.
+#
+# `release.yml` used `dtolnay/rust-toolchain@stable`, which is a *moving*
+# target: the same commit tagged three months apart built with two different
+# compilers and produced two different binaries. Nothing detected that,
+# because nothing was comparing.
+#
+# Pinned here rather than in the workflow so the pin travels with the source.
+# `rustup` honours this file automatically, so a local build, a CI build and
+# a third party reproducing a tag all use one compiler without being told to.
+#
+# Bumping it is a deliberate commit that changes every future artifact hash.
+[toolchain]
+channel    = "1.98.1"
+profile    = "minimal"
+components = ["clippy"]

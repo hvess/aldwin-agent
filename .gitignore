@@ -39,3 +39,8 @@
 cosign.key
 *.key
 *.pem
+
+# `scripts/release.sh` stages builds and archives here. Everything in it is
+# reproducible from a tag by running that script, which is the whole point of
+# it — there is nothing to keep.
+/dist

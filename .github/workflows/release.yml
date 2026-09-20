@@ -1,14 +1,24 @@
 name: Release
 
+# Every step of substance lives in `scripts/release.sh`. This file chooses
+# machines and moves files between them; it makes no decisions about how a
+# binary is built or packaged.
+#
+# That split is the point. The previous version carried the recipe in `run:`
+# blocks, which meant it could only ever be executed by GitHub — not run
+# before pushing, not tested, and not reproducible by anyone checking that a
+# published binary matches the source. Two bugs of exactly that kind shipped
+# in it: a missing checkout, and a guard whose `[ cond ] && action` exited
+# the step under `bash -e`.
+
 on:
   push:
     tags:
       - "v*.*.*"
   workflow_dispatch:
 
-# Scoped per job rather than granted once at the top. The build matrix only
-# ever reads the tree; `contents: write` belongs to the one job that creates
-# a release, and nowhere else.
+# Scoped per job. The build matrix only reads the tree; `contents: write`
+# belongs to the one job that creates a release.
 permissions:
   contents: read
 
@@ -20,91 +30,59 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: x86_64-unknown-linux-gnu
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: apple_intel
+          # Apple Silicon only — Intel was dropped. macOS builds must happen
+          # on macOS: cross-compiling Darwin needs Apple's SDK, and its
+          # licence restricts that to Apple hardware.
+          #
+          # Pinned to a numbered image rather than `macos-latest`, which
+          # moves under you and would change artifact hashes without a commit
+          # to explain why. Bumping it is a deliberate change.
           - target: aarch64-apple-darwin
-            os: macos-latest
-            name: apple_silicon
+            os: macos-14
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      # The binary reports Cargo.toml's version (`mjolnir --version`, the
-      # TUI's top bar). Releases used to be tag-only, so the manifest sat at
-      # 0.1.0 through eleven tagged releases and every build claimed to be
-      # 0.1.0. Failing here is what keeps the two from drifting again: bump
-      # the version, commit, then tag the same number.
       - name: Tag must match the workspace version
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          manifest="$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
-          tag="${GITHUB_REF_NAME#v}"
-          if [ "$manifest" != "$tag" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $manifest"
-            exit 1
-          fi
-          echo "version $manifest matches tag $GITHUB_REF_NAME"
+        run: scripts/release.sh check "${{ github.ref_name }}"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
+      # No toolchain action: `rust-toolchain.toml` pins the compiler and
+      # rustup — present on every GitHub runner — honours it without being
+      # told. The pin travels with the source, so a third party reproducing a
+      # tag gets the same compiler without reading this file.
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p mjolnir-cli
+        run: scripts/release.sh build "${{ matrix.target }}"
 
-      - name: Package
-        run: |
-          out="mjolnir-${{ github.ref_name }}-${{ matrix.name }}.tar.gz"
-          tar czf "$out" -C target/${{ matrix.target }}/release mjolnir
-          mkdir -p dist
-          mv "$out" dist/
-
+      # The whole `dist/bin` tree, so each artifact carries its own
+      # `<target>/mjolnir` path and they merge without colliding downstream.
       - uses: actions/upload-artifact@v4
         with:
-          name: mjolnir-${{ matrix.name }}
-          path: dist/*
+          name: bin-${{ matrix.target }}
+          path: dist/bin
 
-  # Every release carries a SHA256SUMS and a detached signature over it.
+  # Packaging, checksums and signing happen **once, on Linux**, never per
+  # build machine.
   #
-  # **One signature, not one per artifact.** Signing the checksum file and
-  # letting `sha256sum -c` carry the rest means a recipient runs two commands
-  # whatever the target matrix grows to, and there is exactly one thing whose
-  # signature can be wrong.
-  #
-  # **Why a key rather than Sigstore keyless.** Keyless would need no secret
-  # at all, but it writes a permanent entry to the *public* Rekor transparency
-  # log naming this repository, the workflow path and every release tag. For a
-  # private distribution channel that publishes the existence and cadence of
-  # the project to anyone who looks, which defeats the point. `--tlog-upload=false`
-  # keeps the signature offline-verifiable and leaks nothing.
-  #
-  # **Why not GitHub's own artifact attestations.** They are the better tool —
-  # provenance ties a binary to a commit and a workflow run, which a bare
-  # signature does not — but they are unavailable for private repositories
-  # outside GitHub Enterprise Cloud. If this repo ever moves to that plan, or
-  # goes public, add `actions/attest-build-provenance` here and keep the
-  # signature: they answer different questions.
+  # macOS ships bsdtar, which rejects the `--sort` / `--owner` / `--mtime`
+  # flags that make an archive deterministic. Packaging on both runners would
+  # mean two recipes with different flags — precisely the deviance this
+  # rewrite exists to remove. So the Mac produces a binary and nothing else.
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # The tree is needed for `cosign.pub`: the verify step below checks the
-      # signature against the *committed* public key, which is the same file a
-      # recipient is told to use.
+      # The tree is needed for the script, and for `cosign.pub`: the verify
+      # step checks the signature against the *committed* public key, which
+      # is the same file a recipient is told to use.
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: dist/bin
+          pattern: bin-*
           merge-multiple: true
 
       # Fails here, with something actionable, rather than inside cosign with
@@ -127,18 +105,23 @@ jobs:
             missing="${missing:+$missing and }the committed cosign.pub"
           fi
           if [ -n "$missing" ]; then
-            echo "::error::Release signing is not set up — missing $missing. Run \`cosign generate-key-pair\`, add the private half as COSIGN_PRIVATE_KEY and its passphrase as COSIGN_PASSWORD, and commit cosign.pub. See README's \"Verifying a release\"."
+            echo "::error::Release signing is not set up — missing $missing. Run \`cosign generate-key-pair\` in a temporary directory, add the private half as COSIGN_PRIVATE_KEY and its passphrase as COSIGN_PASSWORD, and commit cosign.pub. See README's \"Signing a release\"."
             exit 1
           fi
 
-      - name: Checksums
-        working-directory: dist
-        run: |
-          sha256sum *.tar.gz > SHA256SUMS
-          cat SHA256SUMS
+      - name: Package
+        run: scripts/release.sh package
 
       - uses: sigstore/cosign-installer@v4
 
+      # One signature over the checksum file rather than one per artifact: a
+      # recipient runs two commands whatever the target matrix grows to, and
+      # there is exactly one thing whose signature can be wrong.
+      #
+      # `--tlog-upload=false` keeps it out of Sigstore's public transparency
+      # log, which would otherwise publish this private repository's name,
+      # its workflow path and the timing of every release to a permanent
+      # public record.
       - name: Sign the checksums
         working-directory: dist
         env:
@@ -152,9 +135,9 @@ jobs:
             --yes \
             SHA256SUMS
 
-      # Verified here with the *public* key from the repository, the same file
-      # and the same command a recipient uses. Signing and then not checking
-      # would leave the first real verification to someone who cannot tell a
+      # Verified with the *public* key from the repository, using the same
+      # command the README gives a recipient. Signing and then not checking
+      # leaves the first real verification to someone who cannot tell a
       # broken pipeline from a tampered download.
       - name: Verify the signature the way a recipient does
         run: |
@@ -166,7 +149,10 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
           generate_release_notes: true
           append_body: true
           body: |
@@ -175,9 +161,9 @@ jobs:
             ### Verifying this release
 
             Every artifact is covered by `SHA256SUMS`, and `SHA256SUMS` is
-            signed. `cosign.pub` lives in the repository — take it from there,
-            not from this page, so the key and the signature do not come from
-            the same place.
+            signed. `cosign.pub` lives in the repository — take it from
+            there, not from this page, so the key and the signature do not
+            come from the same place.
 
             ```sh
             cosign verify-blob \
@@ -189,8 +175,24 @@ jobs:
             sha256sum -c SHA256SUMS
             ```
 
-            `--insecure-ignore-tlog` is expected: the signature is deliberately
-            not published to Sigstore's public transparency log, which would
-            otherwise make this private repository's name and release cadence
-            public. The flag disables a check that does not apply, not one that
-            is being skipped.
+            `--insecure-ignore-tlog` is expected: the signature is
+            deliberately not published to Sigstore's public transparency log,
+            which would make this private repository's name and release
+            cadence public. The flag disables a check that does not apply.
+
+            ### Reproducing it
+
+            The build is deterministic — the compiler is pinned in
+            `rust-toolchain.toml`, dependencies by `Cargo.lock`, source paths
+            are remapped out of the binary, and the archive carries no
+            timestamps. Rebuilding this tag gives byte-identical archives:
+
+            ```sh
+            git checkout ${{ github.ref_name }}
+            scripts/release.sh build x86_64-unknown-linux-gnu
+            scripts/release.sh package ${{ github.ref_name }}
+            sha256sum -c SHA256SUMS
+            ```
+
+            The macOS archive reproduces the same way, on a Mac — Apple's SDK
+            licence is why that one cannot be checked from Linux.

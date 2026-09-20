@@ -27,16 +27,52 @@ relying on it for anything you can't afford to babysit closely.
 
 The easiest path is a prebuilt binary from this repo's
 [Releases](../../releases) page — no Rust toolchain needed. Grab the archive
-for your platform (Linux or macOS, x86_64 or Apple Silicon; Windows isn't
-supported yet — `run` relies on Unix process APIs), extract it, and put
-`mjolnir` on your `PATH`. Since this repo is private, you'll need GitHub
-access to it to download release assets.
+for your platform, extract it, and put `mjolnir` on your `PATH`. Since this
+repo is private, you'll need GitHub access to it to download release assets.
+
+Two targets are built, named by their Rust triple:
+
+| archive | for |
+| --- | --- |
+| `mjolnir-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` | 64-bit Intel/AMD Linux |
+| `mjolnir-vX.Y.Z-aarch64-apple-darwin.tar.gz` | Apple Silicon Macs |
+
+Intel Macs are not built. Windows is not supported — `run` relies on Unix
+process APIs.
 
 **On macOS, reads cannot be enforced.** The sandbox that holds a
 read-declared call to its word is Linux-only (see [Permissions](#permissions)),
 so a macOS build asks about every call instead of running reads unattended.
 That is the honest fallback rather than a silent downgrade, but it is a
 materially different experience and worth knowing before you install.
+
+### Reproducing a release
+
+The build is deterministic: the compiler is pinned in `rust-toolchain.toml`,
+dependencies by `Cargo.lock`, absolute source paths are remapped out of the
+binary, and the archive carries no timestamps or ownership. Rebuilding a tag
+gives byte-identical archives, so you can check that what you downloaded is
+what the source produces:
+
+```sh
+git checkout vX.Y.Z
+scripts/release.sh build x86_64-unknown-linux-gnu
+scripts/release.sh package
+sha256sum -c SHA256SUMS      # the one from the release
+```
+
+`scripts/release.sh` *is* the release recipe — the GitHub workflow only
+chooses machines and moves files between them. That is deliberate: a recipe
+living in workflow YAML can only be run by GitHub, which means it cannot be
+tested before it is pushed and cannot be reproduced by anyone checking a
+published binary against the source.
+
+Two honest limits. The macOS archive reproduces the same way but only *on a
+Mac* — cross-compiling Darwin needs Apple's SDK and its licence restricts
+that to Apple hardware. And reproducing without `rustup` installed means
+`rust-toolchain.toml` is not in effect; the script warns when it detects
+this, because a build with a different compiler is perfectly good and simply
+will not match the published hash.
 
 ### Signing a release (maintainers)
 

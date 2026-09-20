@@ -12,10 +12,10 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. As of 2026-08-29,
-four (config, core, llm, cli) are archived under `.claude/spec/archive/` —
-implemented, tested, and audited with no known gaps. Four stay active:
-permissions, tools, tui and review. When a spec step is completed, note it;
+Specs are in `.claude/spec/` — read before implementing. Five are archived
+under `.claude/spec/archive/` — config, core, llm and cli as of 2026-08-29,
+and history as of 2026-09-20 — implemented, tested, and audited with no known
+gaps. Four stay active: permissions, tools, tui and review. When a spec step is completed, note it;
 when all steps are done, move the spec to `.claude/spec/archive/`.
 
 `mjolnir-review.md` is the feedback loop that runs after a change is ready
@@ -109,6 +109,14 @@ a decision they cover.
   toggle and no grant-summary row, because each row quotes the pattern it
   would write. Two stated costs — the session tier grants the exact target,
   and the panel no longer names the file a grant lands in.
+
+- **0005 — A session outlives its process.** Reverses one clause of
+  `mjolnir.md`'s V0 "sessions are ephemeral" Decision: a conversation is
+  written to disk as it happens and `/resume` picks one back up. The other two
+  clauses are deliberately untouched — memory stays developer-authored and
+  nothing crosses into a *new* session. Four boundaries keep it a persistence
+  decision rather than a memory one; the fourth is that there is no
+  `--resume` flag, so the zero-arg Decision stands.
 
 - **0004 — A permission is a declared class, an enforced sandbox, and a lock.**
   Supersedes 0001 entirely and amends 0003's option list. There is no arbitrary

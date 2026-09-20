@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+mjolnir-core  = { path = "../core" }
 serde         = { workspace = true }
+serde_json    = { workspace = true }
 serde_yaml_ng = "0.10"
 thiserror     = { workspace = true }
 tempfile      = "3"

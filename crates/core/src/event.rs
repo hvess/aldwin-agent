@@ -3,7 +3,7 @@ use crate::types::*;
 
 // ── LLM-boundary events ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepOutcome {
     pub stop_reason: StopReason,
     pub usage:       UsageStats,
@@ -24,7 +24,7 @@ pub enum LlmEvent {
 
 // ── Core events (emitted upward) ─────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnEndReason { EndTurn, Cancelled, Error(String) }
 
 /// All events the agent emits toward the TUI / future web client.
@@ -70,6 +70,17 @@ pub enum Event {
     /// state itself.
     HistoryCleared,
 
+    /// `Command::Resume` landed: `ConversationLog` now holds `records` and
+    /// nothing else. The exact counterpart of `HistoryCleared` — the TUI
+    /// rebuilds its own rendered log from these, the way it wipes its own on
+    /// a clear, rather than being told separately by whoever read the file.
+    ///
+    /// The records travel in the event rather than the TUI reading the
+    /// transcript itself: mjolnir-tui depends only on core and permissions
+    /// and has no filesystem access by design, the same reason the model
+    /// catalogue is handed to it rather than looked up.
+    HistoryLoaded { records: Vec<LogRecord> },
+
     /// `/theme light|dark` — the raw config value, same "opaque to core"
     /// shape as `PermissionsChanged`'s payload: core has no opinion on what
     /// a theme is, mjolnir-tui parses it (`palette::Theme::from_config`).
@@ -110,6 +121,21 @@ pub enum Command {
     /// `Submit` mid-turn: there's no sound meaning for "forget everything"
     /// while a turn is still in flight using that same history.
     ClearHistory,
+
+    /// `/resume` — the loaded transcript replaces `ConversationLog`, so the
+    /// next turn's `messages_from_log()` sees the resumed conversation.
+    /// Core acknowledges with `Event::HistoryLoaded`.
+    ///
+    /// It carries the records rather than a `SessionId` because core owns no
+    /// filesystem dependency: mjolnir-cli's interceptor reads the file (it
+    /// holds the `Config` that knows where history lives) and core is handed
+    /// the result. Same division as `ClearHistory`, which core acts on
+    /// without knowing what `/clear` is.
+    ///
+    /// Discarded with a warning mid-turn, exactly as `ClearHistory` is:
+    /// there is no sound meaning for "replace the history" while a turn is
+    /// in flight using it.
+    Resume { records: Vec<LogRecord> },
 }
 
 // ── Log record ───────────────────────────────────────────────────────────────
@@ -117,7 +143,7 @@ pub enum Command {
 /// What gets appended to the conversation log. Mirrors the event set but stripped
 /// of streaming-only entries (TextDelta and ThinkingStart/End accumulate into
 /// AssistantMessage before being committed).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LogRecord {
     TurnStarted  { turn_id: TurnId },

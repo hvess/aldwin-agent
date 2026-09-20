@@ -36,6 +36,19 @@ contradicts) and the entry says so before it goes.
    what to do with them — a cell-for-cell diff is wrong, because the design's
    frames hold different content; landmark positions are the comparable part.
 
+21. **A panel dims the ink behind it but not the ground.** `ui/mod.rs:296`'s
+    `fade_area` composites `cell.fg` against `cell.bg` and leaves `cell.bg`
+    alone, so an overlay panel recedes the *text* behind it and none of the
+    bands. `HANDOFF.md:280` and `:353` say "the transcript behind dims to
+    ~35%", which is the whole surface. Shared by the permission panel and both
+    pickers, so it is not any one screen's defect — but it is most visible
+    where a panel opens over the resting screen, since the wordmark's
+    `--tui-reverse-bg` then stays the brightest field in the frame, above the
+    panel that is supposed to be the one live surface. Raised by a stage 5
+    judge on the session list, 2026-09-20; reachable identically through bare
+    `/model`. Fixing it means fading `cell.bg` toward the ground in the same
+    pass, and deciding what that does to the wordmark specifically.
+
 ## Review loop
 
 3. **`cargo fmt` is not in stage 1.** The codebase's aligned struct fields and
@@ -66,6 +79,33 @@ contradicts) and the entry says so before it goes.
 8. **The loop has never iterated.** No session has gone review → fix →
    re-review → rescore, so the five-iteration cap and stage 5's re-run are
    untested by use.
+
+## History (ADR 0005)
+
+18. ~~**No review scene reaches the `/resume` picker.**~~ **Done 2026-09-20.**
+    `scene.rs` gained a `resume` scene: `Script::history` seeds past sessions
+    through the product's own `HistoryStore` (same rule as the global config —
+    a copy of the JSONL format here would drift), and the scene types
+    `/resume`. Two sessions with different turn counts, so the list is a list
+    and both `1 turn` and `4 turns` are exercised. It earned its keep
+    immediately — stage 5 scored 75 on the first pass, against a panel every
+    unit test was happy with. One wrinkle: the row's date is rendered in local
+    time, so the frame is stable per machine but not across timezones.
+
+19. **There is no opt-out, and nothing prunes.** Both are deliberate V1 gaps
+    named in ADR 0005's Consequences, recorded here so they are found by
+    someone looking for work rather than by someone surprised. Transcripts
+    accumulate under `~/.mjolnir/history/` at mode `0600` until the developer
+    deletes them. The opt-out is the more pressing of the two: a developer
+    working in a tree whose tool results carry secrets currently has no way to
+    say "not this project" short of not running Mjolnir in it.
+
+20. **An MCP tool's results land in the transcript with no classification.**
+    Consequence of entry 12 rather than of ADR 0005, but history is what gives
+    it a disk lifetime: every MCP call is a `Class::Write` whose result is
+    written to a transcript like any other. Whatever entry 12 settles about
+    classifying MCP tools should say whether a class also decides what is
+    recorded.
 
 ## Repo
 

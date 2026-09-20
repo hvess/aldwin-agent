@@ -31,6 +31,16 @@ pub struct Script {
     /// something to read, an `edit` needs its `before` text to exist exactly
     /// once.
     pub files:   Vec<(&'static str, &'static str)>,
+    /// Past sessions to seed into this project's history directory, as
+    /// `(first user message, started_at, turns)`. Written through the
+    /// product's own `HistoryStore`, same rule as the global config: a copy
+    /// of the JSONL format here would drift from the one being reviewed.
+    ///
+    /// `started_at` is fixed per scene so the picker's date column is stable
+    /// between runs. It is rendered in *local* time by mjolnir-cli, so the
+    /// date can still differ between machines in distant timezones — noon
+    /// UTC is chosen to keep that within a day either way.
+    pub history: &'static [(&'static str, u64, usize)],
     /// Typed once the app has settled.
     pub keys:    &'static str,
     /// Written only when the scene wants a provider configured at all;
@@ -57,6 +67,7 @@ pub const CATALOGUE: &[&str] = &[
     "prompt",
     "prompt_path",
     "prompt_scoped",
+    "resume",
 ];
 
 /// Scenes that are wired up. The rest stay in `CATALOGUE` so the vocabulary is
@@ -74,6 +85,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "prompt",
     "prompt_path",
     "prompt_scoped",
+    "resume",
 ];
 
 const DISPATCHER: &str = "crates/tools/src/dispatcher.rs";
@@ -105,17 +117,17 @@ pub fn script(name: &str) -> Result<Script> {
     Ok(match name {
         // First run *is* the absence of both answers: no provider resolves,
         // and this directory has no permissions file.
-        "first_run" => Script { name: "first_run", grants: vec![], replies: vec![], files: vec![], keys: "", provider: false },
+        "first_run" => Script { name: "first_run", grants: vec![], replies: vec![], history: &[], files: vec![], keys: "", provider: false },
 
         // Configured and answered, nothing said yet — the state a returning
         // developer opens into, and the one `/clear` returns them to.
-        "empty" => Script { name: "empty", grants: vec![], replies: vec![], files: vec![], keys: "", provider: true },
+        "empty" => Script { name: "empty", grants: vec![], replies: vec![], history: &[], files: vec![], keys: "", provider: true },
 
-        "conversation" => Script { name: "conversation", grants: vec![], replies: vec![fake::text(PROSE)], files: vec![], keys: ask, provider: true },
+        "conversation" => Script { name: "conversation", grants: vec![], replies: vec![fake::text(PROSE)], history: &[], files: vec![], keys: ask, provider: true },
 
-        "markdown" => Script { name: "markdown", grants: vec![], replies: vec![fake::text(TABLE)], files: vec![], keys: "\"which providers are set up?\",Enter", provider: true },
+        "markdown" => Script { name: "markdown", grants: vec![], replies: vec![fake::text(TABLE)], history: &[], files: vec![], keys: "\"which providers are set up?\",Enter", provider: true },
 
-        "fenced_diff" => Script { name: "fenced_diff", grants: vec![], replies: vec![fake::text(DIFF)], files: vec![], keys: ask, provider: true },
+        "fenced_diff" => Script { name: "fenced_diff", grants: vec![], replies: vec![fake::text(DIFF)], history: &[], files: vec![], keys: ask, provider: true },
 
         // --- the tool-driven scenes -------------------------------------
         // What each of these reaches is decided by the *grants it seeds*, not
@@ -129,6 +141,7 @@ pub fn script(name: &str) -> Result<Script> {
                 fake::tool_call("call-1", "read", serde_json::json!({ "path": DISPATCHER })),
                 fake::text("The dispatcher denies by absence: a tool with no registration is refused before any permission check runs."),
             ],
+            history: &[],
             files:   vec![(DISPATCHER, "// the dispatcher\n")],
             keys:    "\"what does the dispatcher do on a deny-by-absence?\",Enter",
             provider: true,
@@ -138,6 +151,7 @@ pub fn script(name: &str) -> Result<Script> {
             name:    "prompt",
             grants:  vec![],
             replies: vec![fake::tool_call("call-1", "read", serde_json::json!({ "path": "README.md" }))],
+            history: &[],
             files:   vec![("README.md", "# project\n")],
             keys:    "\"read the readme\",Enter",
             provider: true,
@@ -147,6 +161,7 @@ pub fn script(name: &str) -> Result<Script> {
             name:    "prompt_path",
             grants:  vec![],
             replies: vec![fake::tool_call("call-3", "read", serde_json::json!({ "path": DISPATCHER }))],
+            history: &[],
             files:   vec![(DISPATCHER, "// the dispatcher\n")],
             keys:    "\"what does the dispatcher do on a deny-by-absence?\",Enter",
             provider: true,
@@ -172,6 +187,7 @@ pub fn script(name: &str) -> Result<Script> {
                 "run",
                 serde_json::json!({ "program": "git", "args": ["commit", "-m", "wire the dispatcher"], "class": "write" }),
             )],
+            history: &[],
             files:   vec![],
             keys:    "\"commit what we have\",Enter",
             provider: true,
@@ -185,6 +201,7 @@ pub fn script(name: &str) -> Result<Script> {
                 "edit",
                 serde_json::json!({ "path": "src/retry.rs", "before": "    100\n", "after": "    100u64 << attempt.min(6)\n" }),
             )],
+            history: &[],
             files:   vec![("src/retry.rs", RETRY_RS)],
             keys:    ask,
             provider: true,
@@ -202,6 +219,7 @@ pub fn script(name: &str) -> Result<Script> {
                     "after":  "fn backoff(attempt: u32) -> u64 {\n    (100u64 << attempt.min(6)).min(30_000)\n}\n",
                 }),
             )],
+            history: &[],
             files:   vec![("src/retry.rs", LONG_BEFORE)],
             keys:    ask,
             provider: true,
@@ -213,8 +231,28 @@ pub fn script(name: &str) -> Result<Script> {
             name:    "long",
             grants:  vec![],
             replies: vec![fake::text(&format!("{PROSE}\n\n{TABLE}\n\n{DIFF}\n\n{PROSE}"))],
+            history: &[],
             files:   vec![],
             keys:    ask,
+            provider: true,
+        },
+
+        // The session picker. Two past sessions rather than one, so the
+        // list is a list — a single row cannot show the cursor sitting on
+        // one entry among others, which is most of what the control does.
+        // Different turn counts on purpose: the row's detail half
+        // distinguishes "1 turn" from "4 turns", and a scene where every
+        // count matched would not show it.
+        "resume" => Script {
+            name:    "resume",
+            grants:  vec![],
+            replies: vec![],
+            history: &[
+                ("how should the retry loop back off?", 1_789_732_800, 4),
+                ("which providers are set up?", 1_789_819_200, 1),
+            ],
+            files:   vec![],
+            keys:    "\"/resume\",Enter",
             provider: true,
         },
 
@@ -275,6 +313,8 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         std::fs::write(project.join("permissions.yaml"), format!("version: 2\n{allow}deny: []\n"))?;
     }
 
+    seed_history(script, &global, &cwd)?;
+
     for (path, contents) in &script.files {
         let file = cwd.join(path);
         if let Some(parent) = file.parent() {
@@ -285,4 +325,46 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
 
     let keys = crate::keys::parse(script.keys).map_err(Error::other)?;
     Ok(Prepared { cwd, home, keys })
+}
+
+/// Write this scene's past sessions, through the product's own writer.
+///
+/// The ids are derived from `started_at` rather than minted, so a scene's
+/// transcripts have the same names every run — `SessionId::mint` deliberately
+/// carries a pid and a counter, neither of which is reproducible.
+fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
+    if script.history.is_empty() {
+        return Ok(());
+    }
+    use mjolnir_config::{HistoryStore, SessionHeader, HISTORY_VERSION};
+    use mjolnir_core::{LogRecord, SessionId, StepId, TurnEndReason, TurnId};
+
+    let dir = mjolnir_config::history_project_dir(&global.join("history"), cwd);
+    for (index, (text, started_at, turns)) in script.history.iter().enumerate() {
+        let id = SessionId(format!("{started_at:010}-0-{index}"));
+        let header = SessionHeader {
+            version:    HISTORY_VERSION,
+            started_at: *started_at,
+            cwd:        cwd.to_string_lossy().into_owned(),
+            model:      "gpt-5".into(),
+        };
+        let store = HistoryStore::create(&dir, &id, &header).map_err(|e| Error::other(format!("seeding history: {e}")))?;
+        for turn in 0..*turns {
+            let turn_id = TurnId(turn as u64 + 1);
+            let step_id = StepId(turn as u64 + 1);
+            // Only the first turn carries the seeded text: the title comes
+            // from the first user message, and the rest exist to make the
+            // turn count true.
+            let user = if turn == 0 { (*text).to_string() } else { format!("and then? ({turn})") };
+            for record in [
+                LogRecord::TurnStarted { turn_id },
+                LogRecord::UserMessage { turn_id, text: user },
+                LogRecord::AssistantMessage { turn_id, step_id, text: PROSE.into() },
+                LogRecord::TurnEnded { turn_id, reason: TurnEndReason::EndTurn },
+            ] {
+                store.append(&record).map_err(|e| Error::other(format!("seeding history: {e}")))?;
+            }
+        }
+    }
+    Ok(())
 }

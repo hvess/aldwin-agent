@@ -48,6 +48,22 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
     pub fn log(&self) -> &ConversationLog { &self.log }
 
+    /// Write this session's records through to a transcript as well as to
+    /// memory. Builder-style rather than a `new` argument because every
+    /// caller but mjolnir-cli's bootstrap — every test in this crate
+    /// included — wants the historyless log `new` already builds.
+    pub fn with_sink(mut self, sink: Arc<dyn crate::log::RecordSink>) -> Self {
+        self.log = ConversationLog::with_sink(sink);
+        self
+    }
+
+    /// Point the transcript writer at a different file. `/resume` moves it
+    /// onto the resumed session's transcript so the continued conversation
+    /// lands in the file it came from; `/clear` moves it onto a fresh one.
+    pub fn set_sink(&mut self, sink: Option<Arc<dyn crate::log::RecordSink>>) {
+        self.log.set_sink(sink);
+    }
+
     /// Resolve a pending Edit approval gate. Returns false if `call_id` has
     /// no pending *approval* (already resolved, never registered, or its
     /// pending entry is actually a prompt — put back unconsumed rather than
@@ -115,6 +131,17 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 Command::ClearHistory => {
                     self.log.clear();
                     let _ = events.send(Event::HistoryCleared).await;
+                }
+
+                // `replace`, not a loop of `append`: these records came off
+                // disk and the session is about to continue writing to that
+                // same file — see `ConversationLog::replace`. The event
+                // carries them back out so the TUI rebuilds its rendered log
+                // from the one copy core just took, rather than from a second
+                // read of the file.
+                Command::Resume { records } => {
+                    self.log.replace(records.clone());
+                    let _ = events.send(Event::HistoryLoaded { records }).await;
                 }
             }
         }
@@ -234,6 +261,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                             }
                             Some(Command::ClearHistory) => {
                                 warn!("ClearHistory received mid-turn; discarding");
+                            }
+                            Some(Command::Resume { .. }) => {
+                                warn!("Resume received mid-turn; discarding");
                             }
                             None => break StepTerminal::Error("command channel closed".into()),
                         }
@@ -384,6 +414,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         Some(Command::PromptResponse { call_id, payload }) => { self.resolve_prompt(&call_id, payload); }
                         Some(Command::Submit { .. }) => warn!("Submit received mid-turn; discarding"),
                         Some(Command::ClearHistory) => warn!("ClearHistory received mid-turn; discarding"),
+                        Some(Command::Resume { .. }) => warn!("Resume received mid-turn; discarding"),
                         None => {
                             let reason = TurnEndReason::Error("command channel closed".into());
                             return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;

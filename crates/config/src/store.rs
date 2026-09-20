@@ -218,6 +218,17 @@ impl Config {
         self.scope_dir(scope).join(format!("{domain}.yaml"))
     }
 
+    /// Where this project's transcripts live — `~/.mjolnir/history/<slug>/`.
+    ///
+    /// Global-scoped and keyed by project, not written into the project's own
+    /// `.mjolnir/`: a transcript carries whatever the session's tool results
+    /// carried, and that is not something to leave sitting inside a tree the
+    /// developer may well be committing.
+    pub fn history_dir(&self) -> PathBuf {
+        let project_root = self.inner.project_dir.parent().unwrap_or(&self.inner.project_dir);
+        crate::history::project_dir(&self.inner.global_dir.join("history"), project_root)
+    }
+
     // ── Read ─────────────────────────────────────────────────────────────
 
     pub fn project_permissions(&self) -> PermissionsConfig {

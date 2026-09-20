@@ -21,6 +21,10 @@ tracing              = { workspace = true }
 serde_json           = { workspace = true }
 clap                 = { version = "4", features = ["derive"] }
 async-stream         = "0.3"
+# Already in the tree via rmcp — this adds a name, not a build. `Local`
+# because a transcript's timestamp is read by the developer who made it,
+# and UTC in a picker row is a small daily subtraction problem.
+chrono               = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 tempfile = "3"

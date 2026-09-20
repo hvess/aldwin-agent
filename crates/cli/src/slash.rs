@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use mjolnir_config::Config;
-use mjolnir_core::{Command, Event};
+use mjolnir_core::{Command, Event, SessionId};
 use tokio::sync::mpsc;
+
+use crate::history::History;
 
 /// What `intercept` decided to do with one incoming command.
 enum Intercepted {
@@ -27,7 +31,12 @@ enum Intercepted {
 /// data-driven dispatch table yet.
 const HELP_TEXT: &str = "commands: /help (this list), /clear (clear conversation context), /exit (end the session), \
      /model (pick from the provider and model lists), /model [provider/]model (set it directly), \
-     /reload-config (reload config files from disk), /theme light|dark (switch color theme)";
+     /reload-config (reload config files from disk), /resume (pick a past session to continue), \
+     /theme light|dark (switch color theme)";
+
+/// `/resume`'s usage line, quoted by the branches that cannot act — same
+/// "never make them go and find /help" rule as `MODEL_USAGE`.
+const RESUME_USAGE: &str = "usage: /resume <id> (or /resume on its own to pick from a list)";
 
 /// `/model`'s own usage line, quoted by every branch that rejects an
 /// argument so the developer never has to go and find `/help`.
@@ -80,7 +89,13 @@ impl Session {
 /// ApproveTool — it has no slash-command semantics." Runs synchronously in
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
-async fn intercept(command: Command, config: &Config, session: &mut Session, events: &mpsc::Sender<Event>) -> Intercepted {
+async fn intercept(
+    command:  Command,
+    config:   &Config,
+    session:  &mut Session,
+    history:  Option<&Arc<History>>,
+    events:   &mpsc::Sender<Event>,
+) -> Intercepted {
     let Command::Submit { text } = &command else { return Intercepted::Forward(command) };
     let Some(rest) = text.trim_start().strip_prefix('/') else { return Intercepted::Forward(command) };
 
@@ -99,7 +114,18 @@ async fn intercept(command: Command, config: &Config, session: &mut Session, eve
         // than handled locally; core acknowledges with Event::HistoryCleared
         // once done, which is what actually tells the TUI to wipe its own
         // rendered log (see mjolnir_tui::App::apply_event).
-        "clear" => Intercepted::Forward(Command::ClearHistory),
+        //
+        // The transcript is sealed on the way past, before core is told:
+        // "forget everything" is about the model's context, and the record
+        // of what was said stays on disk and stays resumable. Sealing is
+        // implicit — nothing is written to close the old file — so a killed
+        // process leaves exactly what a cleared one does.
+        "clear" => {
+            if let Some(history) = history {
+                history.seal_and_open_new();
+            }
+            Intercepted::Forward(Command::ClearHistory)
+        }
         "exit" => Intercepted::Quit,
         // "theme" alone (no argument) reports the current setting rather
         // than erroring — same "tell the developer where they stand"
@@ -123,11 +149,94 @@ async fn intercept(command: Command, config: &Config, session: &mut Session, eve
             handle_model(Some(other["model ".len()..].trim()), config, session, events).await;
             Intercepted::Handled
         }
+        // Bare `/resume` normally never reaches here: mjolnir-tui reads it
+        // first and opens the picker, which answers by submitting
+        // `/resume <id>`. What arrives is the bare form on a session with no
+        // list to show — so this branch's job is to say why.
+        "resume" => {
+            handle_resume(None, history, events).await;
+            Intercepted::Handled
+        }
+        other if other.starts_with("resume ") => {
+            match handle_resume(Some(other["resume ".len()..].trim()), history, events).await {
+                Some(command) => Intercepted::Forward(command),
+                None => Intercepted::Handled,
+            }
+        }
         other => {
             let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other} (try /help)") }).await;
             Intercepted::Handled
         }
     }
+}
+
+/// `/resume [id]` — load a past transcript into the running session.
+///
+/// Returns the command core needs rather than sending it, because the caller
+/// is the one holding `forward`; everything else here is reporting.
+///
+/// Three things happen in order, and the order matters. The records are read
+/// first, because a read that fails must change nothing. The writer is moved
+/// onto that transcript second, so the continued conversation lands in the
+/// file it came from rather than forking a new one. Core is told last, and
+/// its acknowledgement (`Event::HistoryLoaded`) is what the TUI redraws
+/// from.
+///
+/// What is deliberately *not* restored: permission grants. They are
+/// session-scoped and a resumed session re-asks, per ADR 0004 — "the
+/// developer already approved this" would rebuild a persistent allowlist
+/// through the back door.
+async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events: &mpsc::Sender<Event>) -> Option<Command> {
+    let Some(history) = history else {
+        let _ = events.send(Event::Notice { message: "history is off for this session; there is nothing to resume".into() }).await;
+        return None;
+    };
+
+    let Some(arg) = arg.filter(|a| !a.is_empty()) else {
+        let count = history.resumable().len();
+        let message = match count {
+            0 => "no past sessions recorded for this project".to_string(),
+            n => format!("{n} past session(s) here — {RESUME_USAGE}"),
+        };
+        let _ = events.send(Event::Notice { message }).await;
+        return None;
+    };
+
+    let id = SessionId(arg.to_string());
+    // A session cannot be resumed into itself: the records would be replaced
+    // by the ones already in the log, and the writer would be pointed at the
+    // file it is already writing.
+    if history.is_current(&id) {
+        let _ = events.send(Event::Notice { message: "that is the session you are in".into() }).await;
+        return None;
+    }
+
+    let records = match mjolnir_config::load_session(history.dir(), &id) {
+        Ok(records) => records,
+        Err(e) => {
+            let _ = events.send(Event::Notice { message: format!("cannot read session {arg}: {e} ({RESUME_USAGE})") }).await;
+            return None;
+        }
+    };
+
+    // An empty load is not a failure: it is a transcript whose first turn
+    // never finished (see `mjolnir_config::load`). Resuming it would replace
+    // the session with nothing, which is `/clear` wearing a disguise.
+    if records.is_empty() {
+        let _ = events
+            .send(Event::Notice { message: format!("session {arg} has no completed turns to resume") })
+            .await;
+        return None;
+    }
+
+    if let Err(e) = history.continue_session(&id) {
+        let _ = events.send(Event::Notice { message: format!("cannot continue session {arg}: {e}") }).await;
+        return None;
+    }
+
+    let turns = records.iter().filter(|r| matches!(r, mjolnir_core::LogRecord::TurnStarted { .. })).count();
+    let _ = events.send(Event::Notice { message: format!("resumed session {arg} — {turns} turn(s) restored") }).await;
+    Some(Command::Resume { records })
 }
 
 /// `/theme [light|dark]`. Unlike `/clear`, this never needs core at all —
@@ -422,10 +531,11 @@ pub async fn run_interceptor(
     forward: mpsc::Sender<Command>,
     config: Config,
     mut session: Session,
+    history: Option<Arc<History>>,
     events: mpsc::Sender<Event>,
 ) {
     while let Some(command) = incoming.recv().await {
-        match intercept(command, &config, &mut session, &events).await {
+        match intercept(command, &config, &mut session, history.as_ref(), &events).await {
             Intercepted::Forward(command) => {
                 if forward.send(command).await.is_err() {
                     break;
@@ -488,12 +598,238 @@ mod tests {
         (project, global, config)
     }
 
+    // ── `/resume` ─────────────────────────────────────────────────────────
+
+    /// A history with one finished turn already recorded, plus the channel
+    /// its notices arrive on.
+    fn recorded_history(text: &str) -> (tempfile::TempDir, Arc<History>, SessionId, mpsc::Receiver<Event>) {
+        use mjolnir_core::{LogRecord, TurnEndReason, TurnId};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel(8);
+        HISTORY_EVENTS.with(|c| *c.borrow_mut() = Some(tx.clone()));
+        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx);
+        let history = history.expect("a store");
+        for record in [
+            LogRecord::TurnStarted { turn_id: TurnId(1) },
+            LogRecord::UserMessage { turn_id: TurnId(1), text: text.into() },
+            LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: mjolnir_core::StepId(1), text: "sure".into() },
+            LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
+        ] {
+            mjolnir_core::RecordSink::append(history.as_ref(), &record);
+        }
+        // The session under test is a *new* one, as a fresh launch would be:
+        // the recorded turn is now a past session to resume.
+        history.seal_and_open_new();
+        // The recorded one, not whichever is newest — `seal_and_open_new`
+        // just made a newer, empty one.
+        let id = SessionId(history.resumable().into_iter().find(|s| s.turns > 0).expect("the recorded session").id);
+        (dir, history, id, rx)
+    }
+
+    /// A second sender on the same channel the history reports failures on,
+    /// so a test reads notices from both paths in one place.
+    fn rx_sender(_history: &Arc<History>) -> mpsc::Sender<Event> {
+        HISTORY_EVENTS.with(|c| c.borrow().clone().expect("recorded_history sets this"))
+    }
+
+    thread_local! {
+        static HISTORY_EVENTS: std::cell::RefCell<Option<mpsc::Sender<Event>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    async fn drain(rx: &mut mpsc::Receiver<Event>) -> Vec<String> {
+        let mut messages = Vec::new();
+        while let Ok(Event::Notice { message }) = rx.try_recv() {
+            messages.push(message);
+        }
+        let _ = &mut messages;
+        messages
+    }
+
+    #[tokio::test]
+    async fn resume_with_an_id_forwards_the_loaded_records_to_core() {
+        let (_project, _global, cfg) = config();
+        let (_dir, history, id, mut rx) = recorded_history("the question I asked");
+
+        let cmd = Command::Submit { text: format!("/resume {id}") };
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &rx_sender(&history)).await;
+
+        let Intercepted::Forward(Command::Resume { records }) = result else {
+            panic!("a resume must reach core");
+        };
+        assert!(
+            records.iter().any(|r| matches!(r, mjolnir_core::LogRecord::UserMessage { text, .. } if text == "the question I asked")),
+            "the conversation came back"
+        );
+        let _ = drain(&mut rx).await;
+    }
+
+    /// The fork-free Decision: the writer moves onto the resumed transcript,
+    /// so the continued conversation lands in the file it came from.
+    #[tokio::test]
+    async fn resuming_moves_the_writer_onto_the_resumed_transcript() {
+        use mjolnir_core::{LogRecord, TurnEndReason, TurnId};
+
+        let (_project, _global, cfg) = config();
+        let (dir, history, id, _rx) = recorded_history("first");
+        let events = rx_sender(&history);
+
+        let cmd = Command::Submit { text: format!("/resume {id}") };
+        intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
+
+        for record in [
+            LogRecord::TurnStarted { turn_id: TurnId(2) },
+            LogRecord::TurnEnded { turn_id: TurnId(2), reason: TurnEndReason::EndTurn },
+        ] {
+            mjolnir_core::RecordSink::append(history.as_ref(), &record);
+        }
+
+        let resumed = crate::history::session_choices(dir.path())
+            .into_iter()
+            .find(|s| s.id == id.0)
+            .expect("still listed");
+        assert_eq!(resumed.turns, 2, "the new turn landed in the resumed file, not a fork");
+    }
+
+    #[tokio::test]
+    async fn resuming_an_unknown_session_reports_and_sends_nothing() {
+        let (_project, _global, cfg) = config();
+        let (_dir, history, _id, mut rx) = recorded_history("first");
+        let events = rx_sender(&history);
+
+        let cmd = Command::Submit { text: "/resume 0000000000-0-0".into() };
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
+
+        assert!(matches!(result, Intercepted::Handled), "nothing reaches core");
+        let notices = drain(&mut rx).await;
+        assert!(notices.iter().any(|m| m.contains("cannot read session")), "{notices:?}");
+    }
+
+    /// A transcript whose first turn never finished loads as nothing, and
+    /// resuming it would be `/clear` wearing a disguise. The picker no longer
+    /// offers such a session at all, so this is the typed-id path.
+    #[tokio::test]
+    async fn resuming_a_session_with_no_finished_turn_reports_rather_than_wiping() {
+        use mjolnir_core::{LogRecord, TurnId};
+
+        let (_project, _global, cfg) = config();
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx.clone());
+        let history = history.expect("a store");
+        mjolnir_core::RecordSink::append(history.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
+        // Captured before sealing: an unfinished session is not listed, which
+        // is the point of `an_unfinished_session_is_not_listed` below.
+        let id = history.current();
+        history.seal_and_open_new();
+
+        let cmd = Command::Submit { text: format!("/resume {id}") };
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &tx).await;
+
+        assert!(matches!(result, Intercepted::Handled));
+        let notices = drain(&mut rx).await;
+        assert!(notices.iter().any(|m| m.contains("no completed turns")), "{notices:?}");
+    }
+
+    #[tokio::test]
+    async fn bare_resume_with_no_history_says_so() {
+        let (_project, _global, cfg) = config();
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx.clone());
+
+        let cmd = Command::Submit { text: "/resume".into() };
+        let result = intercept(cmd, &cfg, &mut session(), history.as_ref(), &tx).await;
+
+        assert!(matches!(result, Intercepted::Handled));
+        let notices = drain(&mut rx).await;
+        assert!(notices.iter().any(|m| m.contains("no past sessions")), "{notices:?}");
+    }
+
+    /// History off entirely — the session runs, and `/resume` says why it
+    /// cannot help rather than failing.
+    #[tokio::test]
+    async fn resume_without_a_transcript_reports_that_history_is_off() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+
+        let cmd = Command::Submit { text: "/resume anything".into() };
+        let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
+
+        assert!(matches!(result, Intercepted::Handled));
+        let notices = drain(&mut rx).await;
+        assert!(notices.iter().any(|m| m.contains("history is off")), "{notices:?}");
+    }
+
+    /// Step 6: `/clear` seals the transcript and opens a new one on the way
+    /// past, and still reaches core to wipe the in-memory log.
+    #[tokio::test]
+    async fn clear_seals_the_transcript_and_still_reaches_core() {
+        let (_project, _global, cfg) = config();
+        let (dir, history, _id, _rx) = recorded_history("before");
+        let events = rx_sender(&history);
+        let before = crate::history::session_choices(dir.path()).len();
+
+        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), Some(&history), &events).await;
+
+        assert!(matches!(result, Intercepted::Forward(Command::ClearHistory)), "core still wipes its log");
+        assert!(
+            crate::history::session_choices(dir.path()).len() >= before,
+            "clearing does not delete the record it seals"
+        );
+    }
+
+    /// The picker never offers it, but a typed id can still name it.
+    #[tokio::test]
+    async fn resuming_the_session_you_are_in_is_refused() {
+        let (_project, _global, cfg) = config();
+        let (_dir, history, _id, mut rx) = recorded_history("first");
+        let events = rx_sender(&history);
+        let current = history.current();
+
+        let cmd = Command::Submit { text: format!("/resume {current}") };
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
+
+        assert!(matches!(result, Intercepted::Handled));
+        let notices = drain(&mut rx).await;
+        assert!(notices.iter().any(|m| m.contains("the session you are in")), "{notices:?}");
+    }
+
+    /// The session being written is not a row in its own list.
+    #[tokio::test]
+    async fn the_current_session_is_not_offered_as_resumable() {
+        let (_dir, history, _id, _rx) = recorded_history("first");
+        let current = history.current();
+        assert!(
+            !history.resumable().iter().any(|s| s.id == current.0),
+            "the session you are in is not something to resume"
+        );
+    }
+
+    /// The end-to-end shape of the bug this fixed: launching and quitting
+    /// without saying anything left a row in the picker that, when picked,
+    /// was refused.
+    #[tokio::test]
+    async fn an_unfinished_session_is_not_listed() {
+        let (_dir, history, _id, _rx) = recorded_history("said something");
+        // `recorded_history` sealed and opened a fresh session that has said
+        // nothing — exactly the state a launch-and-quit leaves.
+        let sessions = history.resumable();
+        assert_eq!(sessions.len(), 1, "only the session with a completed turn: {sessions:?}");
+        assert_eq!(sessions[0].title, "said something");
+    }
+
+    #[tokio::test]
+    async fn help_lists_resume() {
+        assert!(HELP_TEXT.contains("/resume"), "a command the developer cannot discover is not a command");
+    }
+
     #[tokio::test]
     async fn non_slash_input_passes_through_unchanged() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "hello".into() };
-        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Forward(Command::Submit { text }) if text == "hello"));
     }
 
@@ -502,7 +838,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
         let cmd = Command::PromptResponse { call_id: "call-1".into(), payload: serde_json::Value::Null };
-        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Forward(Command::PromptResponse { .. })));
     }
 
@@ -511,7 +847,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/nope".into() };
-        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/nope")),
@@ -523,7 +859,7 @@ mod tests {
     async fn help_lists_every_known_command() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => {
@@ -539,7 +875,7 @@ mod tests {
     async fn exit_is_recognised_as_the_quit_command() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Quit));
     }
 
@@ -547,7 +883,7 @@ mod tests {
     async fn clear_is_translated_and_forwarded_to_core_not_handled_locally() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(
             matches!(result, Intercepted::Forward(Command::ClearHistory)),
             "core owns ConversationLog, so /clear must reach it as ClearHistory rather than being swallowed like /help"
@@ -558,7 +894,7 @@ mod tests {
     async fn quit_is_not_recognised_only_exit_is() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled), "/quit must not be a recognised command");
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("/quit")),
@@ -571,7 +907,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
-        let result = intercept(cmd, &cfg, &mut session(), &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
         assert!(matches!(rx.recv().await, Some(Event::PermissionsChanged { .. })));
@@ -596,7 +932,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
-        intercept(cmd, &config, &mut session(), &tx).await;
+        intercept(cmd, &config, &mut session(), None, &tx).await;
 
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains(&bad_path.display().to_string()), "message was: {message}"),
@@ -610,7 +946,7 @@ mod tests {
     async fn theme_with_no_argument_reports_the_current_default() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/theme".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("current theme: dark"), "message was: {message}"),
@@ -623,7 +959,7 @@ mod tests {
     async fn theme_light_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
 
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
@@ -638,7 +974,7 @@ mod tests {
     async fn theme_argument_is_case_insensitive() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme LIGHT".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/theme LIGHT".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "light", "must normalize to lowercase"),
@@ -650,11 +986,11 @@ mod tests {
     async fn theme_back_to_dark_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = rx.recv().await;
         let _ = rx.recv().await;
 
-        intercept(Command::Submit { text: "/theme dark".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/theme dark".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "dark"),
@@ -667,7 +1003,7 @@ mod tests {
     async fn theme_invalid_value_is_rejected_not_persisted_and_no_theme_changed_sent() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme neon".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/theme neon".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(message.contains("neon"), "message was: {message}"),
@@ -714,7 +1050,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), &tx).await;
+        let result = intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
 
         let message = notice(&mut rx).await;
@@ -731,7 +1067,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("anthropic/claude-opus-5"), "{message}");
@@ -749,7 +1085,7 @@ mod tests {
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("now on anthropic/claude-opus-5"), "{message}");
@@ -780,7 +1116,7 @@ mod tests {
         let switch = FakeSwitch { fails_with: Some("GOOGLE_API_KEY is not set".into()), ..Default::default() };
         let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session, None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("GOOGLE_API_KEY is not set"), "the reason has to survive verbatim: {message}");
@@ -796,7 +1132,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("google/gemini-2.5-flash"), "{message}");
@@ -814,7 +1150,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model google/".into() }, &cfg, &mut session(), None, &tx).await;
 
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap().model, mjolnir_llm::provider("google").unwrap().default_model());
@@ -827,7 +1163,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, &mut session(), None, &tx).await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
@@ -845,7 +1181,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("openai/gpt-5"), "{message}");
@@ -866,10 +1202,10 @@ mod tests {
         // session as much as about the file.
         let mut session = session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
         let _ = notice(&mut rx).await;
 
-        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session, None, &tx).await;
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-opus-5"), "{message}");
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
@@ -882,12 +1218,12 @@ mod tests {
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = notice(&mut rx).await;
         let bare = cfg.global_provider().unwrap();
 
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
-        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap(), bare);
     }
@@ -899,7 +1235,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, &mut session(), None, &tx).await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
@@ -914,7 +1250,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("unknown provider \"gogle\""), "{message}");
@@ -930,7 +1266,7 @@ mod tests {
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         with_provider(&cfg, mjolnir_config::Scope::Project, "google");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("this project's provider.yaml"), "{message}");
@@ -945,7 +1281,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("already on anthropic/claude-sonnet-5"), "{message}");
@@ -966,7 +1302,7 @@ mod tests {
         session.model = "anthropic/claude-opus-5".into();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(!message.contains("already on"), "the session is not on it, whatever the file says: {message}");
@@ -986,11 +1322,11 @@ mod tests {
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
         assert!(notice(&mut rx).await.contains("now on anthropic/claude-opus-5"));
         let _ = rx.recv().await; // ModelChanged
 
-        intercept(Command::Submit { text: "/model lumo/lumo-max".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model lumo/lumo-max".into() }, &cfg, &mut session, None, &tx).await;
         assert!(notice(&mut rx).await.contains("now on lumo/lumo-max"));
         let _ = rx.recv().await; // ModelChanged
 
@@ -1001,7 +1337,7 @@ mod tests {
         // session still is.
         let switch = FakeSwitch { fails_with: Some("no key".into()), ..Default::default() };
         session = Session::new(session.model.clone(), Box::new(switch));
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, &tx).await;
+        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, None, &tx).await;
         let message = notice(&mut rx).await;
         assert!(message.contains("still on lumo/lumo-max"), "{message}");
     }
@@ -1024,7 +1360,7 @@ mod tests {
         )
         .unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("model: qwen3-coder"), "{message}");
@@ -1036,7 +1372,7 @@ mod tests {
     async fn model_with_no_provider_configured_says_so_rather_than_panicking() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), &tx).await;
+        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(notice(&mut rx).await.contains("no provider is configured"));
     }
 
@@ -1047,7 +1383,7 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), event_tx));
+        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), None, event_tx));
 
         tui_tx.send(Command::Submit { text: "/nope".into() }).await.unwrap();
         tui_tx.send(Command::Submit { text: "hi".into() }).await.unwrap();
@@ -1071,7 +1407,7 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), event_tx));
+        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), None, event_tx));
 
         tui_tx.send(Command::Submit { text: "/exit".into() }).await.unwrap();
 

@@ -37,8 +37,8 @@
     },
     {
       "id": "screen-prose-names-ramp-rungs-the-token-layer-does-not-expose",
-      "design_says": "HANDOFF.md's screen sections name raw ramp rungs: :274 puts the permission panel's sentence in 'neutral-300', :279 the option number in 'accent-300 on the selected row and neutral-600 on the rest'.",
-      "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all — palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto.",
+      "design_says": "HANDOFF.md's screen sections name raw ramp rungs: :274 puts the permission panel's sentence in 'neutral-300', :279 the option number in 'accent-300 on the selected row and neutral-600 on the rest', and :309 an unselected option row's mark in 'neutral-800'.",
+      "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all — palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto. The :309 case is the sharpest of the three: neutral-800 is #474251, which is exactly --tui-bar — the panel's own ground — so the prose puts an invisible mark on the surface it is drawn against. The app draws --tui-mark-idle, the role semantic.css actually names for one. Added 2026-09-20 after two stage 5 judges re-derived it independently from the same line.",
       "app_follows": "The token layer, because it is the only one it can draw through. Two stage 5 judges reached opposite conclusions on the same frames from the same prose — one called the mapping correct 'through HANDOFF's superseded Nocturne table', the other called it a major deviation — which is the signature of a reference that says two things. What this wants upstream is the screen prose rewritten in semantic roles like the rest of the handoff.",
       "glyphs": ""
     },

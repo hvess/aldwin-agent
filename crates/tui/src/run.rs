@@ -22,6 +22,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::app::App;
 use crate::first_run::ProviderChoice;
+use crate::resume::SessionChoice;
 use crate::palette::Theme;
 use crate::ui;
 
@@ -61,6 +62,12 @@ pub struct SessionProvider {
     /// is known, the declared kind where it is not — so the resting state's
     /// `provider` fact always names a provider, never only a model.
     pub provider_label: Option<String>,
+    /// The past sessions bare `/resume` offers, newest first and never
+    /// including the one being written. Display halves only, exactly as
+    /// `catalogue` is: this crate reads no transcript and formats no
+    /// timestamp. Empty means no picker — bare `/resume` is then forwarded
+    /// to mjolnir-cli, which reports rather than picks.
+    pub sessions: Vec<SessionChoice>,
 }
 
 /// Runs the TUI to completion: sets up the terminal, drives the event loop
@@ -347,6 +354,7 @@ async fn run_loop(
 ) -> io::Result<()> {
     let mut app = App::new(model_name, permissions)
         .with_theme(theme)
+        .with_sessions(session.sessions)
         .with_catalogue(session.catalogue, session.current_provider)
         .with_provider_label(session.provider_label);
     let mut input = spawn_input_reader();

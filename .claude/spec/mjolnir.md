@@ -80,7 +80,7 @@ A tool for thought.
 
 - **Edit happens only on explicit per-edit request, never allowlistable.** — Default is the strong reading — the developer must explicitly say "edit X". Configurable to a weaker reading (agent may propose diffs the developer then approves) but strong is default. Edit is never allowlistable in any configuration — friction on Edit is structural, not a setting.
 
-- **No session persistence, no first-class history, developer-authored memory in V0.** — Sessions are ephemeral. Memory is developer-authored — Mjolnir does not propose entries or prompt at end of session. Privacy is local-only with no telemetry; inference is governed by the chosen model provider (Anthropic in V0; local models possible once V0.5 ships).
+- **Developer-authored memory; sessions persist but nothing crosses between them.** — Amended by ADR 0005, which reversed the original "sessions are ephemeral" clause: a conversation is written to disk as it happens and `/resume` picks one back up. The rest of this Decision stands unchanged and is what ADR 0005 was careful not to touch — memory is developer-authored, Mjolnir does not propose entries or prompt at end of session, and nothing is carried into a *new* session by itself. Privacy is local-only with no telemetry; inference is governed by the chosen model provider (Anthropic in V0; local models possible once V0.5 ships).
 
 ## Pitfalls
 

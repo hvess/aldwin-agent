@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use mjolnir_core::{Command, Event, StepId};
+use mjolnir_core::{Command, Event, LogRecord, StepId};
 use mjolnir_permissions::{Choice, Class, ContextFileTier, Engine, PromptPayload, PromptResponse, Rung};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
@@ -356,6 +356,17 @@ pub struct App {
     /// bottom band draws it instead of the composer, the same way a pending
     /// decision does.
     pub picker: Option<crate::picker::ModelPicker>,
+    /// Open only while the session picker is on screen, on the same terms as
+    /// `picker` above: the two are mutually exclusive by construction, since
+    /// each is opened by a submission and a submission cannot happen while
+    /// either holds the band.
+    pub resume: Option<crate::resume::ResumePicker>,
+    /// The past sessions bare `/resume` offers, newest first — display
+    /// halves handed in by mjolnir-cli's bootstrap (`App::with_sessions`),
+    /// exactly as the model catalogue is. Empty unless the caller supplied
+    /// one, in which case bare `/resume` stays a plain command and the
+    /// interceptor answers it with a notice.
+    pub sessions: Vec<crate::resume::SessionChoice>,
 
     /// Which fixed color `Palette` this session renders with — resolved
     /// once from `tui.yaml`'s `theme` field (`Theme::from_config`) before
@@ -410,9 +421,23 @@ impl App {
             current_provider: None,
             provider_label: None,
             picker: None,
+            resume: None,
+            sessions: Vec::new(),
             theme: crate::palette::Theme::default(),
             transcript: crate::ui::Transcript::default(),
         }
+    }
+
+    /// The past sessions bare `/resume` offers. Builder-style for the same
+    /// reason `with_catalogue` is: only mjolnir-cli's bootstrap can read a
+    /// history directory, and every other caller wants the empty default.
+    ///
+    /// They arrive already rendered for display — mjolnir-tui reads no files
+    /// and parses no timestamps, the same rule that keeps the catalogue's
+    /// endpoints and key variables out of this crate.
+    pub fn with_sessions(mut self, sessions: Vec<crate::resume::SessionChoice>) -> Self {
+        self.sessions = sessions;
+        self
     }
 
     /// Builder-style, for the same reason `with_theme` is: the catalogue is
@@ -530,6 +555,60 @@ impl App {
         })
     }
 
+    /// One loaded record, as the entry the live path would have produced.
+    ///
+    /// The two vocabularies do not line up one-to-one, because `LogEntry` is
+    /// built from *streaming* events and a record is what was committed
+    /// afterwards. Three places that matters:
+    ///
+    /// * `AssistantMessage` is one entry where the live path accumulated many
+    ///   `TextDelta`s into one — so it merges into a trailing `AssistantText`
+    ///   exactly as the deltas did, which is what keeps two steps' prose from
+    ///   splitting into two blocks the live session would have shown as one.
+    /// * A tool call arrives already finished, so it goes straight to
+    ///   `Completed` rather than passing through `Running`.
+    /// * `TurnStarted` and `StepBoundary` produce nothing. They set live
+    ///   status fields (`status.turn`, the spinner) that describe work in
+    ///   flight, and nothing is in flight in a transcript.
+    fn replay(&mut self, record: LogRecord) {
+        match record {
+            LogRecord::UserMessage { text, .. } => self.log.push(LogEntry::UserMessage { text }),
+            LogRecord::AssistantMessage { text, .. } => {
+                if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
+                    buf.push('\n');
+                    buf.push_str(&text);
+                } else {
+                    self.log.push(LogEntry::AssistantText { text });
+                }
+            }
+            LogRecord::ToolUse { step_id, call, .. } => {
+                let entry = ToolActivityEntry {
+                    call_id: call.id,
+                    name:    call.name,
+                    // Overwritten by the matching `ToolResult` below. It can
+                    // only survive as `Running` if the transcript ended
+                    // mid-turn, and `load` truncates those away before they
+                    // ever reach here.
+                    status:  ToolActivityStatus::Running,
+                };
+                match self.active_step_calls(step_id) {
+                    Some(calls) => calls.push(entry),
+                    None => self.log.push(LogEntry::ToolActivity { step_id, calls: vec![entry] }),
+                }
+            }
+            LogRecord::ToolResult { step_id, result, .. } => {
+                let summary = summarise(&result.content, SUMMARY_MAX_LEN);
+                if let Some(calls) = self.active_step_calls(step_id) {
+                    if let Some(call) = calls.iter_mut().find(|c| c.call_id == result.call_id) {
+                        call.status = ToolActivityStatus::Completed { is_error: result.is_error, summary };
+                    }
+                }
+            }
+            LogRecord::TurnEnded { reason, .. } => self.log.push(LogEntry::TurnEnded { reason: reason.into() }),
+            LogRecord::TurnStarted { .. } | LogRecord::StepBoundary { .. } => {}
+        }
+    }
+
     pub fn apply_event(&mut self, event: Event) {
         match event {
             Event::TurnStarted { turn_id } => {
@@ -639,6 +718,31 @@ impl App {
                 self.turn_active = false;
                 self.awaiting_turn = false;
             }
+            // `/resume` — the counterpart of `HistoryCleared` above, and it
+            // starts by doing exactly what that arm does: core's
+            // ConversationLog has been replaced wholesale, so the rendered
+            // log has to be too, not appended to.
+            //
+            // What comes back is the *conversation*, not the session. Tool
+            // activity replays as completed rows; approval cards and
+            // permission prompts do not come back at all, because they exist
+            // only as `LogEntry` and never as `LogRecord` (see
+            // mjolnir-history.md's Decision). That is a chosen loss: the
+            // decisions a resumed session needs are re-asked, and default-deny
+            // is not weakened by a card being redrawn.
+            Event::HistoryLoaded { records } => {
+                self.log.clear();
+                self.scroll = ScrollState::default();
+                self.status.turn = None;
+                self.status.step = None;
+                self.thinking = false;
+                self.turn_active = false;
+                self.awaiting_turn = false;
+                for record in records {
+                    self.replay(record);
+                }
+                self.sync_transcript();
+            }
             // `/theme light|dark` — the interceptor already persisted this
             // to `tui.yaml` (see `Event::ThemeChanged`'s own doc comment in
             // mjolnir-core); reparsing here rather than trusting the raw
@@ -681,6 +785,10 @@ impl App {
         // waiting on an answer, and it takes the band (and the keys) even
         // with the picker open underneath. The picker is still there when
         // the prompt resolves.
+        if self.resume.is_some() {
+            self.handle_resume_key(key);
+            return;
+        }
         if self.picker.is_some() {
             self.handle_picker_key(key);
             return;
@@ -766,7 +874,7 @@ impl App {
     /// alternate-scroll translation sends, so both paths move the same
     /// distance.
     pub fn handle_mouse(&mut self, event: MouseEvent) {
-        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() {
+        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() || self.resume.is_some() {
             return;
         }
         match event.kind {
@@ -799,7 +907,7 @@ impl App {
     /// `handle_key`: there is no composer on screen to paste into, and the
     /// placeholder says so.
     pub fn paste(&mut self, text: &str) {
-        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() {
+        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() || self.resume.is_some() {
             return;
         }
         self.insert_str(&crate::draft::sanitize(text));
@@ -891,6 +999,38 @@ impl App {
         true
     }
 
+    /// Bare `/resume`, on exactly the terms `PICKER_COMMAND` documents: the
+    /// list is how the question is asked, and committing types
+    /// `/resume <id>` so mjolnir-cli's interceptor stays the one thing that
+    /// knows what resuming does.
+    ///
+    /// With no sessions to offer — a project the harness has never recorded
+    /// one in — this returns false and the bare command is forwarded, which
+    /// the interceptor answers by saying so. An empty panel is not a way to
+    /// tell the developer their history is empty.
+    const RESUME_COMMAND: &'static str = "/resume";
+
+    fn open_resume(&mut self) -> bool {
+        let Some(picker) = crate::resume::ResumePicker::open(self.sessions.clone()) else {
+            return false;
+        };
+        self.resume = Some(picker);
+        true
+    }
+
+    fn handle_resume_key(&mut self, key: KeyEvent) {
+        let Some(picker) = self.resume.as_mut() else { return };
+        match picker.handle_key(key.code, key.modifiers).into_picker_outcome() {
+            crate::picker::PickerOutcome::Stay => {}
+            crate::picker::PickerOutcome::Close => self.resume = None,
+            // `provider` carries the session id — see `ResumeOutcome`.
+            crate::picker::PickerOutcome::Chosen { provider: id, .. } => {
+                self.resume = None;
+                self.submit_text(format!("{} {id}", Self::RESUME_COMMAND));
+            }
+        }
+    }
+
     fn handle_picker_key(&mut self, key: KeyEvent) {
         let Some(picker) = self.picker.as_mut() else { return };
         match picker.handle_key(key.code, key.modifiers) {
@@ -913,6 +1053,11 @@ impl App {
             return;
         }
         if self.input.trim() == Self::PICKER_COMMAND && self.open_picker() {
+            self.input.clear();
+            self.cursor = 0;
+            return;
+        }
+        if self.input.trim() == Self::RESUME_COMMAND && self.open_resume() {
             self.input.clear();
             self.cursor = 0;
             return;
@@ -1201,6 +1346,187 @@ mod tests {
         for c in s.chars() {
             app.handle_key(press(KeyCode::Char(c)));
         }
+    }
+
+    // ── `/resume` ─────────────────────────────────────────────────────────
+
+    fn sessions() -> Vec<crate::resume::SessionChoice> {
+        vec![
+            crate::resume::SessionChoice {
+                id: "0000000020-7".into(), title: "newer".into(), when: "2026-09-20 18:11".into(), turns: 2,
+            },
+            crate::resume::SessionChoice {
+                id: "0000000010-3".into(), title: "older".into(), when: "2026-09-19 09:02".into(), turns: 5,
+            },
+        ]
+    }
+
+    fn call() -> ToolCall {
+        ToolCall { id: "c1".into(), name: "read".into(), input: serde_json::json!({ "path": "retry.rs" }) }
+    }
+
+    /// Step 5's verify: a resumed transcript must render through to the same
+    /// entries the live session produced, not to a second, nearly-right
+    /// shape that drifts from it.
+    #[test]
+    fn a_resumed_log_renders_identically_to_the_live_one() {
+        let (turn_id, step_id) = (TurnId(1), StepId(1));
+        let result = ToolResult { call_id: "c1".into(), content: "fn backoff() {}".into(), is_error: false };
+
+        // The live path: streamed events, in the order core emits them.
+        let mut live = app();
+        live.submit_text("explain the retry logic".into());
+        live.apply_event(Event::TurnStarted { turn_id });
+        live.apply_event(Event::TextDelta { turn_id, step_id, text: "Reading ".into() });
+        live.apply_event(Event::TextDelta { turn_id, step_id, text: "it now.".into() });
+        live.apply_event(Event::ToolUseRequested { turn_id, step_id, call: call() });
+        live.apply_event(Event::ToolDispatched { turn_id, step_id, call_id: "c1".into() });
+        live.apply_event(Event::ToolCompleted { turn_id, step_id, result: result.clone() });
+        live.apply_event(Event::TurnEnded { turn_id, reason: TurnEndReason::EndTurn });
+
+        // The resumed path: the records that same turn committed.
+        let mut resumed = app();
+        resumed.apply_event(Event::HistoryLoaded {
+            records: vec![
+                LogRecord::TurnStarted { turn_id },
+                LogRecord::UserMessage { turn_id, text: "explain the retry logic".into() },
+                LogRecord::AssistantMessage { turn_id, step_id, text: "Reading it now.".into() },
+                LogRecord::ToolUse { turn_id, step_id, call: call() },
+                LogRecord::ToolResult { turn_id, step_id, result },
+                LogRecord::TurnEnded { turn_id, reason: TurnEndReason::EndTurn },
+            ],
+        });
+
+        assert_eq!(resumed.log, live.log);
+    }
+
+    /// The counterpart of `HistoryCleared`: core replaced its log wholesale,
+    /// so the rendered one is replaced too rather than appended to.
+    #[test]
+    fn resuming_replaces_the_rendered_log_rather_than_appending_to_it() {
+        let mut app = app();
+        app.submit_text("from before".into());
+        app.apply_event(Event::HistoryLoaded {
+            records: vec![
+                LogRecord::UserMessage { turn_id: TurnId(1), text: "from the transcript".into() },
+                LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
+            ],
+        });
+
+        assert!(
+            !app.log.iter().any(|e| matches!(e, LogEntry::UserMessage { text } if text == "from before")),
+            "nothing from the replaced session survives"
+        );
+        assert!(matches!(app.log.first(), Some(LogEntry::UserMessage { text }) if text == "from the transcript"));
+        assert!(!app.awaiting_turn, "the submission that asked for this has been answered");
+    }
+
+    /// An approval card and a permission prompt are `LogEntry` only — see
+    /// the `HistoryLoaded` arm. This pins the loss as chosen rather than
+    /// letting it be rediscovered as a bug.
+    #[test]
+    fn a_resumed_transcript_carries_the_conversation_not_the_decisions() {
+        let mut app = app();
+        app.apply_event(Event::ToolApprovalRequested {
+            turn_id: TurnId(1), step_id: StepId(1), call_id: "c1".into(), diff: "- a\n+ b".into(),
+        });
+        assert!(app.log.iter().any(|e| matches!(e, LogEntry::ApprovalCard { .. })));
+
+        app.apply_event(Event::HistoryLoaded {
+            records: vec![
+                LogRecord::UserMessage { turn_id: TurnId(1), text: "hello".into() },
+                LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
+            ],
+        });
+        assert!(
+            !app.log.iter().any(|e| matches!(e, LogEntry::ApprovalCard { .. })),
+            "the card does not come back, and is not expected to"
+        );
+    }
+
+    /// Two steps' prose is one block, exactly as the live path's deltas
+    /// accumulate it — a record per step must not split what the session
+    /// showed as continuous.
+    #[test]
+    fn consecutive_assistant_records_merge_into_one_block() {
+        let mut app = app();
+        app.apply_event(Event::HistoryLoaded {
+            records: vec![
+                LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: StepId(1), text: "first".into() },
+                LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: StepId(2), text: "second".into() },
+                LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
+            ],
+        });
+        let blocks = app.log.iter().filter(|e| matches!(e, LogEntry::AssistantText { .. })).count();
+        assert_eq!(blocks, 1, "one block, not one per step");
+        assert!(matches!(app.log.first(), Some(LogEntry::AssistantText { text }) if text == "first\nsecond"));
+    }
+
+    #[test]
+    fn bare_resume_opens_the_session_list_and_submits_nothing() {
+        let mut app = app().with_sessions(sessions());
+        type_str(&mut app, "/resume");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.resume.is_some(), "the list is open");
+        assert!(app.outbox.is_empty(), "and nothing was sent");
+        assert_eq!(app.input, "");
+    }
+
+    /// The picker answers by typing the command — so the interceptor decides
+    /// what resuming does, exactly as it does for `/model`.
+    #[test]
+    fn committing_the_list_submits_the_command_the_developer_would_have_typed() {
+        let mut app = app().with_sessions(sessions());
+        type_str(&mut app, "/resume");
+        app.handle_key(press(KeyCode::Enter));
+        app.handle_key(press(KeyCode::Down));
+        app.handle_key(press(KeyCode::Enter));
+
+        assert!(app.resume.is_none(), "the list closes on committing");
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/resume 0000000010-3".into() }]);
+    }
+
+    /// A project with no recorded sessions forwards the bare command, which
+    /// mjolnir-cli answers by saying so. An empty panel is not an answer.
+    #[test]
+    fn bare_resume_with_no_history_is_forwarded_rather_than_opening_an_empty_panel() {
+        let mut app = app();
+        type_str(&mut app, "/resume");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.resume.is_none());
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/resume".into() }]);
+    }
+
+    /// An argument names the session outright — a developer who did that is
+    /// not asking to be shown a list.
+    #[test]
+    fn resume_with_an_argument_is_forwarded_untouched() {
+        let mut app = app().with_sessions(sessions());
+        type_str(&mut app, "/resume 0000000020-7");
+        app.handle_key(press(KeyCode::Enter));
+        assert!(app.resume.is_none());
+        assert_eq!(app.outbox, vec![Command::Submit { text: "/resume 0000000020-7".into() }]);
+    }
+
+    #[test]
+    fn esc_closes_the_session_list_without_submitting() {
+        let mut app = app().with_sessions(sessions());
+        type_str(&mut app, "/resume");
+        app.handle_key(press(KeyCode::Enter));
+        app.handle_key(press(KeyCode::Esc));
+        assert!(app.resume.is_none());
+        assert!(app.outbox.is_empty());
+    }
+
+    /// The list takes every key while it is open, the same way the model
+    /// picker and a pending decision do.
+    #[test]
+    fn the_session_list_holds_the_composer_while_it_is_open() {
+        let mut app = app().with_sessions(sessions());
+        type_str(&mut app, "/resume");
+        app.handle_key(press(KeyCode::Enter));
+        type_str(&mut app, "hello");
+        assert_eq!(app.input, "", "keys reach the list, not the composer");
     }
 
     #[test]

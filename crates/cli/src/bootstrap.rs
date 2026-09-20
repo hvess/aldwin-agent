@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::context;
 use crate::context_approval;
 use crate::error::StartupError;
+use crate::history::History;
 use crate::slash;
 
 /// Dispatches to whichever client `provider.yaml`'s `kind` selects.
@@ -334,19 +335,49 @@ pub async fn run() -> Result<(), StartupError> {
     }
     let dispatcher = Dispatcher::new(registry, permissions.clone());
 
-    // The agent takes the handle; the interceptor keeps a clone of the same
-    // one, which is what makes `/model` a live swap rather than a note for
-    // the next start.
-    let agent = Agent::new(client.clone(), dispatcher, model_name.clone(), Some(additional_context.as_str()));
-    let session_state = slash::Session::new(session_model, Box::new(client));
-
     // TUI -> interceptor -> core, so slash commands never reach Submit;
     // core -> TUI directly for events (no interception needed there).
+    //
+    // Built before the agent rather than after it because the transcript
+    // reports a failed write as an `Event::Notice`, so it needs the event
+    // sender in hand at the moment it is opened.
     let (tui_cmd_tx, tui_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (agent_cmd_tx, agent_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), session_state, event_tx.clone()));
+    // This session's transcript. `None` when the history directory cannot be
+    // written — the session then runs exactly as it did before history
+    // existed, having said so once. History must never be able to stop a
+    // session starting, let alone fail a turn.
+    //
+    let (history, history_failure) = History::open(config.history_dir(), model_name.clone(), event_tx.clone());
+    if let Some(message) = history_failure {
+        let _ = event_tx.try_send(mjolnir_core::Event::Notice { message });
+    }
+    // Every transcript but this session's own — `resumable` is what excludes
+    // it, so the picker never offers the session the developer is sitting in.
+    let sessions = history.as_ref().map(|h| h.resumable()).unwrap_or_default();
+
+    // The agent takes the handle; the interceptor keeps a clone of the same
+    // one, which is what makes `/model` a live swap rather than a note for
+    // the next start. The transcript is held the same way and for the same
+    // reason: `/clear` seals it and `/resume` moves it onto another file,
+    // both while the agent that owns it keeps running.
+    let agent = Agent::new(client.clone(), dispatcher, model_name.clone(), Some(additional_context.as_str()));
+    let agent = match history.clone() {
+        Some(history) => agent.with_sink(history),
+        None => agent,
+    };
+    let session_state = slash::Session::new(session_model, Box::new(client));
+
+    let interceptor = tokio::spawn(slash::run_interceptor(
+        tui_cmd_rx,
+        agent_cmd_tx,
+        config.clone(),
+        session_state,
+        history,
+        event_tx.clone(),
+    ));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
     // The picker opens on the row the session is actually running on, which
@@ -366,6 +397,7 @@ pub async fn run() -> Result<(), StartupError> {
         provider_label:   Some(identified.clone().unwrap_or_else(|| kind.to_string())),
         catalogue:        catalogue_choices(),
         current_provider: identified,
+        sessions,
     };
     let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme, session).await;
 

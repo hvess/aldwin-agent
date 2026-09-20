@@ -44,6 +44,23 @@ pub enum ToolError {
     #[error("{program} was declared a read and could not complete with the project read-only")]
     ReadRefused { program: String, args: Vec<String> },
 
+    /// **Not a tool failure.** The tool worked; the program it ran exited
+    /// non-zero. It travels as a `ToolError` because that is this crate's
+    /// only route to `is_error: true`, and the model has to be told that the
+    /// command did not succeed — `Ok` said the opposite, so a failed call
+    /// arrived flagged as a good one and the model's next move was a guess.
+    ///
+    /// `Display` is the whole rendered output, stdout included, so nothing
+    /// is lost by routing it through the error arm.
+    ///
+    /// Note a non-zero exit is not always a fault: `grep` exits 1 when it
+    /// matched nothing, and `diff` exits 1 when files differ. This reports
+    /// what the exit code *was* rather than guessing which programs mean
+    /// failure by it; `run`'s own description tells the model to read the
+    /// code rather than assume something broke.
+    #[error("{output}")]
+    CommandFailed { output: String },
+
     /// Reads cannot be enforced here, so a read declaration cannot be
     /// honoured — the call is refused rather than run unconfined.
     #[error("this call was declared a read, but reads cannot be enforced on this system: {source}")]

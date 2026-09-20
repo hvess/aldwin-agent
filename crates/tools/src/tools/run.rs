@@ -55,6 +55,12 @@ impl RunTool {
                 description: "Run a program in the project root. \
                               Give the program and its arguments separately — there is no shell, so \
                               pipes, redirection, globbing and `&&` do not apply. \
+                              `args` holds only what follows the program: `ls -la` is \
+                              program \"ls\", args [\"-la\"]. \
+                              A non-zero exit comes back as an error carrying the exit code and \
+                              both streams; read the code before concluding anything broke, since \
+                              some programs use it to report a result (`grep` exits 1 when nothing \
+                              matched). \
                               Declare `class`: \"read\" if the call only observes, \"write\" if it may \
                               change anything. A call declared \"read\" is executed with the project \
                               read-only and the network unreachable, so an inaccurate declaration \
@@ -64,7 +70,10 @@ impl RunTool {
                     "type": "object",
                     "properties": {
                         "program":      { "type": "string", "description": "The program to run, e.g. \"git\"." },
-                        "args":         { "type": "array", "items": { "type": "string" }, "default": [] },
+                        "args":         { "type": "array", "items": { "type": "string" }, "default": [],
+                                          "description": "Arguments after the program name, one element each — \
+                                                          [\"status\", \"--short\"], not [\"git\", \"status\"]. \
+                                                          Do not repeat the program here." },
                         "class":        { "type": "string", "enum": ["read", "write"] },
                         "timeout_secs": { "type": "integer", "minimum": 1 },
                     },
@@ -209,7 +218,18 @@ async fn execute(project_root: &PathBuf, args: &RunArgs) -> Result<String, ToolE
         });
     }
 
-    Ok(render(&status, &out, &err))
+    let output = render(&status, &out, &err);
+    if status.success() {
+        Ok(output)
+    } else {
+        // The dispatcher's `finish` maps every `Ok` to `is_error: false`, so
+        // returning the rendered output here would tell the model a command
+        // that exited 2 had succeeded — which is exactly what it did, and the
+        // model then guessed at a different program rather than fixing its
+        // call. See `ToolError::CommandFailed`, which carries this same
+        // string through the error arm instead.
+        Err(ToolError::CommandFailed { output })
+    }
 }
 
 fn render(status: &std::process::ExitStatus, out: &str, err: &str) -> String {
@@ -257,6 +277,65 @@ mod tests {
     async fn call(tool: &RunTool, input: Value) -> Result<String, ToolError> {
         let (ctx, _events, _pending) = dispatch_context();
         tool.call("c1", input, &ctx).await
+    }
+
+    /// The defect this pins, seen in a real transcript: the model sent
+    /// `program: "ls", args: ["ls", "-la"]`, which ran `ls ls -la` and
+    /// exited 2 — and the result came back `is_error: false`, so the model
+    /// was told its broken call had worked. It then guessed a different
+    /// program rather than fixing the arguments, costing a second approval.
+    #[tokio::test]
+    async fn a_non_zero_exit_is_an_error_and_keeps_the_whole_output() {
+        let (_d, tool) = tool();
+        let err = call(&tool, json!({"program": "ls", "args": ["no-such-entry"], "class": "write"}))
+            .await
+            .expect_err("a command that exits non-zero has not succeeded");
+
+        let ToolError::CommandFailed { output } = &err else {
+            panic!("expected CommandFailed, got {err:?}");
+        };
+        assert!(output.contains("exit: 2"), "the exit code survives: {output}");
+        assert!(output.contains("stderr:"), "and so does stderr: {output}");
+        assert_eq!(err.to_string(), *output, "Display carries the whole rendering, so nothing is lost");
+    }
+
+    /// The other half: a command that succeeds must stay a success, with no
+    /// error flag and its stdout intact.
+    #[tokio::test]
+    async fn a_zero_exit_is_still_a_plain_success() {
+        let (_d, tool) = tool();
+        let out = call(&tool, json!({"program": "ls", "args": ["-a"], "class": "write"}))
+            .await
+            .expect("a command that exits 0 succeeded");
+        assert!(out.starts_with("exit: 0"), "{out}");
+    }
+
+    /// Non-zero is reported as what it is, not interpreted. `grep` exits 1
+    /// when it matched nothing, which is a result rather than a fault — the
+    /// model is told the code and `run`'s description tells it to read it.
+    #[tokio::test]
+    async fn a_program_that_reports_by_exit_code_still_carries_its_code() {
+        let (dir, tool) = tool();
+        std::fs::write(dir.path().join("haystack.txt"), "alpha\n").unwrap();
+        let err = call(&tool, json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "write"}))
+            .await
+            .expect_err("grep exits 1 on no match");
+        assert!(err.to_string().contains("exit: 1"), "{err}");
+    }
+
+    /// The model supplied `args: ["ls", "-la"]` for `program: "ls"` because
+    /// nothing in the schema said `args` excludes the program name — the
+    /// `program` field had a description and `args` had none at all.
+    #[test]
+    fn the_args_schema_says_the_program_is_not_repeated() {
+        let (_d, tool) = tool();
+        let schema = &tool.descriptor().input_schema;
+        let args = &schema["properties"]["args"];
+        let description = args["description"].as_str().expect("args carries a description");
+        assert!(
+            description.contains("Do not repeat the program"),
+            "the schema has to say it, not only the prose: {description}"
+        );
     }
 
     #[test]

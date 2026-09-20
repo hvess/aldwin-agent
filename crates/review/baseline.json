@@ -20,6 +20,13 @@
       "design_also_says": "The design system has no table component at all, and a one-dimensional ground ladder cannot express a two-dimensional grid of cell boundaries.",
       "app_follows": "ADR 0002 \u2014 a markdown table in assistant prose is drawn with `\u250c \u252c \u2510 \u251c \u253c \u2524 \u2514 \u2534 \u2518 \u2500 \u2502`, scoped to that one construct. This entry is retired when the design system gains a table component.",
       "glyphs": "\u250c\u252c\u2510\u251c\u253c\u2524\u2514\u2534\u2518\u2500\u2502"
+    },
+    {
+      "id": "5a-recess-in-the-prose-but-not-in-the-frame",
+      "design_says": "HANDOFF.md:275 \u2014 the permission panel's command block is 'a recessed field on --t-recess'; HANDOFF.md:277 \u2014 between the key/value table and the options, 'One row of the recessed tone, blank row'.",
+      "design_also_says": "5a's own rendered frame uses --t-recess nowhere. The command field is --t-ground, and between the last fact row and the first option there is a single <div style=\"height:var(--row)\"></div> and nothing else. Measured off `Agent TUI v2.dc.html`, 2026-09-19; the measurement is restated at crates/tui/src/ui/decision.rs:545-553.",
+      "app_follows": "The frame, per CLAUDE.md's first design rule \u2014 measure the handoff HTML; reading it is not enough. Two independent stage 5 judges raised both halves as the top findings of the same run, which is what this entry exists to stop the next one doing. Note the light-theme consequence is real and is the design's own: --t-ground inside a --t-bar panel steps *up* in light, so the design's markup puts the lightest rung in the ladder on a panel two rungs below it. Fixing that is an upstream decision about which surface a quoted payload takes, and this entry retires when it is made.",
+      "glyphs": ""
     }
   ]
 }

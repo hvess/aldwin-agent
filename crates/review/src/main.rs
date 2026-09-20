@@ -344,6 +344,13 @@ fn main() -> std::io::Result<()> {
                 None => println!("no frames captured (--no-capture); stage 5 needs them"),
             }
             println!("\nreport: {}", written.display());
+            // The exact next command, with the directory filled in. Stage 5's
+            // section was left empty on three separate runs because writing it
+            // depended on the operator recalling a command rather than copying
+            // one, and the moment it is needed is the moment attention is on
+            // the findings instead.
+            println!("\nStage 5 is not written yet. After the judge, run:");
+            println!("  ./target/release/mjolnir-review stage5 --run {} --findings <file.json>", dir.display());
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }

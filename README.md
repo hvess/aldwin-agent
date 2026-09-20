@@ -38,6 +38,32 @@ so a macOS build asks about every call instead of running reads unattended.
 That is the honest fallback rather than a silent downgrade, but it is a
 materially different experience and worth knowing before you install.
 
+### Signing a release (maintainers)
+
+One-time setup. Until it is done, pushing a `vX.Y.Z` tag fails at the
+workflow's guard rather than publishing an unsigned release.
+
+**Generate the pair outside the repository.** `cosign generate-key-pair`
+writes into the current directory, and doing that at the repo root puts the
+private key next to the public one that is meant to be committed.
+
+```sh
+cd "$(mktemp -d)"
+cosign generate-key-pair          # prompts for a passphrase
+```
+
+That leaves `cosign.key` (private, encrypted with the passphrase) and
+`cosign.pub` (public). Then:
+
+- `cosign.key` contents → repository secret **`COSIGN_PRIVATE_KEY`**
+- the passphrase → repository secret **`COSIGN_PASSWORD`**
+- `cosign.pub` → copy into the repository root and commit it
+
+Keep `cosign.key` somewhere offline, or delete it — GitHub cannot show a
+secret back to you, so losing both copies means rotating the key rather than
+recovering it. `.gitignore` covers `cosign.key` as a second line of defence,
+but the first is not generating it here.
+
 ### Verifying a release
 
 Each release carries a `SHA256SUMS` covering every archive, and a detached

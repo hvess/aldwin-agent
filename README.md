@@ -28,9 +28,43 @@ relying on it for anything you can't afford to babysit closely.
 The easiest path is a prebuilt binary from this repo's
 [Releases](../../releases) page — no Rust toolchain needed. Grab the archive
 for your platform (Linux or macOS, x86_64 or Apple Silicon; Windows isn't
-supported yet — the shell tool relies on Unix process APIs), extract it,
-and put `mjolnir` on your `PATH`. Since this repo is private, you'll need
-GitHub access to it to download release assets.
+supported yet — `run` relies on Unix process APIs), extract it, and put
+`mjolnir` on your `PATH`. Since this repo is private, you'll need GitHub
+access to it to download release assets.
+
+**On macOS, reads cannot be enforced.** The sandbox that holds a
+read-declared call to its word is Linux-only (see [Permissions](#permissions)),
+so a macOS build asks about every call instead of running reads unattended.
+That is the honest fallback rather than a silent downgrade, but it is a
+materially different experience and worth knowing before you install.
+
+### Verifying a release
+
+Each release carries a `SHA256SUMS` covering every archive, and a detached
+signature over that file. **Take `cosign.pub` from this repository, not from
+the release page** — a key served from the same place as the signature
+proves nothing.
+
+```sh
+cosign verify-blob \
+  --key cosign.pub \
+  --signature SHA256SUMS.sig \
+  --insecure-ignore-tlog=true \
+  SHA256SUMS
+
+sha256sum -c SHA256SUMS
+```
+
+`--insecure-ignore-tlog` is expected here and is not a corner being cut. The
+signature is deliberately kept out of Sigstore's public transparency log,
+which would otherwise publish this private repository's name, its workflow
+path and the timing of every release to a permanent public record. The flag
+disables a check that does not apply.
+
+Verification is worth doing on a tool like this specifically: Mjolnir's whole
+claim is that an edit cannot land without a diff you accepted and that a read
+is enforced rather than trusted. None of that survives running a binary that
+is not the one built from the reviewed source.
 
 Building from source is the alternative — see [Prerequisites](#prerequisites)
 and [Build](#build) below. It's also how new releases get made: pushing a
@@ -125,12 +159,39 @@ model's context, and at what scope (`[p]roject` persists the approval to
 
 ### Permissions
 
-Every tool call starts denied. The first session in a new project will
-prompt for nearly everything it tries to do — that's deliberate; the
-allowlist builds by encounter, not by upfront configuration. Each prompt
-offers allow/deny at four tiers: once, this session, this project, always.
-Edit is the one exception: it's never allowlistable at any tier, and always
-shows a diff for per-call approval.
+Every call starts denied, and the allowlist builds by encounter rather than
+by upfront configuration — so a first session in a new project asks about
+nearly everything. See `.claude/adr/0004-…` for why the model has the shape
+it does.
+
+**A grant is a program and a class** — `git: read`, `cargo: write` — written
+to `permissions.yaml` in the project's `.mjolnir/` or in `~/.mjolnir/`. The
+class belongs to the *call*, not the program: `git status` is a read and
+`git push` is a write, and they are the same binary.
+
+**There is no shell.** A call names a program and an argument list, executed
+directly, so `&&`, `|`, `;` and `$(…)` are ordinary characters with no power
+to chain a second command onto an approved first one.
+
+**A read declaration is enforced, not believed.** The agent declares what
+each call does; a call it declares a read is executed with your source tree
+read-only and the network unreachable. If it tries to write anyway, nothing
+lands — you are asked whether to allow it as a write and it runs again. This
+is why a wrong declaration costs a prompt rather than a tree. *Linux only*:
+it needs Landlock, and where that is unavailable a `read` grant cannot be
+honoured, so every call asks.
+
+**A deny is a lock.** Nothing narrower overrides it — not the other file,
+not a session, not a single turn — so a locked call is refused without a
+prompt, because there is no answer that would lift it. Undoing one is a
+deliberate edit to the file that holds it.
+
+Each scope also carries a standing rung — `ask`, `read` or `write` — for
+anything no entry covers, and the narrower file wins outright.
+
+**Editing is outside all of it.** Not a grant, not a rung, not a row on any
+prompt: every edit shows a diff and waits, under every setting, with no way
+to turn it off.
 
 ### Log rendering
 
@@ -173,7 +234,7 @@ depend on it. Read the relevant file in `.claude/spec/` (or
 | `mjolnir-core`          | Agent loop, append-only log, event/command types, `LlmClient`/`ToolDispatcher` trait defs |
 | `mjolnir-config`        | Per-domain YAML config, project/global scope, refuse-to-start validation |
 | `mjolnir-permissions`   | Default-deny permission engine — three scopes, tiered prompts     |
-| `mjolnir-tools`         | `ToolDispatcher` impl — Read, Edit, shell, Explain (LSP), MCP bridge (rmcp) |
+| `mjolnir-tools`         | `ToolDispatcher` impl — Read, Edit, Run, Explain (LSP), the read-enforcing sandbox, MCP bridge (rmcp) |
 | `mjolnir-llm`           | `LlmClient` impls for Anthropic and OpenAI-compatible (Mistral, self-hosted proxies) providers — reqwest + SSE, retry, prompt caching |
 | `mjolnir-tui`           | ratatui frontend                                                   |
 | `mjolnir-cli` (`crates/cli`) | Binary crate (`mjolnir`) — startup sequence, wiring, slash commands |

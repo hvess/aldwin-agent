@@ -6,8 +6,11 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+# Scoped per job rather than granted once at the top. The build matrix only
+# ever reads the tree; `contents: write` belongs to the one job that creates
+# a release, and nowhere else.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -68,16 +71,126 @@ jobs:
           name: mjolnir-${{ matrix.name }}
           path: dist/*
 
+  # Every release carries a SHA256SUMS and a detached signature over it.
+  #
+  # **One signature, not one per artifact.** Signing the checksum file and
+  # letting `sha256sum -c` carry the rest means a recipient runs two commands
+  # whatever the target matrix grows to, and there is exactly one thing whose
+  # signature can be wrong.
+  #
+  # **Why a key rather than Sigstore keyless.** Keyless would need no secret
+  # at all, but it writes a permanent entry to the *public* Rekor transparency
+  # log naming this repository, the workflow path and every release tag. For a
+  # private distribution channel that publishes the existence and cadence of
+  # the project to anyone who looks, which defeats the point. `--tlog-upload=false`
+  # keeps the signature offline-verifiable and leaks nothing.
+  #
+  # **Why not GitHub's own artifact attestations.** They are the better tool —
+  # provenance ties a binary to a commit and a workflow run, which a bare
+  # signature does not — but they are unavailable for private repositories
+  # outside GitHub Enterprise Cloud. If this repo ever moves to that plan, or
+  # goes public, add `actions/attest-build-provenance` here and keep the
+  # signature: they answer different questions.
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      # The tree is needed for `cosign.pub`: the verify step below checks the
+      # signature against the *committed* public key, which is the same file a
+      # recipient is told to use.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      # Fails here, with something actionable, rather than inside cosign with
+      # a message about a malformed key. A release that silently skipped
+      # signing would be worse than one that did not build: the channel would
+      # look signed and not be.
+      - name: The signing key must be configured
+        env:
+          KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        # Plain `if` blocks, not `[ cond ] && action`: a `run:` step is
+        # `bash -e`, where a standalone `&&` list whose left side is false
+        # exits the step — so the happy path would have failed and the
+        # unhappy one would not have reported anything.
+        run: |
+          missing=""
+          if [ -z "$KEY" ]; then
+            missing="the COSIGN_PRIVATE_KEY secret"
+          fi
+          if [ ! -f cosign.pub ]; then
+            missing="${missing:+$missing and }the committed cosign.pub"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Release signing is not set up — missing $missing. Run \`cosign generate-key-pair\`, add the private half as COSIGN_PRIVATE_KEY and its passphrase as COSIGN_PASSWORD, and commit cosign.pub. See README's \"Verifying a release\"."
+            exit 1
+          fi
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: sigstore/cosign-installer@v4
+
+      - name: Sign the checksums
+        working-directory: dist
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD:    ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign-blob \
+            --key env://COSIGN_PRIVATE_KEY \
+            --output-signature SHA256SUMS.sig \
+            --tlog-upload=false \
+            --yes \
+            SHA256SUMS
+
+      # Verified here with the *public* key from the repository, the same file
+      # and the same command a recipient uses. Signing and then not checking
+      # would leave the first real verification to someone who cannot tell a
+      # broken pipeline from a tampered download.
+      - name: Verify the signature the way a recipient does
+        run: |
+          cosign verify-blob \
+            --key cosign.pub \
+            --signature dist/SHA256SUMS.sig \
+            --insecure-ignore-tlog=true \
+            dist/SHA256SUMS
+
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
+          append_body: true
+          body: |
+            ---
+
+            ### Verifying this release
+
+            Every artifact is covered by `SHA256SUMS`, and `SHA256SUMS` is
+            signed. `cosign.pub` lives in the repository — take it from there,
+            not from this page, so the key and the signature do not come from
+            the same place.
+
+            ```sh
+            cosign verify-blob \
+              --key cosign.pub \
+              --signature SHA256SUMS.sig \
+              --insecure-ignore-tlog=true \
+              SHA256SUMS
+
+            sha256sum -c SHA256SUMS
+            ```
+
+            `--insecure-ignore-tlog` is expected: the signature is deliberately
+            not published to Sigstore's public transparency log, which would
+            otherwise make this private repository's name and release cadence
+            public. The flag disables a check that does not apply, not one that
+            is being skipped.

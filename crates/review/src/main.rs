@@ -56,6 +56,14 @@ enum Command {
         /// half-drawn app.
         #[arg(long, default_value_t = 400)]
         quiet_ms: u64,
+        /// Run the deterministic stages and stop, reporting success on them
+        /// alone.
+        ///
+        /// This is not a review. It is the fast check to run while you are
+        /// still working — the full contract requires stage 5, and without
+        /// this flag `review` says so by exiting non-zero.
+        #[arg(long)]
+        stages_only: bool,
     },
     /// Regenerate the app's design system from `.claude/design/tokens/`.
     Tokens {
@@ -243,7 +251,7 @@ fn main() -> std::io::Result<()> {
             Ok(())
         }
 
-        Command::Review { goal, focus, no_capture, theme, quiet_ms } => {
+        Command::Review { goal, focus, no_capture, theme, quiet_ms, stages_only } => {
             let focused: Vec<&str> = focus.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
             let unknown: Vec<&&str> = focused.iter().filter(|s| !scene::IMPLEMENTED.contains(s)).collect();
             if focused.is_empty() || !unknown.is_empty() {
@@ -354,9 +362,24 @@ fn main() -> std::io::Result<()> {
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }
-            println!("stages 1–4 clean, and every one of them hermetic. Stage 5 is the skill's:");
-            println!("spawn the judge against those frames.");
-            Ok(())
+            if stages_only {
+                println!("stages 0–4 clean. Not a review: stage 5 was not run.");
+                return Ok(());
+            }
+            // Deliberately an error. Stage 5's section came back empty on five
+            // of seven runs, and the cause was never that the command to write
+            // it was missing — it was that this line used to say "clean" and
+            // exit zero, which reads as completion. A review without stage 5
+            // is not a review, so the only way to exit zero is through
+            // `stage5`, the same way the only way past stage 3 is to
+            // regenerate the tokens.
+            // Printed rather than carried in the error: `fn main`'s `Err` is
+            // Debug-formatted, so a multi-line message comes out with its
+            // escapes showing.
+            println!("stages 0–4 clean — review INCOMPLETE until stage 5 is written.");
+            println!("Spawn the judge against those frames, then run the stage5 command above.");
+            println!("(Use --stages-only if you wanted the deterministic check alone.)");
+            Err(std::io::Error::other("review incomplete: stage 5 not written"))
         }
     }
 }

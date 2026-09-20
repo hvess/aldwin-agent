@@ -153,6 +153,11 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
 #[derive(serde::Deserialize)]
 pub struct Finding {
     pub severity: String,
+    /// Which of the prompt's five ranked sources this is measured against.
+    /// Optional so a hand-written file stays valid, but the judge is asked
+    /// for it: a finding that cannot name its source is not a finding.
+    #[serde(default)]
+    pub source:   String,
     pub design:   String,
     pub frame:    String,
     pub frames:   String,
@@ -229,15 +234,16 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     if stage5.findings.is_empty() {
         out.push_str("<p>No findings.</p>");
     } else {
-        out.push_str("<table><tr><th>severity</th><th>design</th><th>frame</th><th>frames</th></tr>");
+        out.push_str("<table><tr><th>severity</th><th>source</th><th>design</th><th>frame</th><th>frames</th></tr>");
         for f in &stage5.findings {
             let class = match f.severity.trim() {
                 "blocking" | "major" => "bad",
                 _ => "",
             };
             out.push_str(&format!(
-                "<tr><td class=\"{class}\">{}</td><td>{}</td><td>{}</td><td class=\"note\">{}</td></tr>",
+                "<tr><td class=\"{class}\">{}</td><td class=\"note\">{}</td><td>{}</td><td>{}</td><td class=\"note\">{}</td></tr>",
                 esc(&f.severity),
+                esc(&f.source),
                 esc(&f.design),
                 esc(&f.frame),
                 esc(&f.frames)

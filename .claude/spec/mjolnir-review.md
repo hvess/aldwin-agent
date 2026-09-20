@@ -121,6 +121,27 @@ harmless there because a bad frame is something the judge says out loud.
     judge's section, because the agent that made the change is the one that
     would otherwise write the verdict sentence.
 
+12. **A review is not complete until stage 5 is written, and the exit code
+    says so.** `review` exits non-zero after a clean stages 0–4, because that
+    is not a review — only `stage5` can exit zero. `--stages-only` is the
+    explicit opt-out for the fast check during development.
+
+    This is the fourth fix for the same failure and the first one aimed at
+    the cause. Stage 5's section came back empty on **five of seven runs**.
+    The first three fixes — providing a command, making that command exit
+    non-zero, printing the invocation — all addressed *recall*, and recall
+    was never the problem. The problem was that nothing depended on it:
+    `review` printed "clean" and exited zero at a point where the work was
+    half done, and a step nothing depends on is a step that gets skipped
+    under attention pressure. Compare stage 3, which has never been skipped
+    once, because skipping it fails the next run.
+
+13. **The judge emits its own JSON, and it goes into the report verbatim.**
+    Transcribing prose findings into the report's schema by hand was tedious
+    enough to be where the step died — and it routed the judge's conclusions
+    through the hands of the agent whose work was being judged. The prompt
+    now asks for exactly one fenced `json` block and nothing else.
+
 ## Pitfalls
 
 - **Letting the contradictions list grow.** It is two entries. A previous

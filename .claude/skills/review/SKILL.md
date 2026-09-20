@@ -154,49 +154,39 @@ Five things the prompt does that matter, each for a measured reason:
 > text lands on cell 13 — derive it, there is deliberately no `--body-col`.
 > The capture cell is 8x18px, so cell column N starts at pixel x = 8N.
 >
-> **Report in three sections, in this order.**
+> **Your entire output is one fenced `json` block and nothing else.** No
+> preamble, no commentary around it. This shape:
 >
-> **1. Findings.** Things you can demonstrate. At most six; if you have more,
-> report the six that matter and say how many you dropped.
+>     ```json
+>     {
+>       "iteration": 1,
+>       "findings": [
+>         { "severity": "major",
+>           "source":   "3 — tokens/cells.css",
+>           "design":   "cells.css:32 — --group-gap is 6 cells between groups inside a bar",
+>           "frame":    "footer row 36: groups start at cells 3, 16 and 30 — 3 cells apart",
+>           "frames":   "all 30" }
+>       ],
+>       "contradictions": ["one string per place the design disagrees with itself, both halves cited"],
+>       "questions":      ["one string per thing you could not resolve"],
+>       "matches":        ["one string per thing you checked and found correct"]
+>     }
+>     ```
 >
->     severity: blocking | major | minor
->     source:   which of the five above you are measuring against
->     design:   <file:line>, and what it states
->     frame:    <what is drawn, measured — cells, rows, hexes>
->     frames:   <which ones>
+> - **findings** — things you can demonstrate, at most six. These are the only
+>   entries that affect the score.
+>   - **blocking** — the change under review does not do what it set out to do.
+>   - **major** — the frame contradicts source 1, 2 or 3.
+>   - **minor** — the frame contradicts source 4, or a source 5 statement
+>     nothing higher speaks to.
+> - **contradictions** — the design against itself. Do not score.
+> - **questions** — unresolved or low confidence. Do not score. **Do not
+>   promote a guess to a minor finding**; saying you could not tell is worth
+>   more than a number.
+> - **matches** — what you checked and found correct, one line each.
 >
-> - **blocking** — the change under review does not do what it set out to do.
-> - **major** — the frame contradicts source 1, 2 or 3.
-> - **minor** — the frame contradicts source 4, and nothing higher covers it.
->
-> **Source 5 on its own — read this twice, it has two cases.**
->
-> - A higher source says something *different* → the frame is conformant.
->   Record it under contradictions. Not a finding.
-> - Nothing higher speaks to the point at all → source 5 is the only
->   statement there is, so it stands. **That is a finding, minor.**
->
-> The difference is whether a higher source *contradicts* it or is merely
-> *silent*. Silence is not an override. A token whose scope is arguable is
-> not a higher source speaking — if you are unsure whether a token covers
-> the case, you are in the second branch, and the prose still stands.
->
-> A finding whose `source` you cannot name is not a finding.
->
-> **Consistency is not evidence of intent.** A value that is wrong in every
-> frame is a systematic defect, which looks exactly like a decision. Do not
-> reason from uniformity to deliberateness.
->
-> **2. Contradictions.** Places the design disagrees with itself, with both
-> halves cited. These do not score. This is where a prose-versus-token
-> conflict goes.
->
-> **3. Questions.** Anything you could not resolve, or hold at low
-> confidence. These do not score either. **Do not promote a guess to a minor
-> finding** — if you are unsure, it belongs here, and saying so is worth more
-> than a number.
->
-> If a screen matches, say so in one line. Do **not** give an overall score.
+> A finding whose `source` you cannot name is not a finding. Do not pad, and
+> do not give an overall score — the score is computed from your severities.
 
 ### Write the result, with the command
 
@@ -206,13 +196,14 @@ Do not hand-edit the HTML:
 ./target/release/mjolnir-review stage5 --run <dir> --findings findings.json
 ```
 
-where `findings.json` is the judge's output as data:
+where `findings.json` is **the judge's JSON block, saved verbatim**. The
+prompt asks for exactly that block and nothing else, so this is a paste
+rather than a transcription.
 
-```json
-{ "iteration": 1,
-  "findings": [ { "severity": "major", "design": "…", "frame": "…", "frames": "…" } ],
-  "matches":  [ "one line per thing the judge confirmed matches" ] }
-```
+That matters for two reasons. Transcribing the judge's prose into JSON by
+hand is tedious enough that it is where the step died five times out of
+seven — and worse, it routes the judge's findings through the hands of the
+agent whose work is being judged. The judge's own words go in the report.
 
 It derives the score from the severities — `100 − (25 × blocking) − (15 ×
 major) − (5 × minor)`, floored at 0, so **90 means at most two minor

@@ -56,6 +56,10 @@ use crate::palette::Palette;
 /// trade in both directions. The floor of 5 rows is what the log needs to
 /// carry a turn and the break above it on a frame too short for a quarter
 /// to reach that.
+/// The rows [`panel_lines`] adds outside whatever budget bounds the body:
+/// the title band, the blank above the footer, and the footer itself.
+const PANEL_CHROME_ROWS: usize = 1 /* band */ + 2 /* footer padding + hint */;
+
 pub(super) fn max_height(frame_height: u16) -> usize {
     // While a decision is pending the panel *is* the bottom bar — it takes
     // the composer's and status line's rows rather than stacking above
@@ -72,7 +76,7 @@ pub(super) fn max_height(frame_height: u16) -> usize {
     // the budget this bounds (see there for why) — reserved here too, so
     // the combined total still fits the same overall budget, not just the
     // clamped body alone.
-    const PANEL_CHROME: u16 = 1 /* band */ + 2 /* footer padding + hint */;
+    const PANEL_CHROME: u16 = PANEL_CHROME_ROWS as u16;
     let log = LOG_MIN.max(frame_height / 4);
     (frame_height.saturating_sub(TOP_BAR + log + PANEL_CHROME) as usize).max(6)
 }
@@ -562,7 +566,26 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             Vec::new()
         }
     };
-    let budget = max_height(frame_height);
+    // The design's band, bounded by what the frame can actually spare.
+    //
+    // `--panel-permission-h` is 18 rows, and `cells.css:82-95` is explicit
+    // that a chrome band's height is a fixed row count — "A body band is
+    // therefore never given a computed height". So the panel is 18 rows
+    // whether its payload is shorter *or longer*: a short one pads below the
+    // options (see the tail of this function) and a long one elides, which
+    // `clamp_panel` already knows how to do and already announces in its own
+    // marker row.
+    //
+    // Before this, only `max_height` bounded it, so at the design's own
+    // frame size a large diff grew the panel to 24 rows while a small one
+    // left it at 12 — the same component at two heights depending on its
+    // payload, which is what the token exists to prevent.
+    //
+    // `max_height` still wins where it is smaller. At 80×24 the design's
+    // band does not fit beside a conversation worth reading, and the
+    // reference specifies one frame and it is not that one.
+    let target = crate::tokens::PANEL_PERMISSION_H.min(max_height(frame_height) + PANEL_CHROME_ROWS);
+    let budget = target - PANEL_CHROME_ROWS;
 
     // `head` is the rows at the top of the body that must survive whatever
     // the budget does — see [`clamp_panel`].
@@ -640,18 +663,20 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // "sits where the composer's status line would be", i.e. at the bottom.
     // Everything else fills from the top.
     //
-    // **Only a tool prompt.** `5a` is the screen the design actually draws.
-    // The edit-approval panel is not in the design system at all (ADR 0003
-    // §1), so 18 is a number the reference never stated for it, and padding
-    // it to match would be inventing a height rather than importing one.
-    let pad = matches!(app.pending_front(), PendingFront::Prompt(_))
-        .then(|| crate::tokens::PANEL_PERMISSION_H.saturating_sub(lines.len() + 1))
-        .unwrap_or(0);
-    // Never at the cost of the conversation: `max_height` already reserved
-    // the transcript's rows, and a band that grew past them would push the
-    // thing the decision is *about* off the screen.
-    let affordable = pad.min(budget.saturating_sub(lines.len().saturating_sub(1)));
-    for _ in 0..affordable {
+    // **Every payload, not only a tool prompt.** This was scoped to
+    // `PendingFront::Prompt` for one iteration, on the reasoning that ADR
+    // 0003 §1 leaves the edit-approval screen outside the design system, so
+    // 18 was a number the reference never stated for it. A stage 5 judge
+    // showed that was too clever: the app draws *one* panel and titles both
+    // `permission`, and the scoping left `approval` at 12 rows while
+    // `approval_large` reached 18 by accident of having a longer diff. The
+    // same component at two heights depending on its payload is the defect
+    // the token exists to prevent, whatever the reference says about the
+    // rows inside it.
+    // `+ 1` for the footer, which is pushed below. `target` already has the
+    // conversation's rows subtracted out of it, so there is nothing further
+    // to guard against here.
+    for _ in 0..target.saturating_sub(lines.len() + 1) {
         lines.push(card.blank(ctx));
     }
 

@@ -134,17 +134,19 @@ fn every_scene_renders_exactly_as_recorded() {
 /// found it independently on the same run; a finding produced twice is a
 /// finding that should stop costing a model's attention.
 ///
-/// **Scoped to the tool prompt.** `5a` is the screen the design draws. The
-/// edit-approval panel (`approval`, `approval_large`) is not in the design
-/// system at all — ADR 0003 §1 says so in as many words — so 18 is a number
-/// the reference never stated for it.
+/// **Every permission panel.** The app draws one component and titles both
+/// payloads `permission`; the token names that band. Scoping this to the
+/// tool prompt for one iteration left `approval` at 12 rows while
+/// `approval_large` reached 18 by accident of content, which a stage 5 judge
+/// caught — the same panel at two heights depending on its payload is what
+/// the token exists to prevent.
 ///
 /// **Not at 80x24.** Eighteen rows plus a 3-row top bar plus the five rows
 /// `decision::max_height` reserves for the conversation is 26, and the frame
 /// is 24. The design specifies one frame and it is not that one.
 #[test]
 fn the_permission_panel_is_the_band_height_the_design_states() {
-    const PROMPTS: [&str; 3] = ["prompt", "prompt_path", "prompt_scoped"];
+    const PROMPTS: [&str; 5] = ["prompt", "prompt_path", "prompt_scoped", "approval", "approval_large"];
     let expected = mjolnir_tui::__design_panel_rows();
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in PROMPTS {

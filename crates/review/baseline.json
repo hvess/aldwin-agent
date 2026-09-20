@@ -27,6 +27,13 @@
       "design_also_says": "5a's own rendered frame uses --t-recess nowhere. The command field is --t-ground, and between the last fact row and the first option there is a single <div style=\"height:var(--row)\"></div> and nothing else. Measured off `Agent TUI v2.dc.html`, 2026-09-19; the measurement is restated at crates/tui/src/ui/decision.rs:545-553.",
       "app_follows": "The frame, per CLAUDE.md's first design rule \u2014 measure the handoff HTML; reading it is not enough. Two independent stage 5 judges raised both halves as the top findings of the same run, which is what this entry exists to stop the next one doing. Note the light-theme consequence is real and is the design's own: --t-ground inside a --t-bar panel steps *up* in light, so the design's markup puts the lightest rung in the ladder on a panel two rungs below it. Fixing that is an upstream decision about which surface a quoted payload takes, and this entry retires when it is made.",
       "glyphs": ""
+    },
+    {
+      "id": "inline-diff-gutter-prose-against-its-own-markup",
+      "design_says": "HANDOFF.md:262 \u2014 the inline diff carries 'a 5-cell right-aligned line number', which reads as the number ending at cell 7 when measured from the 3-cell margin.",
+      "design_also_says": "The frame's own markup is `flex: 0 0 45px; text-align: right; padding-right: 9px` \u2014 a 5-cell field holding a 4-cell number and one cell of separation, so the number right-aligns to cell 6 and cell 7 is the separation. Restated at crates/tui/src/ui/diff.rs:209-212.",
+      "app_follows": "The markup. This is the single most re-raised finding in the project's history \u2014 judges have reported it across four separate runs, each reading the prose and none reading the 45px. Kept here so the fifth does not.",
+      "glyphs": ""
     }
   ]
 }

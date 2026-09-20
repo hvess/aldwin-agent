@@ -137,6 +137,17 @@ The chroma curve runs the other way in this theme — the accent needs *more* ch
 
 ## Revision log
 
+00000. Permission (`5a`) and first run (`5d`) — the harness's permission model
+was rebuilt and these screens describe its terms. A grant is a **program and a
+class** (`git: read`) where it was a command pattern (`cargo *`); the option
+list is **eight rows**, allow and deny mirrored across once / session / project
+/ everywhere, where it was four; the shell tool the screen was drawn around no
+longer exists, so a call names a program and an argument list and carries a
+declared class; and first run's access scale is three rungs rather than four.
+The entries below are left as written — they record what was true when they
+were made.
+
+
 0000. Rules (all three files, 15 in total) — every freestanding rule was a gradient fading to transparent over its outer 48px, inherited from Nocturne's signature. They are now flat single-colour rules running edge to edge, one step more muted than the structural borders they used to match. This affects the turn separators in the transcript, the rule above the permission options, and the step separators in first run.
 
 000. Top bar — every within-group gap was 6 cells, the same gap that parts unrelated groups, so related facts read as if they were unrelated. Facts inside a group are now ` · ` apart: directory and branch (`4a`, `5a`, `5c`), model / gauge / cost (`4a`, `5a`, `5c`), and `3 files · +98 -2` in the review bar (`5b`). The 6-cell gap survives only where it does real work: between the brand and everything else.
@@ -271,17 +282,55 @@ Purpose: approve or deny one tool call. **Full-frame panel anchored to the botto
 Panel: full frame width, 18 rows, ground the chrome-bar tone. The tonal step off the transcript is the whole boundary — there is no rule along its top edge:
 
 - Title row on `--t-title`, full width: `permission` in accent text on the 3-cell margin, no glyph; right-aligned the tool name (`bash`) in the `you` accent step. Same row as `commands` in `5c`.
-- Blank row, then the sentence `The agent wants to run a shell command.` in neutral-300.
+- Blank row, then the sentence. There is no shell to run a command in: a call
+  names a program and an argument list, and it carries a class the agent
+  declares for it — `The agent wants to run git, declared a write.` A call
+  declared a read says what that means, since the harness enforces it rather
+  than trusting it: `The agent wants to run git, declared a read. It runs
+  read-only, with no network.` In neutral-300.
 - Blank row, then the command block: a recessed field on `--t-recess`, no border and no accent bar, with the command on one row 2 cells in — `$` in accent-400 then the command in primary text, and a blank half-row above and below.
-- Blank row, then a 3-row key/value table on the frame's own columns: labels `in`, `writes`, `network` in the 12-cell label column, values from cell 17 (`~/src/gateway`, `target/`, `off`).
+- Blank row, then the command block: a recessed field on `--t-recess`, no border and no accent bar, with the command on one row 2 cells in — `$` in accent-400 then the command in primary text, and a blank half-row above and below.
+- Blank row, then the key/value table on the frame's own columns: labels in the
+  12-cell label column, values from cell 17. `in` is the working directory.
+  **`writes` and `network` are now real facts rather than the guesses they were
+  when this was drawn** — a read-declared call runs with the project read-only
+  and the network unreachable, so they read `refused` and `off`; a
+  write-declared one runs unconfined. **Open question for this screen:** three
+  fact rows plus eight option rows do not fit an 18-row panel, so the harness
+  currently states those two facts inside the sentence above and draws `in`
+  alone. Whether the table shrinks, the band grows, or the list splits is a
+  design decision this note deliberately does not make.
 - One row of the recessed tone, blank row.
-- Four option rows, flush to the frame's left edge like the command rows in `5c`: the selected one has an accent `▌` and the accent-900 band, the rest a neutral-800 `▌`. Text in body colour with the matched pattern one step quieter.
-- **Each option is numbered `1`–`4`**, one cell after the mark and two cells before the label, so option text starts at cell 6. Typing a number picks that option directly, which replaces the right-flush key column the rows used to carry (`⏎`, `a`, `shift-a`, `d`). Arrows still move the selection and `⏎` still commits it; all three keys are named in the footer rather than on the rows. The number is accent-300 on the selected row and neutral-600 on the rest. Nothing is right-aligned in these rows now.
-- Footer row on the bottom-bar tone, sitting where the composer's status line would be. Left, three key hints on `5b`'s pattern — key in the accent, verb one step quieter, groups 6 cells apart: `↑↓ to move`, `1-4 to pick`, `⏎ to confirm`. Right, `saved to .harness/permissions.toml`. No `esc to close` — a permission has to be answered, so the escape is `Deny`.
+- Eight option rows, flush to the frame's left edge like the command rows in `5c`: the selected one has an accent `▌` and the accent-900 band, the rest a neutral-800 `▌`. Text in body colour with the matched pattern one step quieter.
+- **Each option is numbered `1`–`8`**, one cell after the mark and two cells before the label, so option text starts at cell 6. Typing a number picks that option directly, which replaces the right-flush key column the rows used to carry (`⏎`, `a`, `shift-a`, `d`). Arrows still move the selection and `⏎` still commits it; all three keys are named in the footer rather than on the rows. The number is accent-300 on the selected row and neutral-600 on the rest. Nothing is right-aligned in these rows now.
+- Footer row on the bottom-bar tone, sitting where the composer's status line would be. Left, three key hints on `5b`'s pattern — key in the accent, verb one step quieter, groups 6 cells apart: `↑↓ to move`, `1-8 to pick`, `⏎ to confirm`. Nothing is right-flushed here any
+  more: the slot held `saved to .harness/permissions.toml`, which named the
+  wrong file (it is `.mjolnir/permissions.yaml`) and was true of three rows out
+  of eight — the two `once` rows save nothing and the session rows never touch
+  disk. Each row states its own reach instead. No `esc to close` — a permission
+  has to be answered, so the escape is `Deny once`.
 
 This screen is authored entirely in the `--tui-*` semantic roles, so the one markup is identical in both theme files.
 
-Copy, verbatim, in this order: `Allow once` / `Allow cargo test for this session` / `Always allow cargo * in this project` / `Deny and tell the agent why`.
+Copy, verbatim, in this order — allow and deny mirrored across the same four
+scopes, with the program and the class quoted one step quieter inside each
+sentence:
+
+`Allow once` / `Allow cargo writes for this session` /
+`Always allow cargo writes in this project` / `Always allow cargo writes everywhere` /
+`Deny once` / `Deny cargo writes for this session` /
+`Deny cargo writes in this project` / `Never allow cargo`.
+
+A grant is a **program and a class**, not a command pattern — `cargo *` became
+`cargo writes`, because the class belongs to the call (`git status` is a read,
+`git push` is a write, same binary). The eighth row is deliberately blunter
+than the rest: the whole program, every class, everywhere. It is a lock —
+nothing narrower overrides it — which is why the deny side is drawn at all
+rather than left to a config file.
+
+`Deny and tell the agent why` is gone: nothing in the round trip carries a
+reason and no step collects one, so the row named something the product does
+not do.
 
 ### 3. Diff review (`5b`)
 
@@ -311,8 +360,14 @@ Purpose: settle account, model and access before the first prompt.
 - Three steps, each on the same 12-cell label column as a transcript turn, separated by one row of the break tone:
   - `account` — `●` in diff-green, `dev@proton.ch`, right-aligned `signed in` in neutral-700.
   - `model` (label in accent-400, `step 2 of 3` beneath in neutral-700) — prose `Pick a default. /model changes it later.`, then three option rows in the same selected/unselected treatment as elsewhere: `sonnet-4.6 balanced · 200k`, `opus-4.6 slower, deeper`, `haiku-4.6 fast, cheap`.
-  - `access` — prose `How much runs without asking.` then one neutral-700 row: `ask every time · auto-read, ask to write · full access`.
-- Bottom bar: `⏎ continue`, `↑↓ choose`, and `config → ~/.harness/config.toml` right-aligned.
+  - `access` — prose `How much runs without asking.` then one neutral-700 row:
+    `ask · read · write`. Three points, not four. The answer is stored as the
+    scope's standing rung in `permissions.yaml` and is the same setting a
+    developer edits later — not a preset that expands into grants and then
+    stops existing. `full access` had no distinct meaning to offer: editing a
+    file always shows a diff and waits, under every rung, so no point on this
+    scale can mean everything runs.
+- Bottom bar: `⏎ continue`, `↑↓ choose`, and `config → ~/.mjolnir/` right-aligned.
 
 > **Superseded by Turn 13 — see `SYNC.md`.** First run was rebuilt: wordmark,
 > positioning line, **two** steps, a four-point access scale, and **no account
@@ -416,7 +471,12 @@ Static frames were requested, so no motion is specified beyond these implied beh
 - **Transcript** is bottom-anchored and scrolls; tool output streams into the row it belongs to, with `◐` and a trailing `▌` cursor while live, becoming `●` plus a right-aligned summary when done.
 - **Spinner**: `◐` should cycle through a quarter-block or braille sequence at roughly 100ms per frame; keep it in the accent.
 - **Context gauge** redraws whenever the token count changes; `/compact` shows a projected "after" value before running.
-- **Permission rules** chosen in 5a persist to `.harness/permissions.toml`; the session-scoped option lives in memory only.
+- **Permission rules** chosen in 5a persist to `permissions.yaml` — the
+  project's `.mjolnir/` for the two `in this project` rows, `~/.mjolnir/` for
+  the two `everywhere` rows. The session rows live in memory only and the two
+  `once` rows save nothing. A deny is a **lock**: nothing narrower overrides
+  it, so a locked call is refused without drawing a prompt at all — there is
+  no answer at a prompt that would lift it.
 - **Selection** anywhere is band + `▌` mark together — never one alone. There is no hover state; a terminal has no pointer.
 
 ## State

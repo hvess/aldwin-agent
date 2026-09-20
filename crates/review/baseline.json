@@ -1,5 +1,5 @@
 {
-  "//": "The measured cell and pinned font for this machine, and the design system's own self-contradictions. A contradiction is a bug in .claude/design/, removed when the design is fixed upstream \u2014 never when the app changes. See crates/review/src/baseline.rs.",
+  "//": "The measured cell and pinned font for this machine, and the design system's own self-contradictions. A contradiction is a bug in .claude/design/, removed when the design is fixed upstream — never when the app changes. See crates/review/src/baseline.rs.",
   "cell": {
     "w": 8,
     "h": 18
@@ -9,44 +9,44 @@
   "contradictions": [
     {
       "id": "closed-glyph-table-vs-the-designs-own-copy",
-      "design_says": "HANDOFF.md:232-241 closes the glyph table at `\u258c \u25cf \u25d0 \u25cb \u2714 \u25b6 \u2588 + -`, and IMPORT.md restates it as closed.",
-      "design_also_says": "The same document mandates `\u00b7` as the top bar's within-group separator (:142, :254-255), `\u2192` on first run's `more` row (:336), `\u23ce` and `\u2191\u2193` in two footers (:280, :341), and presupposes `\u2026` for clipping.",
+      "design_says": "HANDOFF.md:232-241 closes the glyph table at `▌ ● ◐ ○ ✔ ▶ █ + -`, and IMPORT.md restates it as closed.",
+      "design_also_says": "The same document mandates `·` as the top bar's within-group separator (:142, :254-255), `→` on first run's `more` row (:336), `⏎` and `↑↓` in two footers (:280, :341), and presupposes `…` for clipping.",
       "app_follows": "The copy. A frame cannot draw the screens the design specifies without these five marks, so the table is the half that is wrong.",
-      "glyphs": "\u00b7\u2026\u23ce\u2191\u2193\u2190\u2192"
+      "glyphs": "·…⏎↑↓←→"
     },
     {
       "id": "no-table-component-adr-0002",
       "design_says": "HANDOFF.md:232-241's closed glyph table contains no box-drawing characters, and Turn 13's rule is that nothing inside a frame is stroked.",
       "design_also_says": "The design system has no table component at all, and a one-dimensional ground ladder cannot express a two-dimensional grid of cell boundaries.",
-      "app_follows": "ADR 0002 \u2014 a markdown table in assistant prose is drawn with `\u250c \u252c \u2510 \u251c \u253c \u2524 \u2514 \u2534 \u2518 \u2500 \u2502`, scoped to that one construct. This entry is retired when the design system gains a table component.",
-      "glyphs": "\u250c\u252c\u2510\u251c\u253c\u2524\u2514\u2534\u2518\u2500\u2502"
+      "app_follows": "ADR 0002 — a markdown table in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, scoped to that one construct. This entry is retired when the design system gains a table component.",
+      "glyphs": "┌┬┐├┼┤└┴┘─│"
     },
     {
       "id": "5a-recess-in-the-prose-but-not-in-the-frame",
-      "design_says": "HANDOFF.md:275 \u2014 the permission panel's command block is 'a recessed field on --t-recess'; HANDOFF.md:277 \u2014 between the key/value table and the options, 'One row of the recessed tone, blank row'.",
+      "design_says": "HANDOFF.md:275 — the permission panel's command block is 'a recessed field on --t-recess'; HANDOFF.md:277 — between the key/value table and the options, 'One row of the recessed tone, blank row'.",
       "design_also_says": "5a's own rendered frame uses --t-recess nowhere. The command field is --t-ground, and between the last fact row and the first option there is a single <div style=\"height:var(--row)\"></div> and nothing else. Measured off `Agent TUI v2.dc.html`, 2026-09-19; the measurement is restated at crates/tui/src/ui/decision.rs:545-553.",
-      "app_follows": "The frame, per CLAUDE.md's first design rule \u2014 measure the handoff HTML; reading it is not enough. Two independent stage 5 judges raised both halves as the top findings of the same run, which is what this entry exists to stop the next one doing. Note the light-theme consequence is real and is the design's own: --t-ground inside a --t-bar panel steps *up* in light, so the design's markup puts the lightest rung in the ladder on a panel two rungs below it. Fixing that is an upstream decision about which surface a quoted payload takes, and this entry retires when it is made.",
+      "app_follows": "The frame, per CLAUDE.md's first design rule — measure the handoff HTML; reading it is not enough. Two independent stage 5 judges raised both halves as the top findings of the same run, which is what this entry exists to stop the next one doing. Note the light-theme consequence is real and is the design's own: --t-ground inside a --t-bar panel steps *up* in light, so the design's markup puts the lightest rung in the ladder on a panel two rungs below it. Fixing that is an upstream decision about which surface a quoted payload takes, and this entry retires when it is made.",
       "glyphs": ""
     },
     {
       "id": "inline-diff-gutter-prose-against-its-own-markup",
-      "design_says": "HANDOFF.md:262 \u2014 the inline diff carries 'a 5-cell right-aligned line number', which reads as the number ending at cell 7 when measured from the 3-cell margin.",
-      "design_also_says": "The frame's own markup is `flex: 0 0 45px; text-align: right; padding-right: 9px` \u2014 a 5-cell field holding a 4-cell number and one cell of separation, so the number right-aligns to cell 6 and cell 7 is the separation. Restated at crates/tui/src/ui/diff.rs:209-212.",
-      "app_follows": "The markup. This is the single most re-raised finding in the project's history \u2014 judges have reported it across four separate runs, each reading the prose and none reading the 45px. Kept here so the fifth does not.",
+      "design_says": "HANDOFF.md:262 — the inline diff carries 'a 5-cell right-aligned line number', which reads as the number ending at cell 7 when measured from the 3-cell margin.",
+      "design_also_says": "The frame's own markup is `flex: 0 0 45px; text-align: right; padding-right: 9px` — a 5-cell field holding a 4-cell number and one cell of separation, so the number right-aligns to cell 6 and cell 7 is the separation. Restated at crates/tui/src/ui/diff.rs:209-212.",
+      "app_follows": "The markup. This is the single most re-raised finding in the project's history — judges have reported it across four separate runs, each reading the prose and none reading the 45px. Kept here so the fifth does not.",
       "glyphs": ""
     },
     {
       "id": "screen-prose-names-ramp-rungs-the-token-layer-does-not-expose",
       "design_says": "HANDOFF.md's screen sections name raw ramp rungs: :274 puts the permission panel's sentence in 'neutral-300', :279 the option number in 'accent-300 on the selected row and neutral-600 on the rest'.",
-      "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all \u2014 palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto.",
-      "app_follows": "The token layer, because it is the only one it can draw through. Two stage 5 judges reached opposite conclusions on the same frames from the same prose \u2014 one called the mapping correct 'through HANDOFF's superseded Nocturne table', the other called it a major deviation \u2014 which is the signature of a reference that says two things. What this wants upstream is the screen prose rewritten in semantic roles like the rest of the handoff.",
+      "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all — palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto.",
+      "app_follows": "The token layer, because it is the only one it can draw through. Two stage 5 judges reached opposite conclusions on the same frames from the same prose — one called the mapping correct 'through HANDOFF's superseded Nocturne table', the other called it a major deviation — which is the signature of a reference that says two things. What this wants upstream is the screen prose rewritten in semantic roles like the rest of the handoff.",
       "glyphs": ""
     },
     {
-      "id": "access-fact-tier-vs-what-permissions-yaml-stores",
-      "design_says": "HANDOFF.md:395-396 \u2014 the empty state's third fact is `access`, and its value is the tier word; the design's own 1c/`14c` step offers `ask` / `read` / `write` / `all`.",
-      "design_also_says": "The design never says what the fact reads once the stored grants match no tier, which is the ordinary state rather than the edge: `permissions.yaml` gains a grant every time a permission prompt is answered with a lasting allow, and it is a plain file a developer edits. ADR 0001 \u00a75 has already removed one of the four points (`write`) as a state that does not exist, and ADR 0001 puts `edit` outside the permissions model entirely, so `edit:` is ungrantable at every tier and distinguishes none of them.",
-      "app_follows": "The three stored per-tool states (`read:` / `shell:` / `edit:`) \u2014 what this directory actually permits \u2014 rather than a tier word that is only true until the file drifts. `transcript.rs`'s own note: a tier is what first run *writes*, not what is stored, and reporting one would be a guess printed as a fact on the screen whose whole job is to say what this directory permits. Deferred deliberately: the permissions model is being reworked and this fact's shape is settled with it. Retire this entry then \u2014 it is the one entry here whose retirement condition is an app change rather than a design fix.",
+      "id": "access-fact-scale-in-the-bound-copys-turn-14-prose",
+      "design_says": "The bound copy's Turn 14 prose (`14c`/`14d`, carried into HANDOFF.md as a `>` annotation) offers a four-point access scale — `ask` / `read` / `write` / `all` — and says the empty state's third fact is `access`, value \"the tier\".",
+      "design_also_says": "The top-level README's own `5d` section now reads `ask · read · write`, three points, corrected upstream on 2026-09-20 with the rest of the ADR 0004 copy (see `.claude/design/IMPORT.md`). `all` was dropped because no point on the scale can mean everything runs: ADR 0004 §3 puts `edit` outside the permissions model, so a diff is shown and waited on at every rung.",
+      "app_follows": "The corrected README: the `access` fact reads the standing rung — `ask` / `read` / `write`, or `not set` when neither file states one — followed by `edits always ask`, the one fact no rung changes. This is a *narrowing* of the entry that stood here before, whose retirement condition was the permissions rework and is now met: the app no longer prints three per-tool `read:`/`shell:`/`edit:` states, and the rung it prints instead is exactly what `permissions.yaml` stores, so the fact can no longer drift from the file. What survives is only the bound copy's Turn 14 prose, which a re-sync should bring forward; delete this entry then.",
       "glyphs": ""
     }
   ]

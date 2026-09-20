@@ -10,6 +10,37 @@ byte-identical, and no path was added or removed in either project. The
 design-system project's `updatedAt` did not move; see the note below on why that
 is expected.
 
+## ADR 0004 push — 2026-09-20, the permission copy corrected upstream
+
+**The first push in this direction for a reason other than a re-sync**, and
+the first that corrects the design rather than importing it.
+
+ADR 0004 rebuilt the harness's permission model, and it left `5a` and `5d`
+describing a product that no longer exists: a four-option list over a `shell`
+tool that had been deleted, a grant written as a command pattern (`cargo *`)
+where a grant is now a program and a class (`cargo writes`), a `Deny and tell
+the agent why` row for a reason field nothing collects, a `saved to
+.harness/permissions.toml` footer naming the wrong file and true of three rows
+out of eight, and a four-point access scale where there are three rungs.
+
+Written to **`25845063-…`'s top-level `README.md`** — the file this directory
+keeps as `HANDOFF.md`. Ten edits, each matching exactly once, and nothing else
+in the file touched: the remote base was reconstructed by stripping this
+copy's own `>` annotation blocks, verified section by section against the
+fetched original, edited, and pushed back. The same ten edits were then applied
+here, so the two stay in step.
+
+**What was deliberately not pushed.** The `5a` frame still draws four option
+rows in 18, and eight plus a three-row fact table does not fit. The prose now
+says so and says explicitly that whether the table shrinks, the band grows or
+the list splits is undecided. Redrawing `Agent TUI v2.dc.html` is a design act
+and is Maximilian's to make — see the note added under the fact-table bullet.
+
+Also not pushed: the `14c`/`14d` prose still describing the access fact as "the
+tier" from a four-point scale. That text lives in the bound copy's `SYNC.md`
+under `_ds/`, not in this README, and `crates/review/baseline.json` keeps a
+narrowed entry for it.
+
 ## Turn 15 sync — 2026-09-07, the light theme rebuilt again
 
 The bound copy had moved ahead on its own and this directory was behind. Read

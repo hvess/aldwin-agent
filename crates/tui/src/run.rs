@@ -57,6 +57,10 @@ pub struct SessionProvider {
     /// The catalogue id of the row `provider.yaml` resolves to, or `None`
     /// for an endpoint the catalogue has never seen.
     pub current_provider: Option<String>,
+    /// What to call that provider on screen. The catalogue id where the row
+    /// is known, the declared kind where it is not — so the resting state's
+    /// `provider` fact always names a provider, never only a model.
+    pub provider_label: Option<String>,
 }
 
 /// Runs the TUI to completion: sets up the terminal, drives the event loop
@@ -341,8 +345,10 @@ async fn run_loop(
     theme: Theme,
     session: SessionProvider,
 ) -> io::Result<()> {
-    let mut app =
-        App::new(model_name, permissions).with_theme(theme).with_catalogue(session.catalogue, session.current_provider);
+    let mut app = App::new(model_name, permissions)
+        .with_theme(theme)
+        .with_catalogue(session.catalogue, session.current_provider)
+        .with_provider_label(session.provider_label);
     let mut input = spawn_input_reader();
     // Drives the "working"/"thinking" spinner's animation frame — a plain
     // redraw timer, not tied to any core event, since there'd otherwise be

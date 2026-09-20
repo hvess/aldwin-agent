@@ -391,6 +391,14 @@ pub struct App {
     /// and marks as current. `None` for a hand-written endpoint, which is
     /// a real configuration and not an error.
     pub current_provider: Option<String>,
+    /// What to *call* the provider this session runs on, which is not the
+    /// same question as which catalogue row the picker opens on. A
+    /// hand-written endpoint matches no row, but its kind is still declared
+    /// in `provider.yaml` — so this is the catalogue id where there is one
+    /// and the bare kind (`openai-compatible`) where there is not, and it is
+    /// never unknown for a configured session. `None` only for an `App`
+    /// nobody gave a session to: tests, and `examples/preview.rs`.
+    pub provider_label: Option<String>,
     /// Open only while the picker is on screen: it takes every key and the
     /// bottom band draws it instead of the composer, the same way a pending
     /// decision does.
@@ -449,6 +457,7 @@ impl App {
             outbox: Vec::new(),
             catalogue: Vec::new(),
             current_provider: None,
+            provider_label: None,
             picker: None,
             theme: crate::palette::Theme::default(),
             transcript: crate::ui::Transcript::default(),
@@ -467,6 +476,16 @@ impl App {
     pub fn with_catalogue(mut self, catalogue: Vec<crate::first_run::ProviderChoice>, current_provider: Option<String>) -> Self {
         self.catalogue = catalogue;
         self.current_provider = current_provider;
+        self
+    }
+
+    /// The provider's display name, set alongside the catalogue because it
+    /// answers a different question: `with_catalogue` says which row the
+    /// picker opens on, this says what the resting screen calls the
+    /// provider. They part company for a hand-written endpoint, which has a
+    /// kind to name but no row to open on.
+    pub fn with_provider_label(mut self, label: Option<String>) -> Self {
+        self.provider_label = label;
         self
     }
 

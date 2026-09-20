@@ -41,6 +41,13 @@
       "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all \u2014 palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto.",
       "app_follows": "The token layer, because it is the only one it can draw through. Two stage 5 judges reached opposite conclusions on the same frames from the same prose \u2014 one called the mapping correct 'through HANDOFF's superseded Nocturne table', the other called it a major deviation \u2014 which is the signature of a reference that says two things. What this wants upstream is the screen prose rewritten in semantic roles like the rest of the handoff.",
       "glyphs": ""
+    },
+    {
+      "id": "access-fact-tier-vs-what-permissions-yaml-stores",
+      "design_says": "HANDOFF.md:395-396 \u2014 the empty state's third fact is `access`, and its value is the tier word; the design's own 1c/`14c` step offers `ask` / `read` / `write` / `all`.",
+      "design_also_says": "The design never says what the fact reads once the stored grants match no tier, which is the ordinary state rather than the edge: `permissions.yaml` gains a grant every time a permission prompt is answered with a lasting allow, and it is a plain file a developer edits. ADR 0001 \u00a75 has already removed one of the four points (`write`) as a state that does not exist, and ADR 0001 puts `edit` outside the permissions model entirely, so `edit:` is ungrantable at every tier and distinguishes none of them.",
+      "app_follows": "The three stored per-tool states (`read:` / `shell:` / `edit:`) \u2014 what this directory actually permits \u2014 rather than a tier word that is only true until the file drifts. `transcript.rs`'s own note: a tier is what first run *writes*, not what is stored, and reporting one would be a guess printed as a fact on the screen whose whole job is to say what this directory permits. Deferred deliberately: the permissions model is being reworked and this fact's shape is settled with it. Retire this entry then \u2014 it is the one entry here whose retirement condition is an app change rather than a design fix.",
+      "glyphs": ""
     }
   ]
 }

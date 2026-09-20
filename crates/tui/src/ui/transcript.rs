@@ -746,16 +746,23 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
         with_label_column(vec![Line::from(spans)], Some((name, pal.label))).remove(0)
     };
 
-    let provider = match app.current_provider.as_deref() {
+    let provider = match app.provider_label.as_deref().or(app.current_provider.as_deref()) {
         // `anthropic · claude-sonnet-5` — one group, two facts, so ` · `
         // parts them rather than the 6-cell gap that parts groups.
+        //
+        // A hand-written endpoint matches no catalogue row, but it still
+        // declares a kind, so `provider_label` carries `openai-compatible`
+        // and this row reads `openai-compatible · llama-3.3-70b`. The row's
+        // label says `provider`; dropping to the model alone left it naming
+        // the one thing it does not promise, and on a session whose model id
+        // happens to match a catalogue row's the result read as a bug.
         Some(id) => vec![
             Span::styled(id.to_string(), Style::default().fg(pal.value)),
             Span::styled(" · ".to_string(), Style::default().fg(pal.dim)),
             Span::styled(status.model_name.clone(), Style::default().fg(pal.value)),
         ],
-        // A hand-written endpoint the catalogue cannot name is a real
-        // configuration, not an error — the model still names itself.
+        // Only an `App` nobody gave a session to — tests and
+        // `examples/preview.rs`. A configured session always has a kind.
         None => vec![Span::styled(status.model_name.clone(), Style::default().fg(pal.value))],
     };
 

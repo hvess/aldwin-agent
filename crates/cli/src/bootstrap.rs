@@ -354,9 +354,20 @@ pub async fn run() -> Result<(), StartupError> {
     // The picker opens on the row the session is actually running on, which
     // is `effective_provider` — the file that supplies the setting, not the
     // global one it may be shadowing.
+    //
+    // The label is not `current_provider` with a default: the picker must
+    // open on a row that exists, so an unrecognised endpoint leaves that
+    // `None`, while the resting screen still has a true name to print — the
+    // kind the file itself declares.
+    let identified = mjolnir_llm::identify(&effective_provider).map(|p| p.id.to_string());
+    let kind = match effective_provider.provider {
+        mjolnir_config::ProviderKind::Anthropic => "anthropic",
+        mjolnir_config::ProviderKind::OpenaiCompatible => "openai-compatible",
+    };
     let session = mjolnir_tui::SessionProvider {
+        provider_label:   Some(identified.clone().unwrap_or_else(|| kind.to_string())),
         catalogue:        catalogue_choices(),
-        current_provider: mjolnir_llm::identify(&effective_provider).map(|p| p.id.to_string()),
+        current_provider: identified,
     };
     let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme, session).await;
 

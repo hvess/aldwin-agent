@@ -281,14 +281,19 @@ Purpose: approve or deny one tool call. **Full-frame panel anchored to the botto
 
 Panel: full frame width, 18 rows, ground the chrome-bar tone. The tonal step off the transcript is the whole boundary — there is no rule along its top edge:
 
-- Title row on `--t-title`, full width: `permission` in accent text on the 3-cell margin, no glyph; right-aligned the tool name (`bash`) in the `you` accent step. Same row as `commands` in `5c`.
+- Title row on `--t-title`, full width: `permission` in accent text on the
+  3-cell margin, no glyph; right-aligned, in the `you` accent step, the
+  **program** — which is what `bash` always was here. Since ADR 0004 that is
+  the grant key, the thing every option row below quotes, so a `run` call on
+  `git` right-flushes `git` and not the tool name `run`. For a built-in the
+  two coincide (`read` is both), which is why this needs saying: the slot has
+  one meaning, and it is the program. Same row as `commands` in `5c`.
 - Blank row, then the sentence. There is no shell to run a command in: a call
   names a program and an argument list, and it carries a class the agent
   declares for it — `The agent wants to run git, declared a write.` A call
   declared a read says what that means, since the harness enforces it rather
   than trusting it: `The agent wants to run git, declared a read. It runs
   read-only, with no network.` In neutral-300.
-- Blank row, then the command block: a recessed field on `--t-recess`, no border and no accent bar, with the command on one row 2 cells in — `$` in accent-400 then the command in primary text, and a blank half-row above and below.
 - Blank row, then the command block: a recessed field on `--t-recess`, no border and no accent bar, with the command on one row 2 cells in — `$` in accent-400 then the command in primary text, and a blank half-row above and below.
 - Blank row, then the key/value table on the frame's own columns: labels in the
   12-cell label column, values from cell 17. `in` is the working directory.

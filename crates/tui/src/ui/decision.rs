@@ -346,7 +346,11 @@ fn command_block(target: &str, shell: bool, padding: Padding, ctx: Ctx) -> Vec<L
     let row = Row::card(pal.ground).inset(MARGIN_X, pal.bar).pad(COMMAND_BLOCK_PAD);
     let mut spans = Vec::with_capacity(2);
     if shell {
-        spans.push(Span::styled("$ ", Style::default().fg(pal.speaker_you)));
+        // accent-400 — `--tui-mark` — per `5a`: "`$` in accent-400 then the
+        // command in primary text". It drew `speaker_you` (accent-300), one
+        // rung off, which is the sort of thing only a per-cell measurement
+        // finds.
+        spans.push(Span::styled("$ ", Style::default().fg(pal.mark)));
     }
     spans.push(Span::styled(target.to_string(), Style::default().fg(pal.text)));
 

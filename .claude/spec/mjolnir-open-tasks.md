@@ -97,6 +97,26 @@ entries; numbers here are never reused.
    `.claude/design/`) and a browser render; measure its pixels against its own
    9×20 cell, never read positions off the prose.
 
+   **Two things settled 2026-09-20, and the job it would do has changed.**
+
+   The render half is feasible here and needs nothing installed: there is no
+   Chromium on this machine and no snap, but `firefox --headless --screenshot
+   <abs path> --window-size=1080,720 file://<abs path>` writes the file.
+   CLAUDE.md's warning is about Chromium under snap confinement and does not
+   apply. What is still missing is the fetch, which is a `DesignSync` call
+   against the live discussion project — read the `design-sync` skill first,
+   and it is a decision to make deliberately rather than a step in a loop.
+
+   The *value* of this changed when `crate::expect` landed the same day. The
+   assertion tables now encode the design's stated geometry from its prose and
+   its tokens, so a rendered frame would no longer be the only non-circular
+   reference — it would be the thing that **audits the tables**, which is a
+   narrower and more valuable job than the one this entry was opened for. Two
+   findings in two days survived several judges and failed on first
+   measurement against the reference (conformance items 33 and 38), so an
+   audit of the tables against the frames is worth having. It is the largest
+   remaining piece of harness work.
+
 8. ~~**Tab does not take effect through injected input.**~~ **Retired
    2026-09-19 without being answered, because the feature it was about is
    gone.** ADR 0003 moved grant scope onto the option rows and unbound `Tab`

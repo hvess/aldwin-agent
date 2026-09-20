@@ -169,8 +169,23 @@ Five things the prompt does that matter, each for a measured reason:
 > - **major** — the frame contradicts source 1, 2 or 3.
 > - **minor** — the frame contradicts source 4, and nothing higher covers it.
 >
-> A frame that contradicts **only source 5** is never a finding. It is a
-> contradiction. A finding whose `source` you cannot name is not a finding.
+> **Source 5 on its own — read this twice, it has two cases.**
+>
+> - A higher source says something *different* → the frame is conformant.
+>   Record it under contradictions. Not a finding.
+> - Nothing higher speaks to the point at all → source 5 is the only
+>   statement there is, so it stands. **That is a finding, minor.**
+>
+> The difference is whether a higher source *contradicts* it or is merely
+> *silent*. Silence is not an override. A token whose scope is arguable is
+> not a higher source speaking — if you are unsure whether a token covers
+> the case, you are in the second branch, and the prose still stands.
+>
+> A finding whose `source` you cannot name is not a finding.
+>
+> **Consistency is not evidence of intent.** A value that is wrong in every
+> frame is a systematic defect, which looks exactly like a decision. Do not
+> reason from uniformity to deliberateness.
 >
 > **2. Contradictions.** Places the design disagrees with itself, with both
 > halves cited. These do not score. This is where a prose-versus-token

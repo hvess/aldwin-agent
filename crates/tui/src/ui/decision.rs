@@ -617,8 +617,19 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
             let head = body.len();
             let options = option_rows(&rows, app.decision_selected, ctx);
             // Measured before anything is built: the separator keeps its
-            // blank rows only if the whole panel fits with them.
-            let tight = head + 3 + options.len() > budget;
+            // blank row only if the whole panel fits with it.
+            //
+            // The `3` this used to add was the separator's old height —
+            // blank, band, blank — and it outlived the band by long enough
+            // to become a bug. While `budget` was `max_height` the slack
+            // hid it; bounding the panel to `--panel-permission-h` did not,
+            // and a stage 5 judge measured the result: the prompt panels
+            // dropped the row between their facts and their options and
+            // then padded three blank rows in above the footer, which is
+            // the same height and a worse frame. `options_rule` is the one
+            // place that knows what the separator costs, so ask it.
+            let separator = options_rule(false).len();
+            let tight = head + separator + options.len() > budget;
             let mut tail = options_rule(tight);
             tail.extend(options);
             tail.extend(queue_note(app.pending_prompts.len()));

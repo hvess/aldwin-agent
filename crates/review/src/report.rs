@@ -159,13 +159,26 @@ pub struct Finding {
 }
 
 /// What the skill hands back from stage 5.
+///
+/// Three lists, and only the first scores. `contradictions` is the design
+/// disagreeing with itself and `questions` is the judge saying it could not
+/// tell — both are worth recording and neither is the app's fault, so
+/// neither deducts. Keeping them out of the arithmetic is what stops a
+/// judge's uncertainty from reading as a defect.
 #[derive(serde::Deserialize)]
 pub struct Stage5 {
-    pub iteration: u32,
-    pub findings:  Vec<Finding>,
-    /// Anything the judge confirmed matches, one line each. Optional.
+    pub iteration:      u32,
+    pub findings:       Vec<Finding>,
+    /// Anything the judge confirmed matches, one line each.
     #[serde(default)]
-    pub matches:   Vec<String>,
+    pub matches:        Vec<String>,
+    /// Places the design disagrees with itself. Candidates for
+    /// `baseline.json`; they do not score.
+    #[serde(default)]
+    pub contradictions: Vec<String>,
+    /// What the judge could not resolve. They do not score either.
+    #[serde(default)]
+    pub questions:      Vec<String>,
 }
 
 /// The score, derived from severities rather than chosen by the judge.
@@ -233,13 +246,19 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
         out.push_str("</table>");
     }
 
-    if !stage5.matches.is_empty() {
-        out.push_str("<h3>Confirmed matching</h3><ul>");
-        for m in &stage5.matches {
-            out.push_str(&format!("<li>{}</li>", esc(m)));
+    let mut section = |title: &str, items: &[String]| {
+        if items.is_empty() {
+            return;
+        }
+        out.push_str(&format!("<h3>{title}</h3><ul>"));
+        for item in items {
+            out.push_str(&format!("<li>{}</li>", esc(item)));
         }
         out.push_str("</ul>");
-    }
+    };
+    section("Contradictions — the design against itself, not scored", &stage5.contradictions);
+    section("Questions — unresolved, not scored", &stage5.questions);
+    section("Confirmed matching", &stage5.matches);
 
     std::fs::write(report, format!("{}{out}{}", &text[..start], &text[end..]))?;
     Ok(value)

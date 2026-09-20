@@ -71,12 +71,28 @@ cause.
 
 ## 5. Confidence
 
-Spawn **one subagent**. Give it the prompt below, filled in. It is
-deliberately strict: this is the only stage that is not reproducible, and the
-prompt is most of what bounds that.
+Spawn **one subagent per iteration. One.** Not two to compare, not three to
+vote — a second judge doubles the cost of the slowest stage and what it buys
+is a measurement of variance, which is a thing to fix in the prompt rather
+than average away.
 
-Three things the prompt does that matter, each for a measured reason:
+Give it the prompt below, filled in. It is deliberately strict: this is the
+only stage that is not reproducible, and the prompt is most of what bounds
+that.
 
+Five things the prompt does that matter, each for a measured reason:
+
+- **It ranks its sources.** The design's screen prose, its own token tables,
+  its tokens and the ADRs disagree in places, and a judge with no precedence
+  rule invents one. Two judges on the same unchanged pixels once returned
+  opposite verdicts on the same option-row tones — one calling them correct
+  "through HANDOFF's superseded Nocturne table", the other calling them a
+  major deviation. That is not a judge being careless; it is a prompt failing
+  to say which source wins.
+- **It refuses to let low confidence become a deduction.** Anything unsure
+  goes under "questions", which does not score. The earlier version defined
+  `minor` as "a nit, or anything you hold at low confidence", which invited
+  guesses into the arithmetic.
 - **It enumerates the frames.** `review` prints the exact paths for the
   focused scenes — hand it that list, not the directory. A judge that has to
   decide what to open is a judge making a decision you did not ask it to make.
@@ -99,46 +115,73 @@ Three things the prompt does that matter, each for a measured reason:
 > business, and reporting them is the single most common way this stage goes
 > wrong.
 >
-> Read, in this order, and read nothing else — not `crates/tui`, not
-> `.claude/spec`:
-> 1. `.claude/design/IMPORT.md`, then `HANDOFF.md`, then `tokens/*.css`.
-> 2. `.claude/adr/*.md` — numbered decisions that amend the design. A frame
->    following one of these is conformant, not deviant.
-> 3. `crates/review/baseline.json`, the `contradictions` array — places the
->    design contradicts *itself*. Do not report these.
+> **What you may read, and which source wins.**
+>
+> Read all of these. When two of them disagree — and they do — the one
+> higher in this list wins. This is not a tiebreak you get to make:
+>
+> 1. `.claude/adr/*.md` — numbered decisions that deliberately amend the
+>    design. A frame following one is conformant, full stop.
+> 2. `crates/review/baseline.json`, the `contradictions` array — disagreements
+>    already settled. Never report one of these.
+> 3. `.claude/design/tokens/*.css` — the token layer. This is what the app
+>    can actually draw through, so it is the operative statement.
+> 4. `.claude/design/HANDOFF.md`'s **token tables** (the tables of role, hex
+>    and ramp step).
+> 5. `.claude/design/HANDOFF.md`'s **screen prose** — the narrative sections
+>    describing each screen. This is the oldest layer: written across fifteen
+>    turns over a token layer that was rebuilt twice underneath it, and it
+>    names ramp rungs that in places no longer resolve to any role.
+>
+> Read `.claude/design/IMPORT.md` first for context. Read nothing else — not
+> `crates/tui`, not `.claude/spec`.
+>
+> **If a lower source contradicts a higher one, that is not an app defect.**
+> The app is drawing what the higher source says. Put it under
+> "contradictions" below, which does not affect the score, and move on.
 >
 > **The frames, and how to read them:**
 >
 > `<the exact list review printed>`
 >
-> Each `.png` has a `.txt` beside it: the app's own declared grid, one line
-> per row, every character at its exact column. **Use the `.txt` for anything
-> positional** — columns, rows, alignment, spacing, copy. **Use the `.png`
-> only for colour.** Sampling a pixel to find a column is slow and gets you an
-> antialiased edge; the grid is exact.
+> Each `.png` has a `.txt` beside it, same name: the app's own declared grid,
+> one line per row, every character at its exact column. **Use the `.txt` for
+> anything positional** — columns, rows, alignment, spacing, copy. **Use the
+> `.png` only for colour.** Sampling a pixel to find a column is slow and
+> gets you an antialiased edge; the grid is exact.
 >
 > The grid is `tokens/cells.css`: margin 3, label column 8, gutter 2, so body
 > text lands on cell 13 — derive it, there is deliberately no `--body-col`.
 > The capture cell is 8x18px, so cell column N starts at pixel x = 8N.
 >
-> **Report every finding in exactly this shape:**
+> **Report in three sections, in this order.**
 >
-> ```
-> severity: blocking | major | minor
-> design:   <file:line>, and what it states
-> frame:    <what is drawn, measured — cells, rows, hexes>
-> frames:   <which ones>
-> ```
+> **1. Findings.** Things you can demonstrate. At most six; if you have more,
+> report the six that matter and say how many you dropped.
+>
+>     severity: blocking | major | minor
+>     source:   which of the five above you are measuring against
+>     design:   <file:line>, and what it states
+>     frame:    <what is drawn, measured — cells, rows, hexes>
+>     frames:   <which ones>
 >
 > - **blocking** — the change under review does not do what it set out to do.
-> - **major** — a deviation from a value the design *states*, in the focused
->   screens.
-> - **minor** — a nit, or anything you hold at low confidence.
+> - **major** — the frame contradicts source 1, 2 or 3.
+> - **minor** — the frame contradicts source 4, and nothing higher covers it.
 >
-> A finding you cannot cite a design file and line for is not a finding; drop
-> it. If a screen matches, say so in one line. Do not pad.
+> A frame that contradicts **only source 5** is never a finding. It is a
+> contradiction. A finding whose `source` you cannot name is not a finding.
 >
-> Do **not** give an overall score. Report the findings and stop.
+> **2. Contradictions.** Places the design disagrees with itself, with both
+> halves cited. These do not score. This is where a prose-versus-token
+> conflict goes.
+>
+> **3. Questions.** Anything you could not resolve, or hold at low
+> confidence. These do not score either. **Do not promote a guess to a minor
+> finding** — if you are unsure, it belongs here, and saying so is worth more
+> than a number.
+>
+> If a screen matches, say so in one line. Do **not** give an overall score.
 
 ### Write the result, with the command
 

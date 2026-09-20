@@ -140,16 +140,32 @@ Three things the prompt does that matter, each for a measured reason:
 >
 > Do **not** give an overall score. Report the findings and stop.
 
-### Computing the score
+### Write the result, with the command
 
-From the judge's severities, not from its opinion:
+Do not hand-edit the HTML:
 
+```sh
+./target/release/mjolnir-review stage5 --run <dir> --findings findings.json
 ```
-100 − (25 × blocking) − (15 × major) − (5 × minor), floored at 0
+
+where `findings.json` is the judge's output as data:
+
+```json
+{ "iteration": 1,
+  "findings": [ { "severity": "major", "design": "…", "frame": "…", "frames": "…" } ],
+  "matches":  [ "one line per thing the judge confirmed matches" ] }
 ```
 
-So **90 means at most two minor deviations and nothing else**. Write the
-arithmetic into the report so a reader can check it.
+It derives the score from the severities — `100 − (25 × blocking) − (15 ×
+major) − (5 × minor)`, floored at 0, so **90 means at most two minor
+deviations and nothing else** — renders the section with the arithmetic
+shown, prints the verdict and exits non-zero below the threshold.
+
+**This is a command rather than an instruction for a reason.** The first
+version of this skill asked the agent to append the section by hand, and it
+came back empty on three consecutive runs: the agent was reading findings and
+fixing code, which is exactly when a manual step gets skipped. A report step
+that depends on remembering is a report step that will not happen.
 
 - **≥ 90** — stage 5 passes. The review is done.
 - **< 90** — fix what the judge found, then run the whole loop again from

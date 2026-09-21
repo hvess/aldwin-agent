@@ -33,16 +33,14 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{
-    Color as SynColor, FontStyle, Style as SynStyle, StyleModifier, Theme as SynTheme, ThemeItem, ThemeSettings,
-};
-
-use crate::palette::{Palette, Theme};
+use syntect::highlighting::{Color as SynColor, Style as SynStyle, StyleModifier, Theme as SynTheme, ThemeItem, ThemeSettings};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
+
+use crate::palette::{Palette, Theme};
 
 fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -249,19 +247,11 @@ fn highlight_uncached(lang: &str, body: &str, app_theme: Theme) -> Vec<Vec<Span<
         .collect()
 }
 
+/// Foreground only: [`theme`] sets no font style and no background, so
+/// there is nothing else in a `SynStyle` to carry over.
 fn convert_style(style: SynStyle) -> Style {
     let fg = style.foreground;
-    let mut out = Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b));
-    if style.font_style.contains(FontStyle::BOLD) {
-        out = out.add_modifier(Modifier::BOLD);
-    }
-    if style.font_style.contains(FontStyle::ITALIC) {
-        out = out.add_modifier(Modifier::ITALIC);
-    }
-    if style.font_style.contains(FontStyle::UNDERLINE) {
-        out = out.add_modifier(Modifier::UNDERLINED);
-    }
-    out
+    Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b))
 }
 
 #[cfg(test)]

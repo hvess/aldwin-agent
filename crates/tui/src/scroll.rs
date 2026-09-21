@@ -7,12 +7,10 @@
 /// `total_lines` existed — a handful of entries routinely render to far
 /// more rows than the viewport, so `max_offset` stayed 0 long after there
 /// was real content below the fold. `offset` indexes straight into
-/// `ui::transcript_rows`, which is one screen row per element by
-/// construction — see that function's doc comment for how that invariant is
-/// established, and for the three-passes-per-frame wrapping it replaced.
+/// `ui::Transcript`, which is one screen row per element by construction.
 ///
 /// Auto-follows new content while `following` is true; scrolling up
-/// disengages it, and jumping to the bottom (End / `G`) re-engages it — see
+/// disengages it, and jumping to the bottom (End) re-engages it — see
 /// aldwin-tui.md's Conversation Log scroll behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollState {
@@ -29,7 +27,7 @@ impl Default for ScrollState {
 
 impl ScrollState {
     /// Call once per frame with the actual rendered log-area height (only
-    /// known at render time) and the current entry count — keeps a
+    /// known at render time) and the current row count — keeps a
     /// following viewport pinned to the bottom across a terminal resize
     /// instead of showing a stale offset from before it.
     pub fn set_viewport_height(&mut self, height: usize, total_len: usize) {
@@ -55,7 +53,8 @@ impl ScrollState {
         total_len.saturating_sub(self.viewport_height)
     }
 
-    /// Called whenever a new entry is pushed to the log.
+    /// Called whenever a new entry is pushed to the log, with the new row
+    /// count.
     pub fn on_content_grew(&mut self, total_len: usize) {
         if self.following {
             self.offset = self.max_offset(total_len);

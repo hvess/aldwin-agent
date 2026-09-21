@@ -20,10 +20,10 @@
 //! this bounds flooding without needing a redraw timer, but isn't the
 //! spec's literal mechanism.
 //!
-//! Shift+Enter no longer relies on the terminal happening to report it:
-//! `run.rs` asks for the Kitty keyboard protocol's disambiguation flag
-//! where the terminal says it supports it, which is what makes the key
-//! distinguishable from Enter at all, and `App::handle_key` carries
+//! Shift+Enter does not rely on the terminal happening to report it:
+//! `run.rs` pushes the Kitty keyboard protocol's disambiguation flag
+//! unconditionally, which is what makes the key distinguishable from Enter
+//! at all where the terminal implements it, and `App::handle_key` carries
 //! Alt+Enter and Ctrl+J as fallbacks for terminals that don't. `draft.rs`
 //! owns the multi-line draft those keys produce, along with the bracketed
 //! pastes that produce much larger ones.
@@ -43,7 +43,7 @@ mod ui;
 mod version;
 
 pub use app::App;
-pub use log::{LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+pub use log::{LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus};
 pub use first_run::{run as run_first_run, AccessTier, Answers as FirstRunAnswers, Configured, ModelChoice, ProviderChoice};
 pub use palette::Theme;
 pub use resume::SessionChoice;

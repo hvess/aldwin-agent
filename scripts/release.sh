@@ -140,7 +140,9 @@ cmd_package() {
     fi
     [ -d dist/bin ] || { echo "error: no dist/bin — run 'build' first" >&2; exit 1; }
 
-    rm -f dist/*.tar.gz dist/SHA256SUMS
+    # The signature too: a stale one beside fresh checksums fails `verify`,
+    # and makes `sign` stop to ask about overwriting it.
+    rm -f dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.sig
     local target
     for target in $(ls dist/bin | sort); do
         local bin="dist/bin/$target/aldwin"

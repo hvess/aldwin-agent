@@ -34,7 +34,9 @@ impl SessionId {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let seq = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
-        Self(format!("{secs:010}-{}-{seq}", std::process::id()))
+        // The counter is fixed-width for the same reason the seconds are:
+        // unpadded, the tenth mint in one second sorted ahead of the second.
+        Self(format!("{secs:010}-{}-{seq:06}", std::process::id()))
     }
 }
 
@@ -150,10 +152,11 @@ mod tests {
         assert_eq!(unique.len(), ids.len(), "every mint is its own session");
     }
 
-    /// `list` orders a directory by filename before it reads any header.
+    /// More than ten, so the counter crosses a digit boundary — unpadded,
+    /// `-10` sorted ahead of `-2` and this failed whenever it did.
     #[test]
     fn session_ids_sort_into_the_order_they_were_minted() {
-        let mut ids: Vec<SessionId> = (0..8).map(|_| SessionId::mint()).collect();
+        let mut ids: Vec<SessionId> = (0..24).map(|_| SessionId::mint()).collect();
         let minted = ids.clone();
         ids.sort();
         assert_eq!(ids, minted);

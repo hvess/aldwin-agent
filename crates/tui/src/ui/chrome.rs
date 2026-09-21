@@ -8,7 +8,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Padding, Paragraph};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::grid::{elide, truncate_spans, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
 use crate::app::{App, RunningTool};
@@ -27,13 +27,13 @@ use crate::log::LogEntry;
 /// frames while writing the same word `aldwin` as the speaker label two
 /// rows below. Six letters, so it sits inside `--label-col` with two cells
 /// to spare and the directory still lands on the body column.
-pub(super) const BRAND: &str = "Aldwin";
+const BRAND: &str = "Aldwin";
 
 /// Cells between the brand and whatever follows it in the identity bar, so
 /// that what follows lands on the body column. Derived from `BRAND`'s own
 /// width rather than stated as a number — cell 13 is fixed by the grid, and
 /// a second statement of it could only ever drift.
-pub(super) fn brand_pad() -> usize {
+fn brand_pad() -> usize {
     CONTENT_INDENT.saturating_sub(MARGIN_X).saturating_sub(BRAND.width())
 }
 
@@ -138,6 +138,11 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
     // the transcript's `ground` beneath it is the boundary. Content still
     // sits on row 1, centred in the band.
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
+    // A frame too short to give the bar its middle row draws the ground and
+    // nothing on it, rather than the identity row over the band below.
+    if area.height < 2 {
+        return;
+    }
     let content_row = Rect { y: area.y + 1, height: 1, ..area };
     let width = area.width as usize;
     let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
@@ -344,7 +349,7 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // on the provider, and reporting that stretch as "idle" is exactly the
     // no-progress-feedback complaint `activity_label` exists to answer.
     } else if app.turn_active || app.awaiting_turn {
-        running(activity_label(app).to_string())
+        running(activity_label(app))
     } else {
         activity("●", pal.done, "idle".into())
     };
@@ -476,11 +481,11 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
 /// than wrapped — this is one row by construction — and says where the rest
 /// of it is.
 pub(super) fn draw_notice(frame: &mut Frame, area: Rect, app: &App) {
-    use crate::log::TurnEndReasonKind;
+    use aldwin_core::TurnEndReason;
     let pal = app.theme.palette();
     let why = match app.log.last() {
         Some(LogEntry::Error { message }) => message,
-        Some(LogEntry::TurnEnded { reason: TurnEndReasonKind::Error(message) }) => message,
+        Some(LogEntry::TurnEnded { reason: TurnEndReason::Error(message) }) => message,
         _ => return,
     };
     let on_band = |fg| Style::default().fg(fg).bg(pal.bar_bottom);
@@ -506,11 +511,10 @@ pub(super) fn draw_notice(frame: &mut Frame, area: Rect, app: &App) {
 /// Every word `cli::slash::intercept` actually dispatches on, `/`-prefixed
 /// here to match whole-word input tokens directly. Duplicated because tui
 /// can't depend on cli; purely a hint for [`highlight_command_tokens`], so
-/// keep in sync by hand if slash.rs's arms change — `/theme` was added
-/// 2026-09-02 alongside that command, caught only by remembering this
-/// comment's own instruction, not by a compiler or test forcing the two
-/// files to agree.
-const KNOWN_COMMAND_WORDS: [&str; 5] = ["/help", "/clear", "/exit", "/reload-config", "/theme"];
+/// keep in sync by hand if slash.rs's arms change. Nothing forces the two
+/// files to agree: `/model` and `/resume` shipped undimmed until an audit
+/// read this list against that one.
+const KNOWN_COMMAND_WORDS: [&str; 7] = ["/help", "/clear", "/exit", "/model", "/reload-config", "/resume", "/theme"];
 
 /// Dims every word in `line` that exactly matches a known command, no
 /// matter where it falls — per explicit developer direction, this is a
@@ -663,7 +667,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
 
 /// The drawn caret — `14d`'s `▌` in `--t-mark`, on the composer's own
 /// field.
-fn caret(pal: &crate::palette::Palette) -> Span<'static> {
+fn caret(pal: &Palette) -> Span<'static> {
     Span::styled("▌", Style::default().fg(pal.mark).bg(pal.bar_bottom))
 }
 
@@ -690,7 +694,10 @@ fn caret_row(text: &str, col: usize, ctx: Ctx) -> Line<'static> {
         let (mut before, mut after) = (String::new(), String::new());
         let mut under = None;
         for c in span.content.chars() {
-            let w = c.to_string().width();
+            // `unwrap_or(1)`, as `grid::elide` does and for the same reason:
+            // the outer walk above measures with `str::width`, which charges a
+            // control character one cell. A `0` here would drift from it.
+            let w = c.width().unwrap_or(1);
             if at < col {
                 before.push(c);
             } else if under.is_none() {
@@ -704,7 +711,7 @@ fn caret_row(text: &str, col: usize, ctx: Ctx) -> Line<'static> {
             out.push(Span::styled(before, span.style));
         }
         out.push(caret(ctx.pal));
-        if let Some(pad) = under.map(|c| c.to_string().width().saturating_sub(1)).filter(|&p| p > 0) {
+        if let Some(pad) = under.map(|c| c.width().unwrap_or(1).saturating_sub(1)).filter(|&p| p > 0) {
             out.push(Span::styled(" ".repeat(pad), field));
         }
         if !after.is_empty() {

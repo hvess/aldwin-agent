@@ -80,10 +80,7 @@ pub enum Event {
     Notice { message: String },
 
     /// `Command::ClearHistory` landed and `ConversationLog` was wiped — the
-    /// TUI reacts by wiping its own rendered log in step (see
-    /// `aldwin_tui::App::apply_event`), the same way `PermissionsChanged`
-    /// tells it to refresh the status bar rather than carrying the new
-    /// state itself.
+    /// TUI wipes its own rendered log in step.
     HistoryCleared,
 
     /// `Command::Resume` landed: `ConversationLog` now holds `records` and
@@ -97,16 +94,10 @@ pub enum Event {
     /// catalogue is handed to it rather than looked up.
     HistoryLoaded { records: Vec<LogRecord> },
 
-    /// `/theme light|dark` — the raw config value, same "opaque to core"
-    /// shape as `PermissionsChanged`'s payload: core has no opinion on what
-    /// a theme is, aldwin-tui parses it (`palette::Theme::from_config`).
-    /// Core itself never emits this; same reasoning as `Notice` — aldwin-
-    /// cli's slash-command interceptor is a layer above core with no other
-    /// vehicle to reach the running TUI, since it and the interceptor share
-    /// one `Event` channel by construction (see aldwin-cli's bootstrap).
-    /// The interceptor persists the choice to `tui.yaml` (`Config::
-    /// set_tui`) before emitting this, so a value the developer picked
-    /// mid-session survives their next launch too, not just this one.
+    /// `/theme light|dark` — the raw config value, opaque to core the way
+    /// `PermissionsChanged`'s payload is; aldwin-tui parses it. Core never
+    /// emits this: like `Notice`, it exists because aldwin-cli's
+    /// slash-command interceptor has no other vehicle to reach the TUI.
     ThemeChanged { theme: String },
 
     /// `/model` swapped the client the session is running on. Same "a layer
@@ -133,7 +124,7 @@ pub enum Command {
     DenyTool       { call_id: String },
     PromptResponse { call_id: String, payload: serde_json::Value },
     /// `/clear` — wipes `ConversationLog` so the next turn starts from a
-    /// blank slate. A no-op (with a warning) if received mid-turn, same as
+    /// blank slate. Refused with a `Notice` if received mid-turn, same as
     /// `Submit` mid-turn: there's no sound meaning for "forget everything"
     /// while a turn is still in flight using that same history.
     ClearHistory,
@@ -148,7 +139,7 @@ pub enum Command {
     /// the result. Same division as `ClearHistory`, which core acts on
     /// without knowing what `/clear` is.
     ///
-    /// Discarded with a warning mid-turn, exactly as `ClearHistory` is:
+    /// Refused with a `Notice` mid-turn, exactly as `ClearHistory` is:
     /// there is no sound meaning for "replace the history" while a turn is
     /// in flight using it.
     Resume { records: Vec<LogRecord> },

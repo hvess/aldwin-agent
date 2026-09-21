@@ -1,27 +1,12 @@
 /// The base Aldwin system prompt. Content is its own deliverable; this is the
 /// structural owner. The session initialiser may only append via `compose`.
 ///
-/// Revised by ADR 0008. The previous text read, in full:
-///
-/// > Your resting state is discussion: read, explain, analyse, surface
-/// > tradeoffs. You act only on explicit instruction ("apply this", "go
-/// > ahead", "do it"). Questions, hypotheticals, and exploratory language
-/// > get analysis only.
-///
-/// That made **grammatical mood** the trigger for action, and a session
-/// transcript showed what it costs. A developer who had already approved a
-/// plan said "proton-authenticator is out of scope"; the agent produced
-/// analysis and a two-option menu and asked. Told "proton-calendar is also
-/// out", it offered the same two options again and asked again. Two turns,
-/// no work. Asked "do we need this script?" — a question, therefore analysis
-/// only — it argued against work it had just built and tested, and the
-/// developer deleted it. And a turn that opened "What I am thinking is that
-/// we can create a script that…" was exploratory language, so it produced
-/// nothing at all and had to be answered with "Continue".
-///
-/// The discussion-first identity is not the problem and is kept. What is
-/// removed is the idea that a sentence has to be an imperative to count.
-pub const BASE: &str = "\
+/// Revised by ADR 0008, which records the transcript behind each paragraph.
+/// The previous text acted "only on explicit instruction", which made
+/// **grammatical mood** the trigger for action. The discussion-first identity
+/// is kept; what is removed is the idea that a sentence has to be an
+/// imperative to count. The tests below keep the removed phrases out.
+const BASE: &str = "\
 You are Aldwin, a coding assistant whose purpose is the developer's understanding — \
 not throughput. Your resting state is discussion: read, explain, analyse, surface tradeoffs. \
 A question about how something works gets an answer, not a change.\n\

@@ -12,7 +12,7 @@
 
 use aldwin_core::{ContentBlock, LlmRequest, Message, Role, StopReason, ToolCall, UsageStats};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::config::ProviderConfig;
 
@@ -181,10 +181,7 @@ pub struct WireDelta {
     #[serde(default)]
     pub content:    Option<String>,
     /// Lumo (and other reasoning backends) stream thinking text here, in the
-    /// same deltas as content. Core's event vocabulary has no thinking *text*
-    /// — only ThinkingStart/ThinkingEnd, matching how `wire.rs` drops
-    /// Anthropic's ThinkingDelta — so this is used for its presence, and its
-    /// text is deliberately discarded.
+    /// same deltas as content.
     #[serde(default)]
     pub reasoning:  Option<String>,
     #[serde(default)]
@@ -239,8 +236,6 @@ pub fn parse_error_body(text: &str) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
-    #[error("malformed SSE payload: {0}")]
-    Frame(#[from] serde_json::Error),
     #[error("malformed tool arguments JSON for {name:?}: {source}")]
     ToolInput { name: String, #[source] source: serde_json::Error },
 }
@@ -264,14 +259,14 @@ struct ToolBuffer {
 ///
 /// Tool-call deltas are buffered by
 /// `tool_calls[].index` and flushed once, in index order, when
-/// `finish_reason` is `"tool_calls"`; any other terminal `finish_reason`
-/// (`"stop"`, `"length"`, ...) maps to `StopReason::EndTurn` — same
+/// `finish_reason` is `"tool_calls"` (or `"stop"` with calls buffered); any
+/// other terminal `finish_reason` maps to `StopReason::EndTurn` — same
 /// "everything unmapped falls back to EndTurn" philosophy as the Anthropic
 /// assembler. Usage is taken verbatim from whichever chunk carries it: it's
 /// already a complete total here, unlike Anthropic's start+delta fold.
 #[derive(Default)]
 pub struct Assembler {
-    tool_buffers: HashMap<usize, ToolBuffer>,
+    tool_buffers: BTreeMap<usize, ToolBuffer>,
     usage:        Option<WireUsage>,
     /// Set when `finish_reason` arrived before any usage did — see
     /// [`Assembler::end_step`].
@@ -311,19 +306,18 @@ impl Assembler {
         let text = choice.delta.content.filter(|t| !t.is_empty());
         let tool_calls = choice.delta.tool_calls.unwrap_or_default();
 
-        // Thinking is bracketed by the same rule as before — the first
-        // reasoning fragment opens it, the first non-reasoning thing closes
-        // it — but the text is now accumulated and handed over on the close
-        // rather than discarded (ADR 0006). There is no signature on this
+        // The first reasoning fragment opens a thinking block and the first
+        // non-reasoning thing closes it; the text is accumulated and handed
+        // over whole on the close (ADR 0006). There is no signature on this
         // wire: the field is Anthropic's, and an empty one is honest about
         // that rather than fabricating a stamp nothing issued.
-        if reasoning.is_some() && !self.in_reasoning {
-            events.push(LlmEvent::ThinkingStart);
-            self.in_reasoning = true;
-        }
-        if let Some(fragment) = &reasoning {
-            self.reasoning_buf.push_str(fragment);
-            events.push(LlmEvent::ThinkingDelta { text: fragment.clone() });
+        if let Some(fragment) = reasoning {
+            if !self.in_reasoning {
+                events.push(LlmEvent::ThinkingStart);
+                self.in_reasoning = true;
+            }
+            self.reasoning_buf.push_str(&fragment);
+            events.push(LlmEvent::ThinkingDelta { text: fragment });
         }
         if self.in_reasoning && (text.is_some() || !tool_calls.is_empty() || choice.finish_reason.is_some()) {
             events.push(LlmEvent::ThinkingEnd {
@@ -352,11 +346,11 @@ impl Assembler {
         }
 
         match choice.finish_reason.as_deref() {
-            Some("tool_calls") => {
-                let mut indices: Vec<usize> = self.tool_buffers.keys().copied().collect();
-                indices.sort_unstable();
-                for index in indices {
-                    let buf = self.tool_buffers.remove(&index).expect("index came from this map's own keys");
+            // `"stop"` with calls buffered is a tool turn too: some
+            // compatible backends never say `"tool_calls"`, and treating it
+            // as the end of the turn loses the calls without a word.
+            Some(reason) if reason == "tool_calls" || (reason == "stop" && !self.tool_buffers.is_empty()) => {
+                for (_, buf) in std::mem::take(&mut self.tool_buffers) {
                     let input = if buf.json.is_empty() {
                         serde_json::Value::Object(Default::default())
                     } else {
@@ -495,6 +489,21 @@ mod tests {
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#))
             .unwrap_err();
         assert!(matches!(err, WireError::ToolInput { .. }));
+    }
+
+    /// A compatible backend that ends a tool turn with `"stop"` rather than
+    /// `"tool_calls"`: the calls used to be dropped and the turn reported as
+    /// finished, which reads as the model saying nothing at all.
+    #[test]
+    fn tool_calls_still_flush_when_the_turn_ends_with_stop() {
+        let mut a = Assembler::default();
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{}"},"index":0}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
+            ))
+            .unwrap();
+        assert!(matches!(&out[0], LlmEvent::ToolUseRequested { call } if call.name == "read"));
+        assert!(matches!(&out[1], LlmEvent::StepEnded { outcome } if outcome.stop_reason == StopReason::ToolUse));
     }
 
     #[test]

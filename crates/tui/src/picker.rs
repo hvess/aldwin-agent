@@ -145,8 +145,13 @@ impl ModelPicker {
         }
     }
 
+    /// How many rows the stage on screen has — counted, not built: `rows()`
+    /// clones every label and this runs on each keypress.
     fn len(&self) -> usize {
-        self.rows().len()
+        match self.stage {
+            Stage::Provider => self.providers.len(),
+            Stage::Model => self.models().len(),
+        }
     }
 
     /// `⏎` on a provider opens its models; `⏎` on a model answers. A

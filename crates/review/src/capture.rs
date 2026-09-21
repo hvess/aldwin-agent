@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use crate::baseline::Baseline;
 use crate::compositor::Compositor;
 use crate::geometry::{Cell, Size, Theme};
-use crate::proxy::{foot_command, verify_against_pixels, Proxy};
+use crate::proxy::{foot_command, shell_quote, verify_against_pixels, Proxy};
 use crate::pty::Pty;
 use crate::{fake, png, scene};
 
@@ -61,9 +61,7 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
 }
 
 pub struct Frame {
-    pub path:      PathBuf,
-    /// A copy with every violation outlined, written only when there are any.
-    pub annotated: Option<PathBuf>,
+    pub path:    PathBuf,
     pub grid:    PathBuf,
     pub scene:   String,
     pub size:    Size,
@@ -163,7 +161,7 @@ fn take_frame(
 
     let path = run_dir.join(format!("{scene_name}-{size}-{theme}.png"));
     let _ = std::fs::remove_file(&path);
-    comp.exec(&format!("grim '{}'", path.display()))?;
+    comp.exec(&format!("grim {}", shell_quote(&path.display().to_string())))?;
     wait_for_png(&path)?;
 
     let (w, h) = png::size(&path)?;
@@ -184,17 +182,15 @@ fn take_frame(
         )));
     }
 
-    // No assertions here any more. Every check that reads declared cells —
-    // palette membership, the closed glyph table, the copy rules — moved to
+    // No design assertions here. Every check that reads declared cells —
+    // palette membership, the closed glyph table, the copy rules — is in
     // `crates/tui/tests/render_snapshot.rs`, where a `TestBackend` buffer
     // holds the same cells hermetically and in milliseconds. What a real
     // terminal is for is the picture: stage 5 looks at these, and nothing
     // else does.
-    let annotated = None;
-
     drop(proxy);
 
-    Ok(Frame { path, annotated, grid: grid_path, scene: scene_name.to_string(), size, theme, checked })
+    Ok(Frame { path, grid: grid_path, scene: scene_name.to_string(), size, theme, checked })
 }
 
 fn wait_for_png(path: &Path) -> Result<()> {

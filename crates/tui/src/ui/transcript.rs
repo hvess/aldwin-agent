@@ -27,13 +27,10 @@ use crate::palette::Palette;
 /// where it wrote `harness` before the rebrand made the harness the agent.
 /// The top bar's `Aldwin` is the same word as a *brand* and is capitalised
 /// there; see `chrome::BRAND`.
-pub(super) const AGENT_LABEL: &str = "aldwin";
+const AGENT_LABEL: &str = "aldwin";
 
-/// Builds every line the log panel's *inner* area can show, at `ctx.width`
-/// × `height` (the panel's inner rect — see `super::draw` on why this must
-/// be the inner, not outer, rect). An empty log shows the welcome hero
-/// instead of any entries — the two are mutually exclusive, so there's no
-/// "separate the banner from the first real entry" case.
+/// One entry's rows, separator included, at `ctx.width` (the log panel's
+/// *inner* width — see `super::draw`).
 ///
 /// Every line this returns is **already one screen row**: no caller wraps
 /// afterwards, so `lines.len()` *is* the row count and row `n` of the block
@@ -77,11 +74,8 @@ fn block_rows(entry: &LogEntry, first: bool, opens: bool, ctx: Ctx) -> Vec<Line<
         }
     }
     lines.extend(rendered);
-    // No spinner row is appended here — per explicit developer feedback, an
-    // active turn used to get an animated "thinking…"/"working…" row both
-    // here (trailing the log) *and* in the status line right above the
-    // input, which read as a plain duplicate of the same information. The
-    // status line is now the one place live turn activity shows.
+    // No spinner row: the status line is the one place live turn activity
+    // shows, and a second one trailing the log read as a plain duplicate.
     lines
 }
 
@@ -222,7 +216,7 @@ impl Transcript {
     /// re-rendering only what changed. Cheap enough to call every frame, and
     /// it must be: it is the one place that knows what the transcript
     /// currently is.
-    pub(crate) fn sync(&mut self, app: &App, width: u16, height: u16) {
+    pub(crate) fn sync(&mut self, app: &App, width: u16) {
         let theme = app.theme;
         // `width` and `theme` only. `height` is *not* an input to
         // `block_rows` — no arm of `render_entry` reads it — and keying the
@@ -233,9 +227,8 @@ impl Transcript {
         // only on an explicit newline and now happens whenever a draft
         // wraps: measured at 7.2x the steady-state frame cost on a 40-turn
         // transcript, rising with the session, on *ordinary typing* across a
-        // wrap column. The hero *is* laid out against `height`, and takes it
-        // as the parameter below — it is rebuilt on every sync regardless,
-        // so it needs no cache key of its own.
+        // wrap column. The hero is rebuilt on every sync regardless, so it
+        // needs no cache key of its own.
         if self.width != width || self.theme != Some(theme) {
             self.blocks.clear();
             self.width = width;
@@ -247,7 +240,7 @@ impl Transcript {
         if app.log.is_empty() {
             self.blocks.clear();
             self.starts.clear();
-            self.hero = hero_lines(app, height, ctx);
+            self.hero = hero_lines(app, ctx);
             return;
         }
         self.hero = Vec::new();
@@ -371,7 +364,7 @@ impl Transcript {
     /// The `count` rows starting at `offset`, or fewer at the end. Owned,
     /// because the rows come from several blocks and a viewport is at most a
     /// terminal's height — copying forty `Line`s is not worth a lifetime.
-    pub(crate) fn slice(&self, offset: usize, count: usize) -> Vec<Line<'static>> {
+    fn slice(&self, offset: usize, count: usize) -> Vec<Line<'static>> {
         if self.blocks.is_empty() {
             let end = self.hero.len().min(offset.saturating_add(count));
             return self.hero.get(offset..end).unwrap_or(&[]).to_vec();
@@ -419,8 +412,8 @@ pub(super) fn draw_log(frame: &mut Frame, outer: Rect, inner: Rect, block: Block
 /// One hand-composed row's worth of spans, wrapped to the turn body column
 /// and then laid out under the label column — in that order, which is this
 /// module's whole discipline (see its own doc comment) and now also the
-/// thing that keeps [`rows`]'s one-line-per-screen-row invariant true for
-/// the status-ish entries below. Each of them carries arbitrary text — a
+/// thing that keeps [`Transcript`]'s one-line-per-screen-row invariant true
+/// for the status-ish entries below. Each of them carries arbitrary text — a
 /// provider's retry message, a tool error, a slash command's notice — so
 /// "it's short enough" was never a property any of them actually had; they
 /// simply used to be wrapped by the log's `Paragraph` afterwards, which
@@ -438,7 +431,7 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
     let label = |text: &'static str, color| opens.then_some((text, color));
     match entry {
         // `Turn.jsx`: the `you` label in `speaker-you` (accent-toned), the
-        // `harness` label in `speaker-agent` (neutral) — content in `text`
+        // `aldwin` label in `speaker-agent` (neutral) — content in `text`
         // (primary) for a `you` turn, `body` for the agent's. No filled
         // background: the design system's own components never fill a chat
         // message's background — flat coloured text on the panel ground is
@@ -462,14 +455,7 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
         // result summary. `ToolActivityEntry` carries no separate target
         // path distinct from the tool's own name (unlike the reference's
         // `read src/gateway/mod.rs`), so the call id stands in for it,
-        // parenthesized. The design system's glyph table has no distinct
-        // "failed" mark (`readme.md`'s Iconography table: only `●` done /
-        // `◐` running / `○` pending / `✓` accepted — "if a mark is needed
-        // and it is not in that table, do not draw one") — an error keeps
-        // the `●` done glyph but in `del` (red) instead of `add`, the same
-        // "colour carries the meaning" rule the rest of this system leans
-        // on. No label of its own — a tool-activity group continues
-        // whichever turn's content column it renders under.
+        // parenthesized.
         LogEntry::ToolActivity { calls, .. } => {
             let inner_width = ctx.body().width as usize;
             let content: Vec<Line<'static>> = calls
@@ -477,10 +463,8 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
                 .map(|c| {
                     // `4a`: "glyph, 2 spaces, tool name padded to 6
                     // characters … then the target" — its own example is
-                    // `◐  bash  cargo test…`. This row shipped a single
-                    // space and no pad, putting the name on cell 15 and the
-                    // target on 20 where the reference puts them on 16 and
-                    // 22, so no two tool rows lined up with each other.
+                    // `◐  bash  cargo test…`, which is what lines one tool
+                    // row's target up under the next.
                     //
                     // The 6 is a minimum, not a width: a name of 6 or more
                     // characters would touch its own target, and two runs
@@ -488,13 +472,6 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
                     // recurring defect. Where the reference's arithmetic
                     // runs out, the glyph's own 2-space rhythm is what
                     // continues it.
-                    //
-                    // What is *in* the target field is still the call id
-                    // rather than the file or command the reference shows —
-                    // `ToolActivityEntry` carries `call_id`, `name` and
-                    // `status` and nothing else, so the real target is not
-                    // available to render. See the conformance spec; that
-                    // half is a data source, not a layout fix.
                     //
                     // Two spans, because they are two tones: the name is
                     // `quiet` on every row whatever the call is doing, and
@@ -598,11 +575,11 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
         // did not fail. That is the same line `Outcome` draws between a call
         // that was refused and one that broke.
         LogEntry::TurnEnded { reason } => {
-            use crate::log::TurnEndReasonKind;
+            use aldwin_core::TurnEndReason;
             match reason {
-                TurnEndReasonKind::EndTurn => vec![],
-                TurnEndReasonKind::Cancelled => status_line('!', pal.warn, "turn cancelled", pal.warn, ctx),
-                TurnEndReasonKind::Error(message) => status_line('✗', pal.err, &format!("turn ended in error: {message}"), pal.err, ctx),
+                TurnEndReason::EndTurn => vec![],
+                TurnEndReason::Cancelled => status_line('!', pal.warn, "turn cancelled", pal.warn, ctx),
+                TurnEndReason::Error(message) => status_line('✗', pal.err, &format!("turn ended in error: {message}"), pal.err, ctx),
             }
         }
         LogEntry::Error { message } => status_line('✗', pal.err, message, pal.err, ctx),
@@ -718,7 +695,7 @@ fn payload_call(payload: &PromptPayload) -> (String, String) {
     }
 }
 
-/// Builds the `harness` turn's content — never indented itself; the caller
+/// Builds the agent turn's content — never indented itself; the caller
 /// lays the whole result out under the label column via
 /// `with_label_column`, so every box built here (diff, code block) sizes
 /// itself against the body column, not the full panel width, or it would
@@ -890,22 +867,6 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
 /// `padding-top: var(--row)` on the body band is.
 pub(super) const INTRO_ROWS: usize = 4;
 
-/// One `label: state` pair in the hero's access row. No filled chip — the
-/// design system's own rule is that the accent is "a mark or a line, never
-/// a filled field," and none of its components use a background-filled
-/// badge for a state word.
-///
-/// Both words are `value`, and the **word** is what distinguishes them.
-/// They used to be `add`/`del` — green and red — on the reasoning that the
-/// pair "already reads as allow/deny at a glance." It does, but at a price
-/// the system does not sell: those are the two diff hues, and rule 1 of
-/// three is that "nothing in a frame is a foreign colour. The only
-/// exceptions are the two diff hues, 148° and 25°" — exceptions *for the
-/// diff*, because they have to be unmistakably not-the-accent. Spent
-/// anywhere else they stop meaning "changed line": a screenshot judge read
-/// this row as deleted lines, and in the light theme `deny` at #b0122e was
-/// the most saturated thing in a deliberately shallow frame.
-///
 /// The `access` fact: the rung in force, and the one thing no rung changes.
 ///
 /// The rung is `text`, as the reference draws every value on this screen
@@ -941,10 +902,6 @@ fn access_spans(rung: Option<Rung>, ctx: Ctx) -> Vec<Span<'static>> {
 /// band is a plain column, so the facts sit directly under the top bar, in
 /// the same two rows at every terminal height — which is the property
 /// centring never had, reached from the other end.
-///
-/// `height` is unused and kept: the caller sizes every other log state by
-/// it, and a hero that ignores the band's height is a fact about *this*
-/// screen that belongs here rather than at the call site.
-fn hero_lines(app: &App, _height: u16, ctx: Ctx) -> Vec<Line<'static>> {
+fn hero_lines(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     intro_content(app, ctx)
 }

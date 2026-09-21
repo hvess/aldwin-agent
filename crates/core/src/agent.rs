@@ -2,7 +2,6 @@ use futures::{future, StreamExt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
@@ -64,29 +63,54 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         self.log.set_sink(sink);
     }
 
-    /// Resolve a pending Edit approval gate. Returns false if `call_id` has
-    /// no pending *approval* (already resolved, never registered, or its
-    /// pending entry is actually a prompt — put back unconsumed rather than
-    /// dropped, since that shouldn't happen but must not destroy a live
-    /// entry if it somehow does).
-    fn resolve_approval(&self, call_id: &str, approved: bool) -> bool {
+    /// Resolve a pending Edit approval gate. An entry that turns out to be a
+    /// prompt is put back unconsumed — that shouldn't happen, but it must not
+    /// destroy a live entry if it somehow does.
+    fn resolve_approval(&self, call_id: &str, approved: bool) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(call_id) {
-            Some(PendingReply::Approval(tx)) => { let _ = tx.send(approved); true }
-            Some(other) => { pending.insert(call_id.to_string(), other); false }
-            None => false,
+            Some(PendingReply::Approval(tx)) => { let _ = tx.send(approved); }
+            Some(other) => {
+                pending.insert(call_id.to_string(), other);
+                warn!("approval decision for {call_id}, which is awaiting a prompt");
+            }
+            None => warn!("approval decision for unknown call_id {call_id}"),
         }
     }
 
-    /// Resolve a pending permission prompt. Returns false if `call_id` has
-    /// no pending *prompt* — same reasoning as `resolve_approval` above.
-    fn resolve_prompt(&self, call_id: &str, payload: serde_json::Value) -> bool {
+    /// Resolve a pending permission prompt — same shape as `resolve_approval`.
+    fn resolve_prompt(&self, call_id: &str, payload: serde_json::Value) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(call_id) {
-            Some(PendingReply::Prompt(tx)) => { let _ = tx.send(payload); true }
-            Some(other) => { pending.insert(call_id.to_string(), other); false }
-            None => false,
+            Some(PendingReply::Prompt(tx)) => { let _ = tx.send(payload); }
+            Some(other) => {
+                pending.insert(call_id.to_string(), other);
+                warn!("PromptResponse for {call_id}, which is awaiting an approval");
+            }
+            None => warn!("PromptResponse for unknown call_id {call_id}"),
         }
+    }
+
+    /// A command that arrived while a turn is in flight. Returns `true` when
+    /// it is `Cancel`; everything that would change the history under a
+    /// running turn is discarded.
+    async fn on_mid_turn_command(&self, cmd: Command, events: &mpsc::Sender<Event>) -> bool {
+        let discarded = match cmd {
+            Command::Cancel => return true,
+            Command::ApproveTool { call_id } => { self.resolve_approval(&call_id, true); None }
+            Command::DenyTool { call_id }    => { self.resolve_approval(&call_id, false); None }
+            Command::PromptResponse { call_id, payload } => { self.resolve_prompt(&call_id, payload); None }
+            Command::Submit { .. }  => Some("that message was not sent"),
+            Command::ClearHistory   => Some("the conversation was not cleared"),
+            Command::Resume { .. }  => Some("nothing was resumed"),
+        };
+        // Said, not only logged: the TUI has already drawn the submission,
+        // and a developer who sees it in the transcript assumes it arrived.
+        if let Some(what) = discarded {
+            warn!("command discarded mid-turn: {what}");
+            let _ = events.send(Event::Notice { message: format!("a turn is running; {what}") }).await;
+        }
+        false
     }
 
     /// Drive the agent. Returns when the command channel closes.
@@ -102,30 +126,15 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     self.log.append(LogRecord::TurnStarted { turn_id });
                     self.log.append(LogRecord::UserMessage { turn_id, text });
 
-                    let cancel = CancellationToken::new();
-                    let reason = self
-                        .run_turn(turn_id, &events, &mut commands, cancel)
-                        .await;
+                    let reason = self.run_turn(turn_id, &events, &mut commands).await;
 
                     self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
                     let _ = events.send(Event::TurnEnded { turn_id, reason }).await;
                 }
 
-                Command::ApproveTool { call_id } => {
-                    if !self.resolve_approval(&call_id, true) {
-                        warn!("ApproveTool for unknown call_id {call_id}");
-                    }
-                }
-                Command::DenyTool { call_id } => {
-                    if !self.resolve_approval(&call_id, false) {
-                        warn!("DenyTool for unknown call_id {call_id}");
-                    }
-                }
-                Command::PromptResponse { call_id, payload } => {
-                    if !self.resolve_prompt(&call_id, payload) {
-                        warn!("PromptResponse for unknown call_id {call_id}");
-                    }
-                }
+                Command::ApproveTool { call_id } => self.resolve_approval(&call_id, true),
+                Command::DenyTool { call_id }    => self.resolve_approval(&call_id, false),
+                Command::PromptResponse { call_id, payload } => self.resolve_prompt(&call_id, payload),
                 Command::Cancel => {} // no-op outside an active turn
 
                 Command::ClearHistory => {
@@ -133,12 +142,10 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     let _ = events.send(Event::HistoryCleared).await;
                 }
 
-                // `replace`, not a loop of `append`: these records came off
-                // disk and the session is about to continue writing to that
-                // same file — see `ConversationLog::replace`. The event
-                // carries them back out so the TUI rebuilds its rendered log
-                // from the one copy core just took, rather than from a second
-                // read of the file.
+                // `replace`, not a loop of `append` — see
+                // `ConversationLog::replace`. The event carries the records
+                // back out so the TUI rebuilds from the copy core just took
+                // rather than from a second read of the file.
                 Command::Resume { records } => {
                     self.log.replace(records.clone());
                     let _ = events.send(Event::HistoryLoaded { records }).await;
@@ -152,22 +159,20 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         turn_id:  TurnId,
         events:   &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
-        cancel:   CancellationToken,
     ) -> TurnEndReason {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
 
-        // The just-submitted user message is already in `self.log` (appended
-        // by the `Command::Submit` handler before `run_turn` is called), so
+        // The just-submitted user message is already in `self.log`, so
         // `messages_from_log` reconstructs it — pushing it again here would
         // send it to the LLM twice.
-        let mut messages: Vec<Message> = self.messages_from_log();
+        let mut messages = self.messages_from_log();
 
         loop {
             let step_id = StepId::next();
             debug!("turn {turn_id:?} step {step_id:?}");
 
             let result = self
-                .run_step(turn_id, step_id, &mut messages, events, commands, cancel.clone())
+                .run_step(turn_id, step_id, &mut messages, events, commands)
                 .await;
 
             match result {
@@ -186,15 +191,12 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     for result in results {
                         self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
                     }
-                    // Continue to next step.
                 }
                 StepResult::ToolsAborted { outcome, results, reason } => {
-                    // Dispatch was cut short (cancelled, or the command channel
-                    // closed) after ToolUse records were already logged for this
-                    // step. Close the step out the same shape a completed round
-                    // trip would have — StepBoundary, then a ToolResult for every
-                    // call — so no ToolUse is ever left without a matching
-                    // ToolResult; a later replay of the log stays a valid request.
+                    // Dispatch was cut short after ToolUse records were already
+                    // logged. Close the step out in the shape of a completed
+                    // round trip so no ToolUse is left without a ToolResult and
+                    // a later replay of the log stays a valid request.
                     self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
                     for result in results {
                         self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
@@ -214,34 +216,27 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         messages:  &mut Vec<Message>,
         events:    &mpsc::Sender<Event>,
         commands:  &mut mpsc::Receiver<Command>,
-        cancel:    CancellationToken,
     ) -> StepResult {
-        let cache_breakpoints = self.cache_breakpoints(messages);
+        let cache_breakpoints = cache_breakpoints(messages);
         let tools             = self.dispatcher.definitions();
-
-        // Clone messages so the stream's borrow doesn't block subsequent mutations.
-        // The LlmClient will serialise this snapshot; any mutations we make after
-        // StepEnded are for the *next* step's request.
-        let messages_snap = messages.clone();
 
         let mut text_buf   = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-        let mut step_outcome: Option<StepOutcome> = None;
         // This step's assistant content, **in the order it arrived**. The
         // provider wants its blocks back as it emitted them; with interleaved
         // thinking that can be thinking, text, thinking again, and sorting
         // the thinking to the front would hand back a turn it never wrote.
         // Text is flushed into here whenever something else interrupts it.
         let mut content: Vec<ContentBlock> = Vec::new();
-        let mut produced_text = false;
 
-        // Inner block: stream lives here, releasing the borrow on messages_snap at end.
+        // Inner block: the stream lives here, releasing its borrow of
+        // `messages` at the end so the step's output can be pushed onto it.
         let stream_terminal: StepTerminal = {
             let request = LlmRequest {
                 model:             &self.model,
                 system:            &self.system,
                 tools:             &tools,
-                messages:          &messages_snap,
+                messages:          messages.as_slice(),
                 cache_breakpoints: &cache_breakpoints,
             };
             let mut stream = self.client.stream(request);
@@ -250,28 +245,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 tokio::select! {
                     biased;
 
-                    _ = cancel.cancelled() => {
-                        break StepTerminal::Cancelled;
-                    }
-
                     cmd = commands.recv() => {
                         match cmd {
-                            Some(Command::Cancel) => {
-                                cancel.cancel();
-                                break StepTerminal::Cancelled;
-                            }
-                            Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
-                            Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
-                            Some(Command::PromptResponse { call_id, payload }) => { self.resolve_prompt(&call_id, payload); }
-                            Some(Command::Submit { .. }) => {
-                                warn!("Submit received mid-turn; discarding");
-                            }
-                            Some(Command::ClearHistory) => {
-                                warn!("ClearHistory received mid-turn; discarding");
-                            }
-                            Some(Command::Resume { .. }) => {
-                                warn!("Resume received mid-turn; discarding");
-                            }
+                            Some(cmd) => if self.on_mid_turn_command(cmd, events).await { break StepTerminal::Cancelled },
                             None => break StepTerminal::Error("command channel closed".into()),
                         }
                     }
@@ -297,12 +273,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                         }).await;
                                     }
                                     LlmEvent::ThinkingEnd { text, signature } => {
-                                        if !text_buf.is_empty() {
-                                            let said = std::mem::take(&mut text_buf);
-                                            self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: said.clone() });
-                                            content.push(ContentBlock::Text { text: said });
-                                            produced_text = true;
-                                        }
+                                        self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
                                         content.push(ContentBlock::Thinking {
                                             text: text.clone(), signature: signature.clone(),
                                         });
@@ -312,12 +283,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                         let _ = events.send(Event::ThinkingEnd { turn_id, step_id }).await;
                                     }
                                     LlmEvent::RedactedThinking { data } => {
-                                        if !text_buf.is_empty() {
-                                            let said = std::mem::take(&mut text_buf);
-                                            self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: said.clone() });
-                                            content.push(ContentBlock::Text { text: said });
-                                            produced_text = true;
-                                        }
+                                        self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
                                         content.push(ContentBlock::RedactedThinking { data: data.clone() });
                                         self.log.append(LogRecord::RedactedThinking { turn_id, step_id, data });
                                     }
@@ -336,8 +302,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                         let _ = events.send(Event::StepEnded {
                                             turn_id, step_id, outcome: outcome.clone(),
                                         }).await;
-                                        step_outcome = Some(outcome);
-                                        break StepTerminal::Ok;
+                                        break StepTerminal::Ok(outcome);
                                     }
                                 }
                             }
@@ -347,58 +312,58 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }
         }; // stream dropped here
 
-        // Commit this step's assistant content to log and messages before
-        // anything else. Everything up to the last interruption is already in
-        // `content` and in the log (appended as it happened, so a crash
-        // mid-step cannot lose it, and a replay of the log reproduces this
-        // same order); what remains is the trailing text.
-        if !text_buf.is_empty() {
-            let text = std::mem::take(&mut text_buf);
-            self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: text.clone() });
-            content.push(ContentBlock::Text { text });
-            produced_text = true;
-        }
+        // Commit this step's assistant content before anything else — a
+        // cancelled or failed step keeps what it said. Everything up to the
+        // last interruption is already in `content`; what remains is the
+        // trailing text.
+        self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
+        let produced_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
         if !content.is_empty() {
             messages.push(Message { role: Role::Assistant, content });
         }
 
-        match stream_terminal {
-            StepTerminal::Cancelled  => return StepResult::Cancelled,
-            StepTerminal::Error(msg) => return StepResult::Error(msg),
-            StepTerminal::Ok         => {}
+        let outcome = match stream_terminal {
+            StepTerminal::Cancelled   => return StepResult::Cancelled,
+            StepTerminal::Error(msg)  => return StepResult::Error(msg),
+            StepTerminal::Ok(outcome) => outcome,
+        };
+
+        // A call is committed only if it is about to be dispatched, because a
+        // ToolUse with no matching ToolResult is a torn log: every later
+        // request replays it and the provider rejects them all. So nothing is
+        // logged before the cancellation/error check above, and nothing is
+        // logged for a step that requested a call and then stopped for another
+        // reason — `max_tokens` landing after a complete tool_use block
+        // reaches here as `EndTurn`.
+        //
+        // Said, not only logged: the TUI has already drawn the call as
+        // requested, and a step that also produced text does not reach the
+        // silent-turn notice below — so without this the call simply
+        // disappears between the reply and the end of the turn.
+        if outcome.stop_reason != StopReason::ToolUse && !tool_calls.is_empty() {
+            let dropped = tool_calls.len();
+            warn!("step ended without a tool_use stop; dropping {dropped} undispatched call(s)");
+            tool_calls.clear();
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("the reply stopped before {dropped} requested tool call(s) could run"),
+                })
+                .await;
         }
 
-        // Commit observed tool calls to log only once the step is known to have
-        // completed — logging these before a cancellation/error check would leave
-        // a ToolUse record with no matching ToolResult or StepBoundary (a torn log).
-        //
-        // Must also land in the live `messages` vector, not just the log: the
-        // ToolResult pushed for this step (see ToolsDispatched above) rides as
-        // a `Role::User` message, and a provider that validates role sequencing
-        // (tool must follow an assistant message that actually requested it)
-        // rejects the request outright if the matching ToolUse block is
-        // missing — it was previously dropped on any step whose model response
-        // had no text (see `messages_from_log`, which reconstructs this
-        // correctly from the log and masked the gap at the start of every new
-        // turn — only a multi-step turn hit the live path here).
+        // Committed to the live `messages` as well as the log: the ToolResult
+        // for this step rides as a `Role::User` message, and the provider
+        // rejects it unless the assistant message in front of it carries the
+        // matching ToolUse block — including on a step that produced no text.
         for call in &tool_calls {
             self.log.append(LogRecord::ToolUse { turn_id, step_id, call: call.clone() });
-            match messages.last_mut() {
-                Some(last) if last.role == Role::Assistant => last.content.push(ContentBlock::ToolUse(call.clone())),
-                _ => messages.push(Message { role: Role::Assistant, content: vec![ContentBlock::ToolUse(call.clone())] }),
-            }
+            push_assistant_block(messages, ContentBlock::ToolUse(call.clone()));
         }
 
-        let outcome = step_outcome.expect("StepTerminal::Ok implies StepEnded was received");
-
-        // The floor against a silent turn. A step that ends the turn with no
-        // text and no tool call has nothing to render, and before ADR 0006 it
-        // reached the developer as an empty response — the observed case spent
-        // 14,096 output tokens entirely inside a thinking block, drew nothing,
-        // and was answered by hand with "Continue". Thinking is carried now,
-        // so that particular turn would render; this covers whatever else ends
-        // a turn with nothing to show, and says so rather than looking hung.
-        if matches!(outcome.stop_reason, StopReason::EndTurn) && !produced_text && tool_calls.is_empty() {
+        // The floor against a silent turn (ADR 0006): a step that ends the
+        // turn with no text and no tool call has nothing to render, so it
+        // says so rather than looking hung.
+        if !produced_text && tool_calls.is_empty() {
             let _ = events
                 .send(Event::Notice {
                     message: "the agent ended the turn without a reply".into(),
@@ -406,17 +371,29 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 .await;
         }
 
-        match outcome.stop_reason {
-            StopReason::EndTurn  => StepResult::EndTurn(outcome),
-            StopReason::ToolUse  => {
-                match self.dispatch_tools(turn_id, step_id, tool_calls, events, commands, cancel).await {
-                    DispatchOutcome::Completed(results) => StepResult::ToolsDispatched { outcome, results },
-                    DispatchOutcome::Aborted { results, reason } => {
-                        StepResult::ToolsAborted { outcome, results, reason }
-                    }
-                }
+        // A `ToolUse` stop that named no call has nothing to dispatch, and an
+        // empty tool-result message would be rejected; the turn ends instead.
+        if tool_calls.is_empty() {
+            return StepResult::EndTurn(outcome);
+        }
+        match self.dispatch_tools(turn_id, step_id, tool_calls, events, commands).await {
+            DispatchOutcome::Completed(results) => StepResult::ToolsDispatched { outcome, results },
+            DispatchOutcome::Aborted { results, reason } => {
+                StepResult::ToolsAborted { outcome, results, reason }
             }
         }
+    }
+
+    /// Commits the text streamed so far as one block — to the log as it
+    /// happens, so a crash mid-step cannot lose it and a replay of the log
+    /// reproduces the same order.
+    fn flush_text(&self, turn_id: TurnId, step_id: StepId, text_buf: &mut String, content: &mut Vec<ContentBlock>) {
+        if text_buf.is_empty() {
+            return;
+        }
+        let text = std::mem::take(text_buf);
+        self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: text.clone() });
+        content.push(ContentBlock::Text { text });
     }
 
     /// Dispatch all tool calls for a step concurrently, staying responsive to
@@ -431,7 +408,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         calls:    Vec<ToolCall>,
         events:   &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
-        cancel:   CancellationToken,
     ) -> DispatchOutcome {
         for call in &calls {
             let _ = events.send(Event::ToolDispatched {
@@ -453,27 +429,15 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             tokio::select! {
                 biased;
 
-                _ = cancel.cancelled() => {
-                    return self.abort_dispatch(turn_id, step_id, &calls, events, TurnEndReason::Cancelled).await;
-                }
-
                 cmd = commands.recv() => {
-                    match cmd {
-                        Some(Command::Cancel) => {
-                            cancel.cancel();
-                            return self.abort_dispatch(turn_id, step_id, &calls, events, TurnEndReason::Cancelled).await;
+                    let reason = match cmd {
+                        Some(cmd) => {
+                            if !self.on_mid_turn_command(cmd, events).await { continue; }
+                            TurnEndReason::Cancelled
                         }
-                        Some(Command::ApproveTool { call_id }) => { self.resolve_approval(&call_id, true); }
-                        Some(Command::DenyTool { call_id })    => { self.resolve_approval(&call_id, false); }
-                        Some(Command::PromptResponse { call_id, payload }) => { self.resolve_prompt(&call_id, payload); }
-                        Some(Command::Submit { .. }) => warn!("Submit received mid-turn; discarding"),
-                        Some(Command::ClearHistory) => warn!("ClearHistory received mid-turn; discarding"),
-                        Some(Command::Resume { .. }) => warn!("Resume received mid-turn; discarding"),
-                        None => {
-                            let reason = TurnEndReason::Error("command channel closed".into());
-                            return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;
-                        }
-                    }
+                        None => TurnEndReason::Error("command channel closed".into()),
+                    };
+                    return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;
                 }
 
                 results = &mut joined => {
@@ -502,11 +466,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         reason:  TurnEndReason,
     ) -> DispatchOutcome {
         // A call whose dispatch future was mid-`request_approval` or
-        // mid-`request_prompt` leaves a dangling entry here otherwise —
-        // nothing will ever resolve it once the future backing its receiver
-        // has been dropped. `pending` is keyed by `call_id` regardless of
-        // which of the two it holds (see `PendingReply`), so removing by
-        // `call.id` handles both uniformly.
+        // mid-`request_prompt` otherwise leaves a dangling entry here —
+        // nothing resolves it once the future holding its receiver is gone.
         {
             let mut pending = self.pending.lock().expect("pending lock poisoned");
             for call in calls {
@@ -528,89 +489,74 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     }
 
     /// Reconstruct the wire message list from the append-only log.
+    ///
+    /// Thinking is logged as each block closes, and text is flushed to the
+    /// log whenever thinking interrupts it — so replaying in log order
+    /// reproduces the order the provider emitted, which is the order it wants
+    /// back (ADR 0006 §2).
     fn messages_from_log(&self) -> Vec<Message> {
-        let snap = self.log.snapshot();
         let mut messages: Vec<Message> = Vec::new();
 
-        for record in snap.iter() {
+        for record in self.log.snapshot().iter() {
             match record {
-                LogRecord::UserMessage { text, .. } => {
-                    messages.push(Message::user(text.clone()));
-                }
+                LogRecord::UserMessage { text, .. } => messages.push(Message::user(text.clone())),
                 LogRecord::AssistantMessage { text, .. } => {
-                    // Merge into the last assistant message if possible.
-                    if let Some(last) = messages.last_mut() {
-                        if last.role == Role::Assistant {
-                            last.content.push(ContentBlock::Text { text: text.clone() });
-                            continue;
-                        }
-                    }
-                    messages.push(Message {
-                        role:    Role::Assistant,
-                        content: vec![ContentBlock::Text { text: text.clone() }],
-                    });
+                    push_assistant_block(&mut messages, ContentBlock::Text { text: text.clone() });
                 }
-                // Thinking is logged as each block closes, and text is
-                // flushed to the log whenever thinking interrupts it — so
-                // replaying in log order reproduces the order the provider
-                // emitted, which is the order it wants back (ADR 0006 §2).
                 LogRecord::Thinking { text, signature, .. } => {
                     let block = ContentBlock::Thinking { text: text.clone(), signature: signature.clone() };
-                    match messages.last_mut() {
-                        Some(last) if last.role == Role::Assistant => last.content.push(block),
-                        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
-                    }
+                    push_assistant_block(&mut messages, block);
                 }
                 LogRecord::RedactedThinking { data, .. } => {
-                    let block = ContentBlock::RedactedThinking { data: data.clone() };
-                    match messages.last_mut() {
-                        Some(last) if last.role == Role::Assistant => last.content.push(block),
-                        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
-                    }
+                    push_assistant_block(&mut messages, ContentBlock::RedactedThinking { data: data.clone() });
                 }
                 LogRecord::ToolUse { call, .. } => {
-                    if let Some(last) = messages.last_mut() {
-                        if last.role == Role::Assistant {
-                            last.content.push(ContentBlock::ToolUse(call.clone()));
-                            continue;
-                        }
-                    }
-                    messages.push(Message {
-                        role:    Role::Assistant,
-                        content: vec![ContentBlock::ToolUse(call.clone())],
-                    });
+                    push_assistant_block(&mut messages, ContentBlock::ToolUse(call.clone()));
                 }
                 LogRecord::ToolResult { result, .. } => {
-                    if let Some(last) = messages.last_mut() {
-                        if last.role == Role::User
-                            && matches!(last.content.first(), Some(ContentBlock::ToolResult(_)))
+                    let block = ContentBlock::ToolResult(result.clone());
+                    match messages.last_mut() {
+                        Some(last)
+                            if last.role == Role::User
+                                && matches!(last.content.first(), Some(ContentBlock::ToolResult(_))) =>
                         {
-                            last.content.push(ContentBlock::ToolResult(result.clone()));
-                            continue;
+                            last.content.push(block);
                         }
+                        _ => messages.push(Message { role: Role::User, content: vec![block] }),
                     }
-                    messages.push(Message {
-                        role:    Role::User,
-                        content: vec![ContentBlock::ToolResult(result.clone())],
-                    });
                 }
-                _ => {}
+                LogRecord::TurnStarted { .. }
+                | LogRecord::StepBoundary { .. }
+                | LogRecord::TurnEnded { .. } => {}
             }
         }
 
         messages
     }
+}
 
-    fn cache_breakpoints(&self, messages: &[Message]) -> Vec<usize> {
-        if messages.is_empty() { return vec![]; }
-        let last = messages.len() - 1;
-        if last == 0 { vec![0] } else { vec![0, last] }
+/// Appends to the assistant message being built, or opens one: a step's
+/// blocks all belong to a single assistant message, in the order they arrived.
+fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
+    match messages.last_mut() {
+        Some(last) if last.role == Role::Assistant => last.content.push(block),
+        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
+    }
+}
+
+/// The first message and the last: the stable prefix, and the whole
+/// conversation so far.
+fn cache_breakpoints(messages: &[Message]) -> Vec<usize> {
+    match messages.len() {
+        0 => vec![],
+        1 => vec![0],
+        n => vec![0, n - 1],
     }
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────────
 
-enum StepTerminal { Ok, Cancelled, Error(String) }
+enum StepTerminal { Ok(StepOutcome), Cancelled, Error(String) }
 
 enum StepResult {
     EndTurn(StepOutcome),
@@ -644,13 +590,10 @@ mod tests {
 
     /// Replays one canned event script per `stream()` call, one script per
     /// step. Also records the `messages` slice it was called with, so a test
-    /// can inspect exactly what a later step's request looked like — the
-    /// only way to catch a message-history bug that only manifests once it's
-    /// serialised for a real (or strict-about-role-sequencing) provider.
+    /// can inspect exactly what a later step's request looked like.
     struct ScriptedClient {
         scripts:       Mutex<VecDeque<Vec<LlmEvent>>>,
-        // Shared via `Arc` (not owned outright) so a test can hold its own
-        // handle after `self` is moved into `Agent::new`/`agent.run`.
+        // `Arc` so a test keeps a handle after `self` moves into the agent.
         seen_messages: Arc<Mutex<Vec<Vec<Message>>>>,
     }
 
@@ -884,10 +827,9 @@ mod tests {
         );
     }
 
-    /// Audit: thinking was sorted to the front of the message. With
-    /// interleaved thinking the provider can emit text *between* two thinking
-    /// blocks, and it wants the turn back as it wrote it — live, and again
-    /// when the log is replayed for the next turn.
+    /// With interleaved thinking the provider can emit text *between* two
+    /// thinking blocks, and it wants the turn back as it wrote it — live, and
+    /// again when the log is replayed for the next turn.
     #[tokio::test]
     async fn interleaved_blocks_keep_the_order_they_arrived_in() {
         let script = vec![
@@ -933,12 +875,9 @@ mod tests {
         assert_eq!(shape, vec!["one", "between", "two", "after"]);
     }
 
-    /// Regression test: `run_turn` used to build its first step's request by
-    /// combining `messages_from_log` (which already includes the just-logged
-    /// current-turn `UserMessage`, appended by the `Submit` handler before
-    /// `run_turn` runs) with an extra explicit push of the same text — so
-    /// every turn sent the developer's message to the LLM twice, though the
-    /// conversation log itself only ever recorded it once and stayed clean.
+    /// `messages_from_log` already includes the just-logged `UserMessage`;
+    /// an extra push of the same text once sent every message to the LLM
+    /// twice while the log itself stayed clean.
     #[tokio::test]
     async fn submitted_text_reaches_the_llm_exactly_once() {
         let client = ScriptedClient::new(vec![vec![
@@ -1035,6 +974,109 @@ mod tests {
         assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
         assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolResult { .. })));
         assert!(matches!(snap.last().unwrap(), LogRecord::TurnEnded { .. }));
+    }
+
+    /// `max_tokens` can land after a complete tool_use block, and the wire
+    /// layer reports every stop that is not `tool_use` as `EndTurn`. The call
+    /// is never dispatched, so committing it would leave a ToolUse with no
+    /// ToolResult — and every later request in the session would be rejected.
+    #[tokio::test]
+    async fn a_call_the_step_did_not_stop_for_is_never_committed() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+            vec![
+                LlmEvent::TextDelta { text: "ok".into() },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+        ]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        let mut notices = Vec::new();
+        for text in ["first", "second"] {
+            cmd_tx.send(Command::Submit { text: text.into() }).await.unwrap();
+            loop {
+                match ev_rx.recv().await.expect("agent dropped the event channel") {
+                    Event::Notice { message } => notices.push(message),
+                    Event::TurnEnded { .. } => break,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(!log.snapshot().iter().any(|r| matches!(r, LogRecord::ToolUse { .. })), "an undispatched call must not be logged");
+        let seen = seen_messages.lock().unwrap();
+        assert!(
+            !seen[1].iter().flat_map(|m| &m.content).any(|b| matches!(b, ContentBlock::ToolUse(_))),
+            "the next request must not replay a tool_use that has no result: {:?}",
+            seen[1]
+        );
+        assert!(
+            notices.iter().any(|m| m.contains("before 1 requested tool call(s) could run")),
+            "a dropped call must be said out loud, not only logged: {notices:?}"
+        );
+    }
+
+    /// A `ToolUse` stop with no call has nothing to dispatch; looping would
+    /// send the provider an empty tool-result message.
+    #[tokio::test]
+    async fn a_tool_use_stop_that_named_no_call_ends_the_turn() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::TextDelta { text: "hi".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+        ]]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::EndTurn));
+                break;
+            }
+        }
+        assert_eq!(seen_messages.lock().unwrap().len(), 1, "no second step may be requested");
+    }
+
+    /// The TUI draws a submission the moment it is typed, so one that core
+    /// throws away has to be said out loud.
+    #[tokio::test]
+    async fn a_command_discarded_mid_turn_is_said_not_only_logged() {
+        let agent = Agent::new(StallingClient, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        loop {
+            if let Event::TextDelta { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
+            }
+        }
+        let before = log.len();
+
+        for cmd in [Command::Submit { text: "and another".into() }, Command::ClearHistory, Command::Resume { records: vec![] }] {
+            cmd_tx.send(cmd).await.unwrap();
+            let event = ev_rx.recv().await.expect("agent dropped the event channel");
+            assert!(matches!(&event, Event::Notice { message } if message.starts_with("a turn is running")), "{event:?}");
+        }
+        assert_eq!(log.len(), before, "and the running turn's history is untouched");
     }
 
     #[tokio::test]
@@ -1256,16 +1298,9 @@ mod tests {
         assert!(saw_result);
     }
 
-    /// Regression test for the audit-found leak: `abort_dispatch` used to
-    /// drain the approval half of the (then-separate) pending-request state
-    /// on cancel but never the prompt half, so cancelling a step with a
-    /// permission prompt in flight left a permanently dangling
-    /// `oneshot::Sender` behind (nothing else ever removes it, since only a
-    /// real `PromptResponse` does). Now that both share one `call_id`-keyed
-    /// map, `abort_dispatch` removes by `call_id` uniformly — this test
-    /// still exercises exactly that path. Clones the `Arc` behind `pending`
-    /// before `agent` moves into the spawned task, so it can still be
-    /// inspected after cancellation.
+    /// Cancelling a step with a permission prompt in flight must not leave a
+    /// dangling `oneshot::Sender` in `pending` — nothing else ever removes
+    /// it, since only a real `PromptResponse` does.
     #[tokio::test]
     async fn cancel_during_a_pending_prompt_does_not_leak_the_prompts_entry() {
         let client = ScriptedClient::new(vec![vec![
@@ -1302,14 +1337,11 @@ mod tests {
         assert!(pending.lock().unwrap().is_empty(), "abort_dispatch must clear dangling pending entries on cancel");
     }
 
-    /// Regression test for the bug a live run surfaced: a step whose model
-    /// response was tool-use-only (no text) never got its ToolUse content
-    /// block added to the live `messages` vector, only to the log — so the
-    /// *next* step's request carried the ToolResult (`Role::User`) with no
-    /// matching assistant ToolUse in front of it. `messages_from_log`
-    /// (used only at the start of a fresh turn) reconstructed this
-    /// correctly, which is why the gap only showed up mid-turn, on a
-    /// provider that validates role sequencing strictly.
+    /// A live run surfaced this: a tool-use-only step (no text) got its
+    /// ToolUse block into the log but not the live `messages`, so the *next*
+    /// step's request carried a ToolResult with no ToolUse in front of it.
+    /// `messages_from_log` rebuilt it correctly, which is why the gap only
+    /// showed mid-turn, on a provider strict about role sequencing.
     #[tokio::test]
     async fn multi_step_turn_carries_tool_use_into_the_next_steps_live_request() {
         let client = ScriptedClient::new(vec![

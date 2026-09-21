@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use aldwin_config::Config;
 use aldwin_permissions::{Class, Engine, PromptPayload};
-use aldwin_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use aldwin_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{execute, ExecutableCommand};
@@ -121,7 +121,7 @@ fn long(app: &mut App) {
         app.log.push(LogEntry::UserMessage { text: format!("message {i}") });
         app.log.push(LogEntry::AssistantText { text: format!("reply {i} with a bit more text to see wrapping behavior across the pane width") });
     }
-    app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::EndTurn });
+    app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::EndTurn });
     app.log.push(LogEntry::RetryAttempt {
         info: aldwin_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 },
     });

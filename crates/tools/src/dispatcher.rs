@@ -117,17 +117,36 @@ impl Dispatcher {
     }
 
     /// The second half of ADR 0004 §4. A call declared a read has come back
-    /// refused, which means the sandbox stopped it and **nothing landed**.
-    /// The developer is asked whether to allow it as a write; a yes re-runs
-    /// it unconfined, which is safe precisely because the first attempt could
-    /// not have half-finished.
+    /// refused, which means the sandbox stopped it — or could not be built —
+    /// and **nothing landed**. The developer is asked whether to allow it as
+    /// a write; a yes re-runs it unconfined, which is safe precisely because
+    /// the first attempt could not have half-finished.
+    ///
+    /// The engine is consulted first, under the prompt gate, because a deny
+    /// is a lock (§7): a prompt drawn over a locked program's writes would
+    /// offer the allow the lock exists to withhold. `standing_grant_answers`
+    /// says whether an existing write grant settles it without asking — see
+    /// the two call sites for why they differ.
+    ///
+    /// `None` means run it as a write.
     async fn offer_as_write(
         &self,
         program: &str,
         args:    &[String],
         call:    &ToolCall,
         ctx:     &DispatchContext,
+        standing_grant_answers: bool,
     ) -> Option<ToolResult> {
+        let _gate = self.prompt_gate.lock().await;
+        match self.permissions.check(program, Class::Write, args) {
+            Outcome::Locked { scope, .. } => {
+                let locked = ToolError::Locked { program: program.to_string(), where_it_lives: scope.where_it_lives() };
+                return Some(error_result(&call.id, locked));
+            }
+            Outcome::Allow if standing_grant_answers => return None,
+            Outcome::Allow | Outcome::Ask(_) => {}
+        }
+
         let payload = PromptPayload::WriteAttempt {
             program: program.to_string(),
             argv:    args.to_vec(),
@@ -145,9 +164,7 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         let Some(tool) = self.registry.get(&call.name) else {
             return error_result(&call.id, ToolError::UnknownTool { name: call.name });
         };
-        let descriptor = tool.descriptor().clone();
-
-        if descriptor.edit_class {
+        if tool.descriptor().edit_class {
             return finish(&call.id, tool.call(&call.id, call.input, ctx).await);
         }
 
@@ -159,58 +176,29 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
             return error_result(&call.id, e);
         }
 
-        match tool.call(&call.id, call.input.clone(), ctx).await {
+        let (program, args, standing_grant_answers) = match tool.call(&call.id, call.input.clone(), ctx).await {
             // A read declaration that did not survive contact with the
-            // sandbox. Ask, and on a yes run it again as the write it was.
-            Err(ToolError::ReadRefused { program, args }) => {
-                if let Some(refusal) = self.offer_as_write(&program, &args, &call, ctx).await {
-                    return refusal;
-                }
-                let input = as_write(call.input);
-                finish(&call.id, tool.call(&call.id, input, ctx).await)
-            }
+            // sandbox. Rare, and worth a question every time — even over a
+            // standing write grant, since the call said it would not write.
+            Err(ToolError::ReadRefused { program, args }) => (program, args, false),
             // There is no enforcement primitive on this platform, so the read
             // declaration cannot be honoured — which ADR 0004 §4 answers with
-            // "every call asks", not with an error. It *was* an error until
-            // ADR 0007, and the cost was not one failed call: the model saw
-            // two reads fail, concluded the read path was broken, and spent
-            // the remaining 69 calls of that session declaring `ls`, `grep`
-            // and `cat` as writes. A class nobody can use safely is a class
-            // nobody uses.
+            // "every call asks", not with an error. As a flat error it taught
+            // the model, in two calls, to declare `ls` and `grep` as writes
+            // (ADR 0007 §6). Nothing ran: the sandbox refused to be built.
             //
-            // Same question as above, same guarantee behind it — nothing ran,
-            // because the sandbox refused to be built rather than refusing
-            // mid-call.
-            //
-            // Unlike a refused read — a rare event, worth a question every
-            // time — this happens on *every* read-declared call where there
-            // is no sandbox. So the engine is consulted first, under the
-            // prompt gate: once the developer has allowed this program's
-            // writes at any tier, the answer stands and nothing is asked
-            // again. Asking unconditionally made "always allow" a no-op and
-            // would have taught the model, again, to stop declaring reads.
-            Err(ToolError::SandboxUnavailable { program, args, .. }) => {
-                let _gate = self.prompt_gate.lock().await;
-                match self.permissions.check(&program, Class::Write, &args) {
-                    Outcome::Allow => {}
-                    Outcome::Locked { scope, .. } => {
-                        return error_result(
-                            &call.id,
-                            ToolError::Locked { program: program.clone(), where_it_lives: scope.where_it_lives() },
-                        );
-                    }
-                    Outcome::Ask(_) => {
-                        if let Some(refusal) = self.offer_as_write(&program, &args, &call, ctx).await {
-                            return refusal;
-                        }
-                    }
-                }
-                drop(_gate);
-                let input = as_write(call.input);
-                finish(&call.id, tool.call(&call.id, input, ctx).await)
-            }
-            other => finish(&call.id, other),
+            // This happens on *every* read-declared call where there is no
+            // sandbox, so once the developer has allowed this program's
+            // writes at any tier the answer stands. Asking unconditionally
+            // made "always allow" a no-op.
+            Err(ToolError::SandboxUnavailable { program, args, .. }) => (program, args, true),
+            other => return finish(&call.id, other),
+        };
+
+        if let Some(refusal) = self.offer_as_write(&program, &args, &call, ctx, standing_grant_answers).await {
+            return refusal;
         }
+        finish(&call.id, tool.call(&call.id, as_write(call.input), ctx).await)
     }
 
     fn definitions(&self) -> Vec<ToolDefinition> {
@@ -546,6 +534,61 @@ mod tests {
 
         assert!(result.is_error);
         assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a no means it never runs unconfined");
+    }
+
+    /// A deny is a lock (ADR 0004 §7). The write question used to be drawn
+    /// without consulting the engine, so a refused read of a program whose
+    /// writes were denied offered — and on a yes, ran — the write the lock
+    /// withheld.
+    #[tokio::test]
+    async fn a_refused_read_of_a_program_whose_writes_are_locked_is_not_offered_as_a_write() {
+        let tool = fake_run("run", false, true);
+        let mut registry = Registry::new();
+        registry.register(tool.clone()).unwrap();
+        let (_d, permissions) = engine();
+        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
+        permissions.record("rm", Class::Write, Choice::DenySession).unwrap();
+
+        let dispatcher = Dispatcher::new(registry, permissions);
+        let (ctx, mut events, _pending) = dispatch_context();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), dispatcher.dispatch(call_of("rm", "read"), &ctx))
+            .await
+            .expect("a lock is refused outright, not left waiting on a prompt");
+
+        assert!(result.is_error);
+        assert!(result.content.contains("denied by a rule"), "{}", result.content);
+        assert!(events.try_recv().is_err(), "a lock must not offer a way to say yes");
+        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "no re-run past a lock");
+    }
+
+    /// The other half of `an_unenforceable_read_is_not_asked_about_once_writes_are_allowed`,
+    /// and the reason `offer_as_write` takes a flag rather than one rule for
+    /// both callers. A *refused* read is rare and is evidence the call's own
+    /// declaration was wrong, so it is worth a question every time — a
+    /// standing write grant must not answer it silently.
+    #[tokio::test]
+    async fn a_refused_read_is_still_asked_about_over_a_standing_write_grant() {
+        let tool = fake_run("run", false, true);
+        let mut registry = Registry::new();
+        registry.register(tool.clone()).unwrap();
+        let (_d, permissions) = engine();
+        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
+        permissions.record("rm", Class::Write, Choice::AllowSession).unwrap();
+
+        let dispatcher = Dispatcher::new(registry, permissions);
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let call = dispatcher.dispatch(call_of("rm", "read"), &ctx);
+        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
+        let (result, payload) = tokio::join!(call, resolve);
+
+        assert!(
+            matches!(payload, PromptPayload::WriteAttempt { ref program, .. } if program == "rm"),
+            "the write question must still be drawn: {payload:?}"
+        );
+        assert!(result.is_error);
+        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a no still means no re-run");
     }
 
     #[tokio::test]

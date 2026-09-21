@@ -76,9 +76,6 @@ fn no_truncation_marker_appears_when_nothing_was_actually_hidden() {
     assert!(!out.contains(" 0 more line"), "a degenerate all-head-and-tail panel must not claim to have hidden 0 lines: {out:?}");
 }
 
-
-
-
 fn rendered(app: &mut App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -365,9 +362,9 @@ fn auto_follow_accounts_for_wrapped_rows_not_just_logical_lines() {
 }
 
 /// Regression test for the exact bug class the visual redesign risked
-/// reintroducing: once the log panel got a real border, `render_width`/
-/// `render_height` (and therefore `build_log_lines`/`log_row_count`)
-/// must be sourced from the panel's *inner* rect, not the outer one —
+/// reintroducing: once the log panel got a real border, `render_width`
+/// (and therefore the transcript's row count) must be sourced from the
+/// panel's *inner* rect, not the outer one —
 /// see `draw`'s doc comment. A line here is sized to land exactly on
 /// that 2-column boundary: at the true inner width (98, for a 100-wide
 /// outer area) it wraps into 2 rows; at the outer width (100) it would
@@ -572,7 +569,7 @@ fn a_transcript_row_is_a_screen_row_so_the_scroll_offset_indexes_straight_into_i
     app.log.push(LogEntry::AssistantText { text: "MARKER-ROW".into() });
 
     let (width, height) = (60u16, 24u16);
-    // One draw to settle `render_width`/`render_height` and the following
+    // One draw to settle `render_width` and the following
     // offset, which is what the count below is measured against.
     let _ = rendered(&mut app, width, height);
     let rows = app.transcript_slice(0, usize::MAX);
@@ -657,11 +654,11 @@ fn failures_are_status_rows_with_a_glyph_a_hue_and_no_weight() {
     let (glyph, glyph_fg, text_fg) = cell(LogEntry::Error { message: "connection reset".into() }, "connection reset");
     assert_eq!((glyph.as_str(), glyph_fg, text_fg), ("✗", DARK.err, DARK.err));
 
-    let ended = LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Error("overloaded".into()) };
+    let ended = LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::Error("overloaded".into()) };
     let (glyph, glyph_fg, _) = cell(ended, "overloaded");
     assert_eq!((glyph.as_str(), glyph_fg), ("✗", DARK.err));
 
-    let (glyph, glyph_fg, text_fg) = cell(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Cancelled }, "turn cancelled");
+    let (glyph, glyph_fg, text_fg) = cell(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::Cancelled }, "turn cancelled");
     assert_eq!((glyph.as_str(), glyph_fg, text_fg), ("!", DARK.warn, DARK.warn), "stopped is a warning, not a failure");
 }
 
@@ -1622,6 +1619,17 @@ fn theme_command_word_is_dimmed_live_like_every_other_known_command() {
     assert_eq!(styled, vec![("/theme", Some(DARK.dim)), (" ", None), ("light", Some(DARK.text))]);
 }
 
+/// `/model` and `/resume` are dispatched by `cli::slash` and were missing
+/// from the hand-kept list here, so the two commands that open a picker were
+/// the two that never read as commands while being typed.
+#[test]
+fn the_picker_commands_are_dimmed_live_like_every_other_known_command() {
+    for word in ["/model", "/resume"] {
+        let line = highlight_command_tokens(word, ctx(80));
+        assert_eq!(line.spans[0].style.fg, Some(DARK.dim), "{word} is a command");
+    }
+}
+
 /// Regression test: no visible cursor at all was a standing complaint —
 /// the input box rendered the draft text but never said where the cursor
 /// sat within it. It said so with the *terminal's* cursor until the caret
@@ -1960,7 +1968,7 @@ fn a_failed_turn_leaves_a_notice_on_the_bottom_bands_first_row_until_something_e
     assert!(row_text(&calm, band_top).trim().is_empty(), "the band opens on a blank row when nothing failed");
     let prompt_row = find_row(&calm, "▸");
 
-    app.log.push(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Error("overloaded_error\nsecond line".into()) });
+    app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::Error("overloaded_error\nsecond line".into()) });
     let failed = render(&mut app);
     let notice = row_text(&failed, band_top);
     assert_eq!(notice.trim_end(), "   ✗  turn failed · overloaded_error · output above", "{notice:?}");
@@ -2054,12 +2062,12 @@ fn a_diff_fence_as_the_very_first_thing_in_a_message_still_renders_its_field() {
 fn an_ordinary_turn_end_renders_no_log_row() {
     let mut end_app = app();
     end_app.log.push(LogEntry::UserMessage { text: "hi".into() });
-    end_app.log.push(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::EndTurn });
+    end_app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::EndTurn });
     let out = rendered(&mut end_app, 100, 20);
     assert!(!out.contains("answered"), "an ordinary turn end must not render its own log row any more: {out:?}");
 
     let mut cancelled_app = app();
-    cancelled_app.log.push(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Cancelled });
+    cancelled_app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::Cancelled });
     assert!(rendered(&mut cancelled_app, 100, 20).contains("cancelled"), "a cancelled turn must still render inline");
 }
 
@@ -2696,5 +2704,87 @@ fn dump_picker() {
             let row: String = (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect();
             println!("{y:2}|{row}|");
         }
+    }
+}
+
+// ── Degenerate frames ────────────────────────────────────────────────────
+
+/// A terminal can be resized to anything, mid-session, including to nothing.
+/// Every band's arithmetic is `u16` and every builder subtracts margins from
+/// a width, so the one property asserted here is that no size panics — what
+/// a 3×2 frame *shows* is not a design question.
+#[test]
+fn no_frame_size_however_small_panics_in_any_state() {
+    let diff = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n ctx\n-old\n+new 日本語\n";
+    let scene = |name: &str| -> App {
+        let mut app = if name == "picker" { app_with_catalogue() } else { app() };
+        match name {
+            "transcript" => {
+                app.log.push(LogEntry::UserMessage { text: "hello 日本語 there".into() });
+                app.log.push(LogEntry::AssistantText {
+                    text: format!("# t\n\n| a | b |\n|---|--:|\n| 日本 | `c` |\n\n---\n```rust\nfn main() {{}}\n```\n```diff\n{diff}```\n> q\n- b"),
+                });
+                app.log.push(LogEntry::ApprovalCard { call_id: "c0".into(), diff: diff.into(), resolution: Some(true) });
+                app.log.push(LogEntry::Error { message: "it broke\nbadly".into() });
+                app.input = "a draft 日本語\nover two lines".into();
+                app.cursor = app.input.len();
+            }
+            "approval" => {
+                app.log.push(LogEntry::UserMessage { text: "go".into() });
+                app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: diff.into() });
+            }
+            "prompt" => {
+                let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["日本語".repeat(40)], declared: Class::Read };
+                app.pending_prompts.push_back(crate::app::PendingPrompt { call_id: "c1".into(), payload });
+            }
+            "picker" => picking(&mut app),
+            _ => {}
+        }
+        app
+    };
+    for name in ["empty", "transcript", "approval", "prompt", "picker"] {
+        for width in (0..=16u16).chain([40, 80]) {
+            for height in (0..=12u16).chain([24]) {
+                let mut app = scene(name);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&mut app, width, height)));
+                assert!(outcome.is_ok(), "`{name}` panicked at {width}x{height}");
+            }
+        }
+    }
+    // First run draws outside `App`, through its own bands.
+    for width in (0..=16u16).chain([40, 80]) {
+        for height in (0..=12u16).chain([24]) {
+            for index in 0..3 {
+                let state = crate::first_run::FirstRun { index, expanded: true, ..Default::default() };
+                let outcome = std::panic::catch_unwind(|| {
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal.draw(|f| super::first_run::draw(f, &state, &DARK)).unwrap();
+                });
+                assert!(outcome.is_ok(), "first run step {index} panicked at {width}x{height}");
+            }
+        }
+    }
+}
+
+/// A tab in a reply is ordinary input — Go, a Makefile, a diff of either —
+/// and it has no cell of its own: ratatui draws nothing for it while
+/// `UnicodeWidthStr` counts one. It used to delete the line's indentation
+/// and leave the code field one cell short of its right edge per tab, the
+/// frame's ground showing through the hole.
+#[test]
+fn a_tab_in_a_reply_keeps_its_indentation_and_the_field_keeps_its_edge() {
+    let mut app = app();
+    app.log.push(LogEntry::AssistantText { text: "```go\n\tx := 1\n```\n```diff\n+\tadded\n```".into() });
+    let (width, height) = (60u16, 24u16);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    for needle in ["x := 1", "added"] {
+        let y = find_row(&buffer, needle);
+        let row: String = (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+        assert!(row.contains(&format!("    {needle}")), "the tab is four cells of indentation: {row:?}");
+        let last = width - MARGIN_X as u16 - 1;
+        assert_ne!(buffer[(last, y)].bg, DARK.ground, "the field runs to the right margin: {row:?}");
+        assert_eq!(buffer[(last + 1, y)].bg, DARK.ground, "and stops there");
     }
 }

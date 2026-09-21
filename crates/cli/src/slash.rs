@@ -26,13 +26,17 @@ enum Intercepted {
     Quit,
 }
 
-/// Single source of truth for `/help`'s listing — keep in sync with the
-/// `match` in `intercept` below by hand; six entries doesn't earn a
-/// data-driven dispatch table yet.
+/// Single source of truth for `/help`'s listing — kept in sync with the
+/// `match` in `intercept` below by hand; this few entries does not earn a
+/// data-driven dispatch table.
 const HELP_TEXT: &str = "commands: /help (this list), /clear (clear conversation context), /exit (end the session), \
      /model (pick from the provider and model lists), /model [provider/]model (set it directly), \
      /reload-config (reload config files from disk), /resume (pick a past session to continue), \
      /theme light|dark (switch color theme)";
+
+/// What `/clear` and `/resume` say while a turn runs — see
+/// `History::turn_in_flight`.
+const TURN_IN_FLIGHT: &str = "a turn is running; cancel it with ctrl+c first";
 
 /// `/resume`'s usage line, quoted by the branches that cannot act — same
 /// "never make them go and find /help" rule as `MODEL_USAGE`.
@@ -66,11 +70,9 @@ pub trait ModelSwitch: Send + Sync {
 /// The running session, as `/model` has to see it: what it is on right now,
 /// and how to move it.
 ///
-/// The two belong together because they change together. `model` used to be
-/// a string captured at startup and never updated, which was correct only
-/// while the session could not change model at all; now a successful swap is
-/// precisely what makes the old value stale, so whatever performs the swap
-/// has to be holding the field it invalidates.
+/// The two belong together because they change together: a successful swap
+/// is precisely what makes `model` stale, so whatever performs the swap has
+/// to be holding the field it invalidates.
 pub struct Session {
     /// `provider/model`, as [`qualified`] renders it — what the next turn
     /// will actually run on.
@@ -109,15 +111,26 @@ async fn intercept(
     events:   &mpsc::Sender<Event>,
 ) -> Intercepted {
     let Command::Submit { text } = &command else { return Intercepted::Forward(command) };
-    let Some(rest) = text.trim_start().strip_prefix('/') else { return Intercepted::Forward(command) };
+    let Some(rest) = text.trim_start().strip_prefix('/') else {
+        if let Some(history) = history {
+            history.turn_submitted();
+        }
+        return Intercepted::Forward(command);
+    };
 
+    // The command name, and whatever follows it. Only the commands that take
+    // an argument match `Some`, so `/help me` is as unknown as `/nope`.
     let rest = rest.trim();
-    match rest {
-        "help" => {
+    let (name, arg) = match rest.split_once(char::is_whitespace) {
+        Some((name, arg)) => (name, Some(arg.trim())),
+        None => (rest, None),
+    };
+    match (name, arg) {
+        ("help", None) => {
             let _ = events.send(Event::Notice { message: HELP_TEXT.into() }).await;
             Intercepted::Handled
         }
-        "reload-config" => {
+        ("reload-config", None) => {
             handle_reload_config(config, session, events).await;
             Intercepted::Handled
         }
@@ -129,54 +142,38 @@ async fn intercept(
         //
         // The transcript is sealed on the way past, before core is told:
         // "forget everything" is about the model's context, and the record
-        // of what was said stays on disk and stays resumable. Sealing is
-        // implicit — nothing is written to close the old file — so a killed
-        // process leaves exactly what a cleared one does.
-        "clear" => {
+        // of what was said stays on disk and stays resumable.
+        ("clear", None) => {
             if let Some(history) = history {
+                if history.turn_in_flight() {
+                    let _ = events.send(Event::Notice { message: TURN_IN_FLIGHT.into() }).await;
+                    return Intercepted::Handled;
+                }
                 history.seal_and_open_new();
             }
             Intercepted::Forward(Command::ClearHistory)
         }
-        "exit" => Intercepted::Quit,
-        // "theme" alone (no argument) reports the current setting rather
-        // than erroring — same "tell the developer where they stand"
-        // instinct as `/help`, since there's no running-TUI state this
-        // process can peek at other than what's already on disk.
-        "theme" => {
-            handle_theme(None, config, events).await;
+        ("exit", None) => Intercepted::Quit,
+        // Bare `/theme` and `/model` report where the developer stands; an
+        // argument changes it.
+        ("theme", arg) => {
+            handle_theme(arg, config, events).await;
             Intercepted::Handled
         }
-        other if other.starts_with("theme ") => {
-            handle_theme(Some(other["theme ".len()..].trim()), config, events).await;
-            Intercepted::Handled
-        }
-        // Same shape as `/theme`: bare reports where the developer stands,
-        // an argument changes it.
-        "model" => {
-            handle_model(None, config, session, events).await;
-            Intercepted::Handled
-        }
-        other if other.starts_with("model ") => {
-            handle_model(Some(other["model ".len()..].trim()), config, session, events).await;
+        ("model", arg) => {
+            handle_model(arg, config, session, events).await;
             Intercepted::Handled
         }
         // Bare `/resume` normally never reaches here: aldwin-tui reads it
         // first and opens the picker, which answers by submitting
         // `/resume <id>`. What arrives is the bare form on a session with no
-        // list to show — so this branch's job is to say why.
-        "resume" => {
-            handle_resume(None, history, events).await;
-            Intercepted::Handled
-        }
-        other if other.starts_with("resume ") => {
-            match handle_resume(Some(other["resume ".len()..].trim()), history, events).await {
-                Some(command) => Intercepted::Forward(command),
-                None => Intercepted::Handled,
-            }
-        }
-        other => {
-            let _ = events.send(Event::Notice { message: format!("unknown slash command: /{other} (try /help)") }).await;
+        // list to show — so `handle_resume` says why.
+        ("resume", arg) => match handle_resume(arg, history, events).await {
+            Some(command) => Intercepted::Forward(command),
+            None => Intercepted::Handled,
+        },
+        _ => {
+            let _ = events.send(Event::Notice { message: format!("unknown slash command: /{rest} (try /help)") }).await;
             Intercepted::Handled
         }
     }
@@ -213,6 +210,11 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
         let _ = events.send(Event::Notice { message }).await;
         return None;
     };
+
+    if history.turn_in_flight() {
+        let _ = events.send(Event::Notice { message: TURN_IN_FLIGHT.into() }).await;
+        return None;
+    }
 
     let id = SessionId(arg.to_string());
     // A session cannot be resumed into itself: the records would be replaced
@@ -363,63 +365,32 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
         return;
     };
 
-    // Split on the first `/` only — see this function's own doc comment for
-    // why the left half is a provider only when it names one.
-    //
-    // A *bare* provider name means the same as `provider/`: that provider, on
-    // its default model. Reading it as a model id was the first cut and was
-    // silently destructive — `/model openai` wrote `model: openai` onto
-    // whatever provider was already configured and reported success, and the
-    // next start failed at the host with a model it had never heard of. The
-    // slashed form was validated against the catalogue and the bare form was
-    // not, which is the same name treated two different ways.
-    let (provider, model) = match arg.split_once('/') {
-        Some((head, tail)) => match named_provider(head) {
-            Some(p) => (Some(p), tail.trim()),
-            None => (None, arg),
-        },
-        None => match named_provider(arg) {
-            Some(p) => (Some(p), ""),
-            None => (None, arg),
-        },
-    };
-
-    // A leading `/` from `/model /foo`, or a trailing one from
-    // `/model anthropic/`, both land here as an empty model half.
-    let mut next = match provider {
+    // Split on the first `/` only, and a bare provider name means the same
+    // as `provider/` — see this function's own doc comment for both rules.
+    let (head, tail) = arg.split_once('/').map_or((arg, ""), |(head, tail)| (head, tail.trim()));
+    let next = match named_provider(head) {
         Some(p) => {
-            let mut next = aldwin_config::ProviderConfig {
-                version:                  aldwin_config::PROVIDER_VERSION,
-                provider:                 p.kind,
-                model:                    p.default_model().to_string(),
-                base_url:                 p.base_url.map(String::from),
-                api_key_env:              p.api_key_env.to_string(),
-                // A thinking budget is the developer's preference, not the
-                // host's, so it survives a move between providers.
-                extended_thinking_budget: current.extended_thinking_budget,
+            // A leading `/` cannot reach here (`head` would be empty and name
+            // nothing); a trailing one, or none at all, is an empty model
+            // half. Naming the provider you are already on is then not a
+            // request to be moved off the model you are using — without this
+            // `/model anthropic` on `anthropic/claude-opus-5` would quietly
+            // drop you back to the catalogue's default.
+            let model = match tail {
+                "" if known.map(|c| c.id) == Some(p.id) => Some(current.model.as_str()),
+                "" => None,
+                model => Some(model),
             };
-            if !model.is_empty() {
-                next.model = model.to_string();
-            } else if known.map(|c| c.id) == Some(p.id) {
-                // Naming the provider you are already on is not a request to
-                // be moved off the model you are already using. Without this,
-                // `/model anthropic` on `anthropic/claude-opus-5` would
-                // quietly drop you back to the catalogue's default.
-                next.model = current.model.clone();
-            }
-            next
+            catalogue_provider_config(p, model, Some(&current))
         }
-        None => {
-            if model.contains('/') {
-                let ids = aldwin_llm::provider_ids().join(", ");
-                let message = format!("unknown provider {:?} (known: {ids}; {MODEL_USAGE})", model.split('/').next().unwrap_or(model));
-                let _ = events.send(Event::Notice { message }).await;
-                return;
-            }
-            aldwin_config::ProviderConfig { model: model.to_string(), ..current.clone() }
+        None if arg.contains('/') => {
+            let ids = aldwin_llm::provider_ids().join(", ");
+            let message = format!("unknown provider {head:?} (known: {ids}; {MODEL_USAGE})");
+            let _ = events.send(Event::Notice { message }).await;
+            return;
         }
+        None => aldwin_config::ProviderConfig { version: aldwin_config::PROVIDER_VERSION, model: arg.to_string(), ..current.clone() },
     };
-    next.version = aldwin_config::PROVIDER_VERSION;
 
     let now = qualified(&next, aldwin_llm::identify(&next));
 
@@ -483,6 +454,46 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
 /// and some really are mixed-case.
 fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
     aldwin_llm::provider(&name.trim().to_ascii_lowercase())
+}
+
+/// The `provider.yaml` that naming catalogue row `provider` writes — by first
+/// run's provider step and by `/model` alike: everything but the model comes
+/// straight off the row, and the model is that provider's own default when
+/// none was given.
+///
+/// `provider.yaml` deliberately has no field a plaintext key could go in
+/// (see `ProviderConfig`), so this writes the key variable's *name* and the
+/// developer exports the key themselves.
+///
+/// `current` is whatever already supplies the setting, when anything does.
+/// Two fields come from it rather than from the catalogue row:
+///
+/// * the thinking budget, always — a developer's preference, not the
+///   host's, so it survives a move between providers;
+/// * the key variable, but only when `provider` is the one already
+///   configured. A developer who exports their Anthropic key as
+///   `ANTHROPIC_KEY_WORK` has said so in `provider.yaml`, and changing the
+///   *model* on that provider is not a request to be moved back onto the
+///   catalogue's default variable name — which would break their next
+///   start. Naming a different provider is a different endpoint with a
+///   different key, so there the catalogue's variable is the right one.
+///
+/// Carrying both is also what makes an unchanged answer compare equal to
+/// what is on disk, so confirming first run's lists writes nothing at all.
+pub(crate) fn catalogue_provider_config(
+    provider: &aldwin_llm::Provider,
+    model:    Option<&str>,
+    current:  Option<&aldwin_config::ProviderConfig>,
+) -> aldwin_config::ProviderConfig {
+    let on_this_provider = current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
+    aldwin_config::ProviderConfig {
+        version:                  aldwin_config::PROVIDER_VERSION,
+        provider:                 provider.kind,
+        model:                    model.unwrap_or_else(|| provider.default_model()).to_string(),
+        base_url:                 provider.base_url.map(String::from),
+        api_key_env:              on_this_provider.map_or_else(|| provider.api_key_env.to_string(), |c| c.api_key_env.clone()),
+        extended_thinking_budget: current.and_then(|c| c.extended_thinking_budget),
+    }
 }
 
 /// `provider/model` when the endpoint is one the catalogue knows, and the
@@ -617,16 +628,16 @@ mod tests {
 
     // ── `/resume` ─────────────────────────────────────────────────────────
 
-    /// A history with one finished turn already recorded, plus the channel
-    /// its notices arrive on.
-    fn recorded_history(text: &str) -> (tempfile::TempDir, Arc<History>, SessionId, mpsc::Receiver<Event>) {
+    /// A history with one finished turn already recorded, plus both ends of
+    /// the channel its notices arrive on — the sender is the one the history
+    /// reports failures on, so a test reads notices from both paths in one
+    /// place.
+    fn recorded_history(text: &str) -> (tempfile::TempDir, Arc<History>, SessionId, mpsc::Sender<Event>, mpsc::Receiver<Event>) {
         use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel(8);
-        HISTORY_EVENTS.with(|c| *c.borrow_mut() = Some(tx.clone()));
-        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx);
-        let history = history.expect("a store");
+        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(1) },
             LogRecord::UserMessage { turn_id: TurnId(1), text: text.into() },
@@ -641,35 +652,25 @@ mod tests {
         // The recorded one, not whichever is newest — `seal_and_open_new`
         // just made a newer, empty one.
         let id = SessionId(history.resumable().into_iter().find(|s| s.turns > 0).expect("the recorded session").id);
-        (dir, history, id, rx)
+        (dir, history, id, tx, rx)
     }
 
-    /// A second sender on the same channel the history reports failures on,
-    /// so a test reads notices from both paths in one place.
-    fn rx_sender(_history: &Arc<History>) -> mpsc::Sender<Event> {
-        HISTORY_EVENTS.with(|c| c.borrow().clone().expect("recorded_history sets this"))
-    }
-
-    thread_local! {
-        static HISTORY_EVENTS: std::cell::RefCell<Option<mpsc::Sender<Event>>> = const { std::cell::RefCell::new(None) };
-    }
-
-    async fn drain(rx: &mut mpsc::Receiver<Event>) -> Vec<String> {
-        let mut messages = Vec::new();
-        while let Ok(Event::Notice { message }) = rx.try_recv() {
-            messages.push(message);
-        }
-        let _ = &mut messages;
-        messages
+    /// Every notice already waiting on `rx`.
+    fn drain(rx: &mut mpsc::Receiver<Event>) -> Vec<String> {
+        std::iter::from_fn(|| match rx.try_recv() {
+            Ok(Event::Notice { message }) => Some(message),
+            _ => None,
+        })
+        .collect()
     }
 
     #[tokio::test]
     async fn resume_with_an_id_forwards_the_loaded_records_to_core() {
         let (_project, _global, cfg) = config();
-        let (_dir, history, id, mut rx) = recorded_history("the question I asked");
+        let (_dir, history, id, events, _rx) = recorded_history("the question I asked");
 
         let cmd = Command::Submit { text: format!("/resume {id}") };
-        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &rx_sender(&history)).await;
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         let Intercepted::Forward(Command::Resume { records }) = result else {
             panic!("a resume must reach core");
@@ -678,7 +679,6 @@ mod tests {
             records.iter().any(|r| matches!(r, aldwin_core::LogRecord::UserMessage { text, .. } if text == "the question I asked")),
             "the conversation came back"
         );
-        let _ = drain(&mut rx).await;
     }
 
     /// The fork-free Decision: the writer moves onto the resumed transcript,
@@ -688,8 +688,7 @@ mod tests {
         use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let (_project, _global, cfg) = config();
-        let (dir, history, id, _rx) = recorded_history("first");
-        let events = rx_sender(&history);
+        let (dir, history, id, events, _rx) = recorded_history("first");
 
         let cmd = Command::Submit { text: format!("/resume {id}") };
         intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
@@ -711,14 +710,13 @@ mod tests {
     #[tokio::test]
     async fn resuming_an_unknown_session_reports_and_sends_nothing() {
         let (_project, _global, cfg) = config();
-        let (_dir, history, _id, mut rx) = recorded_history("first");
-        let events = rx_sender(&history);
+        let (_dir, history, _id, events, mut rx) = recorded_history("first");
 
         let cmd = Command::Submit { text: "/resume 0000000000-0-0".into() };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         assert!(matches!(result, Intercepted::Handled), "nothing reaches core");
-        let notices = drain(&mut rx).await;
+        let notices = drain(&mut rx);
         assert!(notices.iter().any(|m| m.contains("cannot read session")), "{notices:?}");
     }
 
@@ -732,19 +730,19 @@ mod tests {
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx.clone());
-        let history = history.expect("a store");
-        aldwin_core::RecordSink::append(history.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
-        // Captured before sealing: an unfinished session is not listed, which
-        // is the point of `an_unfinished_session_is_not_listed` below.
-        let id = history.current();
-        history.seal_and_open_new();
+        // Another process's transcript, as a crash leaves it. Its id is taken
+        // from the handle: an unfinished session is not listed, which is the
+        // point of `an_unfinished_session_is_not_listed` below.
+        let crashed = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        aldwin_core::RecordSink::append(crashed.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
+        let id = crashed.current();
+        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
 
         let cmd = Command::Submit { text: format!("/resume {id}") };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
-        let notices = drain(&mut rx).await;
+        let notices = drain(&mut rx);
         assert!(notices.iter().any(|m| m.contains("no completed turns")), "{notices:?}");
     }
 
@@ -753,13 +751,13 @@ mod tests {
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx.clone());
+        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
 
         let cmd = Command::Submit { text: "/resume".into() };
-        let result = intercept(cmd, &cfg, &mut session(), history.as_ref(), &tx).await;
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
-        let notices = drain(&mut rx).await;
+        let notices = drain(&mut rx);
         assert!(notices.iter().any(|m| m.contains("no past sessions")), "{notices:?}");
     }
 
@@ -774,7 +772,7 @@ mod tests {
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
-        let notices = drain(&mut rx).await;
+        let notices = drain(&mut rx);
         assert!(notices.iter().any(|m| m.contains("history is off")), "{notices:?}");
     }
 
@@ -783,8 +781,7 @@ mod tests {
     #[tokio::test]
     async fn clear_seals_the_transcript_and_still_reaches_core() {
         let (_project, _global, cfg) = config();
-        let (dir, history, _id, _rx) = recorded_history("before");
-        let events = rx_sender(&history);
+        let (dir, history, _id, events, _rx) = recorded_history("before");
         let before = crate::history::session_choices(dir.path()).len();
 
         let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), Some(&history), &events).await;
@@ -796,26 +793,50 @@ mod tests {
         );
     }
 
+    /// Core discards both mid-turn, so a writer moved on the way past would
+    /// send the rest of the running conversation into another session's file.
+    #[tokio::test]
+    async fn clear_and_resume_leave_the_writer_alone_while_a_turn_runs() {
+        let (_project, _global, cfg) = config();
+        let (_dir, history, id, events, mut rx) = recorded_history("first");
+        let writing = history.current();
+
+        // Submitted, and core has logged nothing yet.
+        let sent = intercept(Command::Submit { text: "hello".into() }, &cfg, &mut session(), Some(&history), &events).await;
+        assert!(matches!(sent, Intercepted::Forward(Command::Submit { .. })));
+
+        for text in ["/clear".to_string(), format!("/resume {id}")] {
+            let result = intercept(Command::Submit { text: text.clone() }, &cfg, &mut session(), Some(&history), &events).await;
+            assert!(matches!(result, Intercepted::Handled), "{text} must not reach core mid-turn");
+            assert_eq!(drain(&mut rx), [TURN_IN_FLIGHT]);
+            assert!(history.is_current(&writing), "{text} moved the writer under a running turn");
+        }
+
+        let ended = aldwin_core::LogRecord::TurnEnded { turn_id: aldwin_core::TurnId(9), reason: aldwin_core::TurnEndReason::EndTurn };
+        aldwin_core::RecordSink::append(history.as_ref(), &ended);
+        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), Some(&history), &events).await;
+        assert!(matches!(result, Intercepted::Forward(Command::ClearHistory)), "and works again once the turn has ended");
+    }
+
     /// The picker never offers it, but a typed id can still name it.
     #[tokio::test]
     async fn resuming_the_session_you_are_in_is_refused() {
         let (_project, _global, cfg) = config();
-        let (_dir, history, _id, mut rx) = recorded_history("first");
-        let events = rx_sender(&history);
+        let (_dir, history, _id, events, mut rx) = recorded_history("first");
         let current = history.current();
 
         let cmd = Command::Submit { text: format!("/resume {current}") };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         assert!(matches!(result, Intercepted::Handled));
-        let notices = drain(&mut rx).await;
+        let notices = drain(&mut rx);
         assert!(notices.iter().any(|m| m.contains("the session you are in")), "{notices:?}");
     }
 
     /// The session being written is not a row in its own list.
     #[tokio::test]
     async fn the_current_session_is_not_offered_as_resumable() {
-        let (_dir, history, _id, _rx) = recorded_history("first");
+        let (_dir, history, _id, _events, _rx) = recorded_history("first");
         let current = history.current();
         assert!(
             !history.resumable().iter().any(|s| s.id == current.0),
@@ -828,7 +849,7 @@ mod tests {
     /// was refused.
     #[tokio::test]
     async fn an_unfinished_session_is_not_listed() {
-        let (_dir, history, _id, _rx) = recorded_history("said something");
+        let (_dir, history, _id, _events, _rx) = recorded_history("said something");
         // `recorded_history` sealed and opened a fresh session that has said
         // nothing — exactly the state a launch-and-quit leaves.
         let sessions = history.resumable();
@@ -836,8 +857,8 @@ mod tests {
         assert_eq!(sessions[0].title, "said something");
     }
 
-    #[tokio::test]
-    async fn help_lists_resume() {
+    #[test]
+    fn help_lists_resume() {
         assert!(HELP_TEXT.contains("/resume"), "a command the developer cannot discover is not a command");
     }
 
@@ -999,6 +1020,16 @@ mod tests {
         }
     }
 
+    /// Any whitespace separates a command from its argument, not only a
+    /// space — a pasted tab used to make `/theme` an unknown command.
+    #[tokio::test]
+    async fn a_tab_separates_a_command_from_its_argument() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+        intercept(Command::Submit { text: "/theme\tlight".into() }, &cfg, &mut session(), None, &tx).await;
+        assert!(notice(&mut rx).await.contains("theme set to light"));
+    }
+
     #[tokio::test]
     async fn theme_back_to_dark_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
@@ -1140,6 +1171,76 @@ mod tests {
         assert!(message.contains("still on anthropic/claude-sonnet-5"), "{message}");
         assert!(rx.try_recv().is_err(), "a failed swap must not tell the bars anything changed");
         assert_eq!(cfg.global_provider().unwrap().model, "claude-sonnet-5", "nothing may be written on a failed swap");
+    }
+
+    /// The developer's own model answer is what gets written — the
+    /// provider's catalogue default is the fallback for the case the model
+    /// step could not be asked at all, not the normal path.
+    #[test]
+    fn first_run_writes_the_model_that_was_chosen() {
+        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
+        let chosen = catalogue_provider_config(anthropic, Some("claude-opus-5"), None);
+        assert_eq!(chosen.model, "claude-opus-5");
+        assert_eq!(chosen.api_key_env, anthropic.api_key_env, "the endpoint and key still come from the provider row");
+
+        let unasked = catalogue_provider_config(anthropic, None, None);
+        assert_eq!(unasked.model, anthropic.default_model());
+    }
+
+    /// Confirming the lists on the rows they opened on is not a change, and
+    /// must not leave a project file behind restating the global one.
+    #[test]
+    fn an_unchanged_answer_compares_equal_to_what_is_already_configured() {
+        let google = aldwin_llm::provider("google").expect("a catalogue provider");
+        let current = aldwin_config::ProviderConfig { extended_thinking_budget: Some(4_000), ..catalogue_provider_config(google, Some("gemini-2.5-flash"), None) };
+        let confirmed = catalogue_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
+        assert_eq!(confirmed, current, "the thinking budget travels with it, so an unchanged answer is byte-identical");
+
+        let moved = catalogue_provider_config(google, Some("gemini-2.5-pro"), Some(&current));
+        assert_ne!(moved, current);
+        assert_eq!(moved.extended_thinking_budget, Some(4_000), "a preference of the developer's survives the move");
+    }
+
+    /// A key variable the developer chose is part of how they reach their
+    /// provider, not part of which model they picked — changing the model
+    /// on that provider must not quietly restore the catalogue's default
+    /// variable name and break their next start.
+    #[test]
+    fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
+        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
+        let current = aldwin_config::ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..catalogue_provider_config(anthropic, Some("claude-sonnet-5"), None) };
+
+        let same_provider = catalogue_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
+        assert_eq!(same_provider.api_key_env, "ANTHROPIC_KEY_WORK", "the developer's own variable is how they reach this provider");
+        assert_eq!(same_provider.model, "claude-opus-5");
+
+        // A different provider is a different endpoint with a different
+        // key, so there the catalogue's variable is the right one.
+        let google = aldwin_llm::provider("google").expect("a catalogue provider");
+        let moved = catalogue_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
+        assert_eq!(moved.api_key_env, google.api_key_env);
+    }
+
+    /// The picker answers with `provider/model`, so the qualified form on the
+    /// provider already configured is the common path — and it must keep the
+    /// developer's own key variable exactly as first run does, not restore
+    /// the catalogue's and fail the swap on a variable that is not exported.
+    #[tokio::test]
+    async fn a_chosen_key_variable_survives_a_qualified_model_change_on_the_same_provider() {
+        let (_project, _global, cfg) = config();
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
+        let custom = aldwin_config::ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..cfg.global_provider().unwrap() };
+        cfg.set_provider(aldwin_config::Scope::Global, custom).unwrap();
+        let (mut session, seen) = recording_session();
+        let (tx, mut rx) = mpsc::channel(8);
+
+        intercept(Command::Submit { text: "/model anthropic/claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
+
+        let _ = notice(&mut rx).await;
+        assert_eq!(seen.lock().unwrap()[0].api_key_env, "ANTHROPIC_KEY_WORK", "the client is rebuilt on the key the developer exports");
+        let saved = cfg.global_provider().unwrap();
+        assert_eq!(saved.api_key_env, "ANTHROPIC_KEY_WORK");
+        assert_eq!(saved.model, "claude-opus-5");
     }
 
     /// `provider/model` moves both halves — endpoint and key variable

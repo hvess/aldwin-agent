@@ -3,7 +3,7 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette::Palette;
 
@@ -29,13 +29,8 @@ use crate::palette::Palette;
 /// `cells.css` says so in place: "Do not add one; it would be a fourth
 /// statement of a position the other three already fix." Deriving it here
 /// the same way is what keeps this file honest against that.
-///
-/// The label column was 12 cells (and the body column 17) until the design
-/// system's Turn 13 grid rework. An earlier pass than that used 10/2 with
-/// no margin at all, so every transcript row started 5 cells left of where
-/// the grid puts it — reported directly as "the chat rows themselves appear
-/// misaligned and do not follow the cell/grid system."
-pub(super) use crate::tokens::{LABEL_COL_WIDTH, LABEL_GUTTER, MARGIN_X};
+pub(super) use crate::tokens::MARGIN_X;
+use crate::tokens::{LABEL_COL_WIDTH, LABEL_GUTTER};
 
 /// Body text's column — **derived here and nowhere else**, because
 /// `cells.css` deliberately declares no `--body-col` and says why: it would
@@ -78,14 +73,10 @@ pub(super) use crate::tokens::STEP_CONTENT_COL;
 /// can derive on its own: which theme's colours to draw in, and how many
 /// cells the column it is filling is wide.
 ///
-/// Carried as one `Copy` value rather than as a trailing `(pal, width)`
-/// pair on every signature — the pair was threaded by hand through 25-odd
-/// functions in inconsistent positions, so a builder that wanted one more
-/// piece of render-wide context could not get it without editing all of
-/// them. Narrowing is explicit (`ctx.narrow(..)` / `ctx.body()`): a builder
+/// Narrowing is explicit (`ctx.narrow(..)` / `ctx.body()`): a builder
 /// filling a column inside another one says so at the call site, which is
-/// where the two historical width-divergence bugs recorded in
-/// `aldwin-tui.md` would have been visible.
+/// where the two width-divergence bugs recorded in `aldwin-tui.md` would
+/// have been visible.
 #[derive(Clone, Copy)]
 pub(super) struct Ctx<'a> {
     pub pal:   &'a Palette,
@@ -100,7 +91,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Same palette, a different column width.
-    pub fn narrow(self, width: u16) -> Self {
+    fn narrow(self, width: u16) -> Self {
         Self { width, ..self }
     }
 
@@ -131,9 +122,8 @@ pub(super) fn with_label_column(lines: Vec<Line<'static>>, label: Option<(&str, 
         .map(|(i, line)| {
             let mut spans = Vec::with_capacity(line.spans.len() + 2);
             match (i, label) {
-                // The label starts at the 3-cell margin — cell 3, not cell
-                // 0 — and the body column still lands on cell 17 regardless
-                // of how long the label itself is.
+                // The label starts at the margin, and the body column
+                // still lands on `CONTENT_INDENT` however long the label is.
                 (0, Some((text, color))) => {
                     let pad = (LABEL_COL_WIDTH + LABEL_GUTTER).saturating_sub(text.width());
                     spans.push(Span::raw(margin.clone()));
@@ -163,8 +153,10 @@ pub(super) fn elide(text: &str, max: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for c in text.chars() {
-        let w = c.to_string().width();
-        if used + w > max.saturating_sub(1) {
+        // `unwrap_or(1)`: the one-cell reading `str::width` gives a control
+        // character, so this agrees with the measurement above.
+        let w = c.width().unwrap_or(1);
+        if used + w > max - 1 {
             break;
         }
         out.push(c);
@@ -218,26 +210,15 @@ pub(super) fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<
 /// summary flush to the right edge).
 ///
 /// When the two sides do not both fit, the **right** group is elided to
-/// what is left after the left group and one space. It previously fell back
-/// to a one-space gap and returned a line *longer than `width`*, which
-/// ratatui then clipped at the frame edge — a summary cut to `17 fil` with
-/// no `…`, silently, which is the third time this codebase has learned that
-/// "two groups sized independently cannot keep a gap between them" (see
-/// `chrome::identity_bar_row` and `draw_status_line`, which both compose one
-/// line for exactly this reason). A shortened summary is still true, so the
-/// right group elides rather than being dropped whole; the left group is
+/// what is left after the left group and one space, so the line is never
+/// longer than `width` — ratatui would clip it at the frame edge with no
+/// `…` (a summary once read `17 fil`). A shortened summary is still true, so
+/// the right group elides rather than being dropped whole; the left group is
 /// never cut here, because its glyph and tool name are what identify the row.
-///
-/// Note how narrow the margin was: at 80 columns `● shell (c1)` and
-/// `42 matches across 17 files` fit with a single cell to spare, so widening
-/// the tool-name field by the two cells `4a` asks for was enough to push it
-/// over. Nothing in the crate's tests would have caught the clip — it is
-/// well-formed output, just missing its tail.
 pub(super) fn justified_line(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
-    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
     let room = width.saturating_sub(left_w).saturating_sub(1);
-    let right = if right_w > room { truncate_spans(right, room) } else { right };
+    let right = truncate_spans(right, room);
     let right_w: usize = right.iter().map(|s| s.content.width()).sum();
     let gap = width.saturating_sub(left_w).saturating_sub(right_w).max(1);
     let mut spans = left;

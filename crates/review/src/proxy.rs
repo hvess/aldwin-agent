@@ -49,12 +49,16 @@ pub struct Proxy {
 /// Nothing is read from the developer's own `foot.ini`: their font, padding
 /// and colours are theirs, not the test's.
 pub(crate) fn foot_command(font: &str, pts: &Path) -> String {
-    let q = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     format!(
         "foot --config=/dev/null -o main.pad=0x0 -o {} --pty={}",
-        q(&format!("main.font={font}")),
-        q(&pts.display().to_string())
+        shell_quote(&format!("main.font={font}")),
+        shell_quote(&pts.display().to_string())
     )
+}
+
+/// One word for the shell `swaymsg exec` hands its command to.
+pub(crate) fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 impl Proxy {
@@ -180,10 +184,10 @@ impl Drop for Proxy {
 /// last-change mark, and the fingerprint that decides whether the *visible*
 /// state moved.
 struct Observer {
-    vt:          Arc<Mutex<Vt>>,
-    idle:        Arc<AtomicU64>,
-    start:       Instant,
-    last_print:  u64,
+    vt:         Arc<Mutex<Vt>>,
+    idle:       Arc<AtomicU64>,
+    start:      Instant,
+    last_print: u64,
 }
 
 fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
@@ -253,10 +257,9 @@ pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Resul
         let got = image.pixel(x, y);
         if got != (r, g, b) {
             return Err(Error::other(format!(
-                    "parser and frame disagree at cell ({row},{col}): parsed ground #{r:02x}{g:02x}{b:02x}, frame shows #{:02x}{:02x}{:02x}",
-                    got.0, got.1, got.2
-                ),
-            ));
+                "parser and frame disagree at cell ({row},{col}): parsed ground #{r:02x}{g:02x}{b:02x}, frame shows #{:02x}{:02x}{:02x}",
+                got.0, got.1, got.2
+            )));
         }
         checked += 1;
     }

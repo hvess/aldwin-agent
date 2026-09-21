@@ -1,8 +1,7 @@
 //! Embeds the current git commit into `ALDWIN_GIT_HASH` at compile time,
-//! for the welcome banner (`ui::intro_lines`). `CARGO_PKG_VERSION` alone
-//! (the workspace's shared `0.1.0`) doesn't move between commits on this
-//! actively-developed harness, so it can't tell a developer which build
-//! they're actually running — the commit can.
+//! for `src/version.rs`. `CARGO_PKG_VERSION` alone doesn't move between
+//! commits, so it can't tell a developer which build they're actually
+//! running — the commit can.
 
 use std::process::Command;
 

@@ -1,10 +1,10 @@
-pub mod agent;
-pub mod client;
-pub mod dispatcher;
-pub mod event;
-pub mod log;
-pub mod prompt;
-pub mod types;
+mod agent;
+mod client;
+mod dispatcher;
+mod event;
+mod log;
+mod prompt;
+mod types;
 
 pub use agent::Agent;
 pub use client::{LlmClient, LlmError, LlmRequest};

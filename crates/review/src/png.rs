@@ -3,7 +3,8 @@
 //! The harness does not process images; it needs to *check* one — that the
 //! frame a gate is about really shows what the parser says the app drew. So
 //! this decodes 8-bit RGB/RGBA, non-interlaced, which is what `grim` writes,
-//! and refuses anything else rather than guessing.
+//! and refuses anything else rather than guessing. The encoder exists only
+//! for [`annotate`].
 
 use std::io::{Error, ErrorKind, Read, Result};
 use std::path::Path;
@@ -11,8 +12,8 @@ use std::path::Path;
 pub struct Image {
     pub width:  u32,
     pub height: u32,
-    pub(crate) bpp:    usize,
-    pub(crate) data:   Vec<u8>,
+    bpp:        usize,
+    data:       Vec<u8>,
 }
 
 impl Image {
@@ -22,6 +23,18 @@ impl Image {
         }
         let i = (y as usize * self.width as usize + x as usize) * self.bpp;
         (self.data[i], self.data[i + 1], self.data[i + 2])
+    }
+
+    #[cfg(test)]
+    pub fn into_rgb(self) -> (u32, u32, Vec<u8>) {
+        if self.bpp == 3 {
+            return (self.width, self.height, self.data);
+        }
+        let mut rgb = Vec::with_capacity(self.width as usize * self.height as usize * 3);
+        for pixel in self.data.chunks_exact(self.bpp) {
+            rgb.extend_from_slice(&pixel[..3]);
+        }
+        (self.width, self.height, rgb)
     }
 }
 
@@ -68,17 +81,15 @@ pub fn decode(path: &Path) -> Result<Image> {
     let mut raw = Vec::new();
     flate2::read::ZlibDecoder::new(&idat[..]).read_to_end(&mut raw)?;
 
+    // A scanline is one filter byte then the row. Checked once and before the
+    // allocation, so the size a header merely claims is never trusted.
     let stride = width as usize * bpp;
+    if (raw.len() as u64) < (stride as u64 + 1) * height as u64 {
+        return Err(Error::new(ErrorKind::InvalidData, "truncated PNG data"));
+    }
     let mut data = vec![0u8; stride * height as usize];
     for y in 0..height as usize {
         let line = y * (stride + 1);
-        // `line + 1 + stride` is the end of this scanline: one filter byte
-        // then the row. The first spelling of this allowed `line + stride ==
-        // raw.len()`, which slices one past the end — a PNG truncated by
-        // exactly one byte panicked instead of erroring.
-        if line + 1 + stride > raw.len() {
-            return Err(Error::new(ErrorKind::InvalidData, "truncated PNG data"));
-        }
         let filter = raw[line];
         let src = &raw[line + 1..line + 1 + stride];
         for x in 0..stride {
@@ -111,21 +122,19 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
-/// Write an RGB image back out as a PNG.
-///
-/// Needed for one thing only: drawing a gate's cell coordinates onto the frame
-/// a human opens. A violation the harness has already located should not send
-/// anybody counting cells across a screenshot.
+#[cfg(test)]
 pub fn encode(path: &Path, width: u32, height: u32, rgb: &[u8]) -> Result<()> {
     use std::io::Write;
 
-    let mut raw = Vec::with_capacity(rgb.len() + height as usize);
-    for y in 0..height as usize {
-        raw.push(0); // filter: none. The frames are flat colour; filtering buys little.
-        raw.extend_from_slice(&rgb[y * width as usize * 3..(y + 1) * width as usize * 3]);
+    let stride = width as usize * 3;
+    if rgb.len() != stride * height as usize {
+        return Err(Error::new(ErrorKind::InvalidInput, "RGB buffer does not match the image size"));
     }
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(&raw)?;
+    for y in 0..height as usize {
+        encoder.write_all(&[0])?; // filter: none. The frames are flat colour; filtering buys little.
+        encoder.write_all(&rgb[y * stride..(y + 1) * stride])?;
+    }
     let idat = encoder.finish()?;
 
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -139,22 +148,19 @@ pub fn encode(path: &Path, width: u32, height: u32, rgb: &[u8]) -> Result<()> {
     std::fs::write(path, out)
 }
 
+#[cfg(test)]
 fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
     out.extend_from_slice(body);
-    let mut crc = crc32(kind);
-    crc = crc32_continue(crc, body);
+    let crc = crc32(crc32(0, kind), body);
     out.extend_from_slice(&crc.to_be_bytes());
 }
 
-/// PNG's CRC-32 over one chunk. `crc32_continue` finalises with the standard
-/// inversion, so a fresh run starts from the finalised value of nothing — 0.
-fn crc32(bytes: &[u8]) -> u32 {
-    crc32_continue(0, bytes)
-}
-
-fn crc32_continue(previous: u32, bytes: &[u8]) -> u32 {
+#[cfg(test)]
+/// PNG's CRC-32, resumable: it finalises with the standard inversion and
+/// undoes it on the way in, so a fresh run starts from `previous = 0`.
+fn crc32(previous: u32, bytes: &[u8]) -> u32 {
     let mut crc = previous ^ 0xffff_ffff;
     for &byte in bytes {
         crc ^= byte as u32;
@@ -165,46 +171,38 @@ fn crc32_continue(previous: u32, bytes: &[u8]) -> u32 {
     crc ^ 0xffff_ffff
 }
 
-impl Image {
-    pub fn into_rgb(self) -> (u32, u32, Vec<u8>) {
-        if self.bpp == 3 {
-            return (self.width, self.height, self.data);
-        }
-        let mut rgb = Vec::with_capacity(self.width as usize * self.height as usize * 3);
-        for pixel in self.data.chunks_exact(self.bpp) {
-            rgb.extend_from_slice(&pixel[..3]);
-        }
-        (self.width, self.height, rgb)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chunk_carries_the_crc_every_png_ends_with() {
+        // IEND has no body, so its CRC is a constant of the format.
+        let mut out = Vec::new();
+        chunk(&mut out, b"IEND", &[]);
+        assert_eq!(out, [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
     }
-}
 
-/// Outline each cell a gate reported, on a copy of the frame.
-///
-/// Outline rather than fill, so the marker never hides the thing it points at,
-/// and in a colour that cannot be in the app: every value in the frame comes
-/// from the design palette, so magenta can only be an annotation. The existing
-/// design-iteration harness paints unset cells magenta for the same reason.
-pub fn annotate(source: &Path, destination: &Path, cells: &[(u16, u16)], cell_w: u32, cell_h: u32) -> Result<()> {
-    const MARK: [u8; 3] = [0xff, 0x00, 0xff];
-
-    let (width, height, mut rgb) = decode(source)?.into_rgb();
-    let mut put = |x: u32, y: u32| {
-        if x < width && y < height {
-            let i = (y as usize * width as usize + x as usize) * 3;
-            rgb[i..i + 3].copy_from_slice(&MARK);
-        }
-    };
-
-    for (row, col) in cells {
-        let (x0, y0) = (*col as u32 * cell_w, *row as u32 * cell_h);
-        for x in x0..(x0 + cell_w).min(width) {
-            put(x, y0);
-            put(x, (y0 + cell_h).saturating_sub(1));
-        }
-        for y in y0..(y0 + cell_h).min(height) {
-            put(x0, y);
-            put((x0 + cell_w).saturating_sub(1), y);
-        }
+    #[test]
+    fn an_encoded_image_decodes_to_the_same_pixels() {
+        let path = std::env::temp_dir().join(format!("aldwin-review-png-{}.png", std::process::id()));
+        let rgb: Vec<u8> = (0..3 * 5 * 3).map(|i| i as u8 * 5).collect();
+        encode(&path, 3, 5, &rgb).expect("encodes");
+        let image = decode(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(image.expect("decodes").into_rgb(), (3, 5, rgb));
     }
-    encode(destination, width, height, &rgb)
+
+    #[test]
+    fn a_truncated_image_is_an_error_rather_than_a_panic() {
+        let path = std::env::temp_dir().join(format!("aldwin-review-short-{}.png", std::process::id()));
+        encode(&path, 3, 5, &[0; 45]).expect("encodes");
+        // Claim one more row than the data holds.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[23] = 6;
+        std::fs::write(&path, bytes).unwrap();
+        let image = decode(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(image.is_err());
+    }
 }

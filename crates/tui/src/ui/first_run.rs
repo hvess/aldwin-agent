@@ -53,13 +53,13 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+use super::TOP_BAR_ROWS;
 use super::grid::{elide, Ctx, GROUP_GAP, MARGIN_X, OPTION_LABEL_COL, STEP_CONTENT_COL, STEP_MARK_COL};
-use super::row::band_row;
 use crate::first_run::{AccessTier, FirstRun, Step};
 use crate::palette::Palette;
 
-/// Rows the top bar and the footer take. The body gets the rest.
-const TOP_BAR_ROWS: u16 = 3;
+/// Rows the footer takes; the top bar takes the session's own
+/// [`TOP_BAR_ROWS`], and the body gets the rest.
 const FOOTER_ROWS: u16 = 5;
 
 /// Where the harness's answers land. Stated plainly rather than implied,
@@ -118,7 +118,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
     let [top, body, footer] =
         Layout::vertical([Constraint::Length(TOP_BAR_ROWS), Constraint::Min(1), Constraint::Length(FOOTER_ROWS)]).areas(area);
 
-    draw_top_bar(frame, top, pal);
+    draw_top_bar(frame, top, &state.cwd, pal);
     let ctx = Ctx::new(pal, body.width);
     frame.render_widget(Paragraph::new(Text::from(body_lines(state, ctx))), body);
     draw_footer(frame, footer, state, ctx);
@@ -137,7 +137,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
 ///
 /// The bar carries no `▌` — "the name is the brand, and a pip there
 /// indicated nothing".
-fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
+fn draw_top_bar(frame: &mut Frame, area: Rect, cwd: &str, pal: &Palette) {
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     let Some(row) = area.height.checked_sub(2).map(|_| Rect { y: area.y + 1, height: 1, ..area }) else { return };
 
@@ -146,12 +146,11 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     // laid their groups out by hand, and they had drifted. The right group
     // is dropped whole on a frame too narrow to hold it beside a readable
     // path, never clipped into half a fact.
-    let cwd = crate::app::current_dir_display().unwrap_or_default();
     let right = vec![vec![Span::styled(NO_MODEL, Style::default().fg(pal.dim).bg(pal.bar))], Vec::new()];
     // `quiet` for the path, the same rung the session bar gives the
     // identical string. `no model` beside it is `dim`: an absence is the
     // quieter fact of the two.
-    let line = super::chrome::identity_bar_row(area.width as usize, &cwd, pal.quiet, right, pal);
+    let line = super::chrome::identity_bar_row(area.width as usize, cwd, pal.quiet, right, pal);
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(pal.bar)), row);
 }
 
@@ -232,7 +231,9 @@ fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
     // One blank row, then the positioning line — the reference's body band
     // is `padding-top: var(--row)` and its first child is the sentence.
     let mut lines = vec![Line::default(), positioning_line(ctx)];
-    lines.extend(section_gap(ctx));
+    // `--section-gap-h`: three blank rows, used once — the steps themselves
+    // are one blank row apart.
+    lines.extend([Line::default(), Line::default(), Line::default()]);
 
     // Every step this run asks is drawn, in order, whatever state it is in
     // — that is the whole point of the spine. `state.steps` is what the
@@ -272,7 +273,7 @@ fn step_rows(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
     // The glyph sits at the margin in a 10-cell field, so the name lands on
     // the body column; the name sits in the shared 16-cell option field, so
     // the content lands on cell 29. Both derived — see `grid`.
-    let name_pad = OPTION_LABEL_COL.saturating_sub(name.chars().count());
+    let name_pad = OPTION_LABEL_COL.saturating_sub(name.width());
     let room = (ctx.width as usize).saturating_sub(STEP_CONTENT_COL).saturating_sub(MARGIN_X);
     let mut rows = vec![Line::from(vec![
         Span::raw(" ".repeat(MARGIN_X)),
@@ -305,12 +306,6 @@ fn positioning_line(ctx: Ctx) -> Line<'static> {
     ])
 }
 
-/// `--section-gap-h`: three blank rows. Used once, between the positioning
-/// line and the first step — the steps themselves are one blank row apart.
-fn section_gap(_ctx: Ctx) -> Vec<Line<'static>> {
-    vec![Line::default(), Line::default(), Line::default()]
-}
-
 /// One option in a step's list, before it is a row: the list has to be
 /// measured as a whole before any row of it can be drawn (see
 /// [`option_rows`]).
@@ -335,7 +330,7 @@ impl<'a> Opt<'a> {
     /// Cells this row would like: the mark, its two spaces, the name field
     /// and the purpose, plus a trailing glyph where there is one.
     fn width(&self) -> usize {
-        3 + OPTION_LABEL_COL.max(self.name.chars().count()) + self.purpose.width()
+        3 + OPTION_LABEL_COL.max(self.name.width()) + self.purpose.width()
     }
 }
 
@@ -407,7 +402,7 @@ fn row(opt: &Opt, width: usize, room: usize, ctx: Ctx) -> Line<'static> {
         Span::styled("▌", Style::default().fg(mark_fg).bg(bg)),
         Span::styled("  ".to_string(), field),
     ];
-    let pad = OPTION_LABEL_COL.saturating_sub(name.chars().count());
+    let pad = OPTION_LABEL_COL.saturating_sub(name.width());
     spans.push(Span::styled(name.to_string(), Style::default().fg(name_fg).bg(bg)));
     spans.push(Span::styled(" ".repeat(pad), field));
 
@@ -416,13 +411,13 @@ fn row(opt: &Opt, width: usize, room: usize, ctx: Ctx) -> Line<'static> {
     // a frame narrower than the design's 120 that can be nothing at all,
     // which is why it is elided rather than allowed to wrap the row.
     let trailing = trailing.unwrap_or("");
-    let fixed = 3 + name.chars().count() + pad;
+    let fixed = 3 + name.width() + pad;
     let purpose = elide(purpose, width.saturating_sub(fixed));
     spans.push(Span::styled(purpose.clone(), Style::default().fg(purpose_fg).bg(bg)));
 
     // Fill to the list's width so the band is a band, not a ragged
     // highlight ending wherever the purpose text happens to stop.
-    let used = fixed + purpose.chars().count();
+    let used = fixed + purpose.width();
     spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), field));
     // The `→` is the one thing on this row the handoff places explicitly —
     // "`more` … with a `→` flush to the 3-cell right margin" — so it sits
@@ -433,7 +428,7 @@ fn row(opt: &Opt, width: usize, room: usize, ctx: Ctx) -> Line<'static> {
     // sentence is the reference. What the design does *not* state is how
     // wide this list is — see the conformance spec's Class B entry.
     if !trailing.is_empty() {
-        let pad = room.saturating_sub(width).saturating_sub(trailing.chars().count());
+        let pad = room.saturating_sub(width).saturating_sub(trailing.width());
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::styled(trailing.to_string(), Style::default().fg(if selected { pal.text } else { pal.label })));
     }
@@ -492,24 +487,17 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &FirstRun, ctx: Ctx) {
     // same rule the identity bar applies to its right group. It used to be
     // pushed on regardless, which at 44 columns ran the text beside it
     // straight into it and then clipped the path itself.
-    let used: usize = status.iter().map(|s| s.content.chars().count()).sum();
-    let config = if width.saturating_sub(used).saturating_sub(MARGIN_X) >= CONFIG_LOCATION.chars().count() + GROUP_GAP {
+    let used: usize = status.iter().map(|s| s.content.width()).sum();
+    let config = if width.saturating_sub(used).saturating_sub(MARGIN_X) >= CONFIG_LOCATION.width() + GROUP_GAP {
         CONFIG_LOCATION
     } else {
         ""
     };
-    let gap = width.saturating_sub(used).saturating_sub(config.chars().count()).saturating_sub(MARGIN_X);
+    let gap = width.saturating_sub(used).saturating_sub(config.width()).saturating_sub(MARGIN_X);
     status.push(Span::styled(" ".repeat(gap), field));
     status.push(Span::styled(config.to_string(), on_band(pal.dim)));
     status.push(Span::styled(" ".repeat(MARGIN_X), field));
     frame.render_widget(Paragraph::new(Line::from(status)).style(field), row);
-}
-
-/// A one-row band of `break_`, used nowhere on this screen yet but kept
-/// importable so a future section separator uses the system's own row.
-#[allow(dead_code)]
-fn separator(ctx: Ctx) -> Line<'static> {
-    band_row(ctx.pal.break_, ctx)
 }
 
 #[cfg(test)]

@@ -21,14 +21,12 @@ pub trait ToolDispatcher: Send + Sync {
 
 /// One outstanding `request_approval`/`request_prompt` call, keyed by
 /// `call_id` in `PendingMap`. The two round trips resolve to different
-/// shapes (a plain `bool` vs. arbitrary JSON), so this carries whichever
-/// one the caller registered rather than forcing both through one type.
-/// A single call is never mid-approval and mid-prompt at once — Edit-class
-/// tools (the only `request_approval` caller) skip the generic permission
-/// check (the only `request_prompt` caller) entirely — so `call_id` alone
-/// is always enough to disambiguate; unifying the two maps this way removed
-/// a real bug (see `Agent::abort_dispatch`'s history) where cleanup knew
-/// how to drain one map by key but not the other.
+/// shapes (a `bool` vs. arbitrary JSON), so this carries whichever one the
+/// caller registered. A single call is never mid-approval and mid-prompt at
+/// once — Edit-class tools (the only `request_approval` caller) skip the
+/// permission check (the only `request_prompt` caller) entirely — so
+/// `call_id` alone disambiguates, and one map means cleanup on abort cannot
+/// drain one kind and forget the other.
 pub enum PendingReply {
     Approval(oneshot::Sender<bool>),
     Prompt(oneshot::Sender<serde_json::Value>),
@@ -54,17 +52,12 @@ impl DispatchContext {
         Self { turn_id, step_id, events, pending }
     }
 
-    /// Only compiled with the `test-util` feature — lets a `ToolDispatcher`
-    /// implementor (aldwin-tools) build a real `DispatchContext` in its
-    /// own test harness, with a held-out clone of `pending` so a test can
-    /// resolve the round trip itself exactly as `Agent`'s command loop does
-    /// in production. Kept as a separate, feature-gated function rather
-    /// than just making `new` `pub`, so ordinary (non-test) builds of
-    /// downstream crates keep the compile-time guarantee that only `Agent`'s
-    /// own run loop can construct a context wired to its live pending map —
-    /// a context built any other way has no `Command` handler draining it,
-    /// so `request_approval`/`request_prompt` would hang forever awaiting a
-    /// decision that can never arrive.
+    /// Lets a `ToolDispatcher` implementor (aldwin-tools) build a real
+    /// context in its own test harness, holding a clone of `pending` to
+    /// resolve the round trip itself as `Agent`'s command loop would.
+    /// Feature-gated rather than making `new` `pub`: a context built outside
+    /// `Agent`'s run loop has no `Command` handler draining it, so
+    /// `request_approval`/`request_prompt` would hang forever.
     #[cfg(any(test, feature = "test-util"))]
     pub fn for_testing(turn_id: TurnId, step_id: StepId, events: mpsc::Sender<Event>, pending: PendingMap) -> Self {
         Self::new(turn_id, step_id, events, pending)

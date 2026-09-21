@@ -151,8 +151,8 @@ pub fn provider_ids() -> Vec<&'static str> {
     PROVIDERS.iter().map(|p| p.id).collect()
 }
 
-/// The catalogue entry whose `kind`, `base_url` and `api_key_env` match a
-/// `provider.yaml` already on disk, or `None` when the developer has
+/// The catalogue entry whose `kind` and `base_url` match a `provider.yaml`
+/// already on disk, or `None` when the developer has
 /// hand-written an endpoint the catalogue has never heard of.
 ///
 /// Matching on the endpoint rather than on a name stored in the file is

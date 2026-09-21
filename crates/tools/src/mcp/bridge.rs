@@ -39,7 +39,10 @@ impl McpBridge {
 
     async fn client_for(&self, server_name: &str) -> Result<Arc<RunningService<RoleClient, ()>>, McpError> {
         let mut running = self.running.lock().await;
-        if let Some(client) = running.get(server_name) {
+        // A server whose transport has closed is spawned afresh rather than
+        // handed out again — cached for good, one crash failed every call to
+        // that server's tools for the rest of the session.
+        if let Some(client) = running.get(server_name).filter(|c| !c.is_transport_closed()) {
             return Ok(client.clone());
         }
 
@@ -142,6 +145,26 @@ mod tests {
         }]);
         let err = bridge.list_tools("web").await.unwrap_err();
         assert!(matches!(err, McpError::UnsupportedTransport { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_server_that_died_is_spawned_again_on_the_next_call() {
+        let bridge = McpBridge::new(vec![fake_server()]);
+        assert!(bridge.call_tool("fake", "die", serde_json::Map::new()).await.is_err(), "it exits without answering");
+
+        let revived = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            // The transport's closure is noticed by rmcp's own task, a beat
+            // after the process goes.
+            loop {
+                if let Ok(tools) = bridge.list_tools("fake").await {
+                    return tools;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("a dead server must not stay cached");
+        assert_eq!(revived[0].name, "echo");
     }
 
     #[tokio::test]

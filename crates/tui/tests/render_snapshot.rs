@@ -3,10 +3,10 @@
 //! project's `CLAUDE.md`.
 //!
 //! Every scene below is drawn against `ratatui::backend::TestBackend` at
-//! four frame sizes in both themes, and the *entire* resulting buffer —
+//! three frame sizes in both themes, and the *entire* resulting buffer —
 //! every cell's symbol, foreground, background and modifiers — is
 //! serialized to `tests/snapshots/render.snap`. The unit tests in
-//! `ui.rs` assert facts about individual rows; this asserts the whole
+//! `ui/tests.rs` assert facts about individual rows; this asserts the whole
 //! frame, colors included, which is what makes a layout refactor
 //! provably output-preserving rather than merely test-passing.
 //!
@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use aldwin_config::Config;
 use aldwin_permissions::{Class, Engine, PromptPayload};
-use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -591,8 +591,8 @@ fn long(app: &mut App) {
         app.log.push(LogEntry::UserMessage { text: format!("message {i}") });
         app.log.push(LogEntry::AssistantText { text: format!("reply {i} with a bit more text to see wrapping behavior across the pane width") });
     }
-    app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::EndTurn });
-    app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::Cancelled });
+    app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::EndTurn });
+    app.log.push(LogEntry::TurnEnded { reason: aldwin_core::TurnEndReason::Cancelled });
     app.log.push(LogEntry::RetryAttempt { info: aldwin_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 } });
     app.log.push(LogEntry::Error { message: "provider returned 529 overloaded".into() });
     app.log.push(LogEntry::ApprovalCard { call_id: "done-1".into(), diff: SMALL_DIFF.into(), resolution: Some(true) });

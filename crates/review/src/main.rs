@@ -121,26 +121,21 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
     for old in existing.iter().take(existing.len().saturating_sub(3)) {
         let _ = std::fs::remove_dir_all(old);
     }
-    let dir = parent.join(format!("run-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other)?;
+    let dir = parent.join(format!("run-{}", now.as_secs()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 /// Builds `target/debug/aldwin` and returns its path.
 ///
-/// **Building it here rather than checking it exists is the whole point.**
-/// This used to be an existence check, and an existence check cannot tell a
-/// current binary from one built an hour and several commits ago. It silently
-/// did exactly that: a rename landed in the library, every hermetic test in
-/// `crates/tui` agreed with it, `cargo build --release` was run — and capture
-/// spawned a stale *debug* binary nothing had rebuilt, so the judge spent its
-/// whole budget on a screen whose pixels predated the change under review and
-/// reported the old copy as a finding.
-///
-/// That is the most expensive way this loop can fail. Stage 5 is the one
-/// stage that is neither cheap nor reproducible, and pointing it at stale
-/// pixels wastes it *and* produces a finding that looks real, cannot be
-/// reproduced from the source, and costs a round trip to disbelieve.
+/// **Building it here rather than checking it exists is the whole point.** An
+/// existence check cannot tell a current binary from one built several
+/// commits ago, and it did not: capture once spawned a stale *debug* binary
+/// after a `--release` build, and the judge spent its whole budget on pixels
+/// that predated the change, reporting the old copy as a finding. Stage 5 is
+/// the one stage that is neither cheap nor reproducible, so that is the most
+/// expensive way this loop can fail.
 ///
 /// `cargo build` is incremental, so on an up-to-date tree this is a few
 /// hundred milliseconds against a capture measured in minutes.
@@ -178,10 +173,10 @@ fn capture_all(root: &Path, base: &Baseline, theme: Option<Theme>, quiet_ms: u64
             cell.w, cell.h, base.cell.w, base.cell.h
         )));
     }
-    let themes: Vec<Theme> = theme.map(|t| vec![t]).unwrap_or_else(|| Theme::ALL.to_vec());
+    let themes = theme.map_or_else(|| Theme::ALL.to_vec(), |t| vec![t]);
     for name in scene::IMPLEMENTED {
         for size in Size::ALL {
-            for theme in themes.iter().copied() {
+            for &theme in &themes {
                 capture(&comp, &binary, base, cell, name, size, theme, Duration::from_millis(quiet_ms), &[], &dir)?;
             }
         }
@@ -274,9 +269,11 @@ fn main() -> std::io::Result<()> {
                 Some(name) => vec![name.as_str()],
                 None => scene::IMPLEMENTED.to_vec(),
             };
+            let sizes = size.map_or_else(|| Size::ALL.to_vec(), |s| vec![s]);
+            let themes = theme.map_or_else(|| Theme::ALL.to_vec(), |t| vec![t]);
             for name in names {
-                for s in size.map(|s| vec![s]).unwrap_or_else(|| Size::ALL.to_vec()) {
-                    for t in theme.map(|t| vec![t]).unwrap_or_else(|| Theme::ALL.to_vec()) {
+                for &s in &sizes {
+                    for &t in &themes {
                         let frame = capture(&comp, &binary, &base, cell, name, s, t, Duration::from_millis(quiet_ms), &[], &dir)?;
                         println!("{name} {s} {t}  {}", frame.path.display());
                     }

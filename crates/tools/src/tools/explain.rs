@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -29,7 +28,7 @@ enum Op {
 pub struct ExplainTool {
     descriptor:   ToolDescriptor,
     workspace:    Workspace,
-    clients:      tokio::sync::Mutex<HashMap<&'static str, Arc<LspClient>>>,
+    clients:      tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
 }
 
 impl ExplainTool {
@@ -70,13 +69,16 @@ impl ExplainTool {
         }
     }
 
-    async fn client_for_language(&self, language_id: &'static str, command: &'static str, args: &'static [&'static str]) -> Result<Arc<LspClient>, ToolError> {
+    /// A server that has died is replaced rather than handed out again —
+    /// cached for good, one crash failed every `explain` for the rest of the
+    /// session.
+    async fn client_for(&self, server: &lsp::LanguageServer) -> Result<LspClient, ToolError> {
         let mut clients = self.clients.lock().await;
-        if let Some(client) = clients.get(language_id) {
+        if let Some(client) = clients.get(server.language_id).filter(|c| !c.is_closed()) {
             return Ok(client.clone());
         }
-        let client = Arc::new(LspClient::spawn(command, args, &self.workspace.project_root()).await?);
-        clients.insert(language_id, client.clone());
+        let client = LspClient::spawn(server.command, server.args, &self.workspace.project_root()).await?;
+        clients.insert(server.language_id, client.clone());
         Ok(client)
     }
 }
@@ -120,7 +122,7 @@ impl Tool for ExplainTool {
         if op == Op::WorkspaceSymbols {
             let query = required_str(&input, "query")?;
             let server = lsp::language_by_id("rust").expect("rust is always configured");
-            let client = self.client_for_language(server.language_id, server.command, server.args).await?;
+            let client = self.client_for(server).await?;
             let result = client.request("workspace/symbol", json!({ "query": query })).await?;
             return Ok(format_symbols(result));
         }
@@ -130,11 +132,11 @@ impl Tool for ExplainTool {
         let character = required_u64(&input, "character")?;
         let path = self.workspace.resolve(path_str)?;
         let server = lsp::language_for_path(&path).ok_or_else(|| invalid(format!("no language server configured for {}", path.display())))?;
-        let client = self.client_for_language(server.language_id, server.command, server.args).await?;
+        let client = self.client_for(server).await?;
 
-        let uri = format!("file://{}", path.display());
+        let uri = lsp::file_uri(&path);
         let text = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
-        client.ensure_open(&uri, server.language_id, &text).await?;
+        client.sync_document(&uri, server.language_id, &text).await?;
 
         let position = json!({ "line": line, "character": character });
         let text_document = json!({ "uri": uri });
@@ -205,7 +207,7 @@ fn location_from_value(item: &Value) -> Option<LocationOut> {
     // developer or model actually wants to read.
     let line = start.get("line")?.as_u64()? + 1;
     let character = start.get("character")?.as_u64()? + 1;
-    Some(LocationOut { path: uri_to_path(uri), line, character })
+    Some(LocationOut { path: lsp::path_from_uri(uri), line, character })
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -251,10 +253,6 @@ fn extract_hover_text(contents: &Value) -> String {
         Value::Array(items) => items.iter().map(extract_hover_text).collect::<Vec<_>>().join("\n---\n"),
         _ => String::new(),
     }
-}
-
-fn uri_to_path(uri: &str) -> String {
-    uri.strip_prefix("file://").unwrap_or(uri).to_string()
 }
 
 #[cfg(test)]

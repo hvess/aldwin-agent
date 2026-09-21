@@ -160,7 +160,6 @@ mod tests {
             match choice {
                 Choice::AllowOnce | Choice::DenyOnce => assert!(!sentence.contains("git")),
                 Choice::NeverAllow => assert!(sentence.contains("git") && !sentence.contains("write")),
-                _ if false => unreachable!(),
                 _ => assert!(sentence.contains("git") && sentence.contains("write"), "{sentence}"),
             }
         }

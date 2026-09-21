@@ -20,13 +20,8 @@
 //! nothing. Keeping the model honest about this is why ADR 0004 §5 states the
 //! claim as *no tool is pointed outside your workspace by us* — argument
 //! containment is a separate check in `paths.rs`, and it is what bounds
-//! reach.
-//!
-//! That sentence was false when it was written, and is worth recording as
-//! such: `run` did not call `paths.rs` at all, so the containment this module
-//! deferred to did not exist for the one tool that executes programs. ADR
-//! 0007 made every tool go through `Workspace`, which is what makes the
-//! deferral honest.
+//! reach. That deferral is only honest because every tool, `run` included,
+//! goes through `Workspace` (ADR 0007).
 //!
 //! On macOS the primitive is Seatbelt, reached through `sandbox-exec` — see
 //! `macos.rs` for why that backend confines by rewriting the command rather
@@ -61,16 +56,6 @@ impl Availability {
     }
 }
 
-/// Paths a read-declared call may still write to, because a genuine read
-/// cannot run without them.
-///
-/// This list is the one place our judgement re-enters a model built to avoid
-/// it, so it is kept short, readable, and deliberately excludes the tempting
-/// entry: **`.git/` is not here.** Letting a "read" write anywhere under
-/// `.git/` would let `git commit` — which touches nothing else — succeed as a
-/// read. Git's own `GIT_OPTIONAL_LOCKS=0` (set in [`read_only_env`]) is what
-/// makes `git status` work instead, which is the case the exemption would
-/// have been for.
 /// Whether `resolved` — an already symlink-resolved path — is one of the
 /// incidental paths, or under one.
 ///
@@ -86,6 +71,16 @@ pub fn is_incidental(resolved: &std::path::Path, roots: &[PathBuf]) -> bool {
     })
 }
 
+/// Paths a read-declared call may still write to, because a genuine read
+/// cannot run without them.
+///
+/// This list is the one place our judgement re-enters a model built to avoid
+/// it, so it is kept short, readable, and deliberately excludes the tempting
+/// entry: **`.git/` is not here.** Letting a "read" write anywhere under
+/// `.git/` would let `git commit` — which touches nothing else — succeed as a
+/// read. Git's own `GIT_OPTIONAL_LOCKS=0` (set in [`read_only_env`]) is what
+/// makes `git status` work instead, which is the case the exemption would
+/// have been for.
 fn incidental_writes(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = vec![
         PathBuf::from("/dev/null"),
@@ -101,9 +96,26 @@ fn incidental_writes(roots: &[PathBuf]) -> Vec<PathBuf> {
     // changed nothing a developer wrote. Every root gets the same exemption:
     // a workspace whose second root had to be treated more strictly than its
     // first would just be a read that mysteriously fails over there.
+    //
+    // Only while the cache really is inside its root. These names come from
+    // the repository, and a symlink is an ordinary git blob: a checkout that
+    // ships `target -> ~` would otherwise make the home directory writable
+    // under a read, and a legitimate `run` argument with it. A cache that
+    // does not exist yet is judged by its nearest existing ancestor, so a
+    // dangling `target` or a symlinked `node_modules` is not kept either.
     for root in roots {
-        paths.push(root.join("target"));
-        paths.push(root.join("node_modules/.cache"));
+        let real_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+        for cache in ["target", "node_modules/.cache"] {
+            let path = root.join(cache);
+            let inside = path
+                .ancestors()
+                .find(|p| p.symlink_metadata().is_ok())
+                .and_then(|p| p.canonicalize().ok())
+                .is_some_and(|real| real.starts_with(&real_root));
+            if inside {
+                paths.push(path);
+            }
+        }
     }
     if let Some(tmp) = std::env::var_os("TMPDIR") {
         paths.push(PathBuf::from(tmp));
@@ -187,3 +199,43 @@ mod elsewhere {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub use elsewhere::{availability, ReadOnly};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository can ship `target` as a symlink, and the exemption used to
+    /// follow it: the sandbox made wherever it pointed writable under a read,
+    /// and `run`'s containment accepted paths there as incidental.
+    #[test]
+    #[cfg(unix)]
+    fn a_build_cache_that_is_a_symlink_out_of_its_root_is_not_exempt() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::Builder::new().tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("target")).unwrap();
+        let roots = [root.path().canonicalize().unwrap()];
+
+        assert!(!incidental_writes(&roots).contains(&roots[0].join("target")));
+        let reached = outside.path().canonicalize().unwrap().join("victim");
+        assert!(!is_incidental(&reached, &roots), "a path outside the root must not read as incidental");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_build_cache_that_dangles_out_of_its_root_is_not_exempt() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/nonexistent-aldwin-target", root.path().join("target")).unwrap();
+        let roots = [root.path().canonicalize().unwrap()];
+        assert!(!incidental_writes(&roots).contains(&roots[0].join("target")));
+    }
+
+    #[test]
+    fn a_build_cache_inside_its_root_is_exempt_whether_or_not_it_exists_yet() {
+        let root = tempfile::tempdir().unwrap();
+        let roots = [root.path().canonicalize().unwrap()];
+        assert!(incidental_writes(&roots).contains(&roots[0].join("target")), "absent: kept");
+
+        std::fs::create_dir(roots[0].join("target")).unwrap();
+        assert!(incidental_writes(&roots).contains(&roots[0].join("target")), "present and real: kept");
+    }
+}

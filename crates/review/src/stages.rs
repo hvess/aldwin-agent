@@ -144,7 +144,7 @@ pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
             stage:  "0 toolchain",
             passed: false,
             detail: format!(
-                "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it:\n    cargo run -p aldwin-review -- measure --record-toolchain"
+                "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it in the `toolchain` field of crates/review/baseline.json."
             ),
         }
     }])

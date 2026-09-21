@@ -21,6 +21,10 @@ use super::row::Row;
 use crate::app::{App, PendingFront};
 use crate::palette::Palette;
 
+/// The rows [`panel_lines`] adds outside whatever budget bounds the body:
+/// the title band, the blank above the footer, and the footer itself.
+const PANEL_CHROME_ROWS: usize = 1 /* band */ + 2 /* footer padding + hint */;
+
 /// Maximum rows the panel is allowed to claim, derived from the frame's
 /// total height rather than fixed — so an unusually large diff can never
 /// push the rest of the UI off-frame the way an unbounded
@@ -40,34 +44,17 @@ use crate::palette::Palette;
 /// what it was asked *about* was not.
 ///
 /// A quarter rather than the design's own half (`--panel-permission-h` is
-/// 18 rows of 36) because Aldwin's panel was not `5a`'s: ADR 0001 puts five
-/// options on it where the reference has four, and it carried the
-/// grant-summary and `Tab` scope rows besides, so its full content needed
-/// around 20 rows where the reference needs 18.
-///
-/// **ADR 0003 removed those two rows and their padding blank**, which spends
-/// most of that argument: the panel now needs about 18, and the design's own
-/// half is back within reach. Deliberately left at a quarter in the same
-/// pass that removed them — two geometry changes at once make the next
-/// screenshot delta unreadable about which caused what. See ADR 0003's
-/// consequences. Capping at half the frame is the number the design
-/// states, and it elides the *command block* — the one row that says what
-/// is being approved — while keeping the options list, which is the wrong
-/// trade in both directions. The floor of 5 rows is what the log needs to
-/// carry a turn and the break above it on a frame too short for a quarter
-/// to reach that.
-/// The rows [`panel_lines`] adds outside whatever budget bounds the body:
-/// the title band, the blank above the footer, and the footer itself.
-const PANEL_CHROME_ROWS: usize = 1 /* band */ + 2 /* footer padding + hint */;
-
-pub(super) fn max_height(frame_height: u16) -> usize {
+/// 18 rows of 36): capping at half the frame elides the *command block* —
+/// the one row that says what is being approved — while keeping the options
+/// list, which is the wrong trade in both directions. ADR 0003's
+/// consequences record why the quarter outlived the rows that first argued
+/// for it. The floor of 5 rows is what the log needs to carry a turn and the
+/// break above it on a frame too short for a quarter to reach that.
+fn max_height(frame_height: u16) -> usize {
     // While a decision is pending the panel *is* the bottom bar — it takes
     // the composer's and status line's rows rather than stacking above
     // them (see `super::draw`), so those aren't reserved here.
-    // The top bar's rule row and the panel's own edge row are both gone —
-    // neither the bar nor the panel is stroked any more, so neither spends
-    // a row on an edge.
-    const TOP_BAR: u16 = 3;
+    const TOP_BAR: u16 = super::TOP_BAR_ROWS;
     /// Rows of conversation the panel may never take: enough for a turn and
     /// the break band above it, so the frame still says what the decision
     /// is about.
@@ -86,9 +73,8 @@ pub(super) fn max_height(frame_height: u16) -> usize {
 /// the height `super::draw` reserves and what actually renders can never
 /// disagree.
 ///
-/// The transcript used to be counted this way too and no longer is — it
-/// pre-wraps instead, so its rows *are* screen rows (see
-/// `super::transcript::rows`). The panel keeps the two-pass shape on purpose:
+/// The transcript pre-wraps instead, so its rows *are* screen rows (see
+/// `super::transcript::Transcript`). The panel keeps the two-pass shape on purpose:
 /// it is a bounded band rebuilt only while a decision is open, so the second
 /// wrap costs nothing measurable, and `clamp_panel`'s budget arithmetic is
 /// written against a wrapping `Paragraph`.
@@ -428,7 +414,7 @@ pub(super) fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
 /// column the panel used to need, per the design system's revision log on
 /// the permission screen: "the keys that were on the rows moved into the
 /// footer."
-pub(super) fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
+fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
     key_hints(&[("↑↓", "move"), (&format!("1-{option_count}"), "pick"), ("⏎", "confirm")], ctx)
 }
 
@@ -455,10 +441,8 @@ pub(super) fn key_hints(pairs: &[(&str, &str)], ctx: Ctx) -> Vec<Span<'static>> 
 }
 
 /// Where an option's text starts: `5a` puts `▌` in cell 0, the number in
-/// cell 3 and the label in cell 6. Public to the module so a test can
-/// derive how much room a sentence has for its quoted pattern instead of
-/// restating the arithmetic.
-pub(super) const LABEL_COL: usize = 6;
+/// cell 3 and the label in cell 6.
+const LABEL_COL: usize = 6;
 
 /// One row of a numbered list, reduced to what the row draws.
 ///
@@ -612,19 +596,8 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     let rows: Vec<OptionRow> =
         options.iter().map(|o| OptionRow { label: o.label.clone(), detail: o.detail.clone(), pattern: o.pattern.clone() }).collect();
     let card = Row::card(pal.bar);
-    // The separator above the options list. The design system's permission
-    // screen replaced the old accent rule here with "one row of the
-    // recessed tone" — a band that sinks below the panel rather than a line
-    // drawn across it. Shared by both arms below, since every payload
-    // kind's options list gets the same separator ahead of it.
-    // Under pressure it gives up its two blank rows and keeps the band: the
-    // blanks are the separator's breathing room, the band *is* the
-    // separator, and a panel whose facts run straight into its option list
-    // has lost a boundary the design draws. Same degradation as the
-    // transcript's turn break (`transcript::Transcript::viewport`), for the
-    // same reason — a frame shorter than the design's 36 rows has to give
-    // something up, and spacing is cheaper than structure.
-    // One blank row, and no band. `HANDOFF.md:277` says "One row of the
+    // The separator above the options list, shared by both arms below: one
+    // blank row, and no band. `HANDOFF.md:277` says "One row of the
     // recessed tone, blank row" here and the frame's own markup does not:
     // between the last fact row and the first option it has a single
     // `<div style="height:var(--row)"></div>` and nothing else. There is no
@@ -736,48 +709,29 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     let mut lines = vec![band("permission", &badge_text, ctx)];
     lines.extend(clamped);
     lines.push(card.blank(ctx));
-    // No rule above the footer. It used to carry the reference's
-    // `border-top: 1px solid var(--tui-line)`, but Turn 13 removed that
-    // stroke along with every other one: the footer sits on the bottom-bar
-    // tone and the step down from the panel's own `bar` is the boundary.
-    // The blank row above is `card`'s, so it is still on `bar` — which is
-    // what makes the step land exactly where the rule used to.
-    // No right-hand provenance note. It used to read "saved to
-    // .aldwin/permissions.yaml" under every prompt, which was true of
-    // exactly one of the tiers on offer — "allow once" and "allow for this
-    // session" save nothing at all, and "always allow" writes to the global
-    // file instead. Where each answer lands is now stated per option, on
-    // the option's own row (`DecisionOption::detail`).
     // `5a` is a band of a stated height, not a box that shrinks to its
-    // contents: `cells.css`'s `--panel-permission-h` is 18 rows and
-    // `HANDOFF.md:271` says so again in prose. Aldwin's panel came to 17,
-    // because it draws one fact row where the reference draws three and one
-    // separator row where the reference draws two — arithmetic that lands
-    // near the number without being it. Two independent stage 5 judges
-    // measured the gap on the same run.
+    // contents: `--panel-permission-h` is 18 rows and `HANDOFF.md:271` says
+    // so again in prose. The slack goes directly above the footer, which is
+    // the one thing the reference fixes about this band's vertical
+    // arrangement: the footer "sits where the composer's status line would
+    // be", i.e. at the bottom. Everything else fills from the top.
     //
-    // The slack goes directly above the footer, which is the one thing the
-    // reference fixes about this band's vertical arrangement: the footer
-    // "sits where the composer's status line would be", i.e. at the bottom.
-    // Everything else fills from the top.
-    //
-    // **Every payload, not only a tool prompt.** This was scoped to
-    // `PendingFront::Prompt` for one iteration, on the reasoning that ADR
-    // 0003 §1 leaves the edit-approval screen outside the design system, so
-    // 18 was a number the reference never stated for it. A stage 5 judge
-    // showed that was too clever: the app draws *one* panel and titles both
-    // `permission`, and the scoping left `approval` at 12 rows while
-    // `approval_large` reached 18 by accident of having a longer diff. The
+    // **Every payload, not only a tool prompt.** The app draws *one* panel
+    // and titles both kinds `permission`; scoping this to prompts left a
+    // short edit approval at 12 rows while a long one reached 18, and the
     // same component at two heights depending on its payload is the defect
-    // the token exists to prevent, whatever the reference says about the
-    // rows inside it.
-    // `+ 1` for the footer, which is pushed below. `target` already has the
-    // conversation's rows subtracted out of it, so there is nothing further
-    // to guard against here.
+    // the token exists to prevent.
+    //
+    // `+ 1` for the footer, which is pushed below.
     for _ in 0..target.saturating_sub(lines.len() + 1) {
         lines.push(card.blank(ctx));
     }
 
+    // No rule above the footer: it sits on the bottom-bar tone and the step
+    // down from the panel's own `bar` is the boundary. And no right-hand
+    // provenance note — "saved to .aldwin/permissions.yaml" was true of
+    // exactly one of the tiers on offer, so where each answer lands is
+    // stated per option, on the option's own row.
     lines.push(Row::card(pal.bar_bottom).split(footer_hint(options.len(), ctx), Vec::new(), ctx));
     lines
 }
@@ -788,9 +742,7 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
 /// the two things that must survive, since one says content was hidden and
 /// the other is what the developer is choosing between.
 fn clamp_tail(mut lines: Vec<Line<'static>>, max: usize) -> Vec<Line<'static>> {
-    while lines.len() > max && !lines.is_empty() {
-        lines.remove(0);
-    }
+    lines.drain(..lines.len().saturating_sub(max));
     lines
 }
 

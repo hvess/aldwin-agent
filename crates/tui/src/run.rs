@@ -107,23 +107,13 @@ pub struct SessionProvider {
 ///   it the two are the same bytes, and `App::handle_key`'s Alt+Enter and
 ///   Ctrl+J fallbacks are the way in.
 ///
-///   It used to be sent *only* when `supports_keyboard_enhancement()`
-///   answered yes, and that gate was the bug behind "Shift+Enter works on
-///   my Linux machine but not on macOS" — reported against a terminal
-///   (Ghostty/Kitty/WezTerm) that implements the protocol on both. The query
-///   is a write-then-wait round trip with a 2s timeout whose reply is read
-///   off the same input this process is taking over, so anything that eats
-///   or delays the reply — a multiplexer that doesn't forward it, a slow
-///   answer, a race with another reader — makes it answer "no" for a
-///   terminal that would have honoured the push. Failing that way is silent
-///   and leaves Shift+Enter submitting.
-///
-///   Asking is the fragile part, so it is no longer asked. `CSI > 1 u` is a
-///   private sequence that a terminal not implementing it ignores, exactly
-///   like the alternate-scroll and synchronized-output modes either side of
-///   it — and the pop on the way out is now unconditional too, which keeps
-///   the push and pop symmetric on every terminal instead of depending on a
-///   detection result to pair them.
+///   Not gated on `supports_keyboard_enhancement()`: that query is a
+///   write-then-wait round trip whose reply is read off the same input this
+///   process is taking over, so a multiplexer that eats it or a slow answer
+///   made it say "no" for a terminal that would have honoured the push —
+///   the reported "Shift+Enter works on Linux but not on macOS". `CSI > 1 u`
+///   is a private sequence a terminal without the protocol ignores, and the
+///   pop on the way out is unconditional too, so the pair stays symmetric.
 /// * **Synchronized output** around each frame (see [`present`]).
 ///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
@@ -140,6 +130,12 @@ pub async fn run(
     session: SessionProvider,
 ) -> io::Result<()> {
     enable_raw_mode()?;
+    // Armed before anything else can fail, and declared before `terminal`
+    // so that on an unwind it drops *after* it: an `Err` from the two `?`s
+    // below used to return with raw mode still on, and a panic restored the
+    // screen first and then let the `Terminal`'s drop flush its buffered
+    // frame over the developer's shell.
+    let guard = TerminalGuard::new();
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     let _ = execute!(stdout, EnableBracketedPaste);
@@ -154,7 +150,6 @@ pub async fn run(
     let _ = stdout.write_all(ALTERNATE_SCROLL_ON).and_then(|()| stdout.flush());
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
-    let guard = TerminalGuard::new();
 
     let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme, session).await;
     // Before the guard, not after: the frame the loop last painted is still
@@ -169,13 +164,10 @@ pub async fn run(
 }
 
 /// Restores raw mode, the alternate screen, and the cursor exactly once.
-/// `restore()` is the normal-return path — it surfaces any restore error to
-/// the caller, same as the sequential `?`-chain this replaces, but (unlike
-/// that chain) still attempts every step even if an earlier one fails, so a
-/// `disable_raw_mode` error can't also skip leaving the alternate screen or
-/// showing the cursor. `Drop` is the fallback for a panic unwinding through
-/// `run_loop` — the one path that never reaches `restore()` — and is
-/// necessarily best-effort (errors can't propagate out of `Drop`).
+/// `restore()` is the normal-return path and surfaces any restore error,
+/// still attempting every step when an earlier one fails. `Drop` covers an
+/// early `Err` out of `run`'s setup and a panic unwinding through
+/// `run_loop`, and is necessarily best-effort.
 struct TerminalGuard {
     armed: bool,
 }
@@ -407,7 +399,11 @@ async fn run_loop(
                 }
             }
 
-            _ = ticker.tick() => { app.tick(); dirty = true; }
+            // The counter always advances (the double-Ctrl+C window is
+            // measured in it), but a tick is only worth a frame while the
+            // spinner is on screen — an idle session used to repaint an
+            // unchanged frame eight times a second.
+            _ = ticker.tick() => { app.tick(); dirty |= app.is_animating(); }
 
             _ = tokio::time::sleep_until(flush_at.into()), if dirty => {}
         }
@@ -484,15 +480,15 @@ async fn run_loop(
     Ok(())
 }
 
-/// How often the spinner advances a frame. Also the longest the loop will
-/// sit on an unpainted change, since a tick both animates and redraws.
+/// How often the spinner advances a frame.
 const SPINNER_TICK: Duration = Duration::from_millis(120);
 
 /// The floor on the gap between two redraws — 60fps. Not a target: the loop
 /// draws as soon as something changes and it has been this long, so an idle
-/// session draws 8 times a second (the spinner) and a keystroke paints
-/// immediately. It is only a ceiling on how fast a *burst* can drive the
-/// renderer, and a terminal cannot show more than this anyway.
+/// session does not draw at all, a working one draws 8 times a second (the
+/// spinner) and a keystroke paints immediately. It is only a ceiling on how
+/// fast a *burst* can drive the renderer, and a terminal cannot show more
+/// than this anyway.
 const MIN_FRAME: Duration = Duration::from_millis(16);
 
 /// How many core events one frame will absorb before painting what it has.

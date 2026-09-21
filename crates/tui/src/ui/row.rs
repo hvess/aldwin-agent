@@ -9,18 +9,10 @@
 //!  surround      bg                     surround
 //! ```
 //!
-//! Three numbers (margin, pad, bg) describe every one of them.
-//! Before this they were eight separate functions — `filled_line`,
-//! `flush_line`, `boxed_line`, `card_line`, `card_padding_line`,
-//! `card_rule`, `card_footer_line`, `diff_box_border` — each re-deriving
-//! the same wrap → measure → pad-to-width loop and each computing its own
-//! available content width from the same formula. `diff_box_border` and
-//! `boxed_line` in particular had to agree on `width - 2*inset - 2` in two
-//! places for a box's top edge to line up with its own sides; here that
-//! number is `Row::avail`, computed once.
-//!
-//! Adding a surface is therefore a new constructor, not a ninth copy of the
-//! loop.
+//! Three numbers (margin, pad, bg) describe every one of them, and the
+//! content width they leave is `Row::avail`, computed once. Adding a surface
+//! is a new constructor, not another copy of the wrap → measure →
+//! pad-to-width loop.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -63,13 +55,6 @@ impl Row {
     /// diff's `border: 1px solid var(--tui-line)` with "a recessed field,
     /// no outline", so the only thing marking the field's extent is the
     /// step between its own ground and the surface it is quoted on.
-    ///
-    /// That also removes the whole class of bug the drawn box had. The
-    /// sides used to need a `field` colour held separate from `bg`, so a
-    /// tinted diff row would not tint the border it sat inside — reported
-    /// as "the borders are not aligned with the background at all" — and a
-    /// clamped panel had to be checked for a box left unclosed. Neither
-    /// exists when there is nothing to close.
     pub fn field(bg: Color) -> Self {
         Self { margin: 0, surround: Color::Reset, pad: 0, bg }
     }
@@ -112,13 +97,9 @@ impl Row {
     ///
     /// Spans that *do* carry one (a diff row's `add_row` fill) are left
     /// exactly as they are, which is what lets a caller mix a semantic tint
-    /// into an otherwise-plain row. Before this, carrying the fill was the
-    /// caller's job on every span — an obligation three separate call sites
-    /// (the panel's title, its footer key hints, the command block's `$`)
-    /// had quietly failed, so those spans rendered on whatever the frame's
-    /// canvas happened to hold underneath: `ground`. In the dark theme that
-    /// is a near-black hole punched through a panel; in the light theme it
-    /// is a white box around the word `permission`. Reported as "the title
+    /// into an otherwise-plain row. Done here because as the caller's job
+    /// it was quietly missed at three sites, and a span with no `bg` shows
+    /// the frame's `ground` through the panel — reported as "the title
     /// 'permission' has a dark background."
     fn on_field(self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         spans

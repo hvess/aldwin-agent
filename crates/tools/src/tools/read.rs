@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -46,10 +45,6 @@ impl Tool for ReadTool {
         &self.descriptor
     }
 
-    /// Matched against `read:`-kind grant patterns (e.g. `read:./**`) using
-    /// the raw path as given by the model, not the resolved absolute path —
-    /// that's what the pattern grammar examples in aldwin-permissions.md
-    /// assume.
     /// `read` is a read whatever it is pointed at — the class is a property
     /// of the tool here, not something a caller declares.
     fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {

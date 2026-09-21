@@ -33,39 +33,29 @@ pub struct History {
     current: Mutex<SessionId>,
     store:  Mutex<Option<HistoryStore>>,
     events: mpsc::Sender<Event>,
-    /// A write failure is reported once. A disk that is full at record 200
-    /// is still full at record 201, and the developer does not need to be
-    /// told four hundred times that history is not being kept.
+    /// Whether this transcript's failure has been said — see `report`.
     reported: AtomicBool,
+    /// A turn is being written — see `turn_in_flight`.
+    in_turn: AtomicBool,
 }
 
 impl History {
-    /// Open this session's transcript. `None` when the history directory
-    /// cannot be written: the session runs exactly as it did before history
-    /// existed, having said so once. History must never be able to stop a
-    /// session starting, let alone fail a turn.
-    pub fn open(dir: PathBuf, model: String, events: mpsc::Sender<Event>) -> (Option<Arc<Self>>, Option<String>) {
+    /// Open this session's transcript. `Err` — a line for the developer —
+    /// when the history directory cannot be written: the session then runs
+    /// without one, having said so once. History must never be able to stop
+    /// a session starting, let alone fail a turn.
+    pub fn open(dir: PathBuf, model: String, events: mpsc::Sender<Event>) -> Result<Arc<Self>, String> {
         let id = SessionId::mint();
-        let header = SessionHeader {
-            version:    HISTORY_VERSION,
-            started_at: now(),
-            cwd:        std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned(),
-            model:      model.clone(),
-        };
-        match HistoryStore::create(&dir, &id, &header) {
-            Ok(store) => (
-                Some(Arc::new(Self {
-                    dir,
-                    model,
-                    current: Mutex::new(id),
-                    store: Mutex::new(Some(store)),
-                    events,
-                    reported: AtomicBool::new(false),
-                })),
-                None,
-            ),
-            Err(e) => (None, Some(format!("history is off for this session: {e}"))),
-        }
+        let store = HistoryStore::create(&dir, &id, &header(&model)).map_err(|e| format!("history is off for this session: {e}"))?;
+        Ok(Arc::new(Self {
+            dir,
+            model,
+            current: Mutex::new(id),
+            store: Mutex::new(Some(store)),
+            events,
+            reported: AtomicBool::new(false),
+            in_turn: AtomicBool::new(false),
+        }))
     }
 
     /// `/clear` — seal this transcript and begin a new one.
@@ -76,15 +66,35 @@ impl History {
     /// resumable.
     pub fn seal_and_open_new(&self) {
         let id = SessionId::mint();
-        let header = SessionHeader {
-            version:    HISTORY_VERSION,
-            started_at: now(),
-            cwd:        std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned(),
-            model:      self.model.clone(),
+        let opened = match HistoryStore::create(&self.dir, &id, &header(&self.model)) {
+            Ok(store) => {
+                // A new file is a new chance to fail, and to be told about it.
+                self.reported.store(false, Ordering::Relaxed);
+                Some(store)
+            }
+            // The old transcript is sealed either way; what is lost is the
+            // recording from here on, and the developer is owed that once.
+            Err(e) => {
+                self.report(format!("history is off from here; the cleared conversation is kept, but no new transcript could be opened: {e}"));
+                None
+            }
         };
-        let opened = HistoryStore::create(&self.dir, &id, &header).ok();
         *self.store.lock().expect("history lock poisoned") = opened;
         *self.current.lock().expect("history lock poisoned") = id;
+    }
+
+    /// Says `message` once per transcript. A disk that is full at record 200
+    /// is still full at record 201, and the developer does not need to be
+    /// told four hundred times that history is not being kept.
+    ///
+    /// `try_send` rather than an await: this runs on whichever task committed
+    /// the record, and a full event channel must not become back-pressure on
+    /// the conversation. A dropped notice is the right trade — the
+    /// alternative is a turn that stalls on reporting that history is broken.
+    fn report(&self, message: String) {
+        if !self.reported.swap(true, Ordering::Relaxed) {
+            let _ = self.events.try_send(Event::Notice { message });
+        }
     }
 
     /// `/resume` — continue writing into the transcript that was just
@@ -93,6 +103,7 @@ impl History {
         let store = HistoryStore::reopen(&self.dir, id).map_err(|e| e.to_string())?;
         *self.store.lock().expect("history lock poisoned") = Some(store);
         *self.current.lock().expect("history lock poisoned") = id.clone();
+        self.reported.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -115,23 +126,34 @@ impl History {
     }
 
     pub fn dir(&self) -> &Path { &self.dir }
+
+    /// A submission is on its way to core. Set here as well as by the
+    /// `TurnStarted` record, because `/clear` typed straight after a message
+    /// is intercepted before core has logged anything.
+    pub fn turn_submitted(&self) {
+        self.in_turn.store(true, Ordering::Relaxed);
+    }
+
+    /// Is a turn still being written? The writer must not move while one is:
+    /// core discards a mid-turn `/clear` or `/resume`, so a swap made on the
+    /// way past would send the rest of the running conversation into another
+    /// session's file.
+    pub fn turn_in_flight(&self) -> bool {
+        self.in_turn.load(Ordering::Relaxed)
+    }
 }
 
 impl RecordSink for History {
     fn append(&self, record: &LogRecord) {
+        match record {
+            LogRecord::TurnStarted { .. } => self.in_turn.store(true, Ordering::Relaxed),
+            LogRecord::TurnEnded { .. } => self.in_turn.store(false, Ordering::Relaxed),
+            _ => {}
+        }
         let guard = self.store.lock().expect("history lock poisoned");
         let Some(store) = guard.as_ref() else { return };
         if let Err(e) = store.append(record) {
-            // `try_send` rather than an await: this runs on whichever task
-            // committed the record, and a full event channel must not become
-            // back-pressure on the conversation. A dropped notice is the
-            // right trade — the alternative is a turn that stalls on
-            // reporting that history is broken.
-            if !self.reported.swap(true, Ordering::Relaxed) {
-                let _ = self.events.try_send(Event::Notice {
-                    message: format!("history write failed; this session is no longer being recorded: {e}"),
-                });
-            }
+            self.report(format!("history write failed; this session is no longer being recorded: {e}"));
         }
     }
 }
@@ -161,11 +183,22 @@ fn choice(summary: SessionSummary) -> SessionChoice {
 /// back their own afternoon, not a log shipped from elsewhere.
 fn format_when(epoch_secs: u64) -> String {
     use chrono::{Local, TimeZone};
-    match Local.timestamp_opt(epoch_secs as i64, 0).single() {
+    // `try_from`, not `as`: a damaged header past `i64::MAX` would wrap to a
+    // plausible-looking date before 1970 rather than to "unknown".
+    match i64::try_from(epoch_secs).ok().and_then(|secs| Local.timestamp_opt(secs, 0).single()) {
         Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
         // Unrepresentable, which means the header was damaged. The row is
         // still worth showing: its title is what the developer picks by.
         None => "unknown".to_string(),
+    }
+}
+
+fn header(model: &str) -> SessionHeader {
+    SessionHeader {
+        version:    HISTORY_VERSION,
+        started_at: now(),
+        cwd:        std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned(),
+        model:      model.to_string(),
     }
 }
 
@@ -184,9 +217,7 @@ mod tests {
 
     fn history(dir: &Path) -> (Arc<History>, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel(8);
-        let (history, failure) = History::open(dir.to_path_buf(), "m".into(), tx);
-        assert!(failure.is_none());
-        (history.expect("a store"), rx)
+        (History::open(dir.to_path_buf(), "m".into(), tx).expect("a store"), rx)
     }
 
     fn turn(n: u64, text: &str) -> Vec<LogRecord> {
@@ -263,9 +294,8 @@ mod tests {
         std::fs::write(&blocked, "not a directory").unwrap();
 
         let (tx, _rx) = mpsc::channel(8);
-        let (history, failure) = History::open(blocked.join("history"), "m".into(), tx);
-        assert!(history.is_none());
-        assert!(failure.expect("a reason").contains("history is off"));
+        let failure = History::open(blocked.join("history"), "m".into(), tx).expect_err("a reason");
+        assert!(failure.contains("history is off"));
     }
 
     /// A sink whose file has gone away keeps accepting records — silently,
@@ -287,6 +317,26 @@ mod tests {
             history.append(&record);
         }
         assert!(rx.try_recv().is_err(), "a store that could not even be reopened is simply off");
+    }
+
+    /// `/clear` with nowhere to open the next transcript used to switch
+    /// history off without a word.
+    #[test]
+    fn a_clear_that_cannot_open_a_new_transcript_says_so_once() {
+        let dir = tempdir().unwrap();
+        let store = dir.path().join("history");
+        let (history, mut rx) = history(&store);
+
+        std::fs::remove_dir_all(&store).unwrap();
+        std::fs::write(&store, "not a directory").unwrap();
+        history.seal_and_open_new();
+        history.seal_and_open_new();
+
+        assert!(matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("history is off from here")));
+        assert!(rx.try_recv().is_err(), "said once, not per clear");
+        for record in turn(1, "unrecorded") {
+            history.append(&record); // must not panic
+        }
     }
 
     #[test]

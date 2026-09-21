@@ -4,21 +4,15 @@ use std::sync::{Arc, RwLock};
 use crate::error::ToolError;
 
 /// The set of directories tools may be pointed at (ADR 0004 §5, widened by
-/// ADR 0007).
+/// ADR 0007): one boundary honoured by every tool, `run` included.
 ///
-/// ADR 0004 §5 bounded reach at "the directory Aldwin was launched in", and
-/// three of the four built-in tools enforced it. `run` did not — it never
-/// called this module at all — so the boundary held for `read`, `edit` and
-/// `explain` and was absent from the one tool that can execute a program.
-/// The observed shape of that: `edit` refused to write a file in a sibling
-/// checkout while `run` deleted two repositories there without a prompt.
-///
-/// The fix is one boundary honoured by every tool, and a root list rather
-/// than a single root — because the single root is what made `run`'s
-/// omission load-bearing. A developer working across sibling checkouts had
-/// no sanctioned way to say so, so the unsanctioned way carried the work.
 /// Roots are stated, never inferred: the first is the project root and the
-/// rest come from `roots:` in the project's `.aldwin/permissions.yaml`.
+/// rest come from `roots:` in the project's `.aldwin/permissions.yaml`. A
+/// *list* rather than a single root because the single root is what made
+/// `run`'s omission load-bearing — a developer working across sibling
+/// checkouts had no sanctioned way to say so, so the unsanctioned way
+/// carried the work, and `edit` refused a file in a sibling checkout while
+/// `run` deleted two repositories there without a prompt.
 ///
 /// **What this claims, exactly.** No tool is *pointed* outside these roots by
 /// us. It does not claim a program cannot write outside them once running —
@@ -76,11 +70,15 @@ impl Workspace {
     }
 
     pub fn project_root(&self) -> PathBuf {
-        self.roots()[0].clone()
+        self.read_roots()[0].clone()
     }
 
     pub fn roots(&self) -> Vec<PathBuf> {
-        self.roots.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.read_roots().clone()
+    }
+
+    fn read_roots(&self) -> std::sync::RwLockReadGuard<'_, Vec<PathBuf>> {
+        self.roots.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Resolves a tool's path argument, refusing to leave the workspace.
@@ -118,7 +116,7 @@ impl Workspace {
     ///
     /// The **normalized** path is what is returned and used for I/O, so what
     /// was checked in (1) is what gets opened.
-    pub fn resolve_against(&self, base: &Path, path_str: &str) -> Result<PathBuf, ToolError> {
+    pub(crate) fn resolve_against(&self, base: &Path, path_str: &str) -> Result<PathBuf, ToolError> {
         let candidate = Path::new(path_str);
         let joined = if candidate.is_absolute() { candidate.to_path_buf() } else { base.join(candidate) };
         let escapes = || ToolError::PathEscapesWorkspace { path: path_str.to_string(), roots: self.describe() };
@@ -140,18 +138,18 @@ impl Workspace {
 
     /// Whether an already-canonical absolute path sits under any root.
     fn contains(&self, path: &Path) -> bool {
-        self.roots().iter().any(|root| path.starts_with(root))
+        self.read_roots().iter().any(|root| path.starts_with(root))
     }
 
     /// How the roots read in a message to the developer or the model.
-    pub fn describe(&self) -> String {
-        self.roots().iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
+    pub(crate) fn describe(&self) -> String {
+        self.read_roots().iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
     }
 }
 
 /// The symlink-resolved form of `path` (relative paths against `base`), for
 /// callers that need to compare it against something other than the roots.
-pub fn resolved_form(base: &Path, path_str: &str) -> Option<PathBuf> {
+pub(crate) fn resolved_form(base: &Path, path_str: &str) -> Option<PathBuf> {
     let candidate = Path::new(path_str);
     let joined = if candidate.is_absolute() { candidate.to_path_buf() } else { base.join(candidate) };
     canonicalize_existing_prefix(&normalize_lexically(&joined)).ok()

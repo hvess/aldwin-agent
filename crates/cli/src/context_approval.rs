@@ -31,33 +31,29 @@ fn resolve_with_io(candidates: &[PathBuf], engine: &Engine, input: &mut impl Buf
 /// why). A closed/EOF stdin (non-interactive invocation) declines rather
 /// than hanging forever waiting for an answer that can't come.
 fn prompt_and_record(path: &Path, engine: &Engine, input: &mut impl BufRead, output: &mut impl Write) {
-    loop {
+    let tier = loop {
         let _ = write!(output, "Include {} in this session's context? [p]roject / [s]ession / [n]o: ", path.display());
         let _ = output.flush();
 
         let mut line = String::new();
         if input.read_line(&mut line).unwrap_or(0) == 0 {
-            let _ = engine.record_context_file_decision(path, false, None);
-            return;
+            break None;
         }
 
         match line.trim().chars().next().map(|c| c.to_ascii_lowercase()) {
-            Some('p') => {
-                let _ = engine.record_context_file_decision(path, true, Some(ContextFileTier::Project));
-                return;
-            }
-            Some('s') => {
-                let _ = engine.record_context_file_decision(path, true, Some(ContextFileTier::Session));
-                return;
-            }
-            Some('n') => {
-                let _ = engine.record_context_file_decision(path, false, None);
-                return;
-            }
+            Some('p') => break Some(ContextFileTier::Project),
+            Some('s') => break Some(ContextFileTier::Session),
+            Some('n') => break None,
             _ => {
                 let _ = writeln!(output, "please answer p, s, or n");
             }
         }
+    };
+    // Said rather than swallowed: what fails is the project tier's write, and
+    // the file is then left out of a session whose developer just answered
+    // yes.
+    if let Err(e) = engine.record_context_file_decision(path, tier.is_some(), tier) {
+        let _ = writeln!(output, "could not record that, so {} is left out: {e}", path.display());
     }
 }
 
@@ -130,6 +126,24 @@ mod tests {
         let approved = resolve_with_io(std::slice::from_ref(&path), &engine, &mut input, &mut output);
 
         assert!(approved.is_empty());
+    }
+
+    /// A project-tier answer that cannot be written used to vanish: the file
+    /// was left out of the session and nothing said why.
+    #[test]
+    fn an_approval_that_cannot_be_saved_says_so() {
+        let (project, _global, engine) = engine();
+        let path = project.path().join("CLAUDE.md");
+        std::fs::write(&path, "notes").unwrap();
+        // `.aldwin` as a file, so the project tier has nowhere to write.
+        std::fs::write(project.path().join(".aldwin"), "in the way").unwrap();
+
+        let mut input = Cursor::new(b"p\n".to_vec());
+        let mut output = Vec::new();
+        let approved = resolve_with_io(std::slice::from_ref(&path), &engine, &mut input, &mut output);
+
+        assert!(approved.is_empty());
+        assert!(String::from_utf8_lossy(&output).contains("could not record that"));
     }
 
     #[test]

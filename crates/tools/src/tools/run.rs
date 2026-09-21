@@ -18,26 +18,14 @@
 //! `sh` and `bash` are programs like any other: granting one is granting
 //! arbitrary execution, which is now a visible act rather than the default.
 //!
-//! Three things changed with ADR 0007, each of them a gap this tool had and
-//! the other three built-ins did not:
-//!
-//! 1. **Path arguments are contained.** `run` never called `paths.rs`, so
-//!    ADR 0004 §5's "no tool is pointed outside your project by us" was true
-//!    of `read`, `edit` and `explain` and false of the only tool that
-//!    executes programs. It is now checked against the same [`Workspace`].
-//! 2. **A call can name its working directory.** There was none, so every
-//!    call ran in the project root and "work over there instead" had to be
-//!    written as `bash -c 'cd … && …'` — which is how 46% of the calls in
-//!    the session that prompted this became shell invocations, taking the
-//!    argv guarantee with them.
-//! 3. **A timeout keeps what the program produced.** Output was read to
-//!    completion, so a call that timed out reported only that it had, and
-//!    everything the program had already written was dropped. A 30-minute
-//!    clone loop hit the cap and left nothing to diagnose it with.
+//! ADR 0007 brought this tool into the model the other three built-ins live
+//! in: path arguments are contained by the same [`Workspace`], a call can name
+//! its working directory (so "work over there" is not `bash -c 'cd … && …'`),
+//! and a timeout keeps what the program had already written.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use aldwin_permissions::Class;
@@ -52,6 +40,11 @@ use crate::sandbox;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const OUTPUT_CAP_BYTES: usize = 50 * 1024;
+/// What is *held* per stream while the program runs. Only `OUTPUT_CAP_BYTES`
+/// is ever shown, so holding more is memory a chatty program — `yes`, a build
+/// log — can grow without bound. The slack keeps a character that straddles
+/// the cap whole, and lets [`cap`] see that there was more.
+const OUTPUT_KEEP_BYTES: usize = OUTPUT_CAP_BYTES + 4;
 
 pub struct RunTool {
     descriptor: ToolDescriptor,
@@ -185,8 +178,11 @@ fn parse(input: &Value) -> Result<RunArgs, ToolError> {
 /// `cwd` removes the main reason to reach for a shell at all.
 fn path_like(arg: &str) -> Option<&str> {
     let candidate = match arg.split_once('=') {
-        // `--flag=/some/path` — check the value, not the whole token.
-        Some((flag, value)) if flag.starts_with('-') => value,
+        // `--flag=/some/path` — check the value, not the whole token. The
+        // same for a bare `key=value` (`dd of=/etc/x`): taken whole, the key
+        // reads as a directory name, so `of=../../x` normalized to `x` and
+        // passed as contained.
+        Some((key, value)) if !key.contains('/') => value,
         // `-C/elsewhere`, `-f/etc/x` — a value glued to a short flag. Skipping
         // every `-…` token let these through to `execve` unchecked.
         _ if arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2 && arg.is_char_boundary(2) => &arg[2..],
@@ -196,10 +192,7 @@ fn path_like(arg: &str) -> Option<&str> {
         return None;
     }
     let climbs = Path::new(candidate).components().any(|c| matches!(c, std::path::Component::ParentDir));
-    if climbs {
-        return Some(candidate);
-    }
-    if candidate.starts_with('/') && first_component_exists(candidate) {
+    if climbs || (candidate.starts_with('/') && first_component_exists(candidate)) {
         return Some(candidate);
     }
     None
@@ -332,48 +325,38 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     })?;
 
     // `setsid` made the child its own group leader, so its pid is the group
-    // id. Held here because `child` moves into the future below.
+    // id.
     let group = child.id();
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
 
-    // Accumulate into shared buffers rather than into locals, so a timeout
-    // can still read what arrived before it fired. `read_to_string` on a
-    // local dropped everything the program had written the moment the call
-    // was cancelled — which is precisely the diagnostic a developer needs
-    // when a long command is the thing that went wrong.
+    // Accumulate into buffers the reading future only borrows, so a timeout
+    // can still read what arrived before it fired — which is precisely the
+    // diagnostic a developer needs when a long command is what went wrong.
     //
     // Bytes, decoded once at the end: decoding each 8 KiB read on its own
     // turns any multibyte character that straddles a read boundary into
     // U+FFFD, in output the model is about to reason over.
-    let out_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let err_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let out_buf = Mutex::new(Vec::<u8>::new());
+    let err_buf = Mutex::new(Vec::<u8>::new());
 
-    let run = {
-        let out_buf = Arc::clone(&out_buf);
-        let err_buf = Arc::clone(&err_buf);
-        async move {
-            let (a, b) = tokio::join!(drain(&mut stdout, &out_buf), drain(&mut stderr, &err_buf));
-            a.and(b)?;
-            let status = child.wait().await?;
-            Ok::<_, std::io::Error>(status)
-        }
+    let run = async {
+        let (a, b) = tokio::join!(drain(&mut stdout, &out_buf), drain(&mut stderr, &err_buf));
+        a.and(b)?;
+        child.wait().await
     };
+    tokio::pin!(run);
 
-    let status = match tokio::time::timeout(std::time::Duration::from_secs(args.timeout), run).await {
+    // Declared after `run` so it drops *first*: the group is killed while
+    // the child is still unreaped, which is what keeps its pid — the group
+    // id — from having been handed to something else.
+    let mut group = KillGroupOnDrop(group);
+
+    let status = match tokio::time::timeout(std::time::Duration::from_secs(args.timeout), &mut run).await {
         Ok(Ok(status)) => status,
         Ok(Err(source)) => return Err(ToolError::Io { path: cwd.to_path_buf(), source }),
         Err(_) => {
-            // `kill_on_drop` reaches only the process we hold. The comment
-            // above `setsid` promised the whole tree; this is what keeps it:
-            // without it `sh -c 'slow-thing'` times out and `slow-thing`
-            // keeps running.
-            if let Some(pgid) = group {
-                // SAFETY: a plain syscall on an id we spawned.
-                unsafe {
-                    libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
-                }
-            }
+            drop(group);
             let out = take(&out_buf);
             let err = take(&err_buf);
             return Err(ToolError::Timeout {
@@ -382,6 +365,8 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
             });
         }
     };
+    // It exited on its own. Anything it deliberately left running stays.
+    group.0 = None;
 
     let out = take(&out_buf);
     let err = take(&err_buf);
@@ -426,9 +411,29 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     }
 }
 
+/// Kills a call's whole process group unless the program exited by itself.
+///
+/// `kill_on_drop` reaches only the process we hold, so without this a
+/// timed-out `sh -c 'slow-thing'` left `slow-thing` running — and so did a
+/// call whose future was dropped because the developer cancelled the turn.
+struct KillGroupOnDrop(Option<u32>);
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            // SAFETY: a plain syscall on the id of a group we created.
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    }
+}
+
 /// Reads a stream to EOF, appending as it goes so a cancelled read still
-/// leaves everything received so far in the buffer.
-async fn drain<R>(reader: &mut R, buf: &Arc<Mutex<Vec<u8>>>) -> std::io::Result<()>
+/// leaves everything received so far in the buffer. Past
+/// [`OUTPUT_KEEP_BYTES`] it keeps reading and stops keeping: the pipe has to
+/// stay drained or the program blocks on it.
+async fn drain<R>(reader: &mut R, buf: &Mutex<Vec<u8>>) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -439,12 +444,13 @@ where
             return Ok(());
         }
         if let Ok(mut guard) = buf.lock() {
-            guard.extend_from_slice(&chunk[..n]);
+            let room = OUTPUT_KEEP_BYTES.saturating_sub(guard.len());
+            guard.extend_from_slice(&chunk[..n.min(room)]);
         }
     }
 }
 
-fn take(buf: &Arc<Mutex<Vec<u8>>>) -> String {
+fn take(buf: &Mutex<Vec<u8>>) -> String {
     let bytes = buf.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
     String::from_utf8_lossy(&bytes).into_owned()
 }
@@ -484,8 +490,7 @@ fn render_partial(out: &str, err: &str) -> String {
 }
 
 fn render(status: &std::process::ExitStatus, out: &str, err: &str) -> String {
-    let mut body = String::new();
-    body.push_str(&format!("exit: {}\n", status.code().map_or("signal".to_string(), |c| c.to_string())));
+    let mut body = format!("exit: {}\n", status.code().map_or("signal".to_string(), |c| c.to_string()));
     if !out.is_empty() {
         body.push_str("stdout:\n");
         body.push_str(&cap(out));
@@ -670,6 +675,47 @@ mod tests {
         assert_eq!(path_like("-C/etc"), Some("/etc"), "so is a value glued to a short flag");
         assert_eq!(path_like("-f../../x"), Some("../../x"));
         assert_eq!(path_like("/no-such-top-level-dir/p"), None, "a sed or grep pattern, not a path");
+        assert_eq!(path_like("of=/etc/passwd"), Some("/etc/passwd"), "`dd` spells its paths key=value");
+        assert_eq!(path_like("name=value"), None);
+    }
+
+    /// Audit: taken whole, `of=../../x` reads as a directory called `of=..`
+    /// followed by one climb, which normalizes to `x` inside the cwd — while
+    /// `dd` writes two levels up.
+    #[tokio::test]
+    async fn a_climbing_value_behind_a_bare_key_is_contained_too() {
+        let (_d, tool) = tool();
+        let err = call(&tool, json!({"program": "echo", "args": ["of=../../../../escaped"], "class": "write"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+    }
+
+    /// Audit: everything a program wrote was held until it exited and capped
+    /// only when rendered, so `yes` could grow the buffer until the timeout.
+    #[tokio::test]
+    async fn output_past_the_cap_is_read_but_not_held() {
+        let flood = vec![b'x'; 4 * OUTPUT_KEEP_BYTES];
+        let buf = Mutex::new(Vec::new());
+        drain(&mut flood.as_slice(), &buf).await.unwrap();
+
+        assert_eq!(buf.lock().unwrap().len(), OUTPUT_KEEP_BYTES);
+        assert!(cap(&take(&buf)).ends_with("bytes]\n"), "and the rendering still says it was cut");
+    }
+
+    /// Audit: only a timeout killed the group. A call dropped mid-run — the
+    /// developer cancelling the turn — left its grandchildren running.
+    #[tokio::test]
+    async fn a_cancelled_call_kills_the_grandchildren_too() {
+        let (dir, tool) = tool();
+        let marker = dir.path().join("still-alive");
+        let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
+        let input = json!({"program": "/bin/sh", "args": ["-c", script], "class": "write", "timeout_secs": 30});
+        let cancelled = tokio::time::timeout(std::time::Duration::from_secs(1), call(&tool, input)).await;
+        assert!(cancelled.is_err(), "the call should still have been running");
+
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        assert!(!marker.exists(), "the backgrounded grandchild outlived the cancelled call");
     }
 
     /// A second declared root is reachable, which is the half of ADR 0007

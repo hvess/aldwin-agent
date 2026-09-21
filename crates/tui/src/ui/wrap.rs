@@ -26,6 +26,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
+/// Cells a tab expands to — `draft::sanitize`'s own four, so pasted and
+/// model-written indentation agree.
+const TAB_WIDTH: usize = 4;
+
 /// Word-wraps one logical `Line` to `max_width` display columns, breaking
 /// only at whitespace and preserving each span's style across a break, into
 /// however many `Line`s it takes.
@@ -36,9 +40,12 @@ use unicode_width::UnicodeWidthChar;
 /// inset every prose row gets from `with_label_column` regardless of what
 /// produced it.
 pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
-    #[derive(Clone)]
+    // One per `char`, and `Copy`: this runs over every character of every
+    // rebuilt transcript entry, and a `String` per character was the single
+    // largest allocation count in a streamed reply's re-render.
+    #[derive(Clone, Copy)]
     struct Grapheme {
-        text:     String,
+        ch:       char,
         style:    Style,
         width:    usize,
         is_space: bool,
@@ -48,40 +55,51 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         return vec![line];
     }
 
-    let graphemes: Vec<Grapheme> = line
-        .spans
-        .into_iter()
-        .flat_map(|span| {
-            let style = span.style;
-            span.content.chars().map(move |ch| Grapheme { text: ch.to_string(), style, width: ch.width().unwrap_or(0), is_space: ch.is_whitespace() }).collect::<Vec<_>>()
-        })
-        .collect();
+    let mut graphemes: Vec<Grapheme> = Vec::with_capacity(line.spans.iter().map(|s| s.content.len()).sum());
+    for span in &line.spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            match ch {
+                // A tab has no width of its own and ratatui draws no cell
+                // for it, so left in place it deleted a Go or Makefile
+                // line's indentation outright. Expanded to the same four
+                // spaces `draft::sanitize` gives a typed one.
+                '\t' => graphemes.extend([Grapheme { ch: ' ', style, width: 1, is_space: true }; TAB_WIDTH]),
+                // Any other control character is dropped: ratatui skips it
+                // too, but `UnicodeWidthStr` counts it as one cell, so
+                // `Row::assemble` measured a cell nothing drew and left the
+                // row's fill one cell short of its right edge.
+                ch if ch.is_control() => {}
+                ch => graphemes.push(Grapheme { ch, style, width: ch.width().unwrap_or(0), is_space: ch.is_whitespace() }),
+            }
+        }
+    }
     if graphemes.is_empty() {
         return vec![Line::default()];
     }
 
-    let mut rows: Vec<Vec<Grapheme>> = vec![Vec::new()];
+    // Finished rows, and the one being filled.
+    let mut rows: Vec<Vec<Grapheme>> = Vec::new();
+    let mut row: Vec<Grapheme> = Vec::new();
     let mut row_width = 0usize;
     let mut i = 0;
 
     // The line's own genuine leading whitespace (if any) is kept as literal
     // content on the first row — only whitespace a wrap decision below
-    // introduces at a row break gets dropped, so a rare hand-indented prose
-    // line doesn't lose that indentation just because it happens to be
-    // short enough to fit on one row anyway.
+    // introduces at a row break gets dropped, so a hand-indented prose line
+    // keeps its indentation.
     if graphemes[0].is_space {
         let end = graphemes.iter().position(|g| !g.is_space).unwrap_or(graphemes.len());
         row_width = graphemes[..end].iter().map(|g| g.width).sum();
-        rows[0].extend_from_slice(&graphemes[..end]);
+        row.extend_from_slice(&graphemes[..end]);
         i = end;
     }
 
     // Greedy fill: walk whitespace/non-whitespace runs in order, breaking
     // before whichever run would overflow the current row. A run of
     // whitespace is only ever kept mid-row (never used to open one), so a
-    // wrapped row never starts with the space that caused the break — same
-    // "don't start a wrapped line with the space that broke it" convention
-    // ratatui's own word-wrapper follows.
+    // wrapped row never starts with the space that caused the break — the
+    // convention ratatui's own word-wrapper follows.
     while i < graphemes.len() {
         let is_space = graphemes[i].is_space;
         let start = i;
@@ -92,57 +110,51 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         let run_width: usize = run.iter().map(|g| g.width).sum();
 
         if is_space {
-            if !rows.last().unwrap().is_empty() {
+            if !row.is_empty() {
                 if row_width + run_width > max_width {
-                    rows.push(Vec::new());
+                    rows.push(std::mem::take(&mut row));
                     row_width = 0;
                 } else {
                     row_width += run_width;
-                    rows.last_mut().unwrap().extend_from_slice(run);
+                    row.extend_from_slice(run);
                 }
             }
             continue;
         }
 
         if row_width > 0 && row_width + run_width > max_width {
-            rows.push(Vec::new());
+            rows.push(std::mem::take(&mut row));
             row_width = 0;
         }
         if run_width > max_width {
             // A single word wider than the whole row (e.g. a long URL):
-            // hard-break it grapheme by grapheme rather than overflowing.
+            // hard-break it character by character rather than overflowing.
             for g in run {
                 if row_width > 0 && row_width + g.width > max_width {
-                    rows.push(Vec::new());
+                    rows.push(std::mem::take(&mut row));
                     row_width = 0;
                 }
                 row_width += g.width;
-                rows.last_mut().unwrap().push(g.clone());
+                row.push(*g);
             }
         } else {
             row_width += run_width;
-            rows.last_mut().unwrap().extend_from_slice(run);
+            row.extend_from_slice(run);
         }
     }
+    rows.push(row);
 
     rows.into_iter()
         .map(|row| {
             // A wrap decision can leave trailing whitespace dangling at a
             // row's end (the space that caused the break, kept out of the
-            // *next* row but already appended to this one before the
-            // overflow check above); trim it so it doesn't count toward
-            // width for anyone measuring this row later.
-            let end = row.iter().rposition(|g| !g.is_space).map(|i| i + 1).unwrap_or(0);
+            // *next* row but already appended to this one); trim it so it
+            // doesn't count toward width for anyone measuring this row.
+            let end = row.iter().rposition(|g| !g.is_space).map_or(0, |i| i + 1);
             let mut spans: Vec<Span<'static>> = Vec::new();
-            for g in &row[..end] {
-                match spans.last_mut() {
-                    Some(Span { content, style }) if *style == g.style => {
-                        let mut merged = content.to_string();
-                        merged.push_str(&g.text);
-                        *content = merged.into();
-                    }
-                    _ => spans.push(Span::styled(g.text.clone(), g.style)),
-                }
+            // Consecutive characters of one style become one span.
+            for run in row[..end].chunk_by(|a, b| a.style == b.style) {
+                spans.push(Span::styled(run.iter().map(|g| g.ch).collect::<String>(), run[0].style));
             }
             Line::from(spans)
         })

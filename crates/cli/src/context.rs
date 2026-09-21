@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 /// enforces "only approved files, never a raw filesystem walk" by going
 /// through the permission engine; this function just formats whatever
 /// list it's handed.
+///
 /// Also carries the platform facts and the workspace roots.
 ///
 /// The platform half is there because the agent otherwise learns it by
@@ -24,7 +25,7 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     if roots.len() > 1 {
         let extra: Vec<String> = roots.iter().skip(1).map(|r| r.display().to_string()).collect();
         sections.push(format!(
-            "Also reachable (declared in .aldwin/permissions.yaml): {}\n             Every other path is out of reach for every tool, run included.",
+            "Also reachable (declared in .aldwin/permissions.yaml): {}\nEvery other path is out of reach for every tool, run included.",
             extra.join(", ")
         ));
     }
@@ -54,11 +55,9 @@ fn platform_facts() -> String {
         facts.push(format!("bash: {version}"));
     }
     // The distinction that actually bites: GNU `sed -i` takes no argument,
-    // BSD `sed -i` requires one, and a script written for the wrong one
-    // fails on the machine it was written on. Asked of the `sed` on PATH, not
-    // inferred from the OS — a Mac with gnu-sed installed is GNU, and saying
-    // otherwise would be a confident wrong fact, which is worse than none.
-    // GNU answers `--version`; BSD sed has no such flag and fails.
+    // BSD `sed -i` requires one. Asked of the `sed` on PATH, not inferred
+    // from the OS — a Mac with gnu-sed installed is GNU. GNU answers
+    // `--version`; BSD sed has no such flag and fails.
     match program_version("sed", &["--version"]) {
         Some(version) if version.contains("GNU") => facts.push("sed: GNU (in-place edit is `sed -i`)".to_string()),
         Some(_) => {}

@@ -28,10 +28,10 @@
 //! "at 15px it dominated a frame whose whole argument is that nothing
 //! shouts" — and it "appears on first run and nowhere else".
 //!
-//! Editing is deliberately absent from the access scale. Per ADR 0001 an
-//! edit is never grantable at any tier: `Engine::check_tool` refuses
-//! `edit_class` before consulting any list, so no answer here can turn that
-//! off, and none of the tiers below claims to.
+//! Editing is deliberately absent from the access scale. Per ADR 0004 §3 an
+//! edit is outside the permissions model entirely, so no answer here can
+//! turn its diff gate off, and none of the rungs claims to
+//! (`no_rung_covers_an_edit`).
 
 use std::io;
 
@@ -212,6 +212,9 @@ pub struct FirstRun {
     pub access:    usize,
     /// Set when `⏎` commits the last step, or when the developer quits.
     pub finished:  Option<Option<Answers>>,
+    /// Read once here rather than per frame: the directory cannot change
+    /// under a screen that takes no input but arrow keys.
+    pub cwd:       String,
 }
 
 impl FirstRun {
@@ -252,7 +255,18 @@ impl FirstRun {
             steps.push(Step::Access);
         }
         let curated = curated.min(providers.len());
-        Self { providers, curated, expanded: false, steps, index: 0, provider: 0, model: 0, access: 0, finished: None }
+        Self {
+            providers,
+            curated,
+            expanded: false,
+            steps,
+            index: 0,
+            provider: 0,
+            model: 0,
+            access: 0,
+            finished: None,
+            cwd: crate::app::current_dir_display().unwrap_or_default(),
+        }
     }
 
     /// Opens the two lists on where the developer already stands (see
@@ -472,16 +486,15 @@ pub async fn run(
     configured: Configured,
 ) -> io::Result<Option<Answers>> {
     enable_raw_mode()?;
+    // Armed before the two `?`s below, either of which used to return with
+    // raw mode still on.
+    let _guard = Guard;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let guard = Guard;
 
-    let result = run_loop(&mut terminal, theme, providers, curated, ask_provider, ask_access, configured).await;
-    drop(guard);
-    restore()?;
-    result
+    run_loop(&mut terminal, theme, providers, curated, ask_provider, ask_access, configured).await
 }
 
 async fn run_loop(
@@ -517,20 +530,15 @@ async fn run_loop(
     }
 }
 
-/// Restores the terminal on the way out, however that happens.
+/// Restores the terminal on the way out, however that happens. Best-effort:
+/// there is nothing a caller could do about a failed restore.
 struct Guard;
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let _ = restore();
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
-}
-
-fn restore() -> io::Result<()> {
-    let _ = disable_raw_mode();
-    let mut stdout = io::stdout();
-    let _ = execute!(stdout, LeaveAlternateScreen);
-    Ok(())
 }
 
 /// A stand-in catalogue for tests in this crate, shaped like the real one:
@@ -634,7 +642,6 @@ mod tests {
     #[test]
     fn access_starts_on_ask_the_tier_that_grants_nothing() {
         let state = FirstRun::default();
-        assert_eq!(AccessTier::ORDER[state.access], AccessTier::Ask);
         assert_eq!(AccessTier::ORDER[state.access], AccessTier::Ask, "the preselected rung must grant nothing");
     }
 

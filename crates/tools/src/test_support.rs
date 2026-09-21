@@ -12,7 +12,7 @@ use crate::gate::ApprovalGate;
 
 /// An `ApprovalGate` that answers every `request_approval` the same way,
 /// without needing a real `DispatchContext` — for tools whose tests don't
-/// care about the event side of the round trip (e.g. Read, shell).
+/// care about the event side of the round trip (e.g. Read, Run).
 pub struct FixedApproval(pub bool);
 
 #[async_trait]

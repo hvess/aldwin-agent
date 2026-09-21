@@ -1,7 +1,7 @@
-//! V0 Anthropic client implementing core's `LlmClient` trait. See
-//! `.claude/spec/aldwin-llm.md`. All Anthropic wire types stay in the
-//! private `wire` module — only `AnthropicClient`, `ProviderConfig`, and
-//! core's own `LlmError` are part of this crate's public surface.
+//! The provider clients implementing core's `LlmClient` trait, and the
+//! provider catalogue. See `.claude/spec/archive/aldwin-llm.md`. Every wire
+//! type stays in the private `wire` / `wire_openai` modules — nothing
+//! provider-shaped is part of this crate's public surface.
 
 mod catalog;
 mod client;

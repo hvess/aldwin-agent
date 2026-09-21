@@ -11,12 +11,11 @@
 //! exactly the O(n) write path aldwin-history.md rules out.
 //!
 //! Reading is deliberately forgiving and lives in [`load`]: an unparseable
-//! line is skipped, and the records are then truncated after the last
-//! complete turn. See that function for why the truncation is load-bearing
-//! rather than tidiness.
+//! line is skipped, and a turn that never finished is dropped. See that
+//! function for why the drop is load-bearing rather than tidiness.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -55,7 +54,7 @@ pub struct SessionSummary {
     /// First user message, trimmed to one line — see [`derive_title`].
     pub title:      String,
     /// Number of *completed* turns — what a resume would actually restore,
-    /// since [`load`] truncates after the last `TurnEnded`. Counting started
+    /// since [`load`] drops a turn with no `TurnEnded`. Counting started
     /// turns instead would promise a turn back that resume then drops.
     pub turns:      usize,
 }
@@ -142,12 +141,23 @@ impl HistoryStore {
     /// No header is written: the file already has one, and its `started_at`
     /// should keep saying when the conversation began, not when it was last
     /// picked up.
+    ///
+    /// A transcript whose writer was killed mid-record does not end on a
+    /// newline, and an append straight onto it would fuse the next record —
+    /// the resumed turn's `TurnStarted` — into the torn line, where [`load`]
+    /// skips both. So the line is closed first.
     pub fn reopen(dir: &Path, id: &SessionId) -> Result<Self, ConfigError> {
         let path = transcript_path(dir, id);
-        let file = OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .map_err(|e| ConfigError::Io { path: path.clone(), source: e })?;
+        let io = |e| ConfigError::Io { path: path.clone(), source: e };
+        let mut file = OpenOptions::new().read(true).append(true).open(&path).map_err(io)?;
+        if file.metadata().map_err(io)?.len() > 0 {
+            let mut last = [0u8; 1];
+            file.seek(SeekFrom::End(-1)).map_err(io)?;
+            file.read_exact(&mut last).map_err(io)?;
+            if last != *b"\n" {
+                file.write_all(b"\n").map_err(io)?;
+            }
+        }
         Ok(Self { path, sink: Mutex::new(Sink::Open(file)) })
     }
 
@@ -216,29 +226,38 @@ pub fn list(dir: &Path) -> Vec<SessionSummary> {
 
 /// One session's records, ready to become a `ConversationLog`.
 ///
-/// **Truncates after the last `TurnEnded`.** A tool call and its result are a
+/// **Only finished turns are returned.** A tool call and its result are a
 /// pair: a process killed between them leaves a `ToolUse` on disk with no
 /// `ToolResult`, and `messages_from_log` would rebuild that into an assistant
 /// message carrying an unmatched tool-use block — which every provider
-/// rejects outright. Dropping back to the last finished turn is what makes
-/// the crash case resume exists for actually resumable, and it subsumes the
-/// torn-final-line case for free.
+/// rejects outright. Dropping every turn that never reached its `TurnEnded`
+/// is what makes the crash case resume exists for actually resumable, and it
+/// subsumes the torn-final-line case for free.
+///
+/// Every such turn, not only the last: a session resumed after a crash is
+/// appended to the file that still holds the dead half turn, so on the next
+/// load it sits in the middle. No finished turn at all loads as nothing —
+/// half a turn is worse than none.
 pub fn load(dir: &Path, id: &SessionId) -> Result<Vec<LogRecord>, ConfigError> {
     let path = transcript_path(dir, id);
     let file = File::open(&path).map_err(|e| ConfigError::Io { path: path.clone(), source: e })?;
 
-    let mut records: Vec<LogRecord> = BufReader::new(file)
+    let mut records = Vec::new();
+    let mut turn = Vec::new();
+    let parsed = BufReader::new(file)
         .lines()
         .skip(1) // the header
         .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str(&line).ok())
-        .collect();
-
-    match records.iter().rposition(|r| matches!(r, LogRecord::TurnEnded { .. })) {
-        Some(last) => records.truncate(last + 1),
-        // No turn ever finished — there is nothing safely resumable in this
-        // file, and half a turn is worse than none.
-        None => records.clear(),
+        .filter_map(|line| serde_json::from_str::<LogRecord>(&line).ok());
+    for record in parsed {
+        if matches!(record, LogRecord::TurnStarted { .. }) {
+            turn.clear();
+        }
+        let ended = matches!(record, LogRecord::TurnEnded { .. });
+        turn.push(record);
+        if ended {
+            records.append(&mut turn);
+        }
     }
     Ok(records)
 }
@@ -575,6 +594,43 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "one conversation is one file");
         let loaded = load(dir.path(), &id).unwrap();
         assert_eq!(loaded.len(), 8);
+        assert_eq!(list(dir.path())[0].turns, 2);
+    }
+
+    /// The crash case, resumed twice. The half turn a killed process left is
+    /// still in the file when `/resume` appends after it, so the second load
+    /// finds it in the *middle* — where a tail truncation cannot reach it.
+    #[test]
+    fn a_half_turn_left_by_a_crash_stays_dropped_after_the_session_is_continued() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000055-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "first") {
+            store.append(&record).unwrap();
+        }
+        store.append(&LogRecord::TurnStarted { turn_id: TurnId(2) }).unwrap();
+        store
+            .append(&LogRecord::ToolUse {
+                turn_id: TurnId(2),
+                step_id: StepId(2),
+                call:    ToolCall { id: "c1".into(), name: "read".into(), input: serde_json::json!({}) },
+            })
+            .unwrap();
+        drop(store);
+        // And the kill landed mid-write, so the file does not end on a newline.
+        let path = transcript_path(dir.path(), &id);
+        let mut raw = fs::read_to_string(&path).unwrap();
+        raw.push_str("{\"type\":\"tool_res");
+        fs::write(&path, raw).unwrap();
+
+        let store = HistoryStore::reopen(dir.path(), &id).unwrap();
+        for record in turn(2, "again") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+
+        let expected: Vec<LogRecord> = turn(1, "first").into_iter().chain(turn(2, "again")).collect();
+        assert_eq!(load(dir.path(), &id).unwrap(), expected, "the torn line must not swallow the record after it");
         assert_eq!(list(dir.path())[0].turns, 2);
     }
 

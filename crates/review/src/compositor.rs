@@ -108,8 +108,7 @@ impl Compositor {
     pub fn msg(&self, args: &[&str]) -> Result<String> {
         let out = Command::new("swaymsg").arg("-s").arg(&self.sock).args(args).output()?;
         if !out.status.success() {
-            return Err(Error::other(format!("swaymsg {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
-            ));
+            return Err(Error::other(format!("swaymsg {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }

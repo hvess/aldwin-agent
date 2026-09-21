@@ -149,6 +149,10 @@ pub struct Vt {
     params:  Vec<u32>,
     current: Option<u32>,
     private: bool,
+    /// A `:` was seen in this CSI — the only thing that tells the
+    /// colour-space spelling `38:2::r:g:b` from `38;2;0;g;b` with more
+    /// parameters behind it.
+    colons:  bool,
     utf8:    Vec<u8>,
     need:    usize,
 }
@@ -164,6 +168,7 @@ impl Vt {
             params:  Vec::new(),
             current: None,
             private: false,
+            colons:  false,
             utf8:    Vec::new(),
             need:    0,
         }
@@ -209,6 +214,7 @@ impl Vt {
                     self.params.clear();
                     self.current = None;
                     self.private = false;
+                    self.colons = false;
                     self.state = State::Csi;
                 }
                 b']' => self.state = State::Osc,
@@ -225,6 +231,7 @@ impl Vt {
                 // them as separators so `38:2::r:g:b` does not silently
                 // become one enormous parameter.
                 b';' | b':' => {
+                    self.colons |= b == b':';
                     let v = self.current.take().unwrap_or(0);
                     self.params.push(v);
                 }
@@ -237,6 +244,9 @@ impl Vt {
                     self.csi(b);
                     self.state = State::Ground;
                 }
+                // An ESC abandons the sequence and starts the next one; to
+                // drop it instead would print that sequence's body as text.
+                0x1b => self.state = State::Esc,
                 _ => self.state = State::Ground,
             },
             State::Ground => {
@@ -254,12 +264,20 @@ impl Vt {
     }
 
     fn utf8_byte(&mut self, b: u8) {
+        let continuation = b & 0xc0 == 0x80;
+        // A sequence cut short is dropped and this byte starts afresh —
+        // waiting for the missing bytes would swallow the valid text after it.
+        if self.need != 0 && !continuation {
+            self.need = 0;
+        }
         if self.need == 0 {
             self.need = match b {
                 0x00..=0x7f => 1,
                 0xc0..=0xdf => 2,
                 0xe0..=0xef => 3,
-                _ => 4,
+                0xf0..=0xf7 => 4,
+                // A stray continuation or an impossible lead: skipped.
+                _ => return,
             };
             self.utf8.clear();
         }
@@ -278,7 +296,9 @@ impl Vt {
     fn execute(&mut self, b: u8) {
         match b {
             0x08 => self.col = self.col.saturating_sub(1),
-            0x09 => self.col = ((self.col / 8) + 1) * 8,
+            // Clamped to the last column, as a terminal does: unclamped, a run
+            // of tabs walks `col` up to a u16 overflow.
+            0x09 => self.col = (((self.col / 8) + 1) * 8).min(self.grid.cols.saturating_sub(1)),
             0x0a..=0x0c => self.line_feed(),
             0x0d => self.col = 0,
             _ => {}
@@ -295,11 +315,10 @@ impl Vt {
 
     fn scroll_up(&mut self) {
         let w = self.grid.cols as usize;
+        let blank = self.blank();
         self.grid.cells.copy_within(w.., 0);
         let last = self.grid.cells.len() - w;
-        for c in &mut self.grid.cells[last..] {
-            *c = Cell { ch: ' ', fg: self.pen.fg, bg: self.pen.bg, attrs: Attrs::default() };
-        }
+        self.grid.cells[last..].fill(blank);
     }
 
     fn print(&mut self, ch: char) {
@@ -330,12 +349,15 @@ impl Vt {
         (param.max(1) - 1).min(self.grid.cols.saturating_sub(1) as u32) as u16
     }
 
+    /// A missing parameter and a zero both mean the default.
     fn param(&self, i: usize, default: u32) -> u32 {
-        match self.params.get(i) {
-            None | Some(0) if default != 0 => default,
-            None => default,
-            Some(&v) => v,
-        }
+        self.params.get(i).copied().filter(|&v| v != 0).unwrap_or(default)
+    }
+
+    /// A relative move's count. Clamped rather than cast: `as u16` wraps
+    /// `CSI 65536 B` to a move of nothing.
+    fn count(&self) -> u16 {
+        self.param(0, 1).min(u16::MAX as u32) as u16
     }
 
     fn csi(&mut self, final_byte: u8) {
@@ -344,26 +366,22 @@ impl Vt {
                 self.row = self.clamp_row(self.param(0, 1));
                 self.col = self.clamp_col(self.param(1, 1));
             }
-            // Saturating, for the same reason the CUP parameters are clamped:
-            // `CSI 65535 B` overflows a plain `+` and panics the pump thread,
+            // Saturating and clamped, every one: the app under test is the
+            // thing being observed and does not get to be trusted. `CSI 65535
+            // B` overflows a plain `+`, and an out-of-range row reaches
+            // `erase_line`'s direct index — either panics the pump thread,
             // which poisons the parser's lock and takes the capture down
             // behind a misleading message.
-            b'A' => self.row = self.row.saturating_sub(self.param(0, 1) as u16),
-            b'B' => self.row = self.row.saturating_add(self.param(0, 1) as u16).min(self.grid.rows - 1),
-            b'C' => self.col = self.col.saturating_add(self.param(0, 1) as u16).min(self.grid.cols - 1),
-            b'D' => self.col = self.col.saturating_sub(self.param(0, 1) as u16),
-            // Clamped like CUP above, and for a sharper reason than tidiness:
-            // `erase_line` indexes the grid at `self.row` directly, so an
-            // out-of-range VPA would panic the pump thread, poison the
-            // parser's lock and take the capture down with it. The app under
-            // test is the thing being observed — the parser does not get to
-            // assume it behaves.
+            b'A' => self.row = self.row.saturating_sub(self.count()),
+            b'B' => self.row = self.row.saturating_add(self.count()).min(self.grid.rows.saturating_sub(1)),
+            b'C' => self.col = self.col.saturating_add(self.count()).min(self.grid.cols.saturating_sub(1)),
+            b'D' => self.col = self.col.saturating_sub(self.count()),
             b'G' => self.col = self.clamp_col(self.param(0, 1)),
             b'd' => self.row = self.clamp_row(self.param(0, 1)),
             b'J' => self.erase_display(self.param(0, 0)),
             b'K' => self.erase_line(self.param(0, 0)),
             b'X' => {
-                let n = self.param(0, 1).min(u16::MAX as u32) as u16;
+                let n = self.count();
                 let (row, col) = (self.row, self.col);
                 for c in col..col.saturating_add(n).min(self.grid.cols) {
                     *self.grid.at_mut(row, c) = self.blank();
@@ -407,7 +425,7 @@ impl Vt {
                         *self.grid.at_mut(r, c) = blank;
                     }
                 }
-                for c in 0..=col.min(cols - 1) {
+                for c in 0..col.saturating_add(1).min(cols) {
                     *self.grid.at_mut(row, c) = blank;
                 }
             }
@@ -426,7 +444,7 @@ impl Vt {
         let (row, col, cols) = (self.row, self.col, self.grid.cols);
         let range = match mode {
             0 => col..cols,
-            1 => 0..(col + 1).min(cols),
+            1 => 0..col.saturating_add(1).min(cols),
             _ => 0..cols,
         };
         for c in range {
@@ -462,7 +480,7 @@ impl Vt {
                 90..=97 => self.pen.fg = Color::Indexed((self.params[i] - 90 + 8) as u8),
                 100..=107 => self.pen.bg = Color::Indexed((self.params[i] - 100 + 8) as u8),
                 n @ (38 | 48 | 58) => {
-                    let (color, consumed) = extended(&self.params[i + 1..]);
+                    let (color, consumed) = extended(&self.params[i + 1..], self.colons);
                     match (n, color) {
                         (38, Some(c)) => self.pen.fg = c,
                         (48, Some(c)) => self.pen.bg = c,
@@ -479,17 +497,16 @@ impl Vt {
 
 /// `38;5;n` and `38;2;r;g;b`, returning how many extra parameters were eaten.
 /// The colour-space variant `38:2::r:g:b` arrives with an empty slot where the
-/// colour space goes, which is why a 5-parameter form is accepted too.
-fn extended(rest: &[u32]) -> (Option<Color>, usize) {
-    match rest.first() {
-        Some(5) => (rest.get(1).map(|&n| Color::Indexed(n as u8)), 2),
-        Some(2) => match rest.len() {
-            0..=3 => (None, rest.len()),
-            _ if rest.len() >= 5 && rest[1] == 0 && rest.len() > 4 => {
-                (Some(Color::Rgb(rest[2] as u8, rest[3] as u8, rest[4] as u8)), 5)
-            }
-            _ => (Some(Color::Rgb(rest[1] as u8, rest[2] as u8, rest[3] as u8)), 4),
-        },
+/// colour space goes, which is why a 5-parameter form is accepted too — but
+/// only when the sequence was spelled with colons. crossterm sets both colours
+/// in one `38;2;r;g;b;48;2;r;g;b`, and without that condition a foreground
+/// whose red is 0 reads as the colour-space form and eats the background.
+fn extended(rest: &[u32], colons: bool) -> (Option<Color>, usize) {
+    match rest {
+        [5, n, ..] => (Some(Color::Indexed(*n as u8)), 2),
+        [2, 0, r, g, b, ..] if colons => (Some(Color::Rgb(*r as u8, *g as u8, *b as u8)), 5),
+        [2, r, g, b, ..] => (Some(Color::Rgb(*r as u8, *g as u8, *b as u8)), 4),
+        [2 | 5, ..] => (None, rest.len()),
         _ => (None, 0),
     }
 }
@@ -575,6 +592,45 @@ mod tests {
         // which is a different failure and just as fatal on the pump thread.
         vt.feed(b"\x1b[65535B\x1b[65535C\x1b[65535X");
         assert_eq!(vt.grid().rows, 5);
+    }
+
+    #[test]
+    fn a_foreground_with_no_red_does_not_eat_the_background_set_beside_it() {
+        // crossterm's `SetColors` is one sequence, and `38;2;0;…` is also how
+        // the colon spelling's empty colour-space slot parses.
+        let vt = vt(b"\x1b[38;2;0;10;20;48;2;4;5;6mx");
+        let cell = vt.grid().get(0, 0);
+        assert_eq!(cell.fg, Color::Rgb(0, 10, 20));
+        assert_eq!(cell.bg, Color::Rgb(4, 5, 6));
+        assert!(!cell.attrs.dim, "the background's `2` was read as SGR dim");
+    }
+
+    #[test]
+    fn the_colon_spelling_keeps_its_empty_colour_space_slot() {
+        let vt = vt(b"\x1b[38:2::1:2:3mx");
+        assert_eq!(vt.grid().get(0, 0).fg, Color::Rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn a_broken_utf8_sequence_does_not_swallow_the_text_after_it() {
+        // A lead byte with no continuation, then a stray continuation.
+        let vt = vt(b"\xe6ab\x80cd");
+        assert_eq!(vt.grid().row_text(0), "abcd");
+    }
+
+    #[test]
+    fn a_run_of_tabs_stops_at_the_last_column() {
+        let mut vt = Vt::new(20, 5);
+        vt.feed(&[b'\t'; 9000]);
+        vt.feed(b"\x1b[1K");
+        assert_eq!(vt.grid().cols, 20);
+    }
+
+    #[test]
+    fn an_escape_inside_a_sequence_starts_the_next_one() {
+        let vt = vt(b"\x1b[3\x1b[2;2Hok");
+        assert_eq!(vt.grid().row_text(0), "");
+        assert_eq!(vt.grid().row_text(1), " ok");
     }
 
     #[test]

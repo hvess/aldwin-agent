@@ -28,7 +28,7 @@ mod test_support;
 pub use dispatcher::Dispatcher;
 pub use error::ToolError;
 pub use gate::ApprovalGate;
-pub use mcp::{register_mcp_tools, McpBridge, McpError, McpTool};
+pub use mcp::{register_mcp_tools, McpBridge, McpError, McpRegistrationFailure, McpTool};
 pub use registry::{PermissionRequest, Registry, Tool, ToolDescriptor, ToolSource};
 pub use paths::Workspace;
 pub use tools::{EditTool, ExplainTool, ReadTool, RunTool};

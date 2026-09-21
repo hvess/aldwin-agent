@@ -41,13 +41,9 @@ impl ConversationLog {
         self.inner.write().expect("log lock poisoned").push(record);
     }
 
-    /// An immutable view of every record so far. `.into()` here does clone
-    /// each `LogRecord` (`<[T]>::to_owned` under an `Arc<[T]>` conversion) —
-    /// it is not free, contrary to what this comment used to claim. O(n)
-    /// per call is an accepted cost, same as the streamed-request cost
-    /// `wire.rs` documents: this is called once per turn (from
-    /// `messages_from_log`, at the top of `run_turn`), not on any hot path,
-    /// so it's cheap in the sense of "call frequency," not "cost per call."
+    /// An immutable view of every record so far. Clones each `LogRecord` —
+    /// O(n) per call, accepted because it is called once per turn (from
+    /// `messages_from_log`) and not on any hot path.
     pub fn snapshot(&self) -> Arc<[LogRecord]> {
         let guard = self.inner.read().expect("log lock poisoned");
         guard.as_slice().into()

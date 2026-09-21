@@ -5,9 +5,8 @@ use crate::{
     annotated,
     domain::{
         ContextFilesConfig, GrantEntry, McpConfig, McpServer, PermissionsConfig, ProviderConfig, Rung,
-        CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION, TUI_VERSION,
+        TuiConfig, CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION, TUI_VERSION,
     },
-    domain::TuiConfig,
     error::ConfigError,
     fsio,
     scope::Scope,
@@ -283,25 +282,16 @@ impl Config {
 
     /// Read → mutate → persist-atomically → swap, all under one *held*
     /// write lock — not just the final swap. A concurrent writer (another
-    /// mutator on this same domain, or `reload_all` re-reading it from disk
-    /// on a different task) must block until this call has fully landed on
-    /// both disk and memory, or the two writes can silently clobber each
-    /// other. See aldwin-permissions.md's Pitfall: "storage must express
-    /// deny-wins, not last-write-wins" — a lost concurrent write is exactly
-    /// that failure mode, just for grants generally rather than only
-    /// allow/deny ordering. Every domain-mutating method in this file
-    /// (`with_permissions_mut`, `with_mcp_mut`, `with_context_files_mut`,
-    /// `set_provider`, `set_tui`) is this same shape parameterized by which
-    /// `RwLock` and which on-disk path it targets — consolidated into one
-    /// generic here so the shape can't drift between domains, and a future
-    /// domain doesn't have to re-derive the locking argument above.
+    /// mutator on this domain, or `reload_all` re-reading it from disk) must
+    /// block until this call has landed on both disk and memory, or one of
+    /// the two silently clobbers the other. See aldwin-permissions.md's
+    /// Pitfall: "storage must express deny-wins, not last-write-wins". Every
+    /// domain-mutating method in this file goes through here so the locking
+    /// cannot drift between domains.
     ///
-    /// `header` (an `annotated::*_HEADER` constant, or `""` for a domain
-    /// with no annotated tour — currently only `context_files`) is
-    /// prepended on every write via `fsio::write_atomic_with_header`, not
-    /// just the first-launch one, so a domain's explanatory comments survive
-    /// every later grant/setting change instead of disappearing the moment
-    /// anything is next persisted — see that function's doc comment.
+    /// `header` is an `annotated::*_HEADER` constant, or `""` for a domain
+    /// with none; see `fsio::write_atomic_with_header` for why it is
+    /// prepended on every write.
     fn with_domain_mut<T: Clone + serde::Serialize>(&self, lock: &RwLock<T>, path: &Path, header: &str, f: impl FnOnce(&mut T)) -> Result<(), ConfigError> {
         let mut guard = lock.write().expect("lock poisoned");
         let mut next = guard.clone();
@@ -413,9 +403,7 @@ impl Config {
     }
 
     fn with_context_files_mut(&self, f: impl FnOnce(&mut ContextFilesConfig)) -> Result<(), ConfigError> {
-        // No `annotated` constant for this domain — it was never part of the
-        // first-launch "tour" (see `annotated.rs`'s module doc comment), so
-        // there's no header to keep in sync here.
+        // No `annotated` header: this domain is not part of the first-launch tour.
         self.with_domain_mut(&self.inner.project_context_files, &self.domain_path(Scope::Project, "context_files"), "", f)
     }
 
@@ -497,9 +485,12 @@ impl Config {
         empty: fn() -> T,
         failures: &mut Vec<ReloadFailure>,
     ) {
+        // Locked *before* the read, not after it: `with_domain_mut` could
+        // otherwise land a write between the two, and the snapshot would be
+        // swapped back to the file as it was before that write.
+        let mut guard = lock.write().expect("lock poisoned");
         match fsio::read_versioned::<T>(&path, version) {
-            Ok(Some(value)) => *lock.write().expect("lock poisoned") = value,
-            Ok(None) => *lock.write().expect("lock poisoned") = empty(),
+            Ok(value) => *guard = value.unwrap_or_else(empty),
             Err(error) => failures.push(ReloadFailure { path, error }),
         }
     }
@@ -510,8 +501,10 @@ impl Config {
             Scope::Project => &self.inner.project_provider,
             Scope::Global  => &self.inner.global_provider,
         };
+        // Locked before the read, for `reload_domain`'s reason.
+        let mut guard = lock.write().expect("lock poisoned");
         match load_provider(&path) {
-            Ok(value) => *lock.write().expect("lock poisoned") = value,
+            Ok(value) => *guard = value,
             Err(error) => failures.push(ReloadFailure { path, error }),
         }
     }
@@ -534,7 +527,7 @@ impl Config {
     /// configured" a real state, and it is the state first run exists to
     /// resolve.
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
-        let dir = self.inner.global_dir.clone();
+        let dir = &self.inner.global_dir;
 
         if !dir.exists() {
             let permissions_path = dir.join("permissions.yaml");
@@ -758,15 +751,10 @@ mod tests {
         assert_eq!(cfg.deny, vec![GrantEntry::classed("git", Class::Write)]);
     }
 
-    /// Regression test for the lost-update race the audit found: the
-    /// `with_*_mut` helpers used to release the read lock before mutating,
-    /// then reacquire a write lock only for the final swap, leaving a
-    /// window where two concurrent writers could both compute `next` from
-    /// the same stale snapshot and the second write would silently clobber
-    /// the first. Holding the write lock across the entire
-    /// read-mutate-persist-swap sequence (this test's real regression
-    /// target) serializes concurrent writers instead, so every one of these
-    /// threads' grants must survive.
+    /// Regression: a write lock taken only for the final swap let two
+    /// concurrent writers compute `next` from the same stale snapshot, and
+    /// the second clobbered the first. `with_domain_mut` holds it across the
+    /// whole read-mutate-persist-swap, so every grant here must survive.
     #[test]
     fn concurrent_grant_writes_do_not_lose_updates() {
         let (_project, _global, config) = fresh();
@@ -801,17 +789,11 @@ mod tests {
         assert_eq!(config.global_permissions().allow, vec![GrantEntry::classed("git", Class::Write)]);
     }
 
-    /// Regression test for the bug reported directly as "editing
-    /// permissions.yaml doesn't really appear to make any sense": before
-    /// `with_domain_mut` threaded a header through, `add_grant`'s plain
-    /// `fsio::write_atomic` re-serialized the domain from scratch with no
-    /// comments at all — the annotated explanation only ever survived until
-    /// the *first* grant was persisted, at which point a developer opening
-    /// their real, in-use `permissions.yaml` found a bare `version`/`allow`/
-    /// `deny` with no indication of the format, the scope model, or that
-    /// `edit:` entries are inert. Confirmed to fail (the header line absent)
-    /// against a header-dropping `write_atomic_with_header` before
-    /// confirming it passes against the real fix.
+    /// Regression, reported as "editing permissions.yaml doesn't really
+    /// appear to make any sense": a plain re-serialise drops every comment,
+    /// so the annotated explanation survived only until the *first* grant
+    /// was persisted and the developer's real file was a bare `version`/
+    /// `allow`/`deny`.
     #[test]
     fn permissions_yaml_keeps_its_explanatory_header_after_a_grant_is_persisted() {
         let (project, global, config) = fresh();
@@ -828,9 +810,7 @@ mod tests {
         assert!(global_text.contains("curl"));
     }
 
-    /// Same bug, the other three annotated domains — `set_provider`,
-    /// `add_mcp_server`, `set_tui` all go through the same `with_domain_mut`
-    /// this fix touched, so each must keep its own header too.
+    /// Same bug, the other three annotated domains.
     #[test]
     fn provider_mcp_and_tui_yaml_keep_their_headers_after_a_write() {
         let (_project, global, config) = fresh();
@@ -867,12 +847,6 @@ mod tests {
         assert_eq!(cfg.deny, vec![GrantEntry::program("rg")]);
     }
 
-    /// A v1 permissions.yaml described a world ADR 0004 deleted — its entries
-    /// were `kind:pattern` globs over a `shell` tool that took one opaque
-    /// command string. Opening a project that still holds one must not fail
-    /// to start, and must not reinterpret the old lines as if they meant
-    /// something under the new grammar: the file is moved aside intact and
-    /// the developer starts from an empty, annotated v2 file.
     /// What a developer actually opens. The file is the model's public
     /// face — the reason this whole area was reopened was "the permissions
     /// model is not clear, and editing permissions.yaml doesn't really
@@ -928,6 +902,12 @@ mod tests {
         assert!(serde_yaml_ng::from_str::<PermissionsConfig>("version: 2\nroot:\n- ../x\n").is_err());
     }
 
+    /// A v1 permissions.yaml described a world ADR 0004 deleted — its entries
+    /// were `kind:pattern` globs over a `shell` tool that took one opaque
+    /// command string. Opening a project that still holds one must not fail
+    /// to start, and must not reinterpret the old lines as if they meant
+    /// something under the new grammar: the file is moved aside intact and
+    /// the developer starts from an empty, annotated v2 file.
     #[test]
     fn a_v1_permissions_file_is_moved_aside_rather_than_reinterpreted() {
         let project = tempfile::tempdir().unwrap();

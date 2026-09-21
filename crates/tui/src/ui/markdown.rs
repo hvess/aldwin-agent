@@ -521,6 +521,11 @@ fn parse_ordered(line: &str) -> Option<(String, &str)> {
 /// A line of 3+ `-`, `*`, or `_` (ignoring interior spaces, so `- - -`
 /// counts) and nothing else — CommonMark's thematic break.
 fn is_hr(line: &str) -> bool {
-    let stripped: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-    stripped.len() >= 3 && (stripped.chars().all(|c| c == '-') || stripped.chars().all(|c| c == '*') || stripped.chars().all(|c| c == '_'))
+    let mut marks = line.chars().filter(|c| !c.is_whitespace());
+    let Some(first) = marks.next().filter(|c| matches!(c, '-' | '*' | '_')) else { return false };
+    let mut count = 1;
+    marks.all(|c| {
+        count += 1;
+        c == first
+    }) && count >= 3
 }

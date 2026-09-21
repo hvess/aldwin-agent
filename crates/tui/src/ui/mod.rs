@@ -26,8 +26,8 @@
 //! In the transcript that is now load-bearing rather than merely tidy: the
 //! log's own `Paragraph` no longer wraps *at all*, so a builder that hands
 //! it an over-wide row gets that row truncated rather than folded. See
-//! [`transcript::rows`] for why the second wrapper went away and what it
-//! bought.
+//! [`transcript::Transcript`] for why the second wrapper went away and what
+//! it bought.
 
 mod chrome;
 mod decision;
@@ -54,9 +54,8 @@ use grid::Ctx;
 
 pub(crate) use transcript::Transcript;
 
-/// `--bar-top-h: 60px` — 3 cells. The reference's `1px` border below it is
-/// not a fourth row; see the note on borders further down this file.
-pub(super) const TOP_BAR_ROWS: u16 = 3;
+/// `--bar-top-h: 60px` — 3 cells, first run's bar included.
+const TOP_BAR_ROWS: u16 = 3;
 
 /// Blank rows held back at the top and bottom of the transcript band, so
 /// conversation text never sits flush against a chrome bar.
@@ -111,44 +110,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let picker_height = decision::row_count(&picker_lines, area.width) as u16;
     let picking = picker_height > 0;
 
-    // Three bands: a 3-row identity bar, the conversation log, and the
-    // bottom bar. No border rows between them — see the note on borders
-    // further down this file for why the surface change is the edge.
-    //
-    // The top bar is a structural element from the design system's
-    // reference screens — every one of the five (session/permission/review/
-    // commands/first-run) opens with a persistent 3-row identity bar plus a
-    // a `border-bottom` inside that band (`tokens/cells.css`'s
-    // `--bar-top-h`, `TopBar.jsx`'s `borderBottom`). An earlier pass had
-    // folded identity
-    // into a single status line right above the input; the source design
-    // puts identity back at the top and leaves that line for live turn
-    // activity only.
+    // Three bands: a 3-row identity bar (`--bar-top-h`), the conversation
+    // log, and the bottom bar. No border rows between them — the surface
+    // change is the edge (see the note on borders further down this file).
     //
     // The bottom bar is `BottomBar.jsx` exactly as the reference lays it
-    // out: five rows — blank, composer, blank, status, blank. The status line sits *below* the composer, not above it; an
-    // earlier pass had the two swapped (reported directly: "the status line
-    // is above the text field input, but ... it is below in the designs").
+    // out: five rows — blank, composer, blank, status, blank. The status
+    // line sits *below* the composer, not above it.
     //
     // While a decision is pending the panel takes those rows instead:
     // "input is disabled while a permission is pending: there is nothing to
     // type into, so the prompt row is not drawn at all."
+    //
     // Measured once for the whole frame, and only when the composer is
     // actually on screen: a pending decision or the picker takes the band
     // instead, and wrapping a draft nobody can see is pure cost on a large
     // one. See `chrome::Composer` for why there is exactly one of these.
     let composer = (!pending && !picking).then(|| chrome::Composer::new(&app.input, area.width));
-    // Three bands, each carrying its own edge inside itself (see the note
-    // on borders further down this file). 3 cells for the top bar
-    // (`--bar-top-h`), and `BottomBar.jsx`'s blank/composer/blank/status/
-    // blank for the bottom one (`--bar-bottom-h`), the composer's own
-    // height apart.
-    //
-    // The panel takes exactly its own rows. It used to claim one more for
-    // an edge above it — back when a `border-top` had to be drawn as the
-    // underline of the row above the band. There is no edge now, and
-    // leaving the row reserved put a stray `bar` row *below* the footer,
-    // since the panel's content renders from the top of its rect.
+    // The panel takes exactly its own rows — there is no edge above it to
+    // reserve one for, and a spare row would show as a stray `bar` row
+    // *below* the footer, since the panel renders from the top of its rect.
     let bottom_height = match &composer {
         // The composer's own rows plus `BottomBar.jsx`'s four fixed ones.
         Some(composer) => composer.height() + 4,
@@ -161,15 +142,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     chrome::draw_top_bar(frame, top_bar_area, app);
 
     // No drawn border and no title — the reference shows no box anywhere
-    // around the conversation, just filled cards floating directly on the
-    // frame background. A right-aligned "live"/"scrolled" title badge used
-    // to live here but per explicit developer feedback it was meaningless
-    // noise in the corner of the screen — removed outright, not replaced,
-    // so this is a plain background fill with nothing reserving a title row.
+    // around the conversation, so this is a plain background fill with
+    // nothing reserving a title row.
     let log_block = Block::new().style(Style::default().bg(pal.ground));
     // `Block::inner` is a pure function of the block's border/title config
     // and the outer rect — computed exactly once here, and this same `Rect`
-    // is what both `App::render_width`/`render_height` (cached for scroll
+    // is what `App::render_width` (cached for scroll
     // math between draws) and the log's own content pass use. There must
     // never be a second, independently-derived "inner width" anywhere else
     // in this call graph — see aldwin-tui.md's scrolling-fix and
@@ -177,14 +155,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // from exactly this kind of divergence before.
     let log_inner = pad_rows(log_block.inner(log_area), LOG_PAD_ROWS);
     app.render_width = log_inner.width;
-    app.render_height = log_inner.height;
     // Measured, scrolled and rendered off one cache, synced once (see
-    // `App::sync_transcript`) — the count is the row list's own length, so
+    // `App::transcript_view`) — the count is the row list's own length, so
     // there is no second pass that could disagree with what is drawn, and
     // only the viewport is ever materialised.
-    let total = app.total_lines();
-    app.scroll.set_viewport_height(log_inner.height as usize, total);
-    let mut visible = app.transcript_slice(app.scroll.offset, log_inner.height as usize);
+    let mut visible = app.transcript_view(log_inner.height as usize);
     // Bottom-anchored, like `2a`'s body band (`justify-content: flex-end`):
     // a conversation shorter than the band hangs off its *bottom* edge, not
     // its top. Drawn from the top, the first few turns of a session sat
@@ -261,16 +236,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 // Nothing inside a frame is stroked. Boundaries are tonal.
 //
-// This used to be a long note working out how to render a 1px CSS border
-// in a cell grid — `─` glyphs, one-eighth blocks, `BorderType::QuadrantOutside`,
-// and finally `SGR 4` underlines carrying `underline_color`. All of it is
-// gone, because the design system stopped having borders at all: Turn 13
-// removed every rule, pane divider and box outline and made a band's step
-// on the seven-rung ground ladder the thing that separates it from its
-// neighbour.
-//
-// That is a straightforwardly better fit for a terminal than any of the
-// shapes above were. The handoff says so directly: "Nothing is stroked, so
+// Turn 13 removed every rule, pane divider and box outline and made a
+// band's step on the seven-rung ground ladder the thing that separates it
+// from its neighbour. The handoff says so directly: "Nothing is stroked, so
 // nothing needs a `Block::bordered()` — build each band as a rect with its
 // own `Style::bg` and let the tonal step do the work", and of separator
 // rows, "in a terminal that is a single `Style::bg` on a one-row rect, so

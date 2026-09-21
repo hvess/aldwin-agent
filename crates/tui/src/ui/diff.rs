@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use super::grid::Ctx;
 use super::row::Row;
 
-/// One line of a unified diff (`aldwin_tools::diff::unified`'s output),
+/// One line of a unified diff (aldwin-tools' `diff::unified` output),
 /// tagged by its leading marker (` `/`+`/`-`). The `--- path`/`+++ path`
 /// header pair is pulled out separately by `parse_body` since it's shown
 /// once as a label, not per line.
@@ -18,7 +18,7 @@ pub(super) enum Kind {
     Added,
     Removed,
     /// A `@@ -a,b +c,d @@` hunk header. Never produced by
-    /// `aldwin_tools::diff::unified`, which emits no header at all — this
+    /// aldwin-tools' `diff::unified`, which emits no header at all — this
     /// is a diff the *model* wrote inside a ```diff fence, where the header
     /// is ordinary text in the reply and carries the only absolute line
     /// numbers there are. It used to fall through to `Context`, which drew
@@ -76,7 +76,7 @@ pub(super) fn parse_body(diff: &str) -> (Option<String>, Vec<(Kind, String)>) {
 /// mirroring the two-column gutter GitHub and most diff UIs show.
 ///
 /// Where the counters *start* depends on what the diff carries.
-/// `aldwin_tools::diff::unified` emits no `@@ -a,b +c,d @@` header (it
+/// aldwin-tools' `diff::unified` emits no `@@ -a,b +c,d @@` header (it
 /// diffs a single already-replaced hunk, not a whole file), so there is no
 /// absolute file offset to anchor on and the numbers are relative to the
 /// start of the shown diff, from 1 on each side — the same convention a
@@ -226,7 +226,7 @@ use crate::tokens::DIFF_SIGN_COL as SIGN;
 /// in-box note (`⋯ 3 unchanged lines ⋯`) indents to, so it starts in the
 /// code column rather than in the gutter. The reference does exactly this
 /// with its own `81 more lines` row: an empty gutter, then the text.
-pub(super) const CODE_COLUMN: usize = GUTTER + SIGN;
+const CODE_COLUMN: usize = GUTTER + SIGN;
 
 /// One right-aligned line number in the reference's own 5-cell gutter.
 ///
@@ -261,30 +261,16 @@ fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Colo
 /// and the system ships the opaque pair for exactly this case (see
 /// `palette.rs`).
 ///
-/// Sign and code take the **same** token here — `--t-add-code` /
-/// `--t-del-code` — rather than the sign/code split the source's review
-/// pane uses. This comment used to say the opposite ("kept as separate
-/// spans … so both read as the source does"), which read the review pane's
-/// rule onto the inline diff. The handoff draws the distinction explicitly
-/// and gives a measured reason: "Both the sign and the code take
-/// `--t-add-code` here rather than the sign/code split the review pane
-/// uses, because a tinted row over the recessed field is the darkest
-/// backdrop in the light theme and the mid-lightness sign green measures
-/// only **2.7:1** on it; the code colour holds 4.8:1 light and 5.9:1 dark."
-/// The review pane's hunk keeps the split because it sits on the much
-/// lighter transcript ground — and it is not built, so nothing here needs
-/// that branch yet.
+/// Sign and code are two tones — see the `match` below for the measurement
+/// that allows it.
 fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
-    // A hunk header is not a line of the file: no sign, no number in the
-    // gutter, and `--tui-hunk-header` rather than the tone the gutter and a
-    // context row share — `5b` draws its own `@@ -0,0 +1,84 @@` that way,
-    // and it is the one role in the palette named for this.
-    // A header is not a row of the file, so it takes neither the gutter nor
-    // the sign column: it starts at the field's own left edge, which is
-    // where `5b` draws its `@@ -0,0 +1,84 @@ impl RateLimit`. The trailing
-    // "N more lines" note is the one in-box row that hangs on the *code*
-    // column instead, because it stands in for code.
+    // A hunk header is not a row of the file, so it takes neither the
+    // gutter nor the sign column: it starts at the field's own left edge in
+    // `--tui-hunk-header`, which is where and how `5b` draws its
+    // `@@ -0,0 +1,84 @@ impl RateLimit`. The trailing "N more lines" note is
+    // the one in-box row that hangs on the *code* column instead, because
+    // it stands in for code.
     if line.kind == Kind::Hunk {
         let spans = vec![Span::styled(line.text.clone(), Style::default().fg(pal.hunk_header).bg(pal.diff_box))];
         return row.with_fill(pal.diff_box).build(spans, ctx);
@@ -319,7 +305,7 @@ pub(super) struct Budget {
     /// Collapse runs of unchanged context further than [`CONTEXT_RADIUS`]
     /// from a change.
     pub collapse_context: bool,
-    /// Cap the whole box, its two border rows included.
+    /// Cap the whole field, the marker row for what it drops included.
     pub max_rows:         Option<usize>,
 }
 
@@ -338,19 +324,12 @@ pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Ve
     let shown = if budget.collapse_context { collapse_context(body) } else { body.iter().map(Shown::Line).collect() };
     // Indented to [`CODE_COLUMN`] so a note lines up with the code it
     // stands in for, past an empty gutter — the reference's own `81 more
-    // lines` row.
-    // Plain prose, with no mark of its own. It read `... 3 unchanged lines
-    // ...` in U+22EF until a capture caught the obvious: that glyph is not
-    // in the closed table, and not among the typographic marks the baseline
-    // exempts — those are the ones the design's own screens use (`· … ⏎ ↑↓
-    // ← →`), and this was neither. The reference writes exactly this row as
-    // `81 more lines` (`4a`) and `73 more added lines below` (`5b`): the
-    // empty gutter beside it is what says it is not a line of the file, so
-    // a decoration on both ends was saying it a second time in a glyph the
-    // system does not have.
+    // lines` row (`4a`). Plain prose, with no mark of its own: the empty
+    // gutter beside it is what says it is not a line of the file, and the
+    // U+22EF it once wore is not in the closed glyph table.
     // `quiet`, as `2a` draws `  81 more lines`: it stands in for code, so
     // it takes the gutter's tone rather than dropping to metadata.
-    let marker = |text: String| row.build(vec![Span::styled(format!("{}{text}", " ".repeat(CODE_COLUMN)), Style::default().fg(ctx.pal.quiet).bg(row.fill()))], ctx);
+    let marker = |text: String| row.build(vec![Span::styled(format!("{:CODE_COLUMN$}{text}", ""), Style::default().fg(ctx.pal.quiet).bg(row.fill()))], ctx);
 
     let mut rows: Vec<Line<'static>> = Vec::new();
     for item in &shown {

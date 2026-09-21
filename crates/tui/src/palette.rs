@@ -2,8 +2,8 @@
 //! System (`claude.ai/design`, synced 2026-09-21 from the bound copy in the
 //! "Design system tokens discussion" project, which is the current one —
 //! see `.claude/design/IMPORT.md`) rather than hand-picked. Field names
-//! mirror the design
-//! system's own `--tui-*` semantic tokens (`tokens/semantic.css`), so a
+//! mirror the design system's own `--tui-*` semantic tokens
+//! (`tokens/semantic.css`), so a
 //! value here can be checked directly against that source instead of
 //! against another layer of local naming. Two fixed instances — `DARK`
 //! (the system's default theme) and `LIGHT` (the system's `.tui-light`

@@ -2,7 +2,7 @@
 //! No message shapes live here — just the byte-level envelope.
 
 use serde_json::Value;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub async fn write_message<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> std::io::Result<()> {
     let body = serde_json::to_vec(value).expect("serde_json::Value always serialises");
@@ -14,7 +14,7 @@ pub async fn write_message<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value)
 
 /// `Ok(None)` on a clean EOF before any header line — the normal way a
 /// language server's stdout ends when it exits.
-pub async fn read_message<R: AsyncBufRead + AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Value>> {
+pub async fn read_message<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Value>> {
     let mut content_length: Option<usize> = None;
     let mut saw_any_line = false;
 

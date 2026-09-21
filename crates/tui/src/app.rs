@@ -42,14 +42,10 @@ pub struct PendingPrompt {
 /// Which queue is currently interactive: the front of `pending_approvals` if
 /// it holds anything, else the front of `pending_prompts`, else neither.
 /// This is the *single* place "approvals resolve before prompts" is decided
-/// — `App::decision_options`/`decline_outcome` and `ui::decision_panel_lines`
-/// all go through `App::pending_front` instead of independently re-checking
-/// `pending_approvals.front().is_some()` themselves. That used to be
-/// duplicated across four call sites; a rust-skills audit flagged it as a
-/// maintainability risk — the exact "priority checked one way here, another
-/// way there" bug already happened once this session, in the other
-/// direction, at the status-line/`handle_key` boundary — so it's
-/// consolidated here rather than left to drift.
+/// — `App::decision_options`/`decline_outcome` and the decision panel all go
+/// through `App::pending_front` rather than re-checking the queues
+/// themselves, because that priority has already been checked one way in
+/// one place and another way in another once.
 pub enum PendingFront<'a> {
     Approval(&'a PendingApproval),
     Prompt(&'a PendingPrompt),
@@ -138,12 +134,9 @@ fn describe_response(response: &PromptResponse) -> PromptResolution {
 /// The eight rows of ADR 0004 §8, for one program and the class of the call
 /// that raised the prompt.
 ///
-/// There is no pattern to compute here, and that absence is the change: a
-/// grant is a program and a class, so every row already knows its own rule
-/// from the two things it was handed. The old model needed
-/// `broad_pattern`/`directory_glob`/`program_glob` to guess how wide a glob
-/// to write from a target string, and needed a `Tab` toggle so the developer
-/// could correct the guess.
+/// There is no pattern to compute here: a grant is a program and a class,
+/// so every row already knows its own rule from the two things it was
+/// handed.
 fn tool_options(program: &str, class: Class) -> Vec<DecisionOption> {
     Choice::ORDER
         .iter()
@@ -251,13 +244,6 @@ pub struct App {
     /// plausible starting width so `total_lines()` is never called before
     /// any draw has run.
     pub render_width:     u16,
-    /// The log panel's real inner render height (post-border), last set by
-    /// `ui::draw` alongside `render_width` — same reasoning: `hero_lines`
-    /// needs a pane height to vertically center the welcome banner, and
-    /// that number is only known at render time. Not used by scroll math
-    /// itself (`total_lines()` only needs `render_width`), only by the
-    /// hero-centering path.
-    pub render_height:    u16,
     pub input:             String,
     pub cursor:            usize, // char index into `input`
     /// The composer's real text-column width, cached by `ui::chrome`'s own
@@ -267,7 +253,7 @@ pub struct App {
     /// on a resize, until the next draw corrects it.
     pub composer_width:    u16,
     /// First visual row of the draft the composer band is showing. A draft
-    /// taller than [`crate::ui::COMPOSER_MAX_ROWS`] scrolls inside its band
+    /// taller than `ui::chrome`'s `COMPOSER_MAX_ROWS` scrolls inside its band
     /// rather than growing without bound — a pasted file would otherwise
     /// take the whole frame and leave no transcript at all. Maintained by
     /// the composer's draw, which is the only place that knows both the
@@ -302,7 +288,7 @@ pub struct App {
     pub status:            StatusInfo,
     pub should_quit:       bool,
     /// True from `TurnStarted` until the matching `TurnEnded` — drives the
-    /// "working" activity indicator in `ui::build_log_lines` for the stretch
+    /// "working" activity indicator in `ui::transcript` for the stretch
     /// of a turn (between tool calls, before the first token streams back)
     /// that `thinking` alone doesn't cover, since `thinking` is only set
     /// between `ThinkingStart`/`ThinkingEnd` (extended-thinking blocks).
@@ -401,7 +387,6 @@ impl App {
             thinking: false,
             scroll: ScrollState::default(),
             render_width: 80,
-            render_height: 24,
             input: String::new(),
             cursor: 0,
             composer_width: 74,
@@ -483,6 +468,32 @@ impl App {
         self.tick = self.tick.wrapping_add(1);
     }
 
+    /// Whether anything on screen reads `tick` — the status line's spinner,
+    /// which `ui::chrome` draws under exactly this condition. `run.rs` asks
+    /// so that a tick which changes nothing visible does not cost a frame.
+    pub(crate) fn is_animating(&self) -> bool {
+        self.thinking || self.turn_active || self.awaiting_turn
+    }
+
+    /// True while a decision or a picker holds the bottom band, so there is
+    /// no composer on screen for a paste or a wheel notch to belong to.
+    fn band_is_held(&self) -> bool {
+        !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() || self.resume.is_some()
+    }
+
+    /// What `/clear` and `/resume` share: core replaced its conversation
+    /// wholesale, so the rendered log and everything describing a turn in
+    /// flight go with it. Resetting `scroll` drops any stale offset.
+    fn reset_conversation(&mut self) {
+        self.log.clear();
+        self.scroll = ScrollState::default();
+        self.status.turn = None;
+        self.status.step = None;
+        self.thinking = false;
+        self.turn_active = false;
+        self.awaiting_turn = false;
+    }
+
     fn push(&mut self, entry: LogEntry) {
         self.log.push(entry);
         let total = self.total_lines();
@@ -490,24 +501,12 @@ impl App {
     }
 
     /// Total rendered terminal rows across the whole log, wrapping
-    /// included — what `ScrollState` actually needs to compare against
-    /// `viewport_height` (also rows), not `self.log.len()` (entry count)
-    /// and not a logical (pre-wrap) line count either. Mixing entry count
-    /// in for `viewport_height` is what made scrolling effectively a
-    /// no-op before `total_lines` existed at all: a handful of entries
-    /// routinely render to far more rows than the viewport, so an
-    /// entry-count-based `max_offset` stayed 0 long after there was real
-    /// content to scroll to. Using a *logical* line count (one row per
-    /// source line) fixed that but stayed wrong on its own terms: any
-    /// single line wide enough to wrap at the current `render_width` — a
-    /// long tool-result summary, a long retry message, a long assistant
-    /// line — rendered as more screen rows than it counted as, so
-    /// `ScrollState`'s offset drifted out of sync with what was actually
-    /// on screen and clipped content at the bottom of the log area (see
-    /// aldwin-tui.md's 2026-08-29 scrolling-fix Progress note). It is now
-    /// exactly the transcript's own row count, since those rows *are* the
-    /// screen rows — there is no longer a separate counting pass that could
-    /// drift from the rendering one.
+    /// included — what `ScrollState` compares against `viewport_height`
+    /// (also rows). Not `self.log.len()`, and not a logical pre-wrap line
+    /// count: both were tried, and both let `ScrollState`'s offset drift from
+    /// what was on screen (aldwin-tui.md's 2026-08-29 scrolling-fix Progress
+    /// note). It is the transcript's own row count, so there is no separate
+    /// counting pass to drift from the rendering one.
     pub fn total_lines(&mut self) -> usize {
         self.sync_transcript();
         self.transcript.len()
@@ -532,6 +531,18 @@ impl App {
         self.transcript.viewport(offset, count)
     }
 
+    /// The rows `ui::draw` draws, off one sync: the cache is brought up to
+    /// date once, the scroll state is measured against the count it just
+    /// produced, and the viewport is read from the same cache. Split across
+    /// `total_lines` and `transcript_slice` it synced twice a frame, which
+    /// is a full `==` pass over the log for nothing.
+    pub(crate) fn transcript_view(&mut self, height: usize) -> Vec<ratatui::text::Line<'static>> {
+        self.sync_transcript();
+        let total = self.transcript.len();
+        self.scroll.set_viewport_height(height, total);
+        self.transcript.viewport(self.scroll.offset, height)
+    }
+
     /// Brings the row cache up to date with the log at the current render
     /// size. Every reader goes through here rather than through an
     /// invalidation flag someone has to remember to set: `Transcript::sync`
@@ -544,7 +555,7 @@ impl App {
     /// headers is free next to what it saves.
     fn sync_transcript(&mut self) {
         let mut transcript = std::mem::take(&mut self.transcript);
-        transcript.sync(self, self.render_width, self.render_height);
+        transcript.sync(self, self.render_width);
         self.transcript = transcript;
     }
 
@@ -604,7 +615,7 @@ impl App {
                     }
                 }
             }
-            LogRecord::TurnEnded { reason, .. } => self.log.push(LogEntry::TurnEnded { reason: reason.into() }),
+            LogRecord::TurnEnded { reason, .. } => self.log.push(LogEntry::TurnEnded { reason }),
             // Thinking is carried in the transcript for the wire's sake
             // (ADR 0006), not for the reader's: the log shows what the agent
             // said, not what it thought. Drawing it needs a treatment the
@@ -680,14 +691,24 @@ impl App {
             // Lumo's `lumo-max` thinks on nearly every turn.
             Event::TurnEnded { reason, .. } => {
                 self.status.running_tools.clear();
+                // A call refused before dispatch never sends the
+                // `ToolDispatched` that would have consumed its name.
+                self.pending_tool_names.clear();
                 self.turn_active = false;
                 self.awaiting_turn = false;
                 self.thinking = false;
-                self.push(LogEntry::TurnEnded { reason: reason.into() });
+                self.push(LogEntry::TurnEnded { reason });
             }
             Event::PromptRequested { call_id, payload } => {
                 let parsed: Result<PromptPayload, _> = serde_json::from_value(payload);
                 match parsed {
+                    // Edit's gate is `ToolApprovalRequested`, never this
+                    // round trip. One arriving here has no option list and
+                    // no decline, so queueing it would hold the band with no
+                    // key — Ctrl+C included — able to clear it.
+                    Ok(PromptPayload::Edit { .. }) => {
+                        self.push(LogEntry::Error { message: "malformed permission prompt: an edit is approved as a diff, not prompted".into() })
+                    }
                     Ok(payload) => {
                         // Only becomes interactive (and so only needs a
                         // fresh cursor) when *both* queues were empty — a
@@ -713,19 +734,9 @@ impl App {
             // `/clear` — core's ConversationLog is authoritative for what
             // the LLM sees, so the TUI's own rendered log must actually be
             // wiped in step with it, not just told about it via a Notice
-            // (which only appends). Resetting `scroll` to its default drops
-            // any stale offset/`following` state from before the clear; the
-            // welcome banner reappears on the next draw since it's rendered
-            // whenever `log` is empty (see `ui::build_log_lines`).
-            Event::HistoryCleared => {
-                self.log.clear();
-                self.scroll = ScrollState::default();
-                self.status.turn = None;
-                self.status.step = None;
-                self.thinking = false;
-                self.turn_active = false;
-                self.awaiting_turn = false;
-            }
+            // (which only appends). The welcome banner reappears on the next
+            // draw, since it is rendered whenever `log` is empty.
+            Event::HistoryCleared => self.reset_conversation(),
             // `/resume` — the counterpart of `HistoryCleared` above, and it
             // starts by doing exactly what that arm does: core's
             // ConversationLog has been replaced wholesale, so the rendered
@@ -739,13 +750,7 @@ impl App {
             // decisions a resumed session needs are re-asked, and default-deny
             // is not weakened by a card being redrawn.
             Event::HistoryLoaded { records } => {
-                self.log.clear();
-                self.scroll = ScrollState::default();
-                self.status.turn = None;
-                self.status.step = None;
-                self.thinking = false;
-                self.turn_active = false;
-                self.awaiting_turn = false;
+                self.reset_conversation();
                 for record in records {
                     self.replay(record);
                 }
@@ -806,9 +811,9 @@ impl App {
             // A new line in the draft, three ways, because no one of them
             // reaches every terminal. Shift+Enter is what a developer
             // reaches for, but a terminal only reports it distinctly under
-            // the Kitty keyboard protocol — `run.rs` asks for that at
-            // startup where it is supported, and where it isn't, Shift+Enter
-            // is literally indistinguishable from Enter on the wire. Alt+
+            // the Kitty keyboard protocol — `run.rs` pushes that at startup,
+            // and on a terminal without it Shift+Enter is literally
+            // indistinguishable from Enter on the wire. Alt+
             // Enter is what iTerm2 and Windows Terminal send for
             // Option/Alt+Return without any protocol extension, and Ctrl+J
             // (a bare linefeed) gets through everywhere else.
@@ -840,13 +845,10 @@ impl App {
             // Within a multi-line draft, Up/Down move the cursor between its
             // rows first; only once there's no further row to move to
             // (a single-row draft, or already at the draft's first/last
-            // row) do they fall through to scrolling the log. Previously
-            // this — and a separate set of vim-style j/k/G bindings — used
-            // "only when the input is empty" as the guard, which silently
-            // swallowed the first keystroke of any message starting with
-            // j, k, or a capital G instead of inserting it (the vim
-            // bindings are gone outright: PageUp/PageDown/Home/End already
-            // cover keyboard scrolling without that ambiguity).
+            // row) do they fall through to scrolling the log. There are
+            // deliberately no vim-style j/k/G bindings: guarded on an empty
+            // input, they swallowed the first keystroke of any message
+            // starting with one of those letters.
             //
             // This is also the wheel's path into the log: `run.rs` leaves
             // the mouse to the terminal and asks it to translate notches
@@ -864,6 +866,10 @@ impl App {
                     self.scroll.line_down(total);
                 }
             }
+            // An unbound Ctrl chord is a command that isn't there, not text:
+            // Ctrl+A used to type an `a`. Ctrl+Alt is left alone — it is how
+            // AltGr reports on some platforms, and AltGr does type.
+            (KeyCode::Char(_), m) if m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) => {}
             (KeyCode::Char(c), _) => self.insert_char(c),
             _ => {}
         }
@@ -882,7 +888,7 @@ impl App {
     /// alternate-scroll translation sends, so both paths move the same
     /// distance.
     pub fn handle_mouse(&mut self, event: MouseEvent) {
-        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() || self.resume.is_some() {
+        if self.band_is_held() {
             return;
         }
         match event.kind {
@@ -915,7 +921,7 @@ impl App {
     /// `handle_key`: there is no composer on screen to paste into, and the
     /// placeholder says so.
     pub fn paste(&mut self, text: &str) {
-        if !self.pending_approvals.is_empty() || !self.pending_prompts.is_empty() || self.picker.is_some() || self.resume.is_some() {
+        if self.band_is_held() {
             return;
         }
         self.insert_str(&crate::draft::sanitize(text));
@@ -970,12 +976,15 @@ impl App {
     }
 
     fn backspace(&mut self) {
-        if self.cursor == 0 {
+        // `cursor` is a pub field; past the end it clamps like every other
+        // edit here rather than panicking in `String::remove`.
+        let cursor = self.cursor.min(self.input.chars().count());
+        if cursor == 0 {
             return;
         }
-        let byte_idx = self.input.char_indices().nth(self.cursor - 1).map(|(i, _)| i).unwrap();
+        self.cursor = cursor - 1;
+        let byte_idx = self.byte_at(self.cursor);
         self.input.remove(byte_idx);
-        self.cursor -= 1;
     }
 
     fn delete_forward(&mut self) {
@@ -1093,28 +1102,17 @@ impl App {
     ///
     /// "Is a turn running" is read from `turn_active`/`awaiting_turn` — the
     /// flags `apply_event`/`submit` maintain from the events core actually
-    /// sends. It used to be *inferred* by scanning the log backwards for the
-    /// most recent `UserMessage` (meaning "running") or `TurnEnded` (meaning
-    /// "finished"), and that is the reported "Ctrl+C after /theme appears to
-    /// be broken" bug: a slash command is submitted like any other message,
-    /// so `submit` pushes a `UserMessage` for it, but aldwin-cli's
-    /// interceptor handles `/theme` (and `/help`, `/reload-config`, and any
-    /// unknown command) entirely on its own — the core never sees it, no
-    /// turn ever starts, and no `TurnEnded` is ever appended. The scan then
-    /// found that `UserMessage` forever after and answered "a turn is
-    /// running" to every subsequent Ctrl+C, so the key sent `Command::Cancel`
-    /// into a session with nothing to cancel and the developer could never
-    /// exit with it again. The flags can't drift that way: nothing sets them
-    /// but the events that genuinely bracket a turn.
+    /// sends — and never inferred from the log. A slash command the
+    /// interceptor answers itself leaves a `UserMessage` with no `TurnEnded`
+    /// after it, so a backwards scan answered "running" forever and the key
+    /// could never exit again: the reported "Ctrl+C after /theme appears to
+    /// be broken".
     ///
-    /// `awaiting_turn` covers the real gap the log scan was reaching for —
-    /// the stretch between submitting a message and `TurnStarted` arriving,
-    /// when a turn is coming but isn't running yet; a Ctrl+C there must
-    /// still cancel rather than quit out from under the request. The
-    /// double-press escape hatch is the backstop for every remaining way
-    /// "busy" could be wrong: if the flags ever say busy when nothing is,
-    /// pressing again still exits, so the developer is never trapped in the
-    /// session the way this bug trapped them.
+    /// `awaiting_turn` covers the stretch between submitting and
+    /// `TurnStarted` arriving, where a Ctrl+C must still cancel rather than
+    /// quit out from under the request. The double press is the backstop for
+    /// every remaining way "busy" could be wrong: pressing again always
+    /// exits, so the developer is never trapped in the session.
     fn cancel_or_quit(&mut self) {
         let busy = self.turn_active || self.awaiting_turn;
         let repeat = self.last_cancel_tick.is_some_and(|t| self.tick.saturating_sub(t) <= DOUBLE_CTRL_C_TICKS);
@@ -1130,7 +1128,7 @@ impl App {
     /// The decision panel's selectable options for whichever request is at
     /// the front of the queue, in the order they're numbered/listed —
     /// empty when nothing is pending. Mirrors `handle_key`'s own priority:
-    /// approvals before prompts (`ui::decision_panel_lines` must show
+    /// approvals before prompts (`ui::decision::panel_lines` must show
     /// exactly this same list, in this same order, or a developer could
     /// pick "option 2" expecting one outcome and get another).
     pub fn decision_options(&self) -> Vec<DecisionOption> {
@@ -1207,10 +1205,6 @@ impl App {
         match self.pending_front() {
             PendingFront::Approval(_) => Some(DecisionOutcome::Approve(false)),
             PendingFront::Prompt(pending) => match &pending.payload {
-                // `Once` never persists a pattern (see `Engine::
-                // record_tool_decision`'s `Once` arm), so the exact target
-                // is passed here purely for a well-formed `PromptResponse`,
-                // not because it takes effect.
                 PromptPayload::Tool { .. } => {
                     Some(DecisionOutcome::Prompt(PromptResponse::Tool { choice: Choice::DenyOnce }))
                 }
@@ -1238,20 +1232,14 @@ impl App {
         }
     }
 
-    /// Navigates/resolves the decision panel's numbered list — replaces the
-    /// old per-payload letter-shortcut handling (`y`/`n`, `o`/`s`/`p`/`a` +
-    /// Shift variants) per explicit developer request: "make sure the
-    /// approval options appear as a list and not some weird keyboard
-    /// shortcuts... key bindings for 1-3 or selecting with arrow keys and
-    /// pressing enter are valid inputs." Up/Down move `decision_selected`
-    /// (clamped, not wrapping); Enter confirms whichever option is
-    /// currently selected; a digit key `1`-`9` jumps to and immediately
-    /// confirms that option directly, without needing Enter first; any
-    /// other key is silently dropped — no typing ahead, same as before.
+    /// Navigates/resolves the decision panel's numbered list, per explicit
+    /// developer request that it be a list and not letter shortcuts. Up/Down
+    /// move `decision_selected` (clamped, not wrapping); Enter confirms the
+    /// selected option; a digit `1`-`9` jumps to and immediately confirms
+    /// that option; any other key is silently dropped — no typing ahead.
     ///
-    /// `Tab` used to flip the whole list between the exact and broad grant
-    /// patterns. ADR 0003 moved scope onto the rows themselves, so there is
-    /// no mode left to toggle and the key is no longer bound here.
+    /// `Tab` is deliberately unbound: ADR 0003 moved scope onto the rows
+    /// themselves, so there is no mode left to toggle.
     fn handle_decision_key(&mut self, key: KeyEvent) {
         let options = self.decision_options();
         if options.is_empty() {
@@ -1744,6 +1732,58 @@ mod tests {
         assert!(app.scroll.offset < before, "Up must scroll the log when there's no draft line to navigate to");
     }
 
+    /// Ctrl+A is not the letter `a`. Ctrl+J stays a newline and Ctrl+C
+    /// stays cancel-or-quit — both are bound above the arm this pins.
+    #[test]
+    fn an_unbound_ctrl_chord_types_nothing() {
+        let mut app = app();
+        for c in ['a', 'd', 'w'] {
+            app.handle_key(press_mod(KeyCode::Char(c), KeyModifiers::CONTROL));
+        }
+        assert_eq!(app.input, "");
+        app.handle_key(press_mod(KeyCode::Char('q'), KeyModifiers::CONTROL | KeyModifiers::ALT));
+        assert_eq!(app.input, "q", "AltGr reports as Ctrl+Alt on some platforms, and it types");
+    }
+
+    #[test]
+    fn backspace_walks_multibyte_characters_whole() {
+        let mut app = app();
+        type_str(&mut app, "aé日");
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.input, "aé");
+        app.handle_key(press(KeyCode::Left));
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!((app.input.as_str(), app.cursor), ("é", 0));
+        app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.input, "é", "nothing before the caret to remove");
+    }
+
+    /// An Edit payload has no option list and no decline. Queued, it held
+    /// the band with every key — Ctrl+C included — dropped on the floor.
+    #[test]
+    fn an_edit_shaped_prompt_is_refused_rather_than_queued() {
+        let mut app = app();
+        let payload = serde_json::to_value(PromptPayload::Edit { kind: "edit".into() }).unwrap();
+        app.apply_event(Event::PromptRequested { call_id: "call-1".into(), payload });
+        assert!(app.pending_prompts.is_empty());
+        assert!(matches!(app.log.last(), Some(LogEntry::Error { .. })));
+        ctrl_c(&mut app);
+        assert!(app.should_quit, "the session is still the developer's to leave");
+    }
+
+    /// Only a frame with a spinner on it is worth repainting on a tick.
+    #[test]
+    fn only_a_session_with_work_in_flight_animates() {
+        let mut app = app();
+        assert!(!app.is_animating(), "an idle session has nothing that reads the tick");
+        app.submit_text("go".into());
+        assert!(app.is_animating(), "waiting on the provider spins");
+        app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        assert!(app.is_animating());
+        app.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn });
+        assert!(!app.is_animating());
+    }
+
     #[test]
     fn backspace_removes_the_character_before_the_cursor() {
         let mut app = app();
@@ -1963,7 +2003,7 @@ mod tests {
     /// Regression/consolidation test for a rust-skills audit finding: an
     /// approval must take interactive priority over an already-pending
     /// prompt (the same "approvals before prompts" rule `handle_key`,
-    /// `decision_options`, `decline_outcome`, and `ui::decision_panel_lines`
+    /// `decision_options`, `decline_outcome`, and `ui::decision::panel_lines`
     /// all now read from the single `App::pending_front` accessor, instead
     /// of each independently re-checking `pending_approvals.front()`).
     /// Exercises the outcome through public behavior — the resolved

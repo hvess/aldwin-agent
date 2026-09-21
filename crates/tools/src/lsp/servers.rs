@@ -11,16 +11,18 @@ pub struct LanguageServer {
     pub args:         &'static [&'static str],
 }
 
-pub fn language_for_path(path: &Path) -> Option<LanguageServer> {
+const RUST: LanguageServer = LanguageServer { language_id: "rust", command: "rust-analyzer", args: &[] };
+
+pub fn language_for_path(path: &Path) -> Option<&'static LanguageServer> {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("rs") => Some(LanguageServer { language_id: "rust", command: "rust-analyzer", args: &[] }),
+        Some("rs") => Some(&RUST),
         _ => None,
     }
 }
 
-pub fn language_by_id(language_id: &str) -> Option<LanguageServer> {
+pub fn language_by_id(language_id: &str) -> Option<&'static LanguageServer> {
     match language_id {
-        "rust" => Some(LanguageServer { language_id: "rust", command: "rust-analyzer", args: &[] }),
+        "rust" => Some(&RUST),
         _ => None,
     }
 }

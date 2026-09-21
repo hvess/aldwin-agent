@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use aldwin_config::{Config, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
+use aldwin_config::{Config, InitOutcome, McpServer, ProviderKind, Scope};
 use aldwin_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
 use aldwin_permissions::Engine;
 use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge};
@@ -15,32 +16,13 @@ use crate::error::StartupError;
 use crate::history::History;
 use crate::slash;
 
-/// Dispatches to whichever client `provider.yaml`'s `kind` selects.
-/// `Agent<C, D>` is generic over `C: LlmClient` (monomorphized, not a trait
-/// object), so this small enum exists to give `run()` a single concrete
-/// type to build an `Agent` with — the alternative would be duplicating the
-/// whole channel/task/TUI wiring below in two near-identical branches.
-enum AnyLlmClient {
-    Anthropic(aldwin_llm::AnthropicClient),
-    OpenAi(aldwin_llm::OpenAiCompatibleClient),
-}
-
-impl LlmClient for AnyLlmClient {
-    fn stream<'a>(&'a self, request: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-        match self {
-            Self::Anthropic(c) => c.stream(request),
-            Self::OpenAi(c) => c.stream(request),
-        }
-    }
-}
-
 /// Whichever client `provider_config` selects, built the same way at
 /// startup and on every `/model` after it — so a model swapped into a
 /// running session is reached exactly as one chosen at launch would be.
-fn build_client(config: aldwin_llm::ProviderConfig) -> Result<AnyLlmClient, aldwin_llm::LlmClientInitError> {
+fn build_client(config: aldwin_llm::ProviderConfig) -> Result<Arc<dyn LlmClient>, aldwin_llm::LlmClientInitError> {
     Ok(match config.kind {
-        ProviderKind::Anthropic => AnyLlmClient::Anthropic(aldwin_llm::AnthropicClient::new(config)?),
-        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(aldwin_llm::OpenAiCompatibleClient::new(config)?),
+        ProviderKind::Anthropic => Arc::new(aldwin_llm::AnthropicClient::new(config)?),
+        ProviderKind::OpenaiCompatible => Arc::new(aldwin_llm::OpenAiCompatibleClient::new(config)?),
     })
 }
 
@@ -51,17 +33,18 @@ fn build_client(config: aldwin_llm::ProviderConfig) -> Result<AnyLlmClient, aldw
 /// is *inside* the one it already has. That is this: the agent is handed the
 /// handle, `/model` rebuilds the client in it, and core stays generic over
 /// `C: LlmClient` without learning that providers exist (see
-/// `slash::ModelSwitch`).
-/// Held as a trait object rather than an `AnyLlmClient` so what is inside
-/// the handle is exactly what core sees through the trait — and so a test
-/// can put a client of its own in there and stream through it, which is the
-/// one thing about this indirection that has to be proved rather than read.
+/// `slash::ModelSwitch`). A trait object, so both provider clients fit and
+/// a test can put one of its own in there and stream through it.
 #[derive(Clone)]
 struct ClientHandle(Arc<std::sync::RwLock<Arc<dyn LlmClient>>>);
 
 impl ClientHandle {
-    fn new(client: impl LlmClient + 'static) -> Self {
-        Self(Arc::new(std::sync::RwLock::new(Arc::new(client))))
+    fn new(client: Arc<dyn LlmClient>) -> Self {
+        Self(Arc::new(std::sync::RwLock::new(client)))
+    }
+
+    fn store(&self, client: Arc<dyn LlmClient>) {
+        *self.0.write().expect("client lock poisoned") = client;
     }
 }
 
@@ -71,8 +54,7 @@ impl LlmClient for ClientHandle {
         // for as long as it runs: a swap landing mid-turn cannot pull the
         // client out from under a request already in flight. That turn
         // finishes on the client it began on and the next one picks up the
-        // new one — the same guarantee a turn had when the client could not
-        // change at all.
+        // new one.
         let client = self.0.read().expect("client lock poisoned").clone();
         Box::pin(async_stream::stream! {
             let mut inner = client.stream(request);
@@ -83,19 +65,12 @@ impl LlmClient for ClientHandle {
     }
 }
 
-impl ClientHandle {
-    fn store(&self, client: Arc<dyn LlmClient>) {
-        *self.0.write().expect("client lock poisoned") = client;
-    }
-}
-
 impl slash::ModelSwitch for ClientHandle {
     /// Builds first and stores second, so a client that cannot be
     /// constructed — the new provider's `api_key_env` is not exported —
     /// leaves the session on the one it has.
     fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String> {
-        let client = build_client(config.clone()).map_err(|e| e.to_string())?;
-        self.store(Arc::new(client));
+        self.store(build_client(config.clone()).map_err(|e| e.to_string())?);
         Ok(())
     }
 }
@@ -118,45 +93,6 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
             )
         })
         .collect()
-}
-
-/// The `provider.yaml` a first-run answer writes: everything but the model
-/// comes straight off the catalogue row the developer picked, and the model
-/// is that provider's own default (`/model` changes it afterwards).
-///
-/// `provider.yaml` deliberately has no field a plaintext key could go in
-/// (see `ProviderConfig`), so this writes the key variable's *name* and the
-/// developer exports the key themselves.
-///
-/// `current` is whatever already supplies the setting, when anything does.
-/// Two fields come from it rather than from the catalogue row:
-///
-/// * the thinking budget, always — a developer's preference, not the
-///   host's, so it survives a move between providers, the same rule
-///   `/model` applies;
-/// * the key variable, but only when the answer names the provider that is
-///   already configured. A developer who exports their Anthropic key as
-///   `ANTHROPIC_KEY_WORK` has said so in `provider.yaml`, and changing the
-///   *model* on that provider is not a request to be moved back onto the
-///   catalogue's default variable name — which would break their next
-///   start. Naming a different provider is a different endpoint with a
-///   different key, so there the catalogue's variable is the right one.
-///
-/// Carrying both is also what makes an unchanged answer compare equal to
-/// what is on disk, so confirming the lists writes nothing at all.
-fn first_run_provider_config(provider: &aldwin_llm::Provider, model: Option<&str>, current: Option<&ProviderConfig>) -> ProviderConfig {
-    let on_this_provider = current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
-    ProviderConfig {
-        version:                  PROVIDER_VERSION,
-        provider:                 provider.kind,
-        // The developer's own answer, and the provider's default only when
-        // the model step could not be asked (a catalogue row with no models
-        // — which the real catalogue never has).
-        model:                    model.unwrap_or_else(|| provider.default_model()).to_string(),
-        base_url:                 provider.base_url.map(String::from),
-        api_key_env:              on_this_provider.map_or_else(|| provider.api_key_env.to_string(), |c| c.api_key_env.clone()),
-        extended_thinking_budget: current.and_then(|c| c.extended_thinking_budget),
-    }
 }
 
 /// Whether the first-run screen carries the provider and model steps at
@@ -186,6 +122,74 @@ fn configured_for_first_run(config: &Config) -> aldwin_tui::Configured {
         provider: aldwin_llm::identify(&current).map(|p| p.id.to_string()),
         model:    Some(current.model.clone()),
     }
+}
+
+/// First run, per ADR 0001. What opens the screen is either question being
+/// unanswered:
+///
+/// * no provider config resolves anywhere — where the model runs is unknown,
+///   and it has to be answered before the LLM client can be constructed;
+/// * this project has no `.aldwin/permissions.yaml` — a directory the agent
+///   has never been pointed at, whose access posture is therefore undeclared.
+///
+/// The file's *existence* is the test, not whether it parses to an empty
+/// allow list: a developer who has deliberately allowed nothing has answered
+/// the question, and must not be asked again on every start.
+///
+/// Once the screen is open the provider and model are on it even when a
+/// global `provider.yaml` already answers them (see `asks_for_a_provider`
+/// for the one exception): entering a new directory is the moment a
+/// developer decides what this project runs on. The lists open on what is
+/// already configured, so confirming changes nothing.
+///
+/// Returns `false` when the developer quit without answering.
+async fn first_run(config: &Config, cwd: &Path, theme: aldwin_tui::Theme) -> Result<bool, StartupError> {
+    let needs_provider = config.global_provider().is_err();
+    let needs_access = !cwd.join(".aldwin").join("permissions.yaml").exists();
+    if !needs_provider && !needs_access {
+        return Ok(true);
+    }
+
+    let configured = configured_for_first_run(config);
+    let ask_provider = asks_for_a_provider(needs_provider, &configured);
+    let Some(answers) = aldwin_tui::run_first_run(theme, catalogue_choices(), aldwin_llm::CURATED, ask_provider, needs_access, configured)
+        .await
+        .map_err(StartupError::FirstRun)?
+    else {
+        return Ok(false);
+    };
+    if let Some(id) = answers.provider.as_deref() {
+        let picked = aldwin_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
+        let current = config.project_provider().or_else(|| config.global_provider().ok());
+        let next = slash::catalogue_provider_config(picked, answers.model.as_deref(), current.as_ref());
+        match current {
+            // Nothing to write: the developer confirmed the lists on the
+            // rows they opened on. Writing anyway would create a project
+            // file that only restates the global one, and then goes stale
+            // the first time the global one changes.
+            Some(current) if current == next => {}
+            // A provider is already configured, so this answer is about
+            // *this directory*. The developer's global default is left alone.
+            Some(_) => config.set_provider(Scope::Project, next).map_err(StartupError::FirstRunWrite)?,
+            // A true first run has no global default yet, so the answer
+            // becomes one: a project-scope file would leave every other
+            // directory unconfigured and ask again in each.
+            None => config.set_provider(Scope::Global, next).map_err(StartupError::FirstRunWrite)?,
+        }
+    }
+    // Answered only when it was asked. Writing an unasked answer into a
+    // directory that already has a `permissions.yaml` would overwrite a
+    // standing rung the developer had already settled — and could only
+    // widen it, the one direction a default-deny agent must never move on
+    // its own.
+    //
+    // Written even when the tier grants nothing: the file's existence is
+    // what records that this directory's question has been answered.
+    if let Some(rung) = answers.access {
+        config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
+        config.set_default_rung(Scope::Project, rung).map_err(StartupError::FirstRunWrite)?;
+    }
+    Ok(true)
 }
 
 /// The startup sequence from aldwin-cli.md, in order:
@@ -220,90 +224,12 @@ pub async fn run() -> Result<(), StartupError> {
     // rather than just before the session TUI because first run draws first.
     let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
 
-    // First run, per ADR 0001. What opens the screen is either question
-    // being unanswered:
-    //
-    // * no provider config resolves anywhere — where the model runs is
-    //   unknown, and it has to be answered before the LLM client below can
-    //   be constructed;
-    // * this project has no `.aldwin/permissions.yaml` — a directory the
-    //   harness has never been pointed at, whose access posture is
-    //   therefore undeclared.
-    //
-    // The file's *existence* is the test, not whether it parses to an empty
-    // allow list: a developer who has deliberately allowed nothing has
-    // answered the question, and must not be asked again on every start.
-    //
-    // Once the screen is open the provider and model are always on it, even
-    // when a global `provider.yaml` already answers them. Entering a new
-    // directory is the moment a developer decides what this project runs
-    // on, and a screen that offers `access` alone made that undecidable
-    // there: the lists were simply absent. They open on what is already
-    // configured (`Configured`), so confirming costs three keystrokes and
-    // changes nothing — the question is asked, not reopened.
-    //
-    // The exception is a `provider.yaml` pointed at an endpoint the
-    // catalogue has never seen, which no row on that screen represents. The
-    // lists would open at the top, on a provider the developer is not
-    // using, and pressing through them would move the project off their own
-    // endpoint — an answer given by inertia, which is the one thing this
-    // screen exists to prevent. So a configured provider the catalogue
-    // cannot name is left alone and only `access` is asked, exactly as
-    // before.
-    let needs_provider = config.global_provider().is_err();
-    let needs_access = !cwd.join(".aldwin").join("permissions.yaml").exists();
-    if needs_provider || needs_access {
-        // aldwin-tui is handed the display half of each catalogue row and
-        // nothing else — it renders the list, it does not know what an
-        // endpoint or a key variable is, and it does not depend on this
-        // crate or on aldwin-llm to find out.
-        let choices = catalogue_choices();
-        let configured = configured_for_first_run(&config);
-        let ask_provider = asks_for_a_provider(needs_provider, &configured);
-        // `None` means the developer quit without answering. Nothing is
-        // written and no session opens — a first run that was dismissed must
-        // not fall back to defaults, least of all for the access question.
-        let Some(answers) = aldwin_tui::run_first_run(theme, choices, aldwin_llm::CURATED, ask_provider, needs_access, configured)
-            .await
-            .map_err(StartupError::FirstRun)?
-        else {
-            return Ok(());
-        };
-        if let Some(id) = answers.provider.as_deref() {
-            let picked = aldwin_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
-            let current = config.project_provider().or_else(|| config.global_provider().ok());
-            let next = first_run_provider_config(picked, answers.model.as_deref(), current.as_ref());
-            match current {
-                // Nothing to write: the developer confirmed the lists on the
-                // rows they opened on. Writing anyway would create a project
-                // file that only restates the global one, and then goes stale
-                // the first time the global one changes.
-                Some(current) if current == next => {}
-                // A provider is already configured, so this answer is about
-                // *this directory* — the one the screen opened for, and the
-                // one already getting a `.aldwin/` written for its access
-                // answer. The developer's global default is left alone.
-                Some(_) => config.set_provider(Scope::Project, next).map_err(StartupError::FirstRunWrite)?,
-                // A true first run has no global default yet, so the answer
-                // becomes one: a project-scope file would leave every other
-                // directory unconfigured and ask again in each.
-                None => config.set_provider(Scope::Global, next).map_err(StartupError::FirstRunWrite)?,
-            }
-        }
-        // Again, answered only when it was asked. Writing an unasked answer
-        // into a directory that already has a `permissions.yaml` would
-        // overwrite a standing rung the developer had already settled — and
-        // could only widen it, the one direction a default-deny harness must
-        // never move on its own.
-        //
-        // Written even when the tier grants nothing: the file's existence is
-        // what records that this directory's question has been answered, so
-        // an `ask` answer has to leave one behind or it would be asked again
-        // on the next start.
-        if let Some(rung) = answers.access {
-            config.ensure_permissions(Scope::Project).map_err(StartupError::FirstRunWrite)?;
-            config.set_default_rung(Scope::Project, rung).map_err(StartupError::FirstRunWrite)?;
-        }
+    // `false` means the developer quit the first-run screen without
+    // answering. Nothing was written and no session opens — a first run that
+    // was dismissed must not fall back to defaults, least of all for the
+    // access question.
+    if !first_run(&config, &cwd, theme).await? {
+        return Ok(());
     }
 
     let permissions = Arc::new(Engine::new(config.clone()));
@@ -324,9 +250,6 @@ pub async fn run() -> Result<(), StartupError> {
     // Reach: the project root, plus whatever `.aldwin/permissions.yaml`
     // declares (ADR 0007). Project scope only, and stated rather than
     // inferred — nothing here goes looking for sibling checkouts.
-    //
-    // A relative root resolves against the project root, so
-    // `roots: [../proton-libs]` in a project file means what it looks like.
     let workspace = aldwin_tools::Workspace::new(cwd.clone());
     let reach_notice = apply_roots(&config, &cwd, &workspace);
     let additional_context = context::build(&cwd, &workspace.roots(), &approved_context_files);
@@ -354,14 +277,15 @@ pub async fn run() -> Result<(), StartupError> {
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
     // This session's transcript. `None` when the history directory cannot be
-    // written — the session then runs exactly as it did before history
-    // existed, having said so once. History must never be able to stop a
-    // session starting, let alone fail a turn.
-    //
-    let (history, history_failure) = History::open(config.history_dir(), model_name.clone(), event_tx.clone());
-    if let Some(message) = history_failure {
-        let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
-    }
+    // written — the session then runs without one, having said so once.
+    // History must never be able to stop a session starting.
+    let history = match History::open(config.history_dir(), model_name.clone(), event_tx.clone()) {
+        Ok(history) => Some(history),
+        Err(message) => {
+            let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
+            None
+        }
+    };
     // Every transcript but this session's own — `resumable` is what excludes
     // it, so the picker never offers the session the developer is sitting in.
     let sessions = history.as_ref().map(|h| h.resumable()).unwrap_or_default();
@@ -409,8 +333,8 @@ pub async fn run() -> Result<(), StartupError> {
     // kind the file itself declares.
     let identified = aldwin_llm::identify(&effective_provider).map(|p| p.id.to_string());
     let kind = match effective_provider.provider {
-        aldwin_config::ProviderKind::Anthropic => "anthropic",
-        aldwin_config::ProviderKind::OpenaiCompatible => "openai-compatible",
+        ProviderKind::Anthropic => "anthropic",
+        ProviderKind::OpenaiCompatible => "openai-compatible",
     };
     let session = aldwin_tui::SessionProvider {
         provider_label:   Some(identified.clone().unwrap_or_else(|| kind.to_string())),
@@ -450,8 +374,8 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
 /// Called at startup and again after `/reload-config`. A relative root
 /// resolves against the project root, so `roots: [../proton-libs]` means
 /// what it looks like.
-fn apply_roots(config: &Config, cwd: &std::path::Path, workspace: &aldwin_tools::Workspace) -> Option<String> {
-    let declared: Vec<std::path::PathBuf> =
+fn apply_roots(config: &Config, cwd: &Path, workspace: &aldwin_tools::Workspace) -> Option<String> {
+    let declared: Vec<PathBuf> =
         config.project_permissions().roots.iter().map(|r| if r.is_absolute() { r.clone() } else { cwd.join(r) }).collect();
     let dropped = workspace.set_extra_roots(declared);
     let extra: Vec<String> = workspace.roots().iter().skip(1).map(|r| r.display().to_string()).collect();
@@ -492,54 +416,6 @@ mod tests {
         assert!(matches!(&fs.transport, McpTransport::Stdio { command, .. } if command == "project-fs-server"));
     }
 
-    /// The developer's own model answer is what gets written — the
-    /// provider's catalogue default is the fallback for the case the model
-    /// step could not be asked at all, not the normal path.
-    #[test]
-    fn first_run_writes_the_model_that_was_chosen() {
-        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
-        let chosen = first_run_provider_config(anthropic, Some("claude-opus-5"), None);
-        assert_eq!(chosen.model, "claude-opus-5");
-        assert_eq!(chosen.api_key_env, anthropic.api_key_env, "the endpoint and key still come from the provider row");
-
-        let unasked = first_run_provider_config(anthropic, None, None);
-        assert_eq!(unasked.model, anthropic.default_model());
-    }
-
-    /// Confirming the lists on the rows they opened on is not a change, and
-    /// must not leave a project file behind restating the global one.
-    #[test]
-    fn an_unchanged_answer_compares_equal_to_what_is_already_configured() {
-        let google = aldwin_llm::provider("google").expect("a catalogue provider");
-        let current = ProviderConfig { extended_thinking_budget: Some(4_000), ..first_run_provider_config(google, Some("gemini-2.5-flash"), None) };
-        let confirmed = first_run_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
-        assert_eq!(confirmed, current, "the thinking budget travels with it, so an unchanged answer is byte-identical");
-
-        let moved = first_run_provider_config(google, Some("gemini-2.5-pro"), Some(&current));
-        assert_ne!(moved, current);
-        assert_eq!(moved.extended_thinking_budget, Some(4_000), "a preference of the developer's survives the move");
-    }
-
-    /// A key variable the developer chose is part of how they reach their
-    /// provider, not part of which model they picked — changing the model
-    /// on that provider must not quietly restore the catalogue's default
-    /// variable name and break their next start.
-    #[test]
-    fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
-        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
-        let current = ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..first_run_provider_config(anthropic, Some("claude-sonnet-5"), None) };
-
-        let same_provider = first_run_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
-        assert_eq!(same_provider.api_key_env, "ANTHROPIC_KEY_WORK", "the developer's own variable is how they reach this provider");
-        assert_eq!(same_provider.model, "claude-opus-5");
-
-        // A different provider is a different endpoint with a different
-        // key, so there the catalogue's variable is the right one.
-        let google = aldwin_llm::provider("google").expect("a catalogue provider");
-        let moved = first_run_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
-        assert_eq!(moved.api_key_env, google.api_key_env);
-    }
-
     /// The two steps are on every screen that opens — except when what is
     /// configured is an endpoint the catalogue cannot name, where no row
     /// represents where the developer already is.
@@ -564,13 +440,13 @@ mod tests {
         assert_eq!(configured_for_first_run(&config), aldwin_tui::Configured::default(), "a true first run has nothing to open on");
 
         let anthropic = aldwin_llm::provider("anthropic").unwrap();
-        config.set_provider(Scope::Global, first_run_provider_config(anthropic, Some("claude-opus-5"), None)).unwrap();
+        config.set_provider(Scope::Global, slash::catalogue_provider_config(anthropic, Some("claude-opus-5"), None)).unwrap();
         let configured = configured_for_first_run(&config);
         assert_eq!(configured.provider.as_deref(), Some("anthropic"));
         assert_eq!(configured.model.as_deref(), Some("claude-opus-5"));
 
         let google = aldwin_llm::provider("google").unwrap();
-        config.set_provider(Scope::Project, first_run_provider_config(google, Some("gemini-2.5-flash"), None)).unwrap();
+        config.set_provider(Scope::Project, slash::catalogue_provider_config(google, Some("gemini-2.5-flash"), None)).unwrap();
         let shadowed = configured_for_first_run(&config);
         assert_eq!(shadowed.provider.as_deref(), Some("google"), "the project file is what the session would run on");
         assert_eq!(shadowed.model.as_deref(), Some("gemini-2.5-flash"));
@@ -604,7 +480,7 @@ mod tests {
     /// `stream` on every single turn.
     #[tokio::test]
     async fn the_handle_streams_through_the_client_currently_in_it() {
-        let handle = ClientHandle::new(NamedClient("first"));
+        let handle = ClientHandle::new(Arc::new(NamedClient("first")));
         assert_eq!(stream_text(&handle).await, "first");
 
         handle.store(Arc::new(NamedClient("second")));
@@ -616,7 +492,7 @@ mod tests {
     /// before the swap and drained after it.
     #[tokio::test]
     async fn a_swap_does_not_reach_a_request_already_in_flight() {
-        let handle = ClientHandle::new(NamedClient("first"));
+        let handle = ClientHandle::new(Arc::new(NamedClient("first")));
         let request = LlmRequest { model: "m", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
         let mut in_flight = handle.stream(request);
 
@@ -649,7 +525,7 @@ mod tests {
             extended_thinking_budget: 1_000,
         };
 
-        let handle = ClientHandle::new(NamedClient("the session's own"));
+        let handle = ClientHandle::new(Arc::new(NamedClient("the session's own")));
         let error = slash::ModelSwitch::switch(&handle, &config(ABSENT)).expect_err("no key is exported for this one");
         assert!(error.contains(ABSENT), "the missing variable's name has to reach the developer: {error}");
         assert_eq!(stream_text(&handle).await, "the session's own", "a failed build must not disturb the session's client");

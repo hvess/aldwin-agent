@@ -37,9 +37,7 @@ const UNCARRIED: [(&str, &str); 3] = [
 pub const OUTPUT: &str = "crates/tui/src/tokens.rs";
 
 /// The imported design system. Everything the loop knows about the design is
-/// read from here and from nowhere else — there used to be a second parser
-/// (`design.rs`, 286 lines) resolving the same three files for a cell check
-/// that has since become a hermetic test in `crates/tui`.
+/// read from here and from nowhere else.
 pub fn design_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
 }
@@ -62,13 +60,12 @@ pub fn generate(design_dir: &Path) -> Result<String> {
     // it is on the uncarried list. A role added upstream that nothing here
     // knows about is the case this check exists for: it would otherwise
     // regenerate cleanly and the app would simply not have the colour.
-    let mut unknown: Vec<&str> = dark_roles
-        .keys()
-        .map(|k| k.as_str())
-        .filter(|role| !UNCARRIED.iter().any(|(name, _)| name == role))
-        .filter(|role| !steps.contains_key(dark_roles.get(*role).map(|s| s.as_str()).unwrap_or("")))
+    let uncarried = |role: &str| UNCARRIED.iter().any(|(name, _)| *name == role);
+    let unknown: Vec<&str> = dark_roles
+        .iter()
+        .filter(|(role, step)| !uncarried(role) && !steps.contains_key(*step))
+        .map(|(role, _)| role.as_str())
         .collect();
-    unknown.sort_unstable();
     if !unknown.is_empty() {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -80,23 +77,25 @@ pub fn generate(design_dir: &Path) -> Result<String> {
         steps.get(scope_roles.get(role)?).copied()
     };
 
-    let carried: Vec<&String> = dark_roles
-        .keys()
-        .filter(|role| !UNCARRIED.iter().any(|(name, _)| *name == role.as_str()))
-        .collect();
+    let carried: Vec<&String> = dark_roles.keys().filter(|role| !uncarried(role)).collect();
 
-    let mut out = String::new();
-    out.push_str(&header(&cells));
+    let mut out = header();
 
     for (name, theme, scope_roles) in [("DARK", "Dark", &dark_roles), ("LIGHT", "Light", &light_roles)] {
+        // The light scope overrides most roles and inherits the rest, so a
+        // role it does not declare resolves against the dark map. That is the
+        // design system's own arrangement, not a fallback.
+        let values = carried
+            .iter()
+            .map(|role| {
+                resolve(scope_roles, role).or_else(|| resolve(&dark_roles, role)).ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, format!("--tui-{role} resolves to no value in either scope"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         out.push_str(&format!("pub(crate) const {name}: Palette = Palette {{\n    theme: Theme::{theme},\n"));
-        for role in &carried {
-            // The light scope overrides most roles and inherits the rest, so
-            // a role it does not declare resolves against the dark map. That
-            // is the design system's own arrangement, not a fallback.
-            let rgb = resolve(scope_roles, role).or_else(|| resolve(&dark_roles, role)).ok_or_else(|| {
-                Error::new(ErrorKind::InvalidData, format!("--tui-{role} resolves to no value in either scope"))
-            })?;
+        for (role, rgb) in carried.iter().zip(&values) {
             out.push_str(&format!("    {}: Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}),\n", field(role), rgb.0, rgb.1, rgb.2));
         }
         out.push_str("};\n\n");
@@ -106,8 +105,7 @@ pub fn generate(design_dir: &Path) -> Result<String> {
         // forty-two fields — and without going stale when the design gains a
         // forty-third.
         out.push_str(&format!("pub(crate) const {name}_VALUES: [Color; {}] = [\n", carried.len()));
-        for role in &carried {
-            let rgb = resolve(scope_roles, role).or_else(|| resolve(&dark_roles, role)).expect("resolved above");
+        for (role, rgb) in carried.iter().zip(&values) {
             out.push_str(&format!("    Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}), // --tui-{role}\n", rgb.0, rgb.1, rgb.2));
         }
         out.push_str("];\n\n");
@@ -118,8 +116,7 @@ pub fn generate(design_dir: &Path) -> Result<String> {
     Ok(out)
 }
 
-fn header(cells: &str) -> String {
-    let _ = cells;
+fn header() -> String {
     format!(
         "//! The design system, in Rust. **Generated — do not edit.**\n\
          //!\n\
@@ -332,14 +329,10 @@ fn cell_tokens(css: &str) -> BTreeMap<String, u16> {
 fn eval(value: &str, known: &BTreeMap<String, u16>) -> Option<u16> {
     let body = value.strip_prefix("calc(").and_then(|v| v.strip_suffix(')')).unwrap_or(value).trim();
     if let Some((left, right)) = body.split_once('*') {
-        return Some(eval(left.trim(), known)? * right.trim().parse::<u16>().ok()?);
+        return eval(left.trim(), known)?.checked_mul(right.trim().parse().ok()?);
     }
     if body.contains('+') {
-        let mut total = 0u16;
-        for term in body.split('+') {
-            total += eval(term.trim(), known)?;
-        }
-        return Some(total);
+        return body.split('+').try_fold(0u16, |total, term| total.checked_add(eval(term.trim(), known)?));
     }
     if let Some(name) = body.strip_prefix("var(--").and_then(|v| v.strip_suffix(')')) {
         return known.get(name.trim()).copied();
@@ -372,14 +365,10 @@ pub fn check(root: &Path, design_dir: &Path) -> Result<std::result::Result<usize
 mod tests {
     use super::*;
 
-    fn design() -> std::path::PathBuf {
-        design_dir()
-    }
-
     #[test]
     fn every_role_the_design_declares_is_carried_or_explained() {
-        let text = generate(&design()).expect("tokens generate");
-        let semantic = strip_comments(&std::fs::read_to_string(design().join("tokens/semantic.css")).unwrap());
+        let text = generate(&design_dir()).expect("tokens generate");
+        let semantic = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/semantic.css")).unwrap());
         for role in roles(scope(&semantic, ":root")).keys() {
             let carried = text.contains(&format!("    {}: Color::Rgb", field(role)));
             let excused = UNCARRIED.iter().any(|(name, _)| name == role);
@@ -393,7 +382,7 @@ mod tests {
     /// wrong one, so it is worth asserting separately from the output.
     #[test]
     fn the_resolver_handles_every_calc_in_the_file() {
-        let css = strip_comments(&std::fs::read_to_string(design().join("tokens/cells.css")).unwrap());
+        let css = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/cells.css")).unwrap());
         let resolved = cell_tokens(&css);
         for (token, value) in [("margin-x", 3), ("step-content-col", 29), ("panel-permission-h", 18), ("pane-commands-w", 48)] {
             assert_eq!(resolved.get(token), Some(&value), "--{token} should resolve to {value}");
@@ -404,7 +393,7 @@ mod tests {
     /// tokens and one a sum of three, one of which is itself a sum.
     #[test]
     fn the_grid_resolves_through_calc() {
-        let text = generate(&design()).expect("tokens generate");
+        let text = generate(&design_dir()).expect("tokens generate");
         for (name, value) in [
             ("MARGIN_X", 3),
             ("LABEL_COL_WIDTH", 8),

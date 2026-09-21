@@ -18,11 +18,14 @@ pub fn unified(path: &str, before: &str, after: &str) -> String {
 
     let mut out = format!("--- {path}\n+++ {path}\n");
     for op in diff_lines(&before_lines, &after_lines) {
-        match op {
-            DiffOp::Context(line) => out.push_str(&format!(" {line}\n")),
-            DiffOp::Removed(line) => out.push_str(&format!("-{line}\n")),
-            DiffOp::Added(line) => out.push_str(&format!("+{line}\n")),
-        }
+        let (sign, line) = match op {
+            DiffOp::Context(line) => (' ', line),
+            DiffOp::Removed(line) => ('-', line),
+            DiffOp::Added(line) => ('+', line),
+        };
+        out.push(sign);
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }

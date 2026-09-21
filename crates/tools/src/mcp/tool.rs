@@ -10,10 +10,9 @@ use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 
 /// One remote MCP tool, proxied through `McpBridge`. `edit_class` is always
-/// `false` at registration — per aldwin-tools.md, MCP tools only ever
-/// become edit-shaped via a first-invocation follow-up, never upfront. That
-/// follow-up (and the config persistence it needs) isn't implemented in
-/// this pass; every MCP tool goes through the standard four-tier prompt.
+/// `false`: an MCP tool becomes edit-shaped only once the developer has said
+/// which argument is the path and which the content (ADR 0004 §3), which is
+/// not built yet, so every MCP tool goes through the standard prompt.
 pub struct McpTool {
     descriptor:  ToolDescriptor,
     bridge:      Arc<McpBridge>,
@@ -45,10 +44,9 @@ impl Tool for McpTool {
         &self.descriptor
     }
 
-    /// MCP tool arguments vary arbitrarily by tool, unlike Read/shell's
-    /// single clear string field — the whole serialised argument object is
-    /// the coarsest-but-workable match target; a developer can still grant
     /// **Every MCP tool is a write**, whatever the server says about it.
+    /// `argv` is the whole serialised argument object — MCP arguments vary
+    /// arbitrarily by tool, so that is what the prompt can show.
     ///
     /// A server advertises its own hints, and a server is exactly the party
     /// whose word cannot be taken here: unlike `run`, an MCP call executes
@@ -94,7 +92,6 @@ mod tests {
     use super::*;
     use aldwin_config::{McpServer, McpTransport};
     use serde_json::json;
-    use std::sync::Arc as StdArc;
 
     fn fake_server() -> McpServer {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp_server.py");
@@ -109,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_proxies_through_the_bridge_and_returns_text() {
-        let bridge = StdArc::new(McpBridge::new(vec![fake_server()]));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
         let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
 
         let out = tool.call("c1", json!({"text": "hi"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap();
@@ -118,7 +115,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_error_result_becomes_a_structured_tool_error() {
-        let bridge = StdArc::new(McpBridge::new(vec![fake_server()]));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
         // Registered under the name "echo" but proxy to a remote name that
         // doesn't exist server-side, to force an isError result.
         let mut broken = remote_echo_tool();
@@ -131,7 +128,7 @@ mod tests {
 
     #[test]
     fn descriptor_is_never_edit_class_at_registration() {
-        let bridge = StdArc::new(McpBridge::new(vec![]));
+        let bridge = Arc::new(McpBridge::new(vec![]));
         let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
         assert!(!tool.descriptor().edit_class);
         assert_eq!(tool.descriptor().source, ToolSource::Mcp { server: "fake".into() });
@@ -139,7 +136,7 @@ mod tests {
 
     #[test]
     fn the_permission_request_is_a_write_whatever_the_server_says() {
-        let bridge = StdArc::new(McpBridge::new(vec![]));
+        let bridge = Arc::new(McpBridge::new(vec![]));
         let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
         let request = tool.permission(&json!({"text": "hi"})).unwrap();
         assert_eq!(request.class, aldwin_permissions::Class::Write);

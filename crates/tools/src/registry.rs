@@ -16,10 +16,9 @@ pub enum ToolSource {
     Mcp { server: String },
 }
 
-/// A registered (name, input schema, edit_class, dispatch fn) tuple — see
-/// aldwin-tools.md's Vocabulary. Built-ins register at crate init with a
-/// static descriptor; MCP tools register lazily (not yet implemented in this
-/// pass — see aldwin-tools.md's MCP Bridge / MCP Lifecycle sections).
+/// A registered (name, input schema, edit_class, source) tuple — see
+/// aldwin-tools.md's Vocabulary. Built-ins register through
+/// `builtin_registry`; MCP tools through `register_mcp_tools`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {
     pub name:         String,
@@ -77,10 +76,8 @@ impl Registry {
         Self::default()
     }
 
-    /// Duplicate names are rejected. MCP-supplied names that collide with a
-    /// built-in are namespaced `<server>:<name>` by the (not yet
-    /// implemented) MCP bridge before reaching this call — that is the
-    /// bridge's job, not the registry's.
+    /// Duplicate names are rejected. Namespacing an MCP name that collides
+    /// (`<server>:<name>`) is `register_mcp_tools`' job, not the registry's.
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
         let name = tool.descriptor().name.clone();
         if self.tools.contains_key(&name) {

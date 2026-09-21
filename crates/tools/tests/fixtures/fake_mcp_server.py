@@ -3,8 +3,8 @@
 
 Speaks just enough of the protocol (newline-delimited JSON-RPC 2.0) to
 exercise the real subprocess + rmcp client wiring: initialize, tools/list,
-tools/call for one tool ("echo"), and an error result for any other tool
-name. Not a general-purpose test double — just what this one test needs.
+tools/call for one tool ("echo"), a "die" that exits without answering, and an
+error result for any other tool name. Not a general-purpose test double — just what this one test needs.
 """
 import json
 import sys
@@ -59,6 +59,8 @@ def main():
             params = request.get("params", {})
             name = params.get("name")
             arguments = params.get("arguments") or {}
+            if name == "die":
+                sys.exit(0)
             if name == "echo":
                 send({
                     "jsonrpc": "2.0",

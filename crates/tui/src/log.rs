@@ -20,7 +20,7 @@ pub enum LogEntry {
     /// `PromptRequested`/`PromptResponse`. Resolved in place once answered,
     /// matched by `call_id` (same identifier `ApprovalCard` uses).
     PermissionPrompt { call_id: String, payload: PromptPayload, resolution: Option<PromptResolution> },
-    TurnEnded { reason: TurnEndReasonKind },
+    TurnEnded { reason: TurnEndReason },
     Error { message: String },
     /// From `Event::Notice` — a message from outside the turn/step
     /// lifecycle (aldwin-cli rejecting a slash command, a
@@ -58,26 +58,6 @@ pub enum ToolActivityStatus {
     Completed { is_error: bool, summary: String },
 }
 
-/// Own copy of core's `TurnEndReason` shape, since core's doesn't derive
-/// `PartialEq`/`Clone` in a way this crate wants to lean on for tests and
-/// `matches!` — see the `From` impl below for the one place they meet.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TurnEndReasonKind {
-    EndTurn,
-    Cancelled,
-    Error(String),
-}
-
-impl From<TurnEndReason> for TurnEndReasonKind {
-    fn from(reason: TurnEndReason) -> Self {
-        match reason {
-            TurnEndReason::EndTurn => Self::EndTurn,
-            TurnEndReason::Cancelled => Self::Cancelled,
-            TurnEndReason::Error(message) => Self::Error(message),
-        }
-    }
-}
-
 /// Truncates a tool result to a one-line summary for a closed
 /// `ToolActivityEntry` — the full content already went into the model's
 /// context; the log just needs enough to glance at.
@@ -110,12 +90,4 @@ mod tests {
         let out = summarise(&"x".repeat(100), 10);
         assert_eq!(out, format!("{}…", "x".repeat(10)));
     }
-
-    #[test]
-    fn turn_end_reason_converts_from_core() {
-        assert_eq!(TurnEndReasonKind::from(TurnEndReason::EndTurn), TurnEndReasonKind::EndTurn);
-        assert_eq!(TurnEndReasonKind::from(TurnEndReason::Cancelled), TurnEndReasonKind::Cancelled);
-        assert_eq!(TurnEndReasonKind::from(TurnEndReason::Error("x".into())), TurnEndReasonKind::Error("x".into()));
-    }
-
 }

@@ -131,17 +131,23 @@ impl Pty {
 /// Read from a raw fd. Returns `Ok(0)` at EOF, which for a pty master means
 /// the far side closed — the app exited.
 pub fn read(fd: RawFd, buf: &mut [u8]) -> Result<usize> {
-    // SAFETY: buf is valid for len bytes.
-    let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-    if n < 0 {
+    loop {
+        // SAFETY: buf is valid for len bytes.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n >= 0 {
+            return Ok(n as usize);
+        }
         let err = Error::last_os_error();
         // A pty master reports EIO rather than EOF when the slave is gone.
         if err.raw_os_error() == Some(libc::EIO) {
             return Ok(0);
         }
-        return Err(err);
+        // Retried like `write_all` does: the pump treats an error as the far
+        // side closing, and a signal is not that.
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
     }
-    Ok(n as usize)
 }
 
 pub fn write_all(fd: RawFd, mut buf: &[u8]) -> Result<()> {

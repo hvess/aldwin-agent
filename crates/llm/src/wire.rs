@@ -138,16 +138,10 @@ impl WireContentBlock {
 /// highest index (covers the last completed turn) — at most two total, the
 /// V0 ceiling, even if core ever supplied more than one breakpoint index.
 ///
-/// Known cost, not fixed here: this deep-clones every message's text/JSON
-/// on every call (`WireRequest` owns everything rather than borrowing from
-/// `request`, chosen for simplicity — see the module's earlier design
-/// note), so building the request body is O(conversation length) per turn,
-/// O(n²) in allocation/copy over a long session. A borrowing implementation
-/// is possible (custom `Serialize` over `&Message` plus a side-table for
-/// the one or two blocks that need `cache_control` injected) but is real
-/// added complexity for a cost that's unmeasured against actual session
-/// lengths — worth revisiting if it ever shows up in practice, not
-/// speculatively now.
+/// Known cost, not fixed here: `WireRequest` owns everything, so this
+/// deep-clones every message once per step. A borrowing `Serialize` is
+/// possible but the cost is unmeasured against real session lengths, and the
+/// body is serialised and sent over the network straight afterwards.
 pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
     let mut tools: Vec<WireTool> = request
         .tools
@@ -180,7 +174,9 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     WireRequest {
         model: config.model.clone(),
         system: request.system.to_string(),
-        max_tokens: budget + MAX_TOKENS_HEADROOM,
+        // Saturating: the budget is whatever a developer typed into
+        // provider.yaml, and an overflow here is a panic in a debug build.
+        max_tokens: budget.saturating_add(MAX_TOKENS_HEADROOM),
         stream: true,
         thinking: WireThinking::adaptive(),
         tools,
@@ -341,8 +337,6 @@ pub fn parse_error_body(text: &str) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
-    #[error("malformed SSE payload: {0}")]
-    Frame(#[from] serde_json::Error),
     #[error("malformed tool input JSON for {name:?}: {source}")]
     ToolInput { name: String, #[source] source: serde_json::Error },
     #[error("{message}")]
@@ -591,15 +585,8 @@ mod tests {
                 ContentBlock::Text { text: "done".into() },
             ],
         }];
-        let config = crate::config::ProviderConfig {
-            kind: aldwin_config::ProviderKind::Anthropic,
-            model: "claude-sonnet-5".into(),
-            api_key_env: "X".into(),
-            base_url: None,
-            extended_thinking_budget: 1000,
-        };
         let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[] };
-        let wire = build_request(&config, &request);
+        let wire = build_request(&anthropic(), &request);
         let json = serde_json::to_value(&wire).unwrap();
         let block = &json["messages"][0]["content"][0];
         assert_eq!(block["type"], "thinking");
@@ -752,13 +739,6 @@ mod tests {
 
     #[test]
     fn build_request_places_cache_control_on_last_tool_and_the_given_message_index() {
-        let config = crate::config::ProviderConfig {
-            kind: aldwin_config::ProviderKind::Anthropic,
-            model: "claude-sonnet-5".into(),
-            api_key_env: "X".into(),
-            base_url: None,
-            extended_thinking_budget: 1000,
-        };
         let tools = vec![
             ToolDefinition { name: "a".into(), description: "".into(), input_schema: json!({}) },
             ToolDefinition { name: "b".into(), description: "".into(), input_schema: json!({}) },
@@ -772,7 +752,7 @@ mod tests {
         ];
         let request = LlmRequest { model: "unused", system: "sys", tools: &tools, messages: &messages, cache_breakpoints: &[1] };
 
-        let wire = build_request(&config, &request);
+        let wire = build_request(&anthropic(), &request);
         assert!(wire.tools[0].cache_control.is_none());
         assert!(wire.tools[1].cache_control.is_some());
         let last_block = wire.messages[1].content.last().unwrap();
@@ -800,6 +780,15 @@ mod tests {
         let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &[], cache_breakpoints: &[] };
         let wire = build_request(&config, &request);
         assert!(wire.max_tokens > config.extended_thinking_budget);
+    }
+
+    /// The budget is a developer-typed `u32`; the headroom sum must not
+    /// overflow on one that is already at the top of the range.
+    #[test]
+    fn build_request_max_tokens_saturates_rather_than_overflowing() {
+        let config = crate::config::ProviderConfig { extended_thinking_budget: u32::MAX, ..anthropic() };
+        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &[], cache_breakpoints: &[] };
+        assert_eq!(build_request(&config, &request).max_tokens, u32::MAX);
     }
 
     /// Regression test: current Claude models (Sonnet 5, Opus 5, the rest of

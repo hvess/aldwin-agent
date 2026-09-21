@@ -1,4 +1,4 @@
-# mjolnir-history
+# aldwin-history
 
 Persisted conversation transcripts: a session survives process exit, and a
 past session can be listed and resumed from inside a running one.
@@ -12,14 +12,14 @@ format, the permission engine, retention, and any launch-time entry point.
 
 ## The stale line
 
-`.claude/spec/mjolnir.md` line 83 says, as a V0 Decision: *"No session
+`.claude/spec/aldwin.md` line 83 says, as a V0 Decision: *"No session
 persistence, no first-class history... Sessions are ephemeral."* It becomes
 false the day this ships, so it is edited in the same change (Step 9), and ADR
 0005 records why. This is bookkeeping that travels with the code, not a gate in
 front of it.
 
 Only the first clause goes. The rest of that Decision — memory is
-developer-authored, Mjolnir proposes no entries, nothing crosses into a *new*
+developer-authored, Aldwin proposes no entries, nothing crosses into a *new*
 session — is what this feature is careful not to touch.
 
 ## Why
@@ -49,7 +49,7 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
   otherwise complete; it introduces no second representation.
 
 - **Append-only JSONL, one file per session,** at
-  `~/.mjolnir/history/<project-slug>/<session-id>.jsonl`, mode `0600`. First
+  `~/.aldwin/history/<project-slug>/<session-id>.jsonl`, mode `0600`. First
   line is a header (`version`, `started_at`, `cwd`, `model`); every line after
   it is one `LogRecord`. JSONL because writes are appends and a torn tail costs
   one turn, not the session.
@@ -71,12 +71,12 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
 - **Writes are best-effort.** A failed history write emits `Event::Notice` and
   the turn proceeds. History must never be able to fail a turn.
 
-- **Core stays filesystem-free.** `mjolnir-core` depends on no fs crate and
+- **Core stays filesystem-free.** `aldwin-core` depends on no fs crate and
   must not start. The writer reaches it as a `RecordSink` trait implemented in
-  mjolnir-config; resume reaches it as a command *carrying records*, not a
+  aldwin-config; resume reaches it as a command *carrying records*, not a
   path. Core never learns where a transcript lives.
 
-- **The TUI stays filesystem-free too.** `mjolnir-tui` depends only on core and
+- **The TUI stays filesystem-free too.** `aldwin-tui` depends only on core and
   permissions. The session list is handed in at startup as display rows, the
   same way the model catalogue already arrives (`SessionProvider`).
 
@@ -89,24 +89,24 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
 
 - **`SessionId`** — new id type beside `TurnId`/`StepId` in
   `crates/core/src/types.rs`. Three fields, each answering a different
-  collision: epoch seconds (ordering), pid (two Mjolnirs in one project), and a
+  collision: epoch seconds (ordering), pid (two Aldwins in one project), and a
   process-local counter (two sessions in one process — see Progress).
 - **`RecordSink`** — `trait RecordSink: Send + Sync { fn append(&self, r:
-  &LogRecord); }` in mjolnir-core. `ConversationLog::with_sink` installs one;
+  &LogRecord); }` in aldwin-core. `ConversationLog::with_sink` installs one;
   `append()` fans out to it. `snapshot()`, `len()`, `clear()` unchanged.
-- **`HistoryStore`** — mjolnir-config (`history.rs`; it owns `fsio` and the
-  `~/.mjolnir/` layout). `create` / `reopen` / `append`, with free functions
+- **`HistoryStore`** — aldwin-config (`history.rs`; it owns `fsio` and the
+  `~/.aldwin/` layout). `create` / `reopen` / `append`, with free functions
   `list`, `load` and `project_dir` beside it, and `Config::history_dir` for the
   path. It does *not* implement `RecordSink`: a failed write has to reach the
-  developer through the session's event channel, and mjolnir-config holds no
-  tokio dependency. That impl is `mjolnir-cli`'s `History`, which also owns the
+  developer through the session's event channel, and aldwin-config holds no
+  tokio dependency. That impl is `aldwin-cli`'s `History`, which also owns the
   swap `/clear` and `/resume` perform — the shape `ClientHandle` already uses
   for `/model`.
 - **`Command::Resume { records }`** and **`Event::HistoryLoaded { records }`** —
   the exact shape of the existing `ClearHistory` / `HistoryCleared` pair. The
   interceptor reads the file, core swaps its log, the TUI redraws from the
   event. One read, two consumers, and core touches no disk.
-- **`/resume`** — mjolnir-cli's dispatch table (`crates/cli/src/slash.rs`).
+- **`/resume`** — aldwin-cli's dispatch table (`crates/cli/src/slash.rs`).
   Bare opens the picker; `/resume <id>` does the work. The session being
   written is excluded from every listing and refused by id
   (`History::resumable`, `History::is_current`).
@@ -114,7 +114,7 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
 ## Decisions
 
 - **There is no launch-time entry point in V1 — no `--resume`, no
-  `--continue`.** `archive/mjolnir-cli.md:209` decides "Zero-arg
+  `--continue`.** `archive/aldwin-cli.md:209` decides "Zero-arg
   binary in V0 — no flags, no subcommands", and `crates/cli/src/main.rs`
   enforces it with a `Cli` struct whose only job is rejecting arguments. A
   flag would reverse a second stated Decision for a convenience `/resume`
@@ -169,7 +169,7 @@ All done, 2026-09-20.
    `ConversationLog::with_sink` beside it.
    - Verify: a log with no sink behaves exactly as today.
 
-2. `HistoryStore` in mjolnir-config: header + JSONL append, `0600`, implementing
+2. `HistoryStore` in aldwin-config: header + JSONL append, `0600`, implementing
    `RecordSink`. Mint the `SessionId` in bootstrap and wire the sink through
    `Agent::new`.
    - Verify: a killed process leaves a file whose earlier lines all parse.
@@ -205,7 +205,7 @@ All done, 2026-09-20.
    - Verify: measured against the design system's list frame, not eyeballed —
      see `.claude/design/IMPORT.md` rule 4.
 
-9. Write ADR 0005; amend `mjolnir.md` line 83 to point at it. Note completion
+9. Write ADR 0005; amend `aldwin.md` line 83 to point at it. Note completion
    in Progress and move this spec to `.claude/spec/archive/`.
 
 ## Pitfalls
@@ -235,7 +235,7 @@ All done, 2026-09-20.
 ## Out of Scope
 
 - **Retention.** Nothing prunes and there is no `/history forget`. Clearing out
-  `~/.mjolnir/history/` is the developer's business, the same as any other
+  `~/.aldwin/history/` is the developer's business, the same as any other
   directory of their own files.
 - Launch-time flags (see Decisions), and with them any `--continue`.
 - Cross-session memory, fact extraction, or end-of-session prompts to remember
@@ -243,7 +243,7 @@ All done, 2026-09-20.
 - Search over transcripts. Listing and resuming only.
 - Export, sharing off-machine, and syncing between machines.
 - Editing or redacting a past transcript.
-- Rendering changes in mjolnir-tui — resume reuses the existing entry shapes,
+- Rendering changes in aldwin-tui — resume reuses the existing entry shapes,
   and if it needs new ones that is a signal Step 5's mapping is wrong.
 
 ## Progress
@@ -268,11 +268,11 @@ All done, 2026-09-20.
   reading the list *before* opening its own file, which worked and was fragile:
   it depended on statement order in one function.
 
-  **`mjolnir-config` gained a dependency on `mjolnir-core`.** The truncation
+  **`aldwin-config` gained a dependency on `aldwin-core`.** The truncation
   rule and the turn count are `LogRecord` semantics, and splitting them from
-  the file format would have put half the transcript's meaning in mjolnir-cli.
+  the file format would have put half the transcript's meaning in aldwin-cli.
   Acyclic — core depends on no workspace crate — but it is a new edge and worth
-  knowing about. `mjolnir-tui` did *not* gain one: it holds mjolnir-config as a
+  knowing about. `aldwin-tui` did *not* gain one: it holds aldwin-config as a
   dev-dependency only, which is why the session list is handed to it as display
   rows rather than read.
 
@@ -286,7 +286,7 @@ All done, 2026-09-20.
   `--continue`/`--resume` flags, a `history.yaml` retention policy with
   `/history prune` and `/history forget`, and a documented opt-out. Three
   things came out of that. The flags contradicted
-  `archive/mjolnir-cli.md:209`'s zero-arg Decision, which the draft did not
+  `archive/aldwin-cli.md:209`'s zero-arg Decision, which the draft did not
   notice — dropping them removes the contradiction rather than needing a second
   reversal to resolve it.
   Retention became a named gap rather than a config domain. And the

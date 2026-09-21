@@ -1,11 +1,11 @@
 [package]
-name    = "mjolnir-tui"
+name    = "aldwin-tui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-mjolnir-core        = { path = "../core" }
-mjolnir-permissions = { path = "../permissions" }
+aldwin-core        = { path = "../core" }
+aldwin-permissions = { path = "../permissions" }
 tokio                = { workspace = true }
 futures              = { workspace = true }
 serde_json           = { workspace = true }
@@ -16,4 +16,4 @@ unicode-width        = "0.2"
 
 [dev-dependencies]
 tempfile        = "3"
-mjolnir-config = { path = "../config" }
+aldwin-config = { path = "../config" }

@@ -1,6 +1,6 @@
 ---
 name: review
-description: The feedback loop to run after a change to Mjolnir is ready for submission. Runs lint, tests, design-token checks and screenshot baselines, then has an independent subagent compare the rendered frames against the designs and score its confidence. Iterates until the change is clean and the judge is 90% confident. Use when a feature is finished, not while it is being written.
+description: The feedback loop to run after a change to Aldwin is ready for submission. Runs lint, tests, design-token checks and screenshot baselines, then has an independent subagent compare the rendered frames against the designs and score its confidence. Iterates until the change is clean and the judge is 90% confident. Use when a feature is finished, not while it is being written.
 ---
 
 # Review
@@ -27,7 +27,7 @@ at the wrong screens reports the whole app's backlog instead of this change.
 ## 1–4. The deterministic stages
 
 ```sh
-cargo build && ./target/release/mjolnir-review review \
+cargo build && ./target/release/aldwin-review review \
   --goal  "<what this change set out to do, in a sentence>" \
   --focus "<the scenes it touched>"
 ```
@@ -47,8 +47,8 @@ in a browser from disk and survives being moved.
 | 0 toolchain | `rustc --version` against the baseline | the toolchain moved. Clippy's lint set changes between releases, so stage 1 may now fail on code nobody touched — record the new version deliberately rather than puzzling over it |
 | 1 lint | `cargo clippy --workspace --all-targets -- -D warnings` | fix it before anything else; a lint failure means the other stages ran against code you are about to change |
 | 2 test | `cargo test --workspace` | a regression, or a test that needed updating with the change |
-| 3 tokens | regenerates `crates/tui/src/tokens.rs` from `.claude/design/tokens/` and diffs | the app's design system and the imported one have drifted. `cargo run -p mjolnir-review -- tokens --write`, then read the diff before committing it |
-| 4 frames | `cargo test -p mjolnir-tui --test render_snapshot` | either the rendered frames changed against the baseline, or a cell left the design system — the failure names which. If the change is *meant* to alter the frames, regenerate deliberately after reading the diff: `UPDATE_SNAPSHOTS=1 cargo test -p mjolnir-tui --test render_snapshot` |
+| 3 tokens | regenerates `crates/tui/src/tokens.rs` from `.claude/design/tokens/` and diffs | the app's design system and the imported one have drifted. `cargo run -p aldwin-review -- tokens --write`, then read the diff before committing it |
+| 4 frames | `cargo test -p aldwin-tui --test render_snapshot` | either the rendered frames changed against the baseline, or a cell left the design system — the failure names which. If the change is *meant* to alter the frames, regenerate deliberately after reading the diff: `UPDATE_SNAPSHOTS=1 cargo test -p aldwin-tui --test render_snapshot` |
 
 **All five are hermetic.** Same inputs, same result, no clock, no network, no
 subprocess of the app, no compositor. The whole path runs in about fifteen
@@ -193,7 +193,7 @@ Five things the prompt does that matter, each for a measured reason:
 Do not hand-edit the HTML:
 
 ```sh
-./target/release/mjolnir-review stage5 --run <dir> --findings findings.json
+./target/release/aldwin-review stage5 --run <dir> --findings findings.json
 ```
 
 where `findings.json` is **the judge's JSON block, saved verbatim**. The

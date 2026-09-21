@@ -10,7 +10,7 @@ use crate::error::ToolError;
 use crate::gate::ApprovalGate;
 use crate::lsp::{self, LspClient};
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
-use mjolnir_permissions::Class;
+use aldwin_permissions::Class;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -24,7 +24,7 @@ enum Op {
 
 /// LSP-backed code intelligence. Output is structured location and
 /// signature data only (JSON text) — no prose summaries, per
-/// mjolnir-tools.md. Servers spawn lazily per-language on first use and
+/// aldwin-tools.md. Servers spawn lazily per-language on first use and
 /// persist in `clients` for the tool's (i.e. the session's) lifetime.
 pub struct ExplainTool {
     descriptor:   ToolDescriptor,
@@ -60,7 +60,7 @@ impl ExplainTool {
     }
 
     /// Best-effort graceful shutdown of every spawned server — call this
-    /// from the process's own shutdown sequence (mjolnir-cli). Each
+    /// from the process's own shutdown sequence (aldwin-cli). Each
     /// client's process is also `kill_on_drop`, so this isn't the only
     /// thing standing between a spawned server and process exit.
     pub async fn shutdown_all(&self) {
@@ -354,7 +354,7 @@ mod tests {
     /// definition` correctly. Ignored by default — indexing (even for a
     /// trivial crate) can take several seconds, too slow/flaky for a
     /// default test run. Run explicitly with:
-    ///   cargo test -p mjolnir-tools --lib tools::explain -- --ignored
+    ///   cargo test -p aldwin-tools --lib tools::explain -- --ignored
     #[tokio::test]
     #[ignore]
     async fn real_rust_analyzer_resolves_a_definition() {

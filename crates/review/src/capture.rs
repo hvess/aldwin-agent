@@ -140,7 +140,7 @@ fn take_frame(
         .current_dir(&prepared.cwd)
         .env("HOME", &prepared.home)
         .env("TERM", "foot")
-        .env("MJOLNIR_SHOT_KEY", "not-a-real-key-the-fake-never-checks");
+        .env("ALDWIN_SHOT_KEY", "not-a-real-key-the-fake-never-checks");
 
     let mut proxy = Proxy::start(comp, &baseline.font, cols as u16, rows as u16, command)?;
     proxy.wait_quiet(quiet_for, Duration::from_secs(20))?;

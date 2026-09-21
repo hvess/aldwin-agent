@@ -1,4 +1,4 @@
-# mjolnir-cli
+# aldwin-cli
 
 Binary crate — startup sequence, session bootstrap, impl wiring, slash-command dispatch.
 
@@ -8,8 +8,8 @@ Binary crate — startup sequence, session bootstrap, impl wiring, slash-command
 **Last Updated:** 2026-06-10
 
 **Completed:** 2026-08-29 — `20a8d39`, plus an audit fix (`f023d4a`) that
-wired up context-file approval (was implemented in mjolnir-permissions
-and mjolnir-tui but never actually invoked from here — the session
+wired up context-file approval (was implemented in aldwin-permissions
+and aldwin-tui but never actually invoked from here — the session
 initializer now does exactly what this spec's Design section says: tests
 each candidate file before composing additional-context). No known gaps
 against this spec. Manually verified against the real binary: --help/
@@ -19,7 +19,7 @@ against the real Anthropic API (no API key in this environment).
 
 **Post-archive addition (2026-08-29):** A live run's developer had no
 discoverable way to end a session short of `Ctrl+C` (itself undiscoverable
-until fixed in mjolnir-tui the same day) and asked for a slash command.
+until fixed in aldwin-tui the same day) and asked for a slash command.
 Added `/exit` to the dispatch table — `Intercepted::Quit`
 makes `run_interceptor` return instead of looping again, which drops its
 `forward` and `events` sender clones; the core's command channel then
@@ -35,7 +35,7 @@ with the `match` in `intercept` — three commands doesn't earn a
 data-driven dispatch table yet. The unknown-command Notice now points at
 `/help` too.
 
-**Post-archive addition (2026-08-29, `/clear`):** Part of mjolnir-tui's
+**Post-archive addition (2026-08-29, `/clear`):** Part of aldwin-tui's
 same-day live-feedback batch (see its own spec). Unlike every other known
 command, `/clear` is translated and forwarded (`Intercepted::Forward(Command::ClearHistory)`)
 rather than handled locally — core owns `ConversationLog`, so only core
@@ -48,7 +48,7 @@ owns 100% of the `/`-prefix parsing and dispatch table, it's just that this
 one entry's action lives in core rather than in this crate. `HELP_TEXT`
 updated to include it.
 
-**Post-archive addition (2026-09-02, `/theme`):** Follow-up to mjolnir-tui's
+**Post-archive addition (2026-09-02, `/theme`):** Follow-up to aldwin-tui's
 same-day light-theme addition (see its own spec) — the developer asked for
 a way to switch themes from inside the harness rather than hand-editing
 `tui.yaml`. `/theme light|dark` is closer to `/reload-config` than to
@@ -65,12 +65,12 @@ disk — the two should always agree, since this command is the only thing
 that changes either). An invalid value (anything but `light`/`dark`,
 case-insensitive) is rejected with a `Notice` and neither persists nor
 emits `ThemeChanged` — confirmed by test, not just by the validation read.
-`HELP_TEXT` updated to include it. See mjolnir-tui.md's matching Progress
+`HELP_TEXT` updated to include it. See aldwin-tui.md's matching Progress
 note for the `App`/`ui.rs` side (switches live, no restart, since `App::
-theme` is read fresh on every draw) and mjolnir-core.md's for the new
+theme` is read fresh on every draw) and aldwin-core.md's for the new
 `Event` variant.
 
-**Post-archive addition (2026-09-06, `/model`):** Follow-up to mjolnir-tui's
+**Post-archive addition (2026-09-06, `/model`):** Follow-up to aldwin-tui's
 same-day first-run rework, where screen `5d`'s first step became *provider*
 rather than *model* and its prose promises "/model picks a model once the
 session starts". That clause had been dropped from the frame twice for
@@ -80,7 +80,7 @@ One command, not two, because the two halves are not separable: a model id
 means nothing without the provider whose catalogue it comes from, and
 picking a provider with no model would leave `provider.yaml` incomplete.
 `/model [provider/]model` splits its argument on the *first* `/` only. A
-name the catalogue knows (`mjolnir_llm::PROVIDERS`) is a provider whether or
+name the catalogue knows (`aldwin_llm::PROVIDERS`) is a provider whether or
 not a slash follows it; anything else with no slash is a model id on the
 provider already configured. Everything after that first slash is the model
 — so `openrouter/qwen/qwen3-coder` reaches the right place. A slashed argument
@@ -120,7 +120,7 @@ different:
    pinned by `the_session_model_reported_is_the_one_the_process_started_with`.
 
 `HELP_TEXT` updated to include it. The catalogue itself lives in
-mjolnir-llm (see its own post-archive note): first run and this command
+aldwin-llm (see its own post-archive note): first run and this command
 read the same list, so a provider added there appears in both without
 either being edited.
 
@@ -128,8 +128,8 @@ either being edited.
 `bootstrap::run`'s `needs_model` is now `needs_provider`, and the answer it
 writes comes off a catalogue row rather than being hard-coded Anthropic —
 `DEFAULT_API_KEY_ENV` is gone with it. The CLI is what joins the two
-crates that must not depend on each other: it maps `mjolnir_llm::PROVIDERS`
-into `mjolnir_tui::ProviderChoice` (id and purpose, nothing else) and hands
+crates that must not depend on each other: it maps `aldwin_llm::PROVIDERS`
+into `aldwin_tui::ProviderChoice` (id and purpose, nothing else) and hands
 the display list to `run_first_run`, then maps the returned id back to the
 catalogue row to build the `ProviderConfig`. `Answers::provider` is an
 `Option`, so the access-only run — a new directory under an already
@@ -156,7 +156,7 @@ did not ask for. Both are fixed and pinned.
    "already on …".
 
 Also from the same pass: `bootstrap` writes first run's access answer only
-when the access question was actually asked. See `.claude/spec/mjolnir-tui.
+when the access question was actually asked. See `.claude/spec/aldwin-tui.
 md`'s entry of the same date — `add_grant` only ever adds, so an unasked
 answer could only widen an allow list the developer had already settled.
 
@@ -164,17 +164,17 @@ answer could only widen an allow list the developer had already settled.
 **Post-archive addition (2026-09-06, the model selector):** Reported: the
 selector "doesn't appear in the onboarding", and `/model` "says the model is
 already selected when it isn't". Three changes here; the screens and the
-picker are in `.claude/spec/mjolnir-tui.md`'s entry of the same date, and
-the reason onboarding never appeared is in `mjolnir-config.md`'s (init
+picker are in `.claude/spec/aldwin-tui.md`'s entry of the same date, and
+the reason onboarding never appeared is in `aldwin-config.md`'s (init
 seeded `provider.yaml`, so `needs_provider` was never true).
 
-* `catalogue_choices()` is now the one place `mjolnir_llm::PROVIDERS` is
-  mapped into `mjolnir_tui::ProviderChoice` — used by both first run and the
+* `catalogue_choices()` is now the one place `aldwin_llm::PROVIDERS` is
+  mapped into `aldwin_tui::ProviderChoice` — used by both first run and the
   session, and carrying each row's models, since first run now asks which
   model too. `first_run_provider_config` takes that answer;
   the catalogue default is the fallback for a row that offers no models, not
   the normal path.
-* `mjolnir_tui::run` takes a `SessionProvider` — the catalogue, plus the
+* `aldwin_tui::run` takes a `SessionProvider` — the catalogue, plus the
   catalogue id of the row `provider.yaml` actually resolves to (from
   `identify(&effective_provider)`, the file that supplies the setting rather
   than the global one it may be shadowing). That is what the picker opens on
@@ -191,16 +191,16 @@ seeded `provider.yaml`, so `needs_provider` was never true).
 
 ## Design
 
-- **Invocation:** Zero-arg binary. `mjolnir` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.
+- **Invocation:** Zero-arg binary. `aldwin` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.
 - **Startup Sequence:**
   1. init_global_if_empty — first launch writes annotated global config; PartiallyPresent → refuse to start.
   2. Load all config layers — refuse to start on any parse failure, schema error, unknown major, or missing env var (error to stderr, non-zero exit; TUI has not yet launched).
   3. Build additional-context string from cwd path and approved context file contents.
-  4. Instantiate concrete impls: AnthropicClient (mjolnir-llm), PermissionsEngine (mjolnir-permissions), ToolDispatcher (mjolnir-tools).
-  5. Create the agent loop (mjolnir-core) with LlmClient, ToolDispatcher, and additional-context.
-  6. Launch TUI (mjolnir-tui) with the core's event receiver and command sender.
+  4. Instantiate concrete impls: AnthropicClient (aldwin-llm), PermissionsEngine (aldwin-permissions), ToolDispatcher (aldwin-tools).
+  5. Create the agent loop (aldwin-core) with LlmClient, ToolDispatcher, and additional-context.
+  6. Launch TUI (aldwin-tui) with the core's event receiver and command sender.
   7. Block on TUI exit; drop channels; wait for core to drain cleanly.
-- **Additional Context:** Opaque string handed to mjolnir-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim.
+- **Additional Context:** Opaque string handed to aldwin-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim.
 - **Slash Commands:** Input that begins with `/` is intercepted at the CLI layer before the Submit command reaches the core. The CLI maintains a dispatch table of known slash commands. Unknown slash commands are rejected with an error message in the TUI; they do not reach the core. Known V0 commands: /reload-config.
 - **Reload Config:** `/reload-config` calls config.reload_all(). On success, re-initializes the PermissionsEngine from the new snapshot and notifies the TUI. On failure, previous snapshot is retained and the failing file path is surfaced to the TUI verbatim.
 
@@ -252,9 +252,9 @@ seeded `provider.yaml`, so `needs_provider` was never true).
 
 ## References
 
-- .claude/spec/mjolnir.md — parent spec; binary crate role and dependency list.
-- .claude/spec/mjolnir-core.md — agent loop, additional-context contract, event/command channels.
-- .claude/spec/mjolnir-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
-- .claude/spec/mjolnir-permissions.md — PermissionsEngine init from config snapshot.
-- .claude/spec/mjolnir-tools.md — ToolDispatcher instantiation.
-- .claude/spec/mjolnir-tui.md — TUI launch, channel wiring, /reload-config surface.
+- .claude/spec/aldwin.md — parent spec; binary crate role and dependency list.
+- .claude/spec/aldwin-core.md — agent loop, additional-context contract, event/command channels.
+- .claude/spec/aldwin-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
+- .claude/spec/aldwin-permissions.md — PermissionsEngine init from config snapshot.
+- .claude/spec/aldwin-tools.md — ToolDispatcher instantiation.
+- .claude/spec/aldwin-tui.md — TUI launch, channel wiring, /reload-config surface.

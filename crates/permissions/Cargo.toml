@@ -1,10 +1,10 @@
 [package]
-name    = "mjolnir-permissions"
+name    = "aldwin-permissions"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-mjolnir-config = { path = "../config" }
+aldwin-config = { path = "../config" }
 serde            = { workspace = true }
 serde_json       = { workspace = true }
 thiserror        = { workspace = true }

@@ -339,7 +339,7 @@ fn span_width(spans: &[Span<'static>]) -> usize {
 
 /// Renders one prose line (never a fenced-code line — those are already
 /// pulled out by `split_code_fences`). Styling is modifiers only
-/// (bold/italic/underline/reversed/crossed-out) — mjolnir-tui.md reserves
+/// (bold/italic/underline/reversed/crossed-out) — aldwin-tui.md reserves
 /// the one accent colour for the approval card and focused input.
 pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;

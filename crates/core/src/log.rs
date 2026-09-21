@@ -5,7 +5,7 @@ use crate::event::LogRecord;
 ///
 /// Core owns no filesystem dependency and must not grow one, so the
 /// transcript writer reaches it as a trait implemented elsewhere
-/// (mjolnir-config's `HistoryStore`). Core appends records; it never learns
+/// (aldwin-config's `HistoryStore`). Core appends records; it never learns
 /// where they land, or whether they land at all.
 ///
 /// `append` returns nothing and cannot fail upward by design: history must

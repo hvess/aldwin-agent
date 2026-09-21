@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use mjolnir_core::{LlmClient, LlmError, LlmEvent, LlmRequest, RetryInfo};
+use aldwin_core::{LlmClient, LlmError, LlmEvent, LlmRequest, RetryInfo};
 use async_stream::try_stream;
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
@@ -15,7 +15,7 @@ const PROVIDER_NAME: &str = "openai-compatible";
 
 /// V0.5 OpenAI-compatible client implementing core's `LlmClient` — a sibling
 /// impl to `AnthropicClient` behind the same trait, not a refactor of it
-/// (see mjolnir-llm.md). No OpenAI wire type crosses this struct's public
+/// (see aldwin-llm.md). No OpenAI wire type crosses this struct's public
 /// surface — see `wire_openai.rs`.
 pub struct OpenAiCompatibleClient {
     http:         reqwest::Client,
@@ -184,12 +184,12 @@ impl LlmClient for OpenAiCompatibleClient {
 mod tests {
     use super::*;
     use crate::test_server::{self, Canned};
-    use mjolnir_core::Message;
+    use aldwin_core::Message;
     use std::time::Duration;
 
     fn config() -> ProviderConfig {
         ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "mistral-small-latest".into(),
             api_key_env: "UNUSED".into(),
             base_url: Some("https://x".into()),
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn missing_base_url_is_a_construction_time_error() {
         let config = ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
             api_key_env: "UNUSED".into(),
             base_url: None,

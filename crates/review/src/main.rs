@@ -1,4 +1,4 @@
-//! `mjolnir-review` — the deterministic stages of the review loop.
+//! `aldwin-review` — the deterministic stages of the review loop.
 //!
 //! `review` runs stages 1 to 4 and prints what failed. Stage 5 is a subagent
 //! and belongs to the skill; this binary's job ends at handing it a directory
@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use mjolnir_review::capture::{capture, measure_cell};
-use mjolnir_review::geometry::{Size, Theme};
-use mjolnir_review::{scene, stages, tokens, Baseline, Compositor};
+use aldwin_review::capture::{capture, measure_cell};
+use aldwin_review::geometry::{Size, Theme};
+use aldwin_review::{scene, stages, tokens, Baseline, Compositor};
 
 #[derive(Parser)]
 #[command(about = "The review loop's deterministic stages")]
@@ -126,7 +126,7 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Builds `target/debug/mjolnir` and returns its path.
+/// Builds `target/debug/aldwin` and returns its path.
 ///
 /// **Building it here rather than checking it exists is the whole point.**
 /// This used to be an existence check, and an existence check cannot tell a
@@ -147,15 +147,15 @@ fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
 fn build_app(root: &Path) -> std::io::Result<PathBuf> {
     let out = std::process::Command::new("cargo")
         .current_dir(root)
-        .args(["build", "--bin", "mjolnir"])
+        .args(["build", "--bin", "aldwin"])
         .output()?;
     if !out.status.success() {
         return Err(std::io::Error::other(format!(
-            "the frames capture spawns target/debug/mjolnir, and building it failed:\n{}",
+            "the frames capture spawns target/debug/aldwin, and building it failed:\n{}",
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    let binary = root.join("target/debug/mjolnir");
+    let binary = root.join("target/debug/aldwin");
     if !binary.exists() {
         return Err(std::io::Error::other(format!("{} still does not exist after a successful build", binary.display())));
     }
@@ -196,10 +196,10 @@ fn main() -> std::io::Result<()> {
 
     match cli.command {
         Command::Stage5 { run, findings } => {
-            let stage5: mjolnir_review::report::Stage5 =
+            let stage5: aldwin_review::report::Stage5 =
                 serde_json::from_str(&std::fs::read_to_string(&findings)?).map_err(std::io::Error::other)?;
             let report = run.join("review.html");
-            let score = mjolnir_review::report::write_stage5(&report, &stage5)?;
+            let score = aldwin_review::report::write_stage5(&report, &stage5)?;
             println!("stage 5: {score}, threshold 90 — {}", if score >= 90 { "passes" } else { "does not pass" });
             println!("report: {}", report.display());
             if score < 90 {
@@ -311,7 +311,7 @@ fn main() -> std::io::Result<()> {
                 Err(detail) => stages::Outcome {
                     stage:  "3 tokens",
                     passed: false,
-                    detail: format!("{detail}\n\nRegenerate with:\n    cargo run -p mjolnir-review -- tokens --write"),
+                    detail: format!("{detail}\n\nRegenerate with:\n    cargo run -p aldwin-review -- tokens --write"),
                 },
             });
             outcomes.extend(stages::frames(&root)?);
@@ -353,9 +353,9 @@ fn main() -> std::io::Result<()> {
                 Some(dir) => dir.clone(),
                 None => frames_dir(&root)?,
             };
-            let written = mjolnir_review::report::write(
+            let written = aldwin_review::report::write(
                 &dir,
-                &mjolnir_review::report::Run {
+                &aldwin_review::report::Run {
                     goal: &goal,
                     focus: &focus,
                     commit: &commit,
@@ -393,7 +393,7 @@ fn main() -> std::io::Result<()> {
             // one, and the moment it is needed is the moment attention is on
             // the findings instead.
             println!("\nStage 5 is not written yet. After the judge, run:");
-            println!("  ./target/release/mjolnir-review stage5 --run {} --findings <file.json>", dir.display());
+            println!("  ./target/release/aldwin-review stage5 --run {} --findings <file.json>", dir.display());
             if failed > 0 {
                 return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
             }

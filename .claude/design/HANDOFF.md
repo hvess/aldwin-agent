@@ -16,15 +16,15 @@ The tonal order, ground outward: recessed fields sit lowest, then the composer b
 
 ## Design system
 
-These frames are now bound to the **Mjolnir Design System**, not the Nocturne system they were drawn on. Note that the borderless rebuild below re-ramps the grounds, neutrals and accent locally in each file — see "Borderless rebuild" — so the frames no longer read Mjolnir's colour tokens directly, though the hue families and the cell grid are unchanged. Nocturne's grounds and neutrals survive unchanged inside Mjolnir's palette, so the rebind moved one thing visually: the accent is Mjolnir's own and its OKLCH-regenerated ramp, where it was Nocturne's violet. (The accent has since been re-picked in the system twice; the current value is dusty azure `#84aed9` — see Token resync.) Every accent step maps one-to-one by name, so no accent decision in these screens was re-made.
+These frames are now bound to the **Mjolnir Design System**, not the Nocturne system they were drawn on. Note that the borderless rebuild below re-ramps the grounds, neutrals and accent locally in each file — see "Borderless rebuild" — so the frames no longer read the system's colour tokens directly, though the hue families and the cell grid are unchanged. Nocturne's grounds and neutrals survive unchanged inside the system's palette, so the rebind moved one thing visually: the accent is the system's own and its OKLCH-regenerated ramp, where it was Nocturne's violet. (The accent has since been re-picked in the system twice; the current value is dusty azure `#84aed9` — see Token resync.) Every accent step maps one-to-one by name, so no accent decision in these screens was re-made.
 
 What changed in the files:
 
-- Each file loads Mjolnir's token layer and bundle from `_ds/mjolnir-design-system-4ea574fb-…/`. The Nocturne link and the hand-rolled Google Fonts links are gone — Mjolnir's `styles.css` imports JetBrains Mono and Inter itself.
+- Each file loads the design system's token layer and bundle from `_ds/mjolnir-design-system-4ea574fb-…/`. The Nocturne link and the hand-rolled Google Fonts links are gone — the design system's `styles.css` imports JetBrains Mono and Inter itself.
 - Hardcoded hex is now tokens: the diff pair reads `--tui-add` / `--tui-del` / `--tui-add-bg`, the desk `--color-desk`, the bottom bar `--tui-bar-bottom`, the inline diff box `--tui-diff-box`.
 - Type and grid read tokens too: `--text-cell` for the 15/20 cell style, `--font-mono`, `--font-ui` for annotation, `--frame-w` / `--frame-h` for the 1080 × 720 window, `--radius-frame` for its one rounded corner.
-- The light file carries `class="tui-light"` on its root, so the semantic roles resolve to Mjolnir's light values — including the selection band being *darker* than the ground, and the light desk `#c9cee4`.
-- In the first exploration (`1a`–`1c`) the amber `#c9a97e` used for the running spinner and the `M` file marker had no equivalent in Mjolnir and is now `--tui-glyph-running`, which is what the glyph table specifies for `◐`.
+- The light file carries `class="tui-light"` on its root, so the semantic roles resolve to Aldwin's light values — including the selection band being *darker* than the ground, and the light desk `#c9cee4`.
+- In the first exploration (`1a`–`1c`) the amber `#c9a97e` used for the running spinner and the `M` file marker had no equivalent in Aldwin and is now `--tui-glyph-running`, which is what the glyph table specifies for `◐`.
 
 ## Token resync
 
@@ -152,18 +152,18 @@ were made.
 
 000. Top bar — every within-group gap was 6 cells, the same gap that parts unrelated groups, so related facts read as if they were unrelated. Facts inside a group are now ` · ` apart: directory and branch (`4a`, `5a`, `5c`), model / gauge / cost (`4a`, `5a`, `5c`), and `3 files · +98 -2` in the review bar (`5b`). The 6-cell gap survives only where it does real work: between the brand and everything else.
 
-0. Top bar (`4a`, `5a`, `5c`, `5d`) — the identity slot held the project name (`gateway`, and `harness` in first run) behind an accent `▌`. It now holds the harness name `mjolnir` with no glyph, sitting on the 3-cell content margin. Nothing is lost, since `~/src/gateway` sits immediately to its right, and the pip was marking nothing — `▌` now appears only where it means selection or a caret. Title rows lost their pips for the same reason: `review changes` in `5b` and `permission` in `5a` now start on the 3-cell margin like `commands` in `5c`, which never had one.
+0. Top bar (`4a`, `5a`, `5c`, `5d`) — the identity slot held the project name (`gateway`, and `harness` in first run) behind an accent `▌`. It now holds the harness name `aldwin` with no glyph, sitting on the 3-cell content margin. Nothing is lost, since `~/src/gateway` sits immediately to its right, and the pip was marking nothing — `▌` now appears only where it means selection or a caret. Title rows lost their pips for the same reason: `review changes` in `5b` and `permission` in `5a` now start on the 3-cell margin like `commands` in `5c`, which never had one.
 
 > **Measured 2026-09-06 — the gap here is not `--group-gap`.** This section,
 > and the summary line elsewhere that says "the 6-cell gap survives only
 > between the brand and everything else", both leave the impression that the
 > directory sits six cells after the name. It does not. `4a`, `5a`, `5c` and
 > `5d` all carry exactly **three** spaces there, which after the 3-cell
-> margin and the seven letters of `mjolnir` puts the directory on **cell 13**
+> margin and the seven letters of `aldwin` puts the directory on **cell 13**
 > — the body column. `--group-gap`'s six cells are real, but they part two
 > unrelated groups: `review changes` / `3 files` in `5b`'s title bar, and the
-> key hints in every footer. Mjolnir shipped six cells here for three weeks
-> on the strength of the prose above; see `.claude/spec/mjolnir-tui.md`'s
+> key hints in every footer. Aldwin shipped six cells here for three weeks
+> on the strength of the prose above; see `.claude/spec/aldwin-tui.md`'s
 > audit entry of the same date.
 
 0. Permission (`5a`) — options are numbered `1`–`4` and the trailing shortcut-key column is gone. The number is a direct-pick accelerator, and the keys that were on the rows moved into the footer: `↑↓ to move`, `1-4 to pick`, `⏎ to confirm`. Before that, the screen was a centred 80-cell modal over a dimmed-and-scrimmed session. It is now a bottom-anchored full-width panel on `5c`'s structure, covering the composer rows, since input is disabled while a permission is open. The modal geometry tokens (`--modal-w`, `--modal-x`, `--modal-y`) are consequently unused by these screens.
@@ -262,7 +262,7 @@ The primary view. Purpose: read what the agent is doing and type the next instru
 Layout, top to bottom:
 
 1. **Top bar**, 3 rows, on the chrome tone `--t-bar` — a step above the transcript ground, with no rule below it.
-   - Left group: `mjolnir` in primary text on the 3-cell margin — no glyph before it — then 6 cells, working directory (`~/src/gateway`) muted, then ` · ` — one cell, a dim `·`, one cell — and the branch (`main`) in neutral-400 with a dirty marker `*` in accent. Directory and branch are one group describing where the session is pointed, so they sit tight against the dot rather than taking the 6-cell gap that parts groups. The dot marks that they are two different facts. The slot holds the harness name, not the project name; the repository is already named by the working directory beside it. The top bar carries **no accent mark**: the name is the brand, and a pip there indicated nothing.
+   - Left group: `aldwin` in primary text on the 3-cell margin — no glyph before it — then 6 cells, working directory (`~/src/gateway`) muted, then ` · ` — one cell, a dim `·`, one cell — and the branch (`main`) in neutral-400 with a dirty marker `*` in accent. Directory and branch are one group describing where the session is pointed, so they sit tight against the dot rather than taking the 6-cell gap that parts groups. The dot marks that they are two different facts. The slot holds the harness name, not the project name; the repository is already named by the working directory beside it. The top bar carries **no accent mark**: the name is the brand, and a pip there indicated nothing.
    - Right group, on the same ` · ` rhythm: model (`sonnet-4.6`) muted, ` · `, context gauge — 4 cells of `█` in accent-600 then 6 cells of `█` in neutral-800 then ` 38%` — ` · `, session cost (`$0.42`) in primary text. Gauge and percentage stay unseparated, since the number reads the bar.
 2. **Transcript**, bottom-anchored (new content grows upward from the bottom bar).
    - Each turn is a row of two columns: a 12-cell label column holding the speaker (`you` in accent-400, `harness` in neutral-400) on the first row and the time (`09:42`, neutral-700) on the second; then the content column starting at cell 17.
@@ -310,7 +310,7 @@ Panel: full frame width, 18 rows, ground the chrome-bar tone. The tonal step off
 - **Each option is numbered `1`–`8`**, one cell after the mark and two cells before the label, so option text starts at cell 6. Typing a number picks that option directly, which replaces the right-flush key column the rows used to carry (`⏎`, `a`, `shift-a`, `d`). Arrows still move the selection and `⏎` still commits it; all three keys are named in the footer rather than on the rows. The number is accent-300 on the selected row and neutral-600 on the rest. Nothing is right-aligned in these rows now.
 - Footer row on the bottom-bar tone, sitting where the composer's status line would be. Left, three key hints on `5b`'s pattern — key in the accent, verb one step quieter, groups 6 cells apart: `↑↓ to move`, `1-8 to pick`, `⏎ to confirm`. Nothing is right-flushed here any
   more: the slot held `saved to .harness/permissions.toml`, which named the
-  wrong file (it is `.mjolnir/permissions.yaml`) and was true of three rows out
+  wrong file (it is `.aldwin/permissions.yaml`) and was true of three rows out
   of eight — the two `once` rows save nothing and the session rows never touch
   disk. Each row states its own reach instead. No `esc to close` — a permission
   has to be answered, so the escape is `Deny once`.
@@ -360,7 +360,7 @@ Purpose: run a slash command. Typing `/` in the composer lifts a full-width pane
 
 Purpose: settle account, model and access before the first prompt.
 
-- Top bar carries `mjolnir` and the working directory, with the version right-aligned.
+- Top bar carries `aldwin` and the working directory, with the version right-aligned.
 - One line of neutral-300 prose, three rows down: `A terminal agent in this repository. Three answers and it starts.`
 - Three steps, each on the same 12-cell label column as a transcript turn, separated by one row of the break tone:
   - `account` — `●` in diff-green, `dev@proton.ch`, right-aligned `signed in` in neutral-700.
@@ -372,7 +372,7 @@ Purpose: settle account, model and access before the first prompt.
     stops existing. `full access` had no distinct meaning to offer: editing a
     file always shows a diff and waits, under every rung, so no point on this
     scale can mean everything runs.
-- Bottom bar: `⏎ continue`, `↑↓ choose`, and `config → ~/.mjolnir/` right-aligned.
+- Bottom bar: `⏎ continue`, `↑↓ choose`, and `config → ~/.aldwin/` right-aligned.
 
 > **Superseded by Turn 13 — see `SYNC.md`.** First run was rebuilt: wordmark,
 > positioning line, **two** steps, a four-point access scale, and **no account
@@ -400,9 +400,9 @@ Purpose: settle account, model and access before the first prompt.
 > - The selected row's purpose text is `--t-accent-text`, not `--t-quiet`.
 > - Footer: `⏎ continue`, then `↑↓ choose`, with the config location right.
 >
-> Mjolnir ships three of the four provider rows (`ollama` cannot work while
+> Aldwin ships three of the four provider rows (`ollama` cannot work while
 > `api_key_env` is required), three access points rather than four, and drops
-> the `/access` clause — see `.claude/spec/mjolnir-tui.md`'s entry of the same
+> the `/access` clause — see `.claude/spec/aldwin-tui.md`'s entry of the same
 > date.
 >
 > **Superseded a third time — Turn 14, measured 2026-09-06.** First run is now
@@ -435,18 +435,18 @@ Purpose: settle account, model and access before the first prompt.
 >   colours as before.
 > - `14c` shows **nothing preselected on `access`** — every mark idle, no
 >   band — and its footer reads `⏎ start session` rather than `⏎ continue`.
->   Neither is what Mjolnir ships; see the departures note below.
+>   Neither is what Aldwin ships; see the departures note below.
 > - Footer is two hints only: `⏎ continue`, `↑↓ choose`. There is no `← back`.
 > - **The wordmark is padded by TWO spaces at each end**, not one:
->   `  M J O L N I R  `, a 17-cell reverse-video field. Mjolnir shipped 15 on
+>   `  M J O L N I R  `, a 17-cell reverse-video field. Aldwin shipped 15 on
 >   the strength of a Turn 13 reading that said "one space".
 >
 > **`14d` — returning / empty state.** New frame, and the one a returning
-> developer actually opens into: what `mjolnir` shows in a known repository,
+> developer actually opens into: what `aldwin` shows in a known repository,
 > and what `/clear` leaves behind. Bands are `--bar-top-h` / `1fr` /
 > `--bar-bottom-h` (3 / 28 / 5).
 >
-> - Top bar, left: `mjolnir` in `--t-text`, three spaces, cwd in `--t-quiet`,
+> - Top bar, left: `aldwin` in `--t-text`, three spaces, cwd in `--t-quiet`,
 >   ` · ` with the dot in `--t-dim`, branch in `--t-body`, dirty `*` in
 >   `--t-mark`. Right: the model id in `--t-quiet` — no gauge and no cost,
 >   because neither exists yet.
@@ -461,10 +461,10 @@ Purpose: settle account, model and access before the first prompt.
 > - Bottom bar, five rows: blank, `▶  ▌` (both `--t-mark`), blank, `ready` /
 >   `^d closes` both in `--t-dim`, blank.
 >
-> Mjolnir's departures from `14a`–`14d`, each with a reason recorded where it
+> Aldwin's departures from `14a`–`14d`, each with a reason recorded where it
 > is made: `access` keeps its preselected `ask` row (a list with no selection
 > made `⏎` a no-op — see `first_run::FirstRun`), three access points rather
-> than four (ADR 0001), `⏎ continue` on every step, `config → ~/.mjolnir/`
+> than four (ADR 0001), `⏎ continue` on every step, `config → ~/.aldwin/`
 > rather than `~/.harness/config.toml`, and the `←` key stays bound but
 > unhinted.
 
@@ -477,7 +477,7 @@ Static frames were requested, so no motion is specified beyond these implied beh
 - **Spinner**: `◐` should cycle through a quarter-block or braille sequence at roughly 100ms per frame; keep it in the accent.
 - **Context gauge** redraws whenever the token count changes; `/compact` shows a projected "after" value before running.
 - **Permission rules** chosen in 5a persist to `permissions.yaml` — the
-  project's `.mjolnir/` for the two `in this project` rows, `~/.mjolnir/` for
+  project's `.aldwin/` for the two `in this project` rows, `~/.aldwin/` for
   the two `everywhere` rows. The session rows live in memory only and the two
   `once` rows save nothing. A deny is a **lock**: nothing narrower overrides
   it, so a locked call is refused without drawing a prompt at all — there is

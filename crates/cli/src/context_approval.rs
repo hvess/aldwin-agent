@@ -1,14 +1,14 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use mjolnir_permissions::{ContextFileTier, Engine, Outcome};
+use aldwin_permissions::{ContextFileTier, Engine, Outcome};
 
 const CANDIDATE_FILENAMES: &[&str] = &["CLAUDE.md", "AGENTS.md"];
 
 /// Finds CLAUDE.md/AGENTS.md in `project_root` and, for any not already
 /// approved, asks the developer — synchronously, over stdin/stdout, since
 /// there is no TUI yet at this point in the startup sequence. Matches
-/// mjolnir-permissions.md: "The session initializer (cli crate) tests each
+/// aldwin-permissions.md: "The session initializer (cli crate) tests each
 /// candidate file before composing the additional-context string." Returns
 /// every path now approved, at any scope (project-persisted or
 /// session-only) — `Engine::effective_view` is the one place both live.
@@ -26,7 +26,7 @@ fn resolve_with_io(candidates: &[PathBuf], engine: &Engine, input: &mut impl Buf
     engine.effective_view().context_files.into_iter().map(|f| f.path).collect()
 }
 
-/// Two-tier prompt per mjolnir-permissions.md: persist project / just this
+/// Two-tier prompt per aldwin-permissions.md: persist project / just this
 /// session / decline (no "once", no global — see that spec's Decisions on
 /// why). A closed/EOF stdin (non-interactive invocation) declines rather
 /// than hanging forever waiting for an answer that can't come.
@@ -64,7 +64,7 @@ fn prompt_and_record(path: &Path, engine: &Engine, input: &mut impl BufRead, out
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_config::Config;
+    use aldwin_config::Config;
     use std::io::Cursor;
 
     fn engine() -> (tempfile::TempDir, tempfile::TempDir, Engine) {
@@ -100,7 +100,7 @@ mod tests {
         let approved = resolve_with_io(std::slice::from_ref(&path), &engine, &mut input, &mut output);
 
         assert_eq!(approved, vec![path.clone()]);
-        assert!(engine.effective_view().context_files.iter().any(|f| f.path == path && f.scope == mjolnir_permissions::GrantScope::Project));
+        assert!(engine.effective_view().context_files.iter().any(|f| f.path == path && f.scope == aldwin_permissions::GrantScope::Project));
     }
 
     #[test]

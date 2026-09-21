@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
-use mjolnir_permissions::Class;
+use aldwin_permissions::Class;
 
 pub struct ReadTool {
     descriptor:   ToolDescriptor,
@@ -48,7 +48,7 @@ impl Tool for ReadTool {
 
     /// Matched against `read:`-kind grant patterns (e.g. `read:./**`) using
     /// the raw path as given by the model, not the resolved absolute path —
-    /// that's what the pattern grammar examples in mjolnir-permissions.md
+    /// that's what the pattern grammar examples in aldwin-permissions.md
     /// assume.
     /// `read` is a read whatever it is pointed at — the class is a property
     /// of the tool here, not something a caller declares.

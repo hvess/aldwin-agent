@@ -1,6 +1,6 @@
 //! The design system, in Rust. **Generated — do not edit.**
 //!
-//! Emitted by `mjolnir-review tokens --write` from
+//! Emitted by `aldwin-review tokens --write` from
 //! `.claude/design/tokens/`. The review loop's stage 3 regenerates
 //! this file and fails if the result differs, so the app's palette
 //! and the imported design cannot drift apart.

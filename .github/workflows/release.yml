@@ -55,7 +55,7 @@ jobs:
         run: scripts/release.sh build "${{ matrix.target }}"
 
       # The whole `dist/bin` tree, so each artifact carries its own
-      # `<target>/mjolnir` path and they merge without colliding downstream.
+      # `<target>/aldwin` path and they merge without colliding downstream.
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.target }}
@@ -156,7 +156,7 @@ jobs:
 
             ```sh
             ssh-keygen -Y verify -f allowed_signers \
-              -I release@mjolnir -n mjolnir-release \
+              -I release@aldwin -n aldwin-release \
               -s SHA256SUMS.sig < SHA256SUMS
 
             sha256sum -c SHA256SUMS

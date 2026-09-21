@@ -11,14 +11,14 @@
 
 # The review loop's captured frames live under it, at target/review-frames/:
 # the PNGs stage 5 looks at plus each frame's declared cell grid. Covered by
-# the rule above, named here because `mjolnir-review` keeps only the last
+# the rule above, named here because `aldwin-review` keeps only the last
 # three runs and a reader looking for an older one should find out where it
 # went.
 
-# Written by Mjolnir itself: answering "for this project" at a permission
+# Written by Aldwin itself: answering "for this project" at a permission
 # prompt appends the grant here, so it's whatever this developer approved.
-# The other .mjolnir/ files are hand-authored and stay tracked.
-/.mjolnir/permissions.yaml
+# The other .aldwin/ files are hand-authored and stay tracked.
+/.aldwin/permissions.yaml
 
 # Private key material, which must never be committed under any name.
 #
@@ -36,7 +36,7 @@
 *.pem
 id_ed25519
 id_rsa
-mjolnir_release
+aldwin_release
 
 # `scripts/release.sh` stages builds and archives here. Everything in it is
 # reproducible from a tag by running that script, which is the whole point of

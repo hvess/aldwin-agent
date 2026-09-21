@@ -51,7 +51,7 @@ const FOOTER_ROWS: u16 = 3;
 /// Where the harness's answers land. Stated plainly rather than implied,
 /// per the design system's Content Fundamentals. A directory, not a single
 /// file, because the answers land in two files inside it.
-const CONFIG_LOCATION: &str = "config → ~/.mjolnir/";
+const CONFIG_LOCATION: &str = "config → ~/.aldwin/";
 
 /// The `more` row's own name and purpose. It is not a provider, so it is
 /// not in the catalogue the caller hands in.
@@ -103,7 +103,7 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
 }
 
 /// The same 3-row identity band every screen opens with, on `bar`: the
-/// plain word `mjolnir`, the working directory starting on the body column,
+/// plain word `aldwin`, the working directory starting on the body column,
 /// and the version flush to the right margin — what the reference's own `5d`
 /// top bar carries.
 ///
@@ -264,19 +264,23 @@ fn step_rows(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
     rows
 }
 
-/// `  M J O L N I R  ` in reverse video — the accent as the ground, the desk
+/// `  A L D W I N  ` in reverse video — the accent as the ground, the desk
 /// as the ink, letters one space apart, the whole run padded by **two**
-/// spaces at each end for a 17-cell field. One row, never a block: a
+/// spaces at each end — a 15-cell field for a six-letter name. One row,
+/// never a block: a
 /// multi-row block-character wordmark was built and cut because "at 15px it
 /// dominated a frame whose whole argument is that nothing shouts".
 ///
 /// The pad was one space until Turn 14, on the strength of a reading of the
 /// frame rather than a measurement of it; both `.dc.html` files carry two.
+/// The rule is the pad, not the total: the reference frames spell the
+/// pre-rebrand seven-letter name and so measure 17 cells — see
+/// `baseline.json`'s `wordmark-letters-are-the-old-name` contradiction.
 ///
 /// This is one of exactly two places the accent is allowed to be a filled
 /// field; the selection band is the other.
 pub(super) fn wordmark(ctx: Ctx) -> Line<'static> {
-    let letters: String = "MJOLNIR".chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
+    let letters: String = "ALDWIN".chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
     Line::from(vec![
         Span::raw(" ".repeat(MARGIN_X)),
         Span::styled(format!("  {letters}  "), Style::default().fg(ctx.pal.reverse_ink).bg(ctx.pal.reverse_bg)),
@@ -557,15 +561,15 @@ mod tests {
     fn the_wordmark_is_one_reverse_video_row() {
         let buffer = render(&FirstRun::default(), 120, 36);
         let out = text(&buffer);
-        assert!(out.contains("  M J O L N I R  "), "letters one space apart, padded by two at each end: {out:?}");
+        assert!(out.contains("  A L D W I N  "), "letters one space apart, padded by two at each end: {out:?}");
 
-        let row = find_row(&buffer, "M J O L N I R");
+        let row = find_row(&buffer, "A L D W I N");
         let cell = &buffer[(MARGIN_X as u16 + 1, row)];
         assert_eq!(cell.bg, DARK.reverse_bg, "the accent is the ground");
         assert_eq!(cell.fg, DARK.reverse_ink, "and the desk colour is the ink");
 
         let filled = (0..120).filter(|x| buffer[(*x, row)].bg == DARK.reverse_bg).count();
-        assert_eq!(filled, 17, "a 17-cell field: two spaces, 13 cells of letters, two spaces");
+        assert_eq!(filled, 15, "a 15-cell field: two spaces, 11 cells of letters, two spaces");
 
         let below = (0..120).filter(|x| buffer[(*x, row + 1)].bg == DARK.reverse_bg).count();
         assert_eq!(below, 0, "one row, never a block — the row under it carries no reverse video");
@@ -649,8 +653,8 @@ mod tests {
             "the purpose starts past the 16-cell name field"
         );
 
-        let mark = find_row(&buffer, "M J O L N I R");
-        assert_eq!(col_of(&buffer, mark, "M J O L N I R"), MARGIN_X + 2, "the wordmark's own two-space pad sits inside the margin");
+        let mark = find_row(&buffer, "A L D W I N");
+        assert_eq!(col_of(&buffer, mark, "A L D W I N"), MARGIN_X + 2, "the wordmark's own two-space pad sits inside the margin");
     }
 
     /// A step row puts nothing between its glyph and its name: the glyph is
@@ -836,7 +840,7 @@ mod tests {
             let buffer = render(&FirstRun::default(), width, 36);
             let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
 
-            assert!(row.starts_with("   mjolnir"), "the brand always renders: {width} -> {row:?}");
+            assert!(row.starts_with("   aldwin"), "the brand always renders: {width} -> {row:?}");
             if let Some(at) = row.find('v') {
                 assert!(row[at..].starts_with(&version), "a partial version reads as a real one: {width} -> {row:?}");
                 let left_end = row[..at].trim_end().chars().count();
@@ -867,7 +871,7 @@ mod tests {
             let footer = read(36 - FOOTER_ROWS + 1);
             assert!(footer.contains("⏎ continue"), "the keys always survive: {width} -> {footer:?}");
             if let Some(at) = footer.find("config →") {
-                assert!(footer[at..].trim_end().ends_with("~/.mjolnir/"), "a clipped path reads as a path: {width} -> {footer:?}");
+                assert!(footer[at..].trim_end().ends_with("~/.aldwin/"), "a clipped path reads as a path: {width} -> {footer:?}");
                 let left_end = footer[..at].trim_end().chars().count();
                 assert!(footer[..at].chars().count() - left_end >= GROUP_GAP, "groups too close at {width}: {footer:?}");
             }
@@ -887,7 +891,7 @@ mod tests {
         assert!(out.contains("⏎ continue"), "the footer states the key then the verb: {out:?}");
         assert!(out.contains("↑↓ choose"), "{out:?}");
         assert!(!out.contains("← back"), "the reference's footer carries two hints; `←` stays bound but unnamed: {out:?}");
-        assert!(out.contains("config → ~/.mjolnir/"), "where state lives is stated plainly: {out:?}");
+        assert!(out.contains("config → ~/.aldwin/"), "where state lives is stated plainly: {out:?}");
     }
 
     /// No tier may promise that edits run without asking — the one claim

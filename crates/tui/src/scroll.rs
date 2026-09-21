@@ -13,7 +13,7 @@
 ///
 /// Auto-follows new content while `following` is true; scrolling up
 /// disengages it, and jumping to the bottom (End / `G`) re-engages it — see
-/// mjolnir-tui.md's Conversation Log scroll behaviour.
+/// aldwin-tui.md's Conversation Log scroll behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollState {
     pub offset:          usize,

@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use super::grid::Ctx;
 use super::row::Row;
 
-/// One line of a unified diff (`mjolnir_tools::diff::unified`'s output),
+/// One line of a unified diff (`aldwin_tools::diff::unified`'s output),
 /// tagged by its leading marker (` `/`+`/`-`). The `--- path`/`+++ path`
 /// header pair is pulled out separately by `parse_body` since it's shown
 /// once as a label, not per line.
@@ -18,7 +18,7 @@ pub(super) enum Kind {
     Added,
     Removed,
     /// A `@@ -a,b +c,d @@` hunk header. Never produced by
-    /// `mjolnir_tools::diff::unified`, which emits no header at all — this
+    /// `aldwin_tools::diff::unified`, which emits no header at all — this
     /// is a diff the *model* wrote inside a ```diff fence, where the header
     /// is ordinary text in the reply and carries the only absolute line
     /// numbers there are. It used to fall through to `Context`, which drew
@@ -76,7 +76,7 @@ pub(super) fn parse_body(diff: &str) -> (Option<String>, Vec<(Kind, String)>) {
 /// mirroring the two-column gutter GitHub and most diff UIs show.
 ///
 /// Where the counters *start* depends on what the diff carries.
-/// `mjolnir_tools::diff::unified` emits no `@@ -a,b +c,d @@` header (it
+/// `aldwin_tools::diff::unified` emits no `@@ -a,b +c,d @@` header (it
 /// diffs a single already-replaced hunk, not a whole file), so there is no
 /// absolute file offset to anchor on and the numbers are relative to the
 /// start of the shown diff, from 1 on each side — the same convention a

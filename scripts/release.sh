@@ -12,7 +12,7 @@
 # findable without pushing a tag.
 #
 # **Why shell rather than a Rust subcommand**, against this project's own
-# precedent in `mjolnir-review`: a third party verifying a release has to be
+# precedent in `aldwin-review`: a third party verifying a release has to be
 # able to read and run the recipe *without building anything first*. A Rust
 # tool would have to be compiled before it could check a compilation.
 #
@@ -35,7 +35,7 @@ usage() {
     cat >&2 <<'USAGE'
 usage:
   release.sh check <tag>        verify the tag matches the workspace version
-  release.sh build <target>     build one target into dist/bin/<target>/mjolnir
+  release.sh build <target>     build one target into dist/bin/<target>/aldwin
   release.sh package            archive every built target, deterministically
   release.sh sign <key-file>    sign dist/SHA256SUMS with an SSH private key
   release.sh verify [signers]   verify that signature (default: ./allowed_signers)
@@ -110,10 +110,10 @@ cmd_build() {
     local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
     export RUSTFLAGS="--remap-path-prefix=${cargo_home}=/cargo --remap-path-prefix=${root}=/src${RUSTFLAGS:+ $RUSTFLAGS}"
 
-    cargo build --release --locked --target "$target" -p mjolnir-cli
+    cargo build --release --locked --target "$target" -p aldwin-cli
 
     mkdir -p "dist/bin/$target"
-    cp "target/$target/release/mjolnir" "dist/bin/$target/mjolnir"
+    cp "target/$target/release/aldwin" "dist/bin/$target/aldwin"
     echo "built $target"
 }
 
@@ -128,7 +128,7 @@ cmd_package() {
     # two sources of truth for one fact, and the caller with the weaker claim
     # would have won: on a `workflow_dispatch` run there is no tag, so
     # `github.ref_name` is a branch name and every archive would have been
-    # called `mjolnir-vmain-...`. `check` already guarantees the tag and the
+    # called `aldwin-vmain-...`. `check` already guarantees the tag and the
     # manifest agree, so the manifest is the only thing worth reading.
     local version
     version="$(workspace_version)"
@@ -143,7 +143,7 @@ cmd_package() {
     rm -f dist/*.tar.gz dist/SHA256SUMS
     local target
     for target in $(ls dist/bin | sort); do
-        local bin="dist/bin/$target/mjolnir"
+        local bin="dist/bin/$target/aldwin"
         [ -f "$bin" ] || { echo "error: $bin is missing" >&2; exit 1; }
 
         # Normalise everything tar would otherwise copy from the filesystem.
@@ -158,8 +158,8 @@ cmd_package() {
         # an hour later produces a different archive hash — measured, not
         # assumed.
         tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
-            -cf - -C "dist/bin/$target" mjolnir \
-            | gzip -n > "dist/mjolnir-v${version}-${target}.tar.gz"
+            -cf - -C "dist/bin/$target" aldwin \
+            | gzip -n > "dist/aldwin-v${version}-${target}.tar.gz"
         echo "packaged $target"
     done
 
@@ -186,8 +186,16 @@ cmd_package() {
 #
 # The namespace is what stops a signature made for one purpose being replayed
 # as another; ssh-keygen requires it on both sides and refuses a mismatch.
-readonly SIG_NAMESPACE="mjolnir-release"
-readonly SIG_PRINCIPAL="release@mjolnir"
+#
+# Renamed with the project (Mjolnir -> Aldwin, 2026-09-21). The key did not
+# change, only the labels, so `allowed_signers` carries both principals and a
+# release published before the rename still verifies — with the old pair
+# passed explicitly, since these constants only ever describe a new one:
+#
+#     ssh-keygen -Y verify -f allowed_signers -I release@mjolnir \
+#       -n mjolnir-release -s SHA256SUMS.sig < SHA256SUMS
+readonly SIG_NAMESPACE="aldwin-release"
+readonly SIG_PRINCIPAL="release@aldwin"
 
 cmd_sign() {
     local key="${1:-}"

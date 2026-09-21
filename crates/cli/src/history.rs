@@ -1,10 +1,10 @@
-//! The session's transcript, as the rest of mjolnir-cli has to see it.
+//! The session's transcript, as the rest of aldwin-cli has to see it.
 //!
-//! Two things live here that mjolnir-config deliberately does not carry:
+//! Two things live here that aldwin-config deliberately does not carry:
 //!
 //! 1. **The `RecordSink` impl.** A failed write has to reach the developer,
 //!    and the only vehicle for that is the session's `Event` channel — which
-//!    mjolnir-config, having no tokio dependency, cannot hold.
+//!    aldwin-config, having no tokio dependency, cannot hold.
 //! 2. **The swap.** `/clear` seals the current transcript and opens a fresh
 //!    one; `/resume` moves the writer onto the transcript it just loaded.
 //!    The agent holds this sink for the life of the process, so the file
@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use mjolnir_config::{HistoryStore, SessionHeader, SessionSummary, HISTORY_VERSION};
-use mjolnir_core::{Event, LogRecord, RecordSink, SessionId};
-use mjolnir_tui::SessionChoice;
+use aldwin_config::{HistoryStore, SessionHeader, SessionSummary, HISTORY_VERSION};
+use aldwin_core::{Event, LogRecord, RecordSink, SessionId};
+use aldwin_tui::SessionChoice;
 use tokio::sync::mpsc;
 
 /// The transcript this session writes to, and the handle that can point it
@@ -138,14 +138,14 @@ impl RecordSink for History {
 
 /// Every session in a history directory, rendered for the picker.
 ///
-/// mjolnir-tui takes display halves and nothing else — no paths, no
+/// aldwin-tui takes display halves and nothing else — no paths, no
 /// timestamps — so the formatting happens here, the same division the model
 /// catalogue already follows.
 ///
 /// Callers inside a running session want [`History::resumable`] instead:
 /// this one includes the transcript currently being written.
 pub fn session_choices(dir: &Path) -> Vec<SessionChoice> {
-    mjolnir_config::list_sessions(dir).into_iter().map(choice).collect()
+    aldwin_config::list_sessions(dir).into_iter().map(choice).collect()
 }
 
 fn choice(summary: SessionSummary) -> SessionChoice {
@@ -179,7 +179,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_core::{TurnEndReason, TurnId};
+    use aldwin_core::{TurnEndReason, TurnId};
     use tempfile::tempdir;
 
     fn history(dir: &Path) -> (Arc<History>, mpsc::Receiver<Event>) {

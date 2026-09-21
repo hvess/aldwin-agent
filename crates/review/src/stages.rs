@@ -106,7 +106,7 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     let outcome = Outcome::from(
         "4 frames",
-        cargo(root, &["test", "-p", "mjolnir-tui", "--test", "render_snapshot"])?,
+        cargo(root, &["test", "-p", "aldwin-tui", "--test", "render_snapshot"])?,
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
@@ -118,7 +118,7 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     } else {
         Outcome {
             detail: format!(
-                "{}\n\nIf the change is meant to alter these frames, regenerate deliberately after reading the diff:\n    UPDATE_SNAPSHOTS=1 cargo test -p mjolnir-tui --test render_snapshot",
+                "{}\n\nIf the change is meant to alter these frames, regenerate deliberately after reading the diff:\n    UPDATE_SNAPSHOTS=1 cargo test -p aldwin-tui --test render_snapshot",
                 outcome.detail
             ),
             ..outcome
@@ -144,7 +144,7 @@ pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
             stage:  "0 toolchain",
             passed: false,
             detail: format!(
-                "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it:\n    cargo run -p mjolnir-review -- measure --record-toolchain"
+                "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it:\n    cargo run -p aldwin-review -- measure --record-toolchain"
             ),
         }
     }])

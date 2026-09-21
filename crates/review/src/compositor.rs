@@ -70,7 +70,7 @@ impl Compositor {
         // first.
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let sock = runtime.join(format!("mjolnir-shot-{}-{n}.sock", std::process::id()));
+        let sock = runtime.join(format!("aldwin-shot-{}-{n}.sock", std::process::id()));
         let _ = std::fs::remove_file(&sock);
 
         let log = std::fs::File::create(dir.join("sway.log"))?;

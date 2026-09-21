@@ -1,7 +1,7 @@
-use mjolnir_core::{RetryInfo, StepId, TurnEndReason};
-use mjolnir_permissions::PromptPayload;
+use aldwin_core::{RetryInfo, StepId, TurnEndReason};
+use aldwin_permissions::PromptPayload;
 
-/// One entry in the conversation log. Append-only per mjolnir-tui.md — the
+/// One entry in the conversation log. Append-only per aldwin-tui.md — the
 /// one exception is the transient thinking indicator, which isn't a log
 /// entry at all (see `App::thinking`), since ThinkingEnd removes it rather
 /// than leaving a record.
@@ -9,7 +9,7 @@ use mjolnir_permissions::PromptPayload;
 pub enum LogEntry {
     UserMessage { text: String },
     AssistantText { text: String },
-    /// Grouped per step, per mjolnir-tui.md's Pitfalls ("tool-activity
+    /// Grouped per step, per aldwin-tui.md's Pitfalls ("tool-activity
     /// entries flooding the log during parallel runs — group by step").
     ToolActivity { step_id: StepId, calls: Vec<ToolActivityEntry> },
     RetryAttempt { info: RetryInfo },
@@ -23,7 +23,7 @@ pub enum LogEntry {
     TurnEnded { reason: TurnEndReasonKind },
     Error { message: String },
     /// From `Event::Notice` — a message from outside the turn/step
-    /// lifecycle (mjolnir-cli rejecting a slash command, a
+    /// lifecycle (aldwin-cli rejecting a slash command, a
     /// `/reload-config` result). Rendered dim, not red like `Error` — it
     /// isn't necessarily bad news (a successful reload is a Notice too).
     Notice { message: String },

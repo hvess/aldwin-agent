@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use mjolnir_core::{Command, Event, LogRecord, StepId};
-use mjolnir_permissions::{Choice, Class, ContextFileTier, Engine, PromptPayload, PromptResponse, Rung};
+use aldwin_core::{Command, Event, LogRecord, StepId};
+use aldwin_permissions::{Choice, Class, ContextFileTier, Engine, PromptPayload, PromptResponse, Rung};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::log::{summarise, LogEntry, PromptResolution, ToolActivityEntry, ToolActivityStatus};
@@ -275,7 +275,7 @@ pub struct App {
     pub composer_top:      usize,
     /// Queued, not a single slot — parallel tool use can dispatch several
     /// Edit calls in one step, each requesting approval independently (see
-    /// `dispatch_tools`' `future::join_all` in mjolnir-core), so more than
+    /// `dispatch_tools`' `future::join_all` in aldwin-core), so more than
     /// one can be outstanding at once. A second `ToolApprovalRequested`
     /// arriving while the first was still an `Option` silently overwrote
     /// it — the first call's approval channel then hung forever with no
@@ -285,7 +285,7 @@ pub struct App {
     /// overwrite. The front of the queue is the one actually interactive
     /// (`handle_approval_key`/`handle_prompt_key` only ever act on it);
     /// resolving it pops the front and the next queued one becomes
-    /// interactive automatically. See `mjolnir-tui.md`'s Progress note.
+    /// interactive automatically. See `aldwin-tui.md`'s Progress note.
     pub pending_approvals: VecDeque<PendingApproval>,
     /// Same reasoning as `pending_approvals` — a generic permission prompt
     /// can equally arrive for more than one dispatched call at once.
@@ -337,7 +337,7 @@ pub struct App {
     /// with each row's models on it — the display halves only (an id and a
     /// purpose), exactly as first run takes them. Empty unless the caller
     /// supplied one (`App::with_catalogue`), in which case bare `/model`
-    /// stays a plain command and mjolnir-cli reports on it as before.
+    /// stays a plain command and aldwin-cli reports on it as before.
     pub catalogue: Vec<crate::first_run::ProviderChoice>,
     /// The catalogue id of the provider this session is actually running
     /// on, when it is one the catalogue knows — what the picker opens on
@@ -362,7 +362,7 @@ pub struct App {
     /// either holds the band.
     pub resume: Option<crate::resume::ResumePicker>,
     /// The past sessions bare `/resume` offers, newest first — display
-    /// halves handed in by mjolnir-cli's bootstrap (`App::with_sessions`),
+    /// halves handed in by aldwin-cli's bootstrap (`App::with_sessions`),
     /// exactly as the model catalogue is. Empty unless the caller supplied
     /// one, in which case bare `/resume` stays a plain command and the
     /// interceptor answers it with a notice.
@@ -429,10 +429,10 @@ impl App {
     }
 
     /// The past sessions bare `/resume` offers. Builder-style for the same
-    /// reason `with_catalogue` is: only mjolnir-cli's bootstrap can read a
+    /// reason `with_catalogue` is: only aldwin-cli's bootstrap can read a
     /// history directory, and every other caller wants the empty default.
     ///
-    /// They arrive already rendered for display — mjolnir-tui reads no files
+    /// They arrive already rendered for display — aldwin-tui reads no files
     /// and parses no timestamps, the same rule that keeps the catalogue's
     /// endpoints and key variables out of this crate.
     pub fn with_sessions(mut self, sessions: Vec<crate::resume::SessionChoice>) -> Self {
@@ -441,7 +441,7 @@ impl App {
     }
 
     /// Builder-style, for the same reason `with_theme` is: the catalogue is
-    /// something only mjolnir-cli's bootstrap has, and every other caller
+    /// something only aldwin-cli's bootstrap has, and every other caller
     /// (tests, `examples/preview.rs`) wants the same empty default it
     /// already had. Without one, bare `/model` is forwarded to the
     /// interceptor and reports where the developer stands, as it always did.
@@ -468,7 +468,7 @@ impl App {
     /// Builder-style override for `theme` — kept separate from `App::new`'s
     /// own parameter list rather than adding a parameter there, so the
     /// many existing `App::new(model_name, permissions)` call sites (tests,
-    /// `examples/preview.rs`, `mjolnir-cli`'s bootstrap) don't all need to
+    /// `examples/preview.rs`, `aldwin-cli`'s bootstrap) don't all need to
     /// thread a theme through just to get the same `Dark` default they
     /// already had. `run.rs` is the one real caller that overrides it.
     pub fn with_theme(mut self, theme: crate::palette::Theme) -> Self {
@@ -504,7 +504,7 @@ impl App {
     /// line — rendered as more screen rows than it counted as, so
     /// `ScrollState`'s offset drifted out of sync with what was actually
     /// on screen and clipped content at the bottom of the log area (see
-    /// mjolnir-tui.md's 2026-08-29 scrolling-fix Progress note). It is now
+    /// aldwin-tui.md's 2026-08-29 scrolling-fix Progress note). It is now
     /// exactly the transcript's own row count, since those rows *are* the
     /// screen rows — there is no longer a separate counting pass that could
     /// drift from the rendering one.
@@ -727,7 +727,7 @@ impl App {
             // activity replays as completed rows; approval cards and
             // permission prompts do not come back at all, because they exist
             // only as `LogEntry` and never as `LogRecord` (see
-            // mjolnir-history.md's Decision). That is a chosen loss: the
+            // aldwin-history.md's Decision). That is a chosen loss: the
             // decisions a resumed session needs are re-asked, and default-deny
             // is not weakened by a card being redrawn.
             Event::HistoryLoaded { records } => {
@@ -745,10 +745,10 @@ impl App {
             }
             // `/theme light|dark` — the interceptor already persisted this
             // to `tui.yaml` (see `Event::ThemeChanged`'s own doc comment in
-            // mjolnir-core); reparsing here rather than trusting the raw
+            // aldwin-core); reparsing here rather than trusting the raw
             // string directly keeps the "anything unrecognized means dark"
             // fallback in exactly one place (`Theme::from_config`), the same
-            // rule mjolnir-cli's bootstrap already applies at startup.
+            // rule aldwin-cli's bootstrap already applies at startup.
             // Nothing else needs updating — `App::theme` is read fresh by
             // `ui::draw` on every frame, so the very next redraw already
             // reflects it.
@@ -757,7 +757,7 @@ impl App {
                 self.theme = crate::palette::Theme::from_config(Some(&theme));
             }
             // `/model` — the interceptor rebuilt the session's client before
-            // sending this (see `Event::ModelChanged` in mjolnir-core), so
+            // sending this (see `Event::ModelChanged` in aldwin-core), so
             // by the time it lands the next turn really will run on this
             // model. Both bars read `status.model_name` on every draw, so
             // they follow on the very next redraw; `current_provider` is
@@ -977,7 +977,7 @@ impl App {
     }
 
     /// Bare `/model`, with no argument — the one submission this side reads
-    /// rather than forwards. The command is still mjolnir-cli's: the picker
+    /// rather than forwards. The command is still aldwin-cli's: the picker
     /// answers by *typing* it (`/model provider/model`) once both halves are
     /// chosen, so the interceptor remains the only thing that decides which
     /// `provider.yaml` a choice lands in. What is intercepted here is how
@@ -1001,7 +1001,7 @@ impl App {
 
     /// Bare `/resume`, on exactly the terms `PICKER_COMMAND` documents: the
     /// list is how the question is asked, and committing types
-    /// `/resume <id>` so mjolnir-cli's interceptor stays the one thing that
+    /// `/resume <id>` so aldwin-cli's interceptor stays the one thing that
     /// knows what resuming does.
     ///
     /// With no sessions to offer — a project the harness has never recorded
@@ -1070,7 +1070,7 @@ impl App {
     /// The tail every submission shares, typed or picked.
     fn submit_text(&mut self, text: String) {
         // Set for every submission, slash command included: this side can't
-        // know which ones mjolnir-cli's interceptor will handle itself, and
+        // know which ones aldwin-cli's interceptor will handle itself, and
         // it doesn't need to — whatever the interceptor sends back (a
         // `Notice`, `HistoryCleared`, `ThemeChanged`) clears the flag just
         // as `TurnStarted` does. See `cancel_or_quit`.
@@ -1089,7 +1089,7 @@ impl App {
     /// most recent `UserMessage` (meaning "running") or `TurnEnded` (meaning
     /// "finished"), and that is the reported "Ctrl+C after /theme appears to
     /// be broken" bug: a slash command is submitted like any other message,
-    /// so `submit` pushes a `UserMessage` for it, but mjolnir-cli's
+    /// so `submit` pushes a `UserMessage` for it, but aldwin-cli's
     /// interceptor handles `/theme` (and `/help`, `/reload-config`, and any
     /// unknown command) entirely on its own — the core never sees it, no
     /// turn ever starts, and no `TurnEnded` is ever appended. The scan then
@@ -1158,13 +1158,13 @@ impl App {
                 PromptPayload::ContextFile { .. } => vec![
                     DecisionOption {
                         label:   "Inject for this session".into(),
-                        detail:  "until mjolnir exits; nothing is saved".into(),
+                        detail:  "until aldwin exits; nothing is saved".into(),
                         pattern: None,
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Session) }),
                     },
                     DecisionOption {
                         label:   "Inject for this project".into(),
-                        detail:  "saved to .mjolnir/context_files.yaml".into(),
+                        detail:  "saved to .aldwin/context_files.yaml".into(),
                         pattern: None,
                         outcome: DecisionOutcome::Prompt(PromptResponse::ContextFile { approve: true, tier: Some(ContextFileTier::Project) }),
                     },
@@ -1190,7 +1190,7 @@ impl App {
     /// whatever happens to be the list's last entry: for a Tool prompt
     /// that's "always deny," a far more consequential and harder-to-reverse
     /// action than the one-time decline Ctrl+C has always meant (see
-    /// mjolnir-tui.md's 2026-08-29 live-run fix and its Pitfall on requiring
+    /// aldwin-tui.md's 2026-08-29 live-run fix and its Pitfall on requiring
     /// an unambiguous way out). Keeping this as its own dedicated mapping,
     /// rather than deriving it from list order, means a developer who
     /// doesn't know (or care about) the list at all still gets the same
@@ -1320,8 +1320,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_config::Config;
-    use mjolnir_core::{ToolCall, ToolResult, TurnEndReason, TurnId};
+    use aldwin_config::Config;
+    use aldwin_core::{ToolCall, ToolResult, TurnEndReason, TurnId};
     use ratatui::crossterm::event::KeyEventState;
 
     fn engine() -> Arc<Engine> {
@@ -1487,7 +1487,7 @@ mod tests {
     }
 
     /// A project with no recorded sessions forwards the bare command, which
-    /// mjolnir-cli answers by saying so. An empty panel is not an answer.
+    /// aldwin-cli answers by saying so. An empty panel is not an answer.
     #[test]
     fn bare_resume_with_no_history_is_forwarded_rather_than_opening_an_empty_panel() {
         let mut app = app();
@@ -1793,7 +1793,7 @@ mod tests {
 
     /// The reported bug: "ctrl+c after /theme appears to be broken." A
     /// slash command is submitted like any other message (so `submit` logs
-    /// a `UserMessage` for it) but mjolnir-cli's interceptor answers it
+    /// a `UserMessage` for it) but aldwin-cli's interceptor answers it
     /// itself — no turn ever starts, and no `TurnEnded` is ever appended.
     /// The old log-scan heuristic saw only that `UserMessage`, concluded a
     /// turn was running, and sent `Cancel` to every later Ctrl+C instead of
@@ -2149,7 +2149,7 @@ mod tests {
     #[test]
     fn retry_attempt_renders_as_a_visible_log_entry() {
         let mut app = app();
-        let info = mjolnir_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded".into(), attempt: 1 };
+        let info = aldwin_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded".into(), attempt: 1 };
         app.apply_event(Event::RetryAttempt { turn_id: TurnId(1), step_id: StepId(1), info: info.clone() });
         assert!(matches!(app.log.last(), Some(LogEntry::RetryAttempt { info: i }) if *i == info));
     }
@@ -2187,7 +2187,7 @@ mod tests {
 
     /// `/theme` round trip: the interceptor persists to `tui.yaml` and
     /// sends this event directly (see `Event::ThemeChanged`'s own doc
-    /// comment in mjolnir-core) — `App` just needs to switch its own
+    /// comment in aldwin-core) — `App` just needs to switch its own
     /// `theme` field, since `ui::draw` reads it fresh on every frame with
     /// no caching to invalidate.
     #[test]
@@ -2398,7 +2398,7 @@ mod tests {
     }
 
     /// With no catalogue there is no list to open, so the command goes to
-    /// mjolnir-cli, which reports where the developer stands.
+    /// aldwin-cli, which reports where the developer stands.
     #[test]
     fn bare_model_without_a_catalogue_is_forwarded_as_before() {
         let mut app = app();
@@ -2409,7 +2409,7 @@ mod tests {
     }
 
     /// The picker answers by typing the command: the write, the scope it
-    /// lands in and what is reported all stay mjolnir-cli's, exactly as if
+    /// lands in and what is reported all stay aldwin-cli's, exactly as if
     /// the developer had typed it — and the transcript records the choice
     /// above the notice that answers it.
     #[test]

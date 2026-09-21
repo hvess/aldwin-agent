@@ -1,10 +1,10 @@
 //! The provider catalogue — what first run's `provider` step and `/model`
 //! choose between.
 //!
-//! It lives here rather than in mjolnir-tui or mjolnir-cli because every
+//! It lives here rather than in aldwin-tui or aldwin-cli because every
 //! field in it is knowledge this crate already owns: which wire dialect a
 //! host speaks, what its chat-completions URL is, and which environment
-//! variable holds its key. mjolnir-tui is handed the display half of these
+//! variable holds its key. aldwin-tui is handed the display half of these
 //! rows (id and purpose) by the CLI rather than depending on this crate,
 //! which would invert the workspace's dependency order.
 //!
@@ -21,7 +21,7 @@
 //! unset. Supporting one means relaxing that field to an `Option`, which
 //! changes a persisted format and so wants its own decision record first.
 
-use mjolnir_config::ProviderKind;
+use aldwin_config::ProviderKind;
 
 /// One model on offer, in the shared 16-cell option row: the id that lands
 /// in `provider.yaml`, and what picking it does.
@@ -159,7 +159,7 @@ pub fn provider_ids() -> Vec<&'static str> {
 /// deliberate: `provider.yaml` records what to *call*, not which row of a
 /// menu was clicked, and adding a name field would create a second source
 /// of truth that could disagree with the URL beside it.
-pub fn identify(config: &mjolnir_config::ProviderConfig) -> Option<&'static Provider> {
+pub fn identify(config: &aldwin_config::ProviderConfig) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.kind == config.provider && p.base_url == config.base_url.as_deref())
 }
 
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn identify_recovers_the_catalogue_row_from_a_written_config() {
         let anthropic = provider("anthropic").unwrap();
-        let written = mjolnir_config::ProviderConfig {
-            version:                  mjolnir_config::PROVIDER_VERSION,
+        let written = aldwin_config::ProviderConfig {
+            version:                  aldwin_config::PROVIDER_VERSION,
             provider:                 anthropic.kind,
             model:                    anthropic.default_model().into(),
             base_url:                 anthropic.base_url.map(String::from),
@@ -279,8 +279,8 @@ mod tests {
 
     #[test]
     fn identify_returns_none_for_a_hand_written_endpoint() {
-        let written = mjolnir_config::ProviderConfig {
-            version:                  mjolnir_config::PROVIDER_VERSION,
+        let written = aldwin_config::ProviderConfig {
+            version:                  aldwin_config::PROVIDER_VERSION,
             provider:                 ProviderKind::OpenaiCompatible,
             model:                    "qwen3-coder".into(),
             base_url:                 Some("http://localhost:8000/v1/chat/completions".into()),

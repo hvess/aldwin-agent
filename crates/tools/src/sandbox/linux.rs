@@ -146,7 +146,7 @@ impl ReadOnly {
     /// # Safety
     /// Intended for `pre_exec`, between `fork` and `execve`. It allocates
     /// nothing and takes no locks — two syscalls — which is what makes it
-    /// safe to call there. Calling it on the parent would confine Mjolnir
+    /// safe to call there. Calling it on the parent would confine Aldwin
     /// itself, permanently.
     pub unsafe fn engage(&self) -> io::Result<()> {
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
@@ -235,7 +235,7 @@ mod tests {
     /// denied by the sandbox. This cost a debugging round the first time.
     fn project() -> tempfile::TempDir {
         tempfile::Builder::new()
-            .prefix("mjolnir-sandbox-")
+            .prefix("aldwin-sandbox-")
             .tempdir_in(env!("CARGO_MANIFEST_DIR"))
             .expect("a scratch project outside the incidental paths")
     }

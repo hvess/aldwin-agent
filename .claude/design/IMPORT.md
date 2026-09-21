@@ -282,7 +282,7 @@ asserts `every_scene_parts_its_bands_by_tone_and_draws_no_rules`, and
 prose in `HANDOFF.md` still says, which is the old numbers: `tokens/cells.css`
 is the authority, not that document's grid table.
 
-Also applied, same direction: the top bar carries no `▌` and shows `mjolnir`
+Also applied, same direction: the top bar carries no `▌` and shows `aldwin`
 rather than the project name; `▌` means selection or caret only; permission is
 a bottom-anchored full-width panel with numbered options `1`–`4`, not a centred
 modal; within-group facts are parted by ` · `, and the 6-cell gap survives only

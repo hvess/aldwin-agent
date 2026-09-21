@@ -50,7 +50,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
     /// Write this session's records through to a transcript as well as to
     /// memory. Builder-style rather than a `new` argument because every
-    /// caller but mjolnir-cli's bootstrap — every test in this crate
+    /// caller but aldwin-cli's bootstrap — every test in this crate
     /// included — wants the historyless log `new` already builds.
     pub fn with_sink(mut self, sink: Arc<dyn crate::log::RecordSink>) -> Self {
         self.log = ConversationLog::with_sink(sink);
@@ -555,7 +555,7 @@ enum DispatchOutcome {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Covers the loop's real failure modes per mjolnir-core.md's Pitfalls: torn logs
+// Covers the loop's real failure modes per aldwin-core.md's Pitfalls: torn logs
 // on cancellation, tool round trips, and step/turn boundary bookkeeping. Not
 // exhaustive by design — these are the invariants a refactor is most likely to
 // break silently.

@@ -14,10 +14,10 @@ use super::grid::{elide, justified_line, with_label_column, Ctx, MARGIN_X};
 use super::markdown::{self, Segment};
 use super::row::{band_row, Row};
 use super::wrap::wrap_line;
-use mjolnir_permissions::PromptPayload;
+use aldwin_permissions::PromptPayload;
 
 use crate::app::App;
-use mjolnir_permissions::Rung;
+use aldwin_permissions::Rung;
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
 
@@ -86,7 +86,7 @@ fn block_rows(entry: &LogEntry, first: bool, opens: bool, ctx: Ctx) -> Vec<Line<
 /// *developer's* turn and its label column was empty — an unattributed row
 /// at cells 3–10. `4a` makes the tool group part of the agent's turn
 /// ("Agent prose is neutral-300. One blank row between prose and a tool
-/// group"), and in Mjolnir the call comes before the reply it produces, so
+/// group"), and in Aldwin the call comes before the reply it produces, so
 /// it is the tool group that opens that turn and therefore carries its
 /// speaker label.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,7 +119,7 @@ fn speaker(entry: &LogEntry) -> Option<Speaker> {
 /// That equivalence used to be established the other way round — the
 /// builders emitted logical lines, the log's `Paragraph` wrapped them, and
 /// the count came from `Paragraph::line_count` running the same wrapper a
-/// second time (see mjolnir-tui.md's 2026-08-29 notes for the two bugs that
+/// second time (see aldwin-tui.md's 2026-08-29 notes for the two bugs that
 /// got it there). Correct, but it meant three passes over the whole
 /// conversation per frame. Wrapping in the builders makes the count free and
 /// the render O(viewport), and closes the divergence the old discipline
@@ -701,7 +701,7 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
-/// Mirrors mjolnir-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
+/// Mirrors aldwin-cli's own `/`-prefix check (`text.trim_start().strip_prefix('/')`
 /// in `slash.rs`) — this crate can't depend on that one to reuse it
 /// directly (cli depends on tui, not the other way around), so the rule is
 /// duplicated; keep the two in sync if it ever changes.
@@ -710,7 +710,7 @@ fn is_command(text: &str) -> bool {
 }
 
 /// The empty state — the design system's `14d`, and the screen a returning
-/// developer actually opens into: what `mjolnir` shows in a repository it
+/// developer actually opens into: what `aldwin` shows in a repository it
 /// has been pointed at before, and what `/clear` leaves behind.
 ///
 /// The wordmark leads, because "the mark identifies a frame with no

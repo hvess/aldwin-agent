@@ -1,1 +1,7 @@
+# The release signing key's public half. One key, two principals: the
+# namespace and principal were renamed with the project (Mjolnir → Aldwin,
+# 2026-09-21), and releases published before that were signed under the old
+# pair. Both lines carry the same key, so `verify` works against any tag —
+# drop the second when no supported release predates the rename.
+release@aldwin ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAK4pbaFw71wr1e/PSlEjQVzFO0tP4U6H5cCwpPdXOdu aldwin-release
 release@mjolnir ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAK4pbaFw71wr1e/PSlEjQVzFO0tP4U6H5cCwpPdXOdu mjolnir-release

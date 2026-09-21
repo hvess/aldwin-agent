@@ -54,7 +54,7 @@ pub(super) use crate::tokens::OPTION_LABEL_COL;
 /// Deliberately *not* what sits between the brand and the working directory
 /// — those are one group, and the three cells there are a pad to the body
 /// column (see `chrome::brand_pad`). Facts *within* a group ride the tighter
-/// ` · ` rhythm instead. Mjolnir shipped six cells in the identity group for
+/// ` · ` rhythm instead. Aldwin shipped six cells in the identity group for
 /// three weeks on a misreading of the handoff prose; see `.claude/design/
 /// HANDOFF.md`'s "the gap here is not `--group-gap`" note.
 pub(super) use crate::tokens::GROUP_GAP;
@@ -85,7 +85,7 @@ pub(super) use crate::tokens::STEP_CONTENT_COL;
 /// them. Narrowing is explicit (`ctx.narrow(..)` / `ctx.body()`): a builder
 /// filling a column inside another one says so at the call site, which is
 /// where the two historical width-divergence bugs recorded in
-/// `mjolnir-tui.md` would have been visible.
+/// `aldwin-tui.md` would have been visible.
 #[derive(Clone, Copy)]
 pub(super) struct Ctx<'a> {
     pub pal:   &'a Palette,

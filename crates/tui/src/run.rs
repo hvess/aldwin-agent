@@ -3,8 +3,8 @@ use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mjolnir_core::{Command, Event};
-use mjolnir_permissions::Engine;
+use aldwin_core::{Command, Event};
+use aldwin_permissions::Engine;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
@@ -52,7 +52,7 @@ const OUT_BUFFER: usize = 1 << 20;
 pub struct SessionProvider {
     /// Display halves only, in catalogue order (see
     /// [`crate::first_run::ProviderChoice`]). Empty means no picker: bare
-    /// `/model` is then forwarded to mjolnir-cli, which reports rather than
+    /// `/model` is then forwarded to aldwin-cli, which reports rather than
     /// picks.
     pub catalogue:        Vec<ProviderChoice>,
     /// The catalogue id of the row `provider.yaml` resolves to, or `None`
@@ -66,13 +66,13 @@ pub struct SessionProvider {
     /// including the one being written. Display halves only, exactly as
     /// `catalogue` is: this crate reads no transcript and formats no
     /// timestamp. Empty means no picker — bare `/resume` is then forwarded
-    /// to mjolnir-cli, which reports rather than picks.
+    /// to aldwin-cli, which reports rather than picks.
     pub sessions: Vec<SessionChoice>,
 }
 
 /// Runs the TUI to completion: sets up the terminal, drives the event loop
 /// multiplexing crossterm input and core events on one `tokio::select!` (per
-/// mjolnir-tui.md's Pitfall on not blocking the draw loop on either channel
+/// aldwin-tui.md's Pitfall on not blocking the draw loop on either channel
 /// alone), and always restores the terminal on the way out — success,
 /// `Err`, or a panic unwinding through `run_loop` — via `TerminalGuard`.
 ///
@@ -127,7 +127,7 @@ pub struct SessionProvider {
 /// * **Synchronized output** around each frame (see [`present`]).
 ///
 /// `theme` (resolved by the caller from `tui.yaml`'s `theme` field via
-/// `Theme::from_config` — mjolnir-cli's bootstrap does this) selects which
+/// `Theme::from_config` — aldwin-cli's bootstrap does this) selects which
 /// fixed `palette::Palette` every draw uses for the whole session; see
 /// `palette.rs`'s module doc comment for why this is a one-time, explicit
 /// choice rather than a runtime-switchable global.
@@ -318,7 +318,7 @@ fn apply_input(app: &mut App, event: Option<io::Result<CtEvent>>) -> bool {
 fn spawn_input_reader() -> mpsc::Receiver<io::Result<CtEvent>> {
     let (tx, rx) = mpsc::channel(INPUT_CHANNEL);
     std::thread::Builder::new()
-        .name("mjolnir-input".into())
+        .name("aldwin-input".into())
         .spawn(move || loop {
             match ratatui::crossterm::event::read() {
                 Ok(event) => {

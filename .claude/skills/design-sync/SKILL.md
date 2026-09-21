@@ -1,6 +1,6 @@
 ---
 name: design-sync
-description: How to re-sync the Mjolnir design system from claude.ai/design with DesignSync — which of the two projects is live, and the four traps in addressing them. Read before any DesignSync call or design re-sync; not needed to use the local copy in .claude/design/.
+description: How to re-sync the Aldwin design system from claude.ai/design with DesignSync — which of the two projects is live, and the four traps in addressing them. Read before any DesignSync call or design re-sync; not needed to use the local copy in .claude/design/.
 ---
 
 # Re-syncing the design system

@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use mjolnir_config::{Config, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
-use mjolnir_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
-use mjolnir_permissions::Engine;
-use mjolnir_tools::{register_mcp_tools, Dispatcher, McpBridge};
+use aldwin_config::{Config, InitOutcome, McpServer, ProviderConfig, ProviderKind, Scope, PROVIDER_VERSION};
+use aldwin_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
+use aldwin_permissions::Engine;
+use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
@@ -21,8 +21,8 @@ use crate::slash;
 /// type to build an `Agent` with — the alternative would be duplicating the
 /// whole channel/task/TUI wiring below in two near-identical branches.
 enum AnyLlmClient {
-    Anthropic(mjolnir_llm::AnthropicClient),
-    OpenAi(mjolnir_llm::OpenAiCompatibleClient),
+    Anthropic(aldwin_llm::AnthropicClient),
+    OpenAi(aldwin_llm::OpenAiCompatibleClient),
 }
 
 impl LlmClient for AnyLlmClient {
@@ -37,10 +37,10 @@ impl LlmClient for AnyLlmClient {
 /// Whichever client `provider_config` selects, built the same way at
 /// startup and on every `/model` after it — so a model swapped into a
 /// running session is reached exactly as one chosen at launch would be.
-fn build_client(config: mjolnir_llm::ProviderConfig) -> Result<AnyLlmClient, mjolnir_llm::LlmClientInitError> {
+fn build_client(config: aldwin_llm::ProviderConfig) -> Result<AnyLlmClient, aldwin_llm::LlmClientInitError> {
     Ok(match config.kind {
-        ProviderKind::Anthropic => AnyLlmClient::Anthropic(mjolnir_llm::AnthropicClient::new(config)?),
-        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(mjolnir_llm::OpenAiCompatibleClient::new(config)?),
+        ProviderKind::Anthropic => AnyLlmClient::Anthropic(aldwin_llm::AnthropicClient::new(config)?),
+        ProviderKind::OpenaiCompatible => AnyLlmClient::OpenAi(aldwin_llm::OpenAiCompatibleClient::new(config)?),
     })
 }
 
@@ -93,7 +93,7 @@ impl slash::ModelSwitch for ClientHandle {
     /// Builds first and stores second, so a client that cannot be
     /// constructed — the new provider's `api_key_env` is not exported —
     /// leaves the session on the one it has.
-    fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String> {
+    fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String> {
         let client = build_client(config.clone()).map_err(|e| e.to_string())?;
         self.store(Arc::new(client));
         Ok(())
@@ -104,17 +104,17 @@ const CHANNEL_CAPACITY: usize = 64;
 
 /// The display halves of the whole catalogue, in catalogue order — what
 /// first run's provider step and the session's `/model` picker both list.
-/// mjolnir-tui is handed ids and purposes and nothing else: it renders the
+/// aldwin-tui is handed ids and purposes and nothing else: it renders the
 /// list, it does not know what an endpoint or a key variable is, and it
-/// does not depend on this crate or on mjolnir-llm to find out.
-fn catalogue_choices() -> Vec<mjolnir_tui::ProviderChoice> {
-    mjolnir_llm::PROVIDERS
+/// does not depend on this crate or on aldwin-llm to find out.
+fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
+    aldwin_llm::PROVIDERS
         .iter()
         .map(|p| {
-            mjolnir_tui::ProviderChoice::new(
+            aldwin_tui::ProviderChoice::new(
                 p.id,
                 p.purpose,
-                p.models.iter().map(|m| mjolnir_tui::ModelChoice::new(m.id, m.purpose)).collect(),
+                p.models.iter().map(|m| aldwin_tui::ModelChoice::new(m.id, m.purpose)).collect(),
             )
         })
         .collect()
@@ -144,8 +144,8 @@ fn catalogue_choices() -> Vec<mjolnir_tui::ProviderChoice> {
 ///
 /// Carrying both is also what makes an unchanged answer compare equal to
 /// what is on disk, so confirming the lists writes nothing at all.
-fn first_run_provider_config(provider: &mjolnir_llm::Provider, model: Option<&str>, current: Option<&ProviderConfig>) -> ProviderConfig {
-    let on_this_provider = current.filter(|c| mjolnir_llm::identify(c).map(|p| p.id) == Some(provider.id));
+fn first_run_provider_config(provider: &aldwin_llm::Provider, model: Option<&str>, current: Option<&ProviderConfig>) -> ProviderConfig {
+    let on_this_provider = current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
     ProviderConfig {
         version:                  PROVIDER_VERSION,
         provider:                 provider.kind,
@@ -168,27 +168,27 @@ fn first_run_provider_config(provider: &mjolnir_llm::Provider, model: Option<&st
 /// `provider.yaml` pointed at an endpoint the catalogue cannot name, where
 /// every row on the screen is somewhere the developer is not, and pressing
 /// through would move them off their own endpoint.
-fn asks_for_a_provider(needs_provider: bool, configured: &mjolnir_tui::Configured) -> bool {
+fn asks_for_a_provider(needs_provider: bool, configured: &aldwin_tui::Configured) -> bool {
     needs_provider || configured.provider.is_some()
 }
 
 /// Where the first-run screen's provider and model lists open: whatever
 /// already supplies the setting, project file over global, reduced to the
 /// two ids the screen can match against its own rows.
-fn configured_for_first_run(config: &Config) -> mjolnir_tui::Configured {
+fn configured_for_first_run(config: &Config) -> aldwin_tui::Configured {
     let Some(current) = config.project_provider().or_else(|| config.global_provider().ok()) else {
-        return mjolnir_tui::Configured::default();
+        return aldwin_tui::Configured::default();
     };
-    mjolnir_tui::Configured {
+    aldwin_tui::Configured {
         // `None` for an endpoint the catalogue does not know — there is no
         // row for it, so the lists open at the top rather than on a
         // neighbour that merely looks similar.
-        provider: mjolnir_llm::identify(&current).map(|p| p.id.to_string()),
+        provider: aldwin_llm::identify(&current).map(|p| p.id.to_string()),
         model:    Some(current.model.clone()),
     }
 }
 
-/// The startup sequence from mjolnir-cli.md, in order:
+/// The startup sequence from aldwin-cli.md, in order:
 /// 1. init_global_if_empty — refuse to start on PartiallyPresent.
 /// 2. Load all config layers (`Config::open` — refuses to start on any
 ///    parse failure, schema error, unknown major, or missing env var).
@@ -199,7 +199,7 @@ fn configured_for_first_run(config: &Config) -> mjolnir_tui::Configured {
 /// 7. Block on TUI exit; drop channels; wait for the agent to drain.
 ///
 /// Step 4's PermissionsEngine is actually built ahead of step 3 here, not
-/// after: per mjolnir-permissions.md, "the session initializer tests each
+/// after: per aldwin-permissions.md, "the session initializer tests each
 /// candidate [context] file" through the engine's own check_context_file
 /// before composing the additional-context string, which needs the engine
 /// to already exist. The spec's numbered list is the right order to read
@@ -213,12 +213,12 @@ pub async fn run() -> Result<(), StartupError> {
         InitOutcome::PartiallyPresent { missing } => return Err(StartupError::PartiallyPresentGlobalConfig { missing }),
     }
 
-    // `theme` is global-only (see mjolnir-config's annotated tui.yaml) —
+    // `theme` is global-only (see aldwin-config's annotated tui.yaml) —
     // resolved once, before anything draws, and never revisited for the rest
-    // of the session (mjolnir_tui::palette's own doc comment explains why
+    // of the session (aldwin_tui::palette's own doc comment explains why
     // this is a one-time explicit choice, not a live setting). Read here
     // rather than just before the session TUI because first run draws first.
-    let theme = mjolnir_tui::Theme::from_config(config.global_tui().theme.as_deref());
+    let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
 
     // First run, per ADR 0001. What opens the screen is either question
     // being unanswered:
@@ -226,7 +226,7 @@ pub async fn run() -> Result<(), StartupError> {
     // * no provider config resolves anywhere — where the model runs is
     //   unknown, and it has to be answered before the LLM client below can
     //   be constructed;
-    // * this project has no `.mjolnir/permissions.yaml` — a directory the
+    // * this project has no `.aldwin/permissions.yaml` — a directory the
     //   harness has never been pointed at, whose access posture is
     //   therefore undeclared.
     //
@@ -251,26 +251,26 @@ pub async fn run() -> Result<(), StartupError> {
     // cannot name is left alone and only `access` is asked, exactly as
     // before.
     let needs_provider = config.global_provider().is_err();
-    let needs_access = !cwd.join(".mjolnir").join("permissions.yaml").exists();
+    let needs_access = !cwd.join(".aldwin").join("permissions.yaml").exists();
     if needs_provider || needs_access {
-        // mjolnir-tui is handed the display half of each catalogue row and
+        // aldwin-tui is handed the display half of each catalogue row and
         // nothing else — it renders the list, it does not know what an
         // endpoint or a key variable is, and it does not depend on this
-        // crate or on mjolnir-llm to find out.
+        // crate or on aldwin-llm to find out.
         let choices = catalogue_choices();
         let configured = configured_for_first_run(&config);
         let ask_provider = asks_for_a_provider(needs_provider, &configured);
         // `None` means the developer quit without answering. Nothing is
         // written and no session opens — a first run that was dismissed must
         // not fall back to defaults, least of all for the access question.
-        let Some(answers) = mjolnir_tui::run_first_run(theme, choices, mjolnir_llm::CURATED, ask_provider, needs_access, configured)
+        let Some(answers) = aldwin_tui::run_first_run(theme, choices, aldwin_llm::CURATED, ask_provider, needs_access, configured)
             .await
             .map_err(StartupError::FirstRun)?
         else {
             return Ok(());
         };
         if let Some(id) = answers.provider.as_deref() {
-            let picked = mjolnir_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
+            let picked = aldwin_llm::provider(id).ok_or_else(|| StartupError::UnknownProvider { id: id.to_string() })?;
             let current = config.project_provider().or_else(|| config.global_provider().ok());
             let next = first_run_provider_config(picked, answers.model.as_deref(), current.as_ref());
             match current {
@@ -281,7 +281,7 @@ pub async fn run() -> Result<(), StartupError> {
                 Some(current) if current == next => {}
                 // A provider is already configured, so this answer is about
                 // *this directory* — the one the screen opened for, and the
-                // one already getting a `.mjolnir/` written for its access
+                // one already getting a `.aldwin/` written for its access
                 // answer. The developer's global default is left alone.
                 Some(_) => config.set_provider(Scope::Project, next).map_err(StartupError::FirstRunWrite)?,
                 // A true first run has no global default yet, so the answer
@@ -313,16 +313,16 @@ pub async fn run() -> Result<(), StartupError> {
 
     let project_provider = config.project_provider();
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
-    let provider_config = mjolnir_llm::resolve(project_provider.as_ref(), &global_provider);
+    let provider_config = aldwin_llm::resolve(project_provider.as_ref(), &global_provider);
     let model_name = provider_config.model.clone();
     // What this process boots on. `/model` moves the session off it and
     // updates `slash::Session` in step, so this is a starting point rather
     // than a fact about the whole run.
     let effective_provider = project_provider.clone().unwrap_or_else(|| global_provider.clone());
-    let session_model = slash::qualified(&effective_provider, mjolnir_llm::identify(&effective_provider));
+    let session_model = slash::qualified(&effective_provider, aldwin_llm::identify(&effective_provider));
     let client = ClientHandle::new(build_client(provider_config)?);
 
-    let mut registry = mjolnir_tools::builtin_registry(cwd.clone());
+    let mut registry = aldwin_tools::builtin_registry(cwd.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
     // Best-effort per server/tool (see register_mcp_tools' own doc comment)
     // — one broken server must not prevent the session from starting, or
@@ -352,7 +352,7 @@ pub async fn run() -> Result<(), StartupError> {
     //
     let (history, history_failure) = History::open(config.history_dir(), model_name.clone(), event_tx.clone());
     if let Some(message) = history_failure {
-        let _ = event_tx.try_send(mjolnir_core::Event::Notice { message });
+        let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
     }
     // Every transcript but this session's own — `resumable` is what excludes
     // it, so the picker never offers the session the developer is sitting in.
@@ -388,18 +388,18 @@ pub async fn run() -> Result<(), StartupError> {
     // open on a row that exists, so an unrecognised endpoint leaves that
     // `None`, while the resting screen still has a true name to print — the
     // kind the file itself declares.
-    let identified = mjolnir_llm::identify(&effective_provider).map(|p| p.id.to_string());
+    let identified = aldwin_llm::identify(&effective_provider).map(|p| p.id.to_string());
     let kind = match effective_provider.provider {
-        mjolnir_config::ProviderKind::Anthropic => "anthropic",
-        mjolnir_config::ProviderKind::OpenaiCompatible => "openai-compatible",
+        aldwin_config::ProviderKind::Anthropic => "anthropic",
+        aldwin_config::ProviderKind::OpenaiCompatible => "openai-compatible",
     };
-    let session = mjolnir_tui::SessionProvider {
+    let session = aldwin_tui::SessionProvider {
         provider_label:   Some(identified.clone().unwrap_or_else(|| kind.to_string())),
         catalogue:        catalogue_choices(),
         current_provider: identified,
         sessions,
     };
-    let tui_result = mjolnir_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme, session).await;
+    let tui_result = aldwin_tui::run(event_rx, tui_cmd_tx, model_name, permissions, theme, session).await;
 
     // The TUI dropped its command sender on return, closing tui_cmd_rx;
     // the interceptor then drops agent_cmd_tx, closing the core's command
@@ -411,7 +411,7 @@ pub async fn run() -> Result<(), StartupError> {
 }
 
 /// A project-scope server entry replaces a global one of the same name
-/// entirely (see mjolnir-config's annotated mcp.yaml) — this is that same
+/// entirely (see aldwin-config's annotated mcp.yaml) — this is that same
 /// rule applied across the two already-loaded snapshots.
 fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut by_name: BTreeMap<String, McpServer> = config.global_mcp().servers.into_iter().map(|s| (s.name.clone(), s)).collect();
@@ -424,7 +424,7 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_config::McpTransport;
+    use aldwin_config::McpTransport;
 
     fn server(name: &str, command: &str) -> McpServer {
         McpServer { name: name.into(), transport: McpTransport::Stdio { command: command.into(), args: vec![] }, env: Default::default() }
@@ -436,9 +436,9 @@ mod tests {
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
 
-        config.add_mcp_server(mjolnir_config::Scope::Global, server("fs", "global-fs-server")).unwrap();
-        config.add_mcp_server(mjolnir_config::Scope::Project, server("fs", "project-fs-server")).unwrap();
-        config.add_mcp_server(mjolnir_config::Scope::Global, server("other", "other-server")).unwrap();
+        config.add_mcp_server(aldwin_config::Scope::Global, server("fs", "global-fs-server")).unwrap();
+        config.add_mcp_server(aldwin_config::Scope::Project, server("fs", "project-fs-server")).unwrap();
+        config.add_mcp_server(aldwin_config::Scope::Global, server("other", "other-server")).unwrap();
 
         let merged = merged_mcp_servers(&config);
         assert_eq!(merged.len(), 2);
@@ -451,7 +451,7 @@ mod tests {
     /// step could not be asked at all, not the normal path.
     #[test]
     fn first_run_writes_the_model_that_was_chosen() {
-        let anthropic = mjolnir_llm::provider("anthropic").expect("a catalogue provider");
+        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
         let chosen = first_run_provider_config(anthropic, Some("claude-opus-5"), None);
         assert_eq!(chosen.model, "claude-opus-5");
         assert_eq!(chosen.api_key_env, anthropic.api_key_env, "the endpoint and key still come from the provider row");
@@ -464,7 +464,7 @@ mod tests {
     /// must not leave a project file behind restating the global one.
     #[test]
     fn an_unchanged_answer_compares_equal_to_what_is_already_configured() {
-        let google = mjolnir_llm::provider("google").expect("a catalogue provider");
+        let google = aldwin_llm::provider("google").expect("a catalogue provider");
         let current = ProviderConfig { extended_thinking_budget: Some(4_000), ..first_run_provider_config(google, Some("gemini-2.5-flash"), None) };
         let confirmed = first_run_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
         assert_eq!(confirmed, current, "the thinking budget travels with it, so an unchanged answer is byte-identical");
@@ -480,7 +480,7 @@ mod tests {
     /// variable name and break their next start.
     #[test]
     fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
-        let anthropic = mjolnir_llm::provider("anthropic").expect("a catalogue provider");
+        let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
         let current = ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..first_run_provider_config(anthropic, Some("claude-sonnet-5"), None) };
 
         let same_provider = first_run_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
@@ -489,7 +489,7 @@ mod tests {
 
         // A different provider is a different endpoint with a different
         // key, so there the catalogue's variable is the right one.
-        let google = mjolnir_llm::provider("google").expect("a catalogue provider");
+        let google = aldwin_llm::provider("google").expect("a catalogue provider");
         let moved = first_run_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
         assert_eq!(moved.api_key_env, google.api_key_env);
     }
@@ -499,10 +499,10 @@ mod tests {
     /// represents where the developer already is.
     #[test]
     fn the_provider_steps_are_held_back_only_for_an_endpoint_with_no_row() {
-        let known = mjolnir_tui::Configured { provider: Some("anthropic".into()), model: Some("claude-opus-5".into()) };
-        let unknown = mjolnir_tui::Configured { provider: None, model: Some("qwen3-coder".into()) };
+        let known = aldwin_tui::Configured { provider: Some("anthropic".into()), model: Some("claude-opus-5".into()) };
+        let unknown = aldwin_tui::Configured { provider: None, model: Some("qwen3-coder".into()) };
 
-        assert!(asks_for_a_provider(true, &mjolnir_tui::Configured::default()), "a true first run has to ask");
+        assert!(asks_for_a_provider(true, &aldwin_tui::Configured::default()), "a true first run has to ask");
         assert!(asks_for_a_provider(false, &known), "a catalogue row is a row the lists can open on");
         assert!(!asks_for_a_provider(false, &unknown), "pressing through rows that are all somewhere else is not an answer");
         assert!(asks_for_a_provider(true, &unknown), "nothing configured still has to be asked, whatever else is on disk");
@@ -515,15 +515,15 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
-        assert_eq!(configured_for_first_run(&config), mjolnir_tui::Configured::default(), "a true first run has nothing to open on");
+        assert_eq!(configured_for_first_run(&config), aldwin_tui::Configured::default(), "a true first run has nothing to open on");
 
-        let anthropic = mjolnir_llm::provider("anthropic").unwrap();
+        let anthropic = aldwin_llm::provider("anthropic").unwrap();
         config.set_provider(Scope::Global, first_run_provider_config(anthropic, Some("claude-opus-5"), None)).unwrap();
         let configured = configured_for_first_run(&config);
         assert_eq!(configured.provider.as_deref(), Some("anthropic"));
         assert_eq!(configured.model.as_deref(), Some("claude-opus-5"));
 
-        let google = mjolnir_llm::provider("google").unwrap();
+        let google = aldwin_llm::provider("google").unwrap();
         config.set_provider(Scope::Project, first_run_provider_config(google, Some("gemini-2.5-flash"), None)).unwrap();
         let shadowed = configured_for_first_run(&config);
         assert_eq!(shadowed.provider.as_deref(), Some("google"), "the project file is what the session would run on");
@@ -591,11 +591,11 @@ mod tests {
     async fn a_swap_that_cannot_build_a_client_leaves_the_running_one_in_place() {
         // A name of this test's own, so a parallel test's environment can
         // neither satisfy nor break it.
-        const KEY: &str = "MJOLNIR_SWAP_TEST_KEY";
-        const ABSENT: &str = "MJOLNIR_SWAP_TEST_KEY_NEVER_SET";
+        const KEY: &str = "ALDWIN_SWAP_TEST_KEY";
+        const ABSENT: &str = "ALDWIN_SWAP_TEST_KEY_NEVER_SET";
         std::env::set_var(KEY, "not-a-real-key");
 
-        let config = |key: &str| mjolnir_llm::ProviderConfig {
+        let config = |key: &str| aldwin_llm::ProviderConfig {
             kind:                     ProviderKind::Anthropic,
             model:                    "a-model".into(),
             api_key_env:              key.to_string(),
@@ -620,8 +620,8 @@ mod tests {
     #[test]
     fn every_catalogue_row_carries_its_models_to_the_frontend() {
         let choices = catalogue_choices();
-        assert_eq!(choices.len(), mjolnir_llm::PROVIDERS.len());
-        for (choice, provider) in choices.iter().zip(mjolnir_llm::PROVIDERS) {
+        assert_eq!(choices.len(), aldwin_llm::PROVIDERS.len());
+        for (choice, provider) in choices.iter().zip(aldwin_llm::PROVIDERS) {
             assert_eq!(choice.id, provider.id);
             assert_eq!(
                 choice.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),

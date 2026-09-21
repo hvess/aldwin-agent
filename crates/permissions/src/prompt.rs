@@ -1,10 +1,10 @@
-//! Wire shapes for the prompt round trip. `mjolnir-core`'s
+//! Wire shapes for the prompt round trip. `aldwin-core`'s
 //! `Event::PromptRequested` / `Command::PromptResponse` carry an opaque
 //! `serde_json::Value` — these types are what that value actually is.
 
 use std::path::PathBuf;
 
-use mjolnir_config::Class;
+use aldwin_config::Class;
 use serde::{Deserialize, Serialize};
 
 /// Persistence tier for a context-file two-tier prompt response. No "once"

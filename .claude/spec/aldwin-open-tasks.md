@@ -1,4 +1,4 @@
-# mjolnir-open-tasks
+# aldwin-open-tasks
 
 Work that is known, understood and not done. Each entry says what was seen, where the evidence is, and what would close it.
 
@@ -6,9 +6,9 @@ Work that is known, understood and not done. Each entry says what was seen, wher
 **Scope:** everything outstanding as of 2026-09-20. Entries 1–15 are gone:
 they belonged to the screenshot harness and its conformance catalogue, both
 deleted when the review loop replaced them — see
-`.claude/spec/mjolnir-review.md`'s Progress entry. New numbering starts at 1.
+`.claude/spec/aldwin-review.md`'s Progress entry. New numbering starts at 1.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-21
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -22,6 +22,19 @@ contradicts) and the entry says so before it goes.
    works around. Both are bugs in `.claude/design/`, not in the app. Closing
    them means fixing the design upstream and re-syncing — read the
    `design-sync` skill first — after which the entries are deleted.
+
+2a. **The design system upstream is still named Mjolnir, and its frames
+   still spell that wordmark.** The project was renamed Mjolnir → Aldwin on
+   2026-09-21; `.claude/design/` keeps the old name wherever it is an
+   *address* — the project title on `claude.ai/design`, the bound copy's
+   `_ds/mjolnir-design-system-4ea574fb-…/` path, `window.MjolnirDesignSystem_4ea574`
+   — because renaming those locally would only stop `design-sync` finding
+   anything. The consequence that reaches the app is the wordmark: the
+   frames render seven letters in a 17-cell field, the app renders six in
+   15, and `baseline.json`'s `wordmark-letters-are-the-old-name` records the
+   split. Closing it means renaming the project upstream and re-syncing,
+   after which that contradiction entry is deleted and the addresses here
+   are updated in the same pass.
 
 2. **The design system ships no reference frames.** `.claude/design/` carries
    prose and tokens; the rendered `.dc.html` frames the design was drawn as
@@ -95,10 +108,10 @@ contradicts) and the entry says so before it goes.
 19. **There is no opt-out, and nothing prunes.** Both are deliberate V1 gaps
     named in ADR 0005's Consequences, recorded here so they are found by
     someone looking for work rather than by someone surprised. Transcripts
-    accumulate under `~/.mjolnir/history/` at mode `0600` until the developer
+    accumulate under `~/.aldwin/history/` at mode `0600` until the developer
     deletes them. The opt-out is the more pressing of the two: a developer
     working in a tree whose tool results carry secrets currently has no way to
-    say "not this project" short of not running Mjolnir in it.
+    say "not this project" short of not running Aldwin in it.
 
 20. **An MCP tool's results land in the transcript with no classification.**
     Consequence of entry 12 rather than of ADR 0005, but history is what gives
@@ -109,11 +122,11 @@ contradicts) and the entry says so before it goes.
 
 ## Repo
 
-9. ~~**`mjolnir-tools`' LSP test needs `rust-analyzer` on PATH and is not
+9. ~~**`aldwin-tools`' LSP test needs `rust-analyzer` on PATH and is not
    gated for it.**~~ **Done 2026-09-20.** `#[ignore]`d with a reason, the
    same convention `llm/tests/live_lumo.rs` uses for its live-API tests, so
    the review loop's stage 2 no longer reports a missing dependency as a
-   broken workspace. Run it with `cargo test -p mjolnir-tools -- --ignored`.
+   broken workspace. Run it with `cargo test -p aldwin-tools -- --ignored`.
 
 10. ~~**`target/` is tracked — 402 files — and the repo had no `.gitignore`
     until 2026-09-19.**~~ **Done.** The rule is `/target`, which covers the
@@ -144,7 +157,7 @@ contradicts) and the entry says so before it goes.
     `edit` holds it; an MCP tool could too, but only once the developer has
     said which of its arguments is the path and which is the new content —
     without that mapping there is nothing to render a diff from. Until it is
-    built, the claim is worded narrowly and deliberately: *Mjolnir's `edit`
+    built, the claim is worded narrowly and deliberately: *Aldwin's `edit`
     tool never lands without a diff you accepted.* The design system's readme
     still says "no write lands without a diff the user has accepted", which
     overstates it and wants rewording upstream (see entry 1 — it goes in the
@@ -188,7 +201,7 @@ contradicts) and the entry says so before it goes.
 
 ## References
 
-- .claude/spec/mjolnir-review.md — the loop most of these belong to, and what it replaced.
+- .claude/spec/aldwin-review.md — the loop most of these belong to, and what it replaced.
 - .claude/skills/review/SKILL.md — the loop as run, including stage 5's prompt.
 - crates/review/baseline.json — the design contradictions entry 1 is about.
 - .claude/design/IMPORT.md — the reference, and how to re-sync it.

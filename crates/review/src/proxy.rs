@@ -187,12 +187,12 @@ struct Observer {
 }
 
 fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
-    // `MJOLNIR_SHOT_TRACE=<path>` tees the app's byte stream to a file. When
+    // `ALDWIN_SHOT_TRACE=<path>` tees the app's byte stream to a file. When
     // the parser and the frame disagree, this is the only place the answer
     // can be: both of them are downstream of these bytes.
     let mut trace = observe
         .is_some()
-        .then(|| std::env::var_os("MJOLNIR_SHOT_TRACE"))
+        .then(|| std::env::var_os("ALDWIN_SHOT_TRACE"))
         .flatten()
         .and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     thread::spawn(move || {

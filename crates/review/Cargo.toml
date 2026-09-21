@@ -1,24 +1,24 @@
 [package]
-name    = "mjolnir-review"
+name    = "aldwin-review"
 version.workspace = true
 edition.workspace = true
 
 # Dev-only harness. Nothing in the shipped binary may depend on this crate;
-# `release.yml` builds `-p mjolnir-cli`, so it is never in a release build.
+# `release.yml` builds `-p aldwin-cli`, so it is never in a release build.
 [[bin]]
-name = "mjolnir-review"
+name = "aldwin-review"
 path = "src/main.rs"
 
 [dependencies]
 # The product's own config writer, so a seeded global config is created by the
 # code under test rather than by a copy of its templates that would drift.
-mjolnir-config = { path = "../config" }
+aldwin-config = { path = "../config" }
 # `LogRecord`, so a seeded transcript is written through the product's own
 # history writer rather than by a copy of the JSONL format that would drift.
-mjolnir-core   = { path = "../core" }
+aldwin-core   = { path = "../core" }
 # The product's own canned-response server, behind its dev-only feature, so a
 # scene is driven by a provider that answers identically every run.
-mjolnir-llm    = { path = "../llm", features = ["test-server"] }
+aldwin-llm    = { path = "../llm", features = ["test-server"] }
 tokio          = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }

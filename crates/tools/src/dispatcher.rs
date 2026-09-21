@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use mjolnir_core::{DispatchContext, ToolCall, ToolDefinition, ToolResult};
-use mjolnir_permissions::{Class, Engine, Outcome, PromptPayload, PromptResponse};
+use aldwin_core::{DispatchContext, ToolCall, ToolDefinition, ToolResult};
+use aldwin_permissions::{Class, Engine, Outcome, PromptPayload, PromptResponse};
 use async_trait::async_trait;
 
 use crate::error::ToolError;
@@ -20,7 +20,7 @@ pub struct Dispatcher {
     registry:    Registry,
     permissions: Arc<Engine>,
     /// Serialises the prompt-and-record half of `check` across the tool
-    /// calls of a step, which `mjolnir-core`'s `dispatch_tools` drives
+    /// calls of a step, which `aldwin-core`'s `dispatch_tools` drives
     /// concurrently (`future::join_all`) — see `check`'s own doc comment for
     /// the bug that makes this necessary. Held only while a prompt is
     /// genuinely outstanding, so calls the engine can already answer never
@@ -140,7 +140,7 @@ impl Dispatcher {
 }
 
 #[async_trait]
-impl mjolnir_core::ToolDispatcher for Dispatcher {
+impl aldwin_core::ToolDispatcher for Dispatcher {
     async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
         let Some(tool) = self.registry.get(&call.name) else {
             return error_result(&call.id, ToolError::UnknownTool { name: call.name });
@@ -204,9 +204,9 @@ mod tests {
     use super::*;
     use crate::registry::{Tool, ToolDescriptor, ToolSource};
     use crate::test_support::dispatch_context;
-    use mjolnir_config::Config;
-    use mjolnir_core::{Event, ToolDispatcher as _};
-    use mjolnir_permissions::{Choice, GrantEntry, GrantList};
+    use aldwin_config::Config;
+    use aldwin_core::{Event, ToolDispatcher as _};
+    use aldwin_permissions::{Choice, GrantEntry, GrantList};
     use async_trait::async_trait;
     use serde_json::{json, Value};
 
@@ -278,7 +278,7 @@ mod tests {
     /// Answers the next prompt with `choice`, asserting on the payload.
     async fn answer(
         events:  &mut tokio::sync::mpsc::Receiver<Event>,
-        pending: &mjolnir_core::PendingMap,
+        pending: &aldwin_core::PendingMap,
         choice:  Choice,
     ) -> PromptPayload {
         let Some(Event::PromptRequested { call_id, payload }) = events.recv().await else {
@@ -289,7 +289,7 @@ mod tests {
             PromptPayload::WriteAttempt { .. } => PromptResponse::WriteAttempt { choice },
             _ => PromptResponse::Tool { choice },
         };
-        let Some(mjolnir_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
+        let Some(aldwin_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
             panic!("expected a pending Prompt entry for {call_id}");
         };
         tx.send(serde_json::to_value(response).unwrap()).unwrap();

@@ -20,7 +20,7 @@
 //! once, by [`wrap`] or by [`row::Row`], *before* it is inset or filled —
 //! never afterwards by a `Paragraph`'s own `Wrap`, which knows nothing
 //! about the insets already applied and would strand continuation rows flush
-//! against the frame edge. See mjolnir-tui.md's Progress notes for the two
+//! against the frame edge. See aldwin-tui.md's Progress notes for the two
 //! bugs that discipline exists to prevent from recurring.
 //!
 //! In the transcript that is now load-bearing rather than merely tidy: the
@@ -65,7 +65,7 @@ pub(super) const TOP_BAR_ROWS: u16 = 3;
 /// this is a row of the transcript's own ground, not an inset with a
 /// different tone, and it is taken out of the band's *inner* rect while the
 /// band itself still fills edge to edge. The reference frames space the
-/// transcript off both bars this way; mjolnir had the body band running
+/// transcript off both bars this way; aldwin had the body band running
 /// straight into them, reported directly as "the chat doesn't have any top
 /// and bottom padding and it means the text touches the top and bottom
 /// bars".
@@ -172,7 +172,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // is what both `App::render_width`/`render_height` (cached for scroll
     // math between draws) and the log's own content pass use. There must
     // never be a second, independently-derived "inner width" anywhere else
-    // in this call graph — see mjolnir-tui.md's scrolling-fix and
+    // in this call graph — see aldwin-tui.md's scrolling-fix and
     // wrapped-row-scroll-math Progress notes for the two real bugs that came
     // from exactly this kind of divergence before.
     let log_inner = pad_rows(log_block.inner(log_area), LOG_PAD_ROWS);

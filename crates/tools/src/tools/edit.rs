@@ -7,11 +7,11 @@ use crate::diff;
 use crate::error::ToolError;
 use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
-use mjolnir_permissions::Class;
+use aldwin_permissions::Class;
 
 /// Propose a single edit (path, before, after). Always per-call approval —
 /// the gate lives inside this future, not the dispatcher (see
-/// mjolnir-tools.md's Decisions). `edit_class: true` means the generic
+/// aldwin-tools.md's Decisions). `edit_class: true` means the generic
 /// dispatcher permission check is never even consulted for this tool.
 pub struct EditTool {
     descriptor:   ToolDescriptor,
@@ -112,7 +112,7 @@ impl Tool for EditTool {
 mod tests {
     use super::*;
     use crate::test_support::{dispatch_context, ALWAYS_APPROVE, ALWAYS_DENY};
-    use mjolnir_core::Event;
+    use aldwin_core::Event;
     use tempfile::tempdir;
 
     fn write(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {
@@ -229,7 +229,7 @@ mod tests {
                     assert_eq!(call_id, "call-1");
                     assert!(diff.contains("-old"));
                     assert!(diff.contains("+new"));
-                    let Some(mjolnir_core::PendingReply::Approval(tx)) = pending.lock().unwrap().remove(&call_id) else {
+                    let Some(aldwin_core::PendingReply::Approval(tx)) = pending.lock().unwrap().remove(&call_id) else {
                         panic!("expected a pending Approval entry for {call_id}");
                     };
                     tx.send(true).unwrap();

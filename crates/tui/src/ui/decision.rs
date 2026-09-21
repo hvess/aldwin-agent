@@ -7,7 +7,7 @@
 //! a recessed diff field or a command block), the grant the answer would
 //! save, a separator band, the numbered options, and a key-hint footer.
 
-use mjolnir_permissions::{Class, PromptPayload};
+use aldwin_permissions::{Class, PromptPayload};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
@@ -40,7 +40,7 @@ use crate::palette::Palette;
 /// what it was asked *about* was not.
 ///
 /// A quarter rather than the design's own half (`--panel-permission-h` is
-/// 18 rows of 36) because Mjolnir's panel was not `5a`'s: ADR 0001 puts five
+/// 18 rows of 36) because Aldwin's panel was not `5a`'s: ADR 0001 puts five
 /// options on it where the reference has four, and it carried the
 /// grant-summary and `Tab` scope rows besides, so its full content needed
 /// around 20 rows where the reference needs 18.
@@ -205,7 +205,7 @@ impl PromptView {
             // Never actually reaches this card in production — `App::
             // decision_options`' Edit arm returns no options, since Edit
             // uses the separate ToolApprovalRequested/ApprovalCard path
-            // instead (mjolnir-permissions.md's Edit Exception). Kept for a
+            // instead (aldwin-permissions.md's Edit Exception). Kept for a
             // complete, non-panicking match, not a live UI path.
             PromptPayload::Edit { kind } => {
                 Self { sentence: "The agent wants to edit a file.".into(), badge: "edit".into(), target: kind.clone(), shell: false }
@@ -293,7 +293,7 @@ fn prompt_card(payload: &PromptPayload, cwd: Option<&str>, tail: Vec<Line<'stati
     // blank, and a doubled blank is exactly the row an eight-option panel
     // cannot afford.
     lines.extend(command_block(&view.target, view.shell, padding, ctx));
-    // `5a`'s key/value table, of which Mjolnir can honestly source one row.
+    // `5a`'s key/value table, of which Aldwin can honestly source one row.
     // The design's `in` / `writes` / `network` wanted a working directory, a
     // static analysis of what a command touches, and a network posture; only
     // the first existed, and the other two were deliberately not invented.
@@ -478,7 +478,7 @@ pub(super) struct OptionRow {
 /// Each row also carries the option's `detail` — `accent_text` on the
 /// selected row and dim elsewhere — in a column aligned
 /// across the whole list — what choosing this option concretely does
-/// ("saved to .mjolnir/permissions.yaml"). The column is dropped wholesale
+/// ("saved to .aldwin/permissions.yaml"). The column is dropped wholesale
 /// (never per-row, which would leave the list visibly ragged) on a frame
 /// too narrow to seat it without wrapping every row: the labels alone still
 /// resolve the list, and the panel body above already states the rule in
@@ -734,14 +734,14 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx, frame_height: u16) -> Vec<Line<'s
     // The blank row above is `card`'s, so it is still on `bar` — which is
     // what makes the step land exactly where the rule used to.
     // No right-hand provenance note. It used to read "saved to
-    // .mjolnir/permissions.yaml" under every prompt, which was true of
+    // .aldwin/permissions.yaml" under every prompt, which was true of
     // exactly one of the tiers on offer — "allow once" and "allow for this
     // session" save nothing at all, and "always allow" writes to the global
     // file instead. Where each answer lands is now stated per option, on
     // the option's own row (`DecisionOption::detail`).
     // `5a` is a band of a stated height, not a box that shrinks to its
     // contents: `cells.css`'s `--panel-permission-h` is 18 rows and
-    // `HANDOFF.md:271` says so again in prose. Mjolnir's panel came to 17,
+    // `HANDOFF.md:271` says so again in prose. Aldwin's panel came to 17,
     // because it draws one fact row where the reference draws three and one
     // separator row where the reference draws two — arithmetic that lands
     // near the number without being it. Two independent stage 5 judges

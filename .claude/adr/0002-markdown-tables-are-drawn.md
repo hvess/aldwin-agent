@@ -4,7 +4,7 @@
 **Supersedes:** nothing wholesale — it carves one exception out of the Turn 13
 "nothing inside a frame is stroked" rule and out of the closed glyph table in
 `.claude/design/HANDOFF.md`
-**Affects:** `mjolnir-tui` (`ui/markdown.rs`), `.claude/design/` (the glyph
+**Affects:** `aldwin-tui` (`ui/markdown.rs`), `.claude/design/` (the glyph
 table needs a table component upstream), `CLAUDE.md`'s Design System section
 
 ## Context

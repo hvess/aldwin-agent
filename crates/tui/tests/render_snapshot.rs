@@ -19,15 +19,15 @@
 //! Regenerate deliberately, after eyeballing the diff:
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=1 cargo test -p mjolnir-tui --test render_snapshot
+//! UPDATE_SNAPSHOTS=1 cargo test -p aldwin-tui --test render_snapshot
 //! ```
 
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mjolnir_config::Config;
-use mjolnir_permissions::{Class, Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use aldwin_config::Config;
+use aldwin_permissions::{Class, Engine, PromptPayload};
+use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -63,7 +63,7 @@ const SCENES: [&str; 11] = [
 /// Pinned here rather than read from config for the same reason the build
 /// identity is: a snapshot that inherits its content breaks on the next
 /// change to something it is not testing.
-fn first_run_state() -> mjolnir_tui::__PreviewFirstRun {
+fn first_run_state() -> aldwin_tui::__PreviewFirstRun {
     let providers: Vec<ProviderChoice> = [
         ("anthropic", "claude models · ANTHROPIC_API_KEY", ["opus-4.6", "sonnet-4.6", "haiku-4.6"]),
         ("google", "gemini models · GOOGLE_API_KEY", ["gemini-3-pro", "gemini-3-flash", "gemini-3-lite"]),
@@ -80,7 +80,7 @@ fn first_run_state() -> mjolnir_tui::__PreviewFirstRun {
         ProviderChoice::new(id, purpose, models)
     })
     .collect();
-    mjolnir_tui::__PreviewFirstRun::new(providers, 3, true, true)
+    aldwin_tui::__PreviewFirstRun::new(providers, 3, true, true)
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn every_scene_renders_exactly_as_recorded() {
         for (width, height) in SIZES {
             let state = first_run_state();
             let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-            terminal.draw(|f| mjolnir_tui::__preview_draw_first_run(f, &state, theme)).expect("draw");
+            terminal.draw(|f| aldwin_tui::__preview_draw_first_run(f, &state, theme)).expect("draw");
             let _ = writeln!(out, "=== {theme:?} first_run {width}x{height}");
             out.push_str(&serialize(terminal.backend().buffer()));
         }
@@ -120,7 +120,7 @@ fn every_scene_renders_exactly_as_recorded() {
         panic!("missing snapshot {SNAPSHOT} ({e}) — regenerate with UPDATE_SNAPSHOTS=1");
     });
     if expected != out {
-        let actual_path = std::env::temp_dir().join("mjolnir-render.actual.snap");
+        let actual_path = std::env::temp_dir().join("aldwin-render.actual.snap");
         let _ = std::fs::write(&actual_path, &out);
         panic!("{}\n\nfull output written to {}", first_difference(&expected, &out), actual_path.display());
     }
@@ -147,7 +147,7 @@ fn every_scene_renders_exactly_as_recorded() {
 #[test]
 fn the_permission_panel_is_the_band_height_the_design_states() {
     const PROMPTS: [&str; 5] = ["prompt", "prompt_path", "prompt_scoped", "approval", "approval_large"];
-    let expected = mjolnir_tui::__design_panel_rows();
+    let expected = aldwin_tui::__design_panel_rows();
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in PROMPTS {
             for (width, height) in SIZES.iter().filter(|(_, h)| *h >= 36) {
@@ -182,7 +182,7 @@ fn row_text(buffer: &Buffer, y: u16, width: u16) -> String {
 /// outside it.
 ///
 /// This boundary is the whole subtlety in the two checks below. The closed
-/// glyph table and the no-contractions rule govern Mjolnir's own copy —
+/// glyph table and the no-contractions rule govern Aldwin's own copy —
 /// labels, hints, panel sentences, the status row. They do not govern a
 /// model's reply, which the transcript renders verbatim and which may
 /// legitimately contain an em dash, a contraction, or any Unicode at all. A
@@ -229,14 +229,14 @@ fn app_owned_rows(scene_name: &str, height: u16) -> Vec<u16> {
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {
-        let palette = mjolnir_tui::__design_palette(theme);
+        let palette = aldwin_tui::__design_palette(theme);
         // The dimmed transcript behind an open panel: every ink the app has,
         // composited over every ground it has. Enumerated rather than
         // solved for — the blend is a known function of two known sets.
         let mut allowed: Vec<ratatui::style::Color> = palette.to_vec();
         for ink in palette {
             for ground in palette {
-                allowed.push(mjolnir_tui::__design_fade(*ink, *ground));
+                allowed.push(aldwin_tui::__design_fade(*ink, *ground));
             }
         }
         allowed.sort_by_key(|c| format!("{c:?}"));
@@ -280,7 +280,7 @@ fn every_cell_carries_a_colour_from_the_design_system() {
 /// leave `crates/review/baseline.json` when the design is fixed.
 #[test]
 fn every_glyph_comes_from_the_closed_table() {
-    let (marks, by_exception) = mjolnir_tui::__design_glyphs();
+    let (marks, by_exception) = aldwin_tui::__design_glyphs();
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
             for (width, height) in SIZES {
@@ -315,7 +315,7 @@ fn every_glyph_comes_from_the_closed_table() {
 /// on every 80×24 frame.
 ///
 /// The bare pronoun needs more care than the contractions do, and the first
-/// version of this proved it by firing on the wordmark: `M J O L N I R` is
+/// version of this proved it by firing on the wordmark: `A L D W I N` is
 /// letter-spaced, so it contains a literal `"I "`. Requiring a lowercase word
 /// after it separates `I can` from `I R`.
 #[test]
@@ -455,7 +455,7 @@ fn engine() -> Arc<Engine> {
 
 fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| mjolnir_tui::__preview_draw(f, app)).unwrap();
+    terminal.draw(|f| aldwin_tui::__preview_draw(f, app)).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -531,7 +531,7 @@ fn fenced_diff(app: &mut App) {
 fn tools(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "grep for TODO across the repo and summarize".into() });
     app.log.push(LogEntry::ToolActivity {
-        step_id: mjolnir_core::StepId(1),
+        step_id: aldwin_core::StepId(1),
         calls:   vec![
             ToolActivityEntry { call_id: "c1".into(), name: "shell".into(), status: ToolActivityStatus::Completed { is_error: false, summary: "42 matches across 17 files".into() } },
             ToolActivityEntry { call_id: "c2".into(), name: "read".into(), status: ToolActivityStatus::Running },
@@ -540,7 +540,7 @@ fn tools(app: &mut App) {
     });
     app.turn_active = true;
     app.status.running_tools =
-        vec![mjolnir_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() }, mjolnir_tui::__PreviewRunningTool { call_id: "c3".into(), name: "shell".into() }];
+        vec![aldwin_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() }, aldwin_tui::__PreviewRunningTool { call_id: "c3".into(), name: "shell".into() }];
     app.status.turn = Some(4);
     app.status.step = Some(1);
 }
@@ -548,7 +548,7 @@ fn tools(app: &mut App) {
 fn approval(app: &mut App, diff: &str) {
     app.log.push(LogEntry::UserMessage { text: "fix the off-by-one in the pagination helper".into() });
     app.log.push(LogEntry::ApprovalCard { call_id: "call-1".into(), diff: diff.into(), resolution: None });
-    app.pending_approvals.push_back(mjolnir_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: diff.into() });
+    app.pending_approvals.push_back(aldwin_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: diff.into() });
     app.decision_selected = 1;
 }
 
@@ -571,14 +571,14 @@ fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
     let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
 
 fn prompt_path(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "what does the dispatcher do on a deny-by-absence?".into() });
     let payload = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/tools/src/dispatcher.rs".into()], declared: Class::Read };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-3".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
 }
 
 /// The same path-like prompt after Tab has widened the grant to the whole
@@ -589,7 +589,7 @@ fn prompt_scoped(app: &mut App) {
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.decision_selected = 3;
     let queued = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/core/src/lib.rs".into()], declared: Class::Read };
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-4".into(), payload: queued });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-4".into(), payload: queued });
 }
 
 fn long(app: &mut App) {
@@ -599,13 +599,13 @@ fn long(app: &mut App) {
     }
     app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::EndTurn });
     app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::Cancelled });
-    app.log.push(LogEntry::RetryAttempt { info: mjolnir_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 } });
+    app.log.push(LogEntry::RetryAttempt { info: aldwin_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 } });
     app.log.push(LogEntry::Error { message: "provider returned 529 overloaded".into() });
     app.log.push(LogEntry::ApprovalCard { call_id: "done-1".into(), diff: SMALL_DIFF.into(), resolution: Some(true) });
     app.log.push(LogEntry::PermissionPrompt {
         call_id:    "done-2".into(),
         payload:    PromptPayload::Tool { program: "ls".into(), argv: vec!["-la".into()], declared: Class::Write },
-        resolution: Some(mjolnir_tui::PromptResolution { allowed: true, label: "allowed once".into() }),
+        resolution: Some(aldwin_tui::PromptResolution { allowed: true, label: "allowed once".into() }),
     });
     app.status.turn = Some(9);
     app.status.step = Some(3);
@@ -733,8 +733,11 @@ fn every_scene_respects_the_three_cell_margins() {
 /// the directory on cell 16 — a position no token in `cells.css` names.
 /// Six cells part two *unrelated* groups (`5b`'s `review changes` / `3
 /// files`, the footer's key hints); the reference's own `4a`, `5a`, `5c`
-/// and `5d` bars all put the cwd three cells after a seven-letter name,
-/// which is the body column exactly. The prose in `HANDOFF.md` says the
+/// and `5d` bars all put the cwd on the body column, three cells after the
+/// seven-letter name they were drawn with. The body column is the fixed
+/// half: the six-letter name this ships under pads by four, and `brand_pad`
+/// derives that from `BRAND` so the two can never be stated twice. The
+/// prose in `HANDOFF.md` says the
 /// six-cell gap "survives only between the brand and everything else",
 /// which is the stale statement — the frame is the authority on positions,
 /// per this project's own "measure the handoff HTML" rule.
@@ -745,10 +748,10 @@ fn the_identity_bar_puts_the_working_directory_on_the_body_column() {
         // Row 1 of the 3-row top bar is the content row in every scene.
         let row: String = (0..buffer.area.width).map(|x| buffer[(x, 1)].symbol()).collect();
         let Some(rest) = row.strip_prefix(&" ".repeat(MARGIN)) else { return };
-        let Some(after_brand) = rest.strip_prefix("mjolnir") else { return };
+        let Some(after_brand) = rest.strip_prefix("aldwin") else { return };
         // Only scenes whose bar actually carries a directory beside the name.
         if after_brand.trim_start().starts_with(['~', '/']) {
-            let start = MARGIN + "mjolnir".chars().count() + (after_brand.len() - after_brand.trim_start().len());
+            let start = MARGIN + "aldwin".chars().count() + (after_brand.len() - after_brand.trim_start().len());
             assert_eq!(start, BODY_COL, "{theme:?}/{name}: the cwd starts on cell {start}, not the body column\n{row}");
             seen += 1;
         }

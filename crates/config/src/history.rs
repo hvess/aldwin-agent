@@ -1,14 +1,14 @@
 //! Persisted conversation transcripts — the on-disk half of `/resume`.
 //!
 //! One session is one append-only JSONL file under
-//! `~/.mjolnir/history/<project-slug>/<session-id>.jsonl`. The first line is
+//! `~/.aldwin/history/<project-slug>/<session-id>.jsonl`. The first line is
 //! a [`SessionHeader`]; every line after it is one `LogRecord`.
 //!
 //! JSONL rather than one document because writes are appends: a process
 //! killed mid-turn costs the partial last line and nothing else. That is
 //! also why this module does not use `fsio`'s atomic write — atomicity here
 //! would mean rewriting the whole transcript on every record, which is
-//! exactly the O(n) write path mjolnir-history.md rules out.
+//! exactly the O(n) write path aldwin-history.md rules out.
 //!
 //! Reading is deliberately forgiving and lives in [`load`]: an unparseable
 //! line is skipped, and the records are then truncated after the last
@@ -20,7 +20,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use mjolnir_core::{LogRecord, SessionId};
+use aldwin_core::{LogRecord, SessionId};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
@@ -71,7 +71,7 @@ enum Sink {
     Pending(String),
     Open(File),
     /// A write failed. The first failure is reported by whoever owns the
-    /// event channel (mjolnir-cli's sink wrapper); every subsequent record is
+    /// event channel (aldwin-cli's sink wrapper); every subsequent record is
     /// dropped silently, because a disk that is full at record 200 is still
     /// full at record 201 and the developer does not need to be told 400
     /// times.
@@ -115,7 +115,7 @@ impl HistoryStore {
     ///
     /// Mode `0600`: a transcript carries whatever the session's tool results
     /// carried — file contents, command output, anything a `.env` held — so
-    /// it is readable by its owner and nobody else. See mjolnir-history.md's
+    /// it is readable by its owner and nobody else. See aldwin-history.md's
     /// Pitfalls.
     fn materialise(path: &Path, header: &str) -> Result<File, ConfigError> {
         // `create_new`, not `create`: an id that already has a transcript is
@@ -137,7 +137,7 @@ impl HistoryStore {
 
     /// Reopen an existing transcript for appending — what `/resume` does, so
     /// a resumed conversation continues in the file it came from rather than
-    /// forking a second one (mjolnir-history.md's fork-free Decision).
+    /// forking a second one (aldwin-history.md's fork-free Decision).
     ///
     /// No header is written: the file already has one, and its `started_at`
     /// should keep saying when the conversation began, not when it was last
@@ -331,7 +331,7 @@ fn derive_title(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_core::{StepId, ToolCall, TurnEndReason, TurnId};
+    use aldwin_core::{StepId, ToolCall, TurnEndReason, TurnId};
     use tempfile::tempdir;
 
     fn header() -> SessionHeader {

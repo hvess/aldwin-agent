@@ -3,7 +3,7 @@
 //! Scenes need the TUI to draw a real conversation, and a real model cannot
 //! give one: it is slow, it costs money, and it says something different every
 //! time, so the same scene would produce a different frame on every run. This
-//! is the product's own canned-response server — `mjolnir-llm`'s
+//! is the product's own canned-response server — `aldwin-llm`'s
 //! `test_server`, behind its `test-server` feature — driving the app through
 //! the whole real path: HTTP on a real socket, the streaming adapter, core's
 //! event loop, the TUI.
@@ -16,7 +16,7 @@
 //! is therefore invisible to this harness, which is worth knowing before
 //! reading a clean run as coverage of both.
 
-pub use mjolnir_llm::test_server::{spawn, Canned, FakeServer};
+pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 
 /// An assistant reply streamed as text deltas.
 ///

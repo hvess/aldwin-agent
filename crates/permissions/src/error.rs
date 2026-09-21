@@ -9,5 +9,5 @@ pub enum PermissionError {
     EditNotGrantable,
 
     #[error(transparent)]
-    Config(#[from] mjolnir_config::ConfigError),
+    Config(#[from] aldwin_config::ConfigError),
 }

@@ -1,6 +1,6 @@
 //! First run — the design system's screen `5d`, and the state behind it.
 //!
-//! Entering a project with no `.mjolnir/permissions.yaml` asks three
+//! Entering a project with no `.aldwin/permissions.yaml` asks three
 //! questions and then starts: which provider the model runs on, which of its
 //! models, and how much runs without asking in this directory. Every answer
 //! is written before the session opens, which is why this runs as its own
@@ -19,7 +19,7 @@
 //!
 //! This screen never sees the catalogue itself. [`ProviderChoice`] is the
 //! display half of a row — an id, a purpose, and its models — handed in by the caller,
-//! because the catalogue lives in `mjolnir-llm` (endpoints, key variables,
+//! because the catalogue lives in `aldwin-llm` (endpoints, key variables,
 //! wire dialects) and this crate does not depend on it.
 //!
 //! The screen is also the one place the brand is set as a mark. Per the
@@ -55,7 +55,7 @@ use crate::ui;
 /// picked "read" had no standing setting afterwards and nothing to change.
 /// Under ADR 0004 §6 the answer *is* the setting: it is written to the
 /// project's `default:`, and changing it later is the same one-word edit.
-pub use mjolnir_permissions::Rung as AccessTier;
+pub use aldwin_permissions::Rung as AccessTier;
 
 /// One model row: the id that lands in `provider.yaml`, and what picking it
 /// does. The same shape as a [`ProviderChoice`] because they are drawn on
@@ -160,7 +160,7 @@ pub struct Answers {
 /// * losing the provider config in a project that has already declared its
 ///   access posture asks `provider` and `model`.
 ///
-/// The caller is what holds the first two back — mjolnir-cli does so for a
+/// The caller is what holds the first two back — aldwin-cli does so for a
 /// `provider.yaml` aimed at an endpoint the catalogue cannot name, since
 /// every row here would then be somewhere the developer is not.
 ///
@@ -320,7 +320,7 @@ impl FirstRun {
 
     /// The models of the provider currently selected — the model step's own
     /// list. Empty only for a catalogue row that offers none, which the real
-    /// one never does (`mjolnir_llm`'s `every_provider_offers_a_model` pins
+    /// one never does (`aldwin_llm`'s `every_provider_offers_a_model` pins
     /// it) but which this screen must not index blindly.
     pub fn visible_models(&self) -> &[ModelChoice] {
         self.providers.get(self.provider).map(|p| p.models.as_slice()).unwrap_or_default()
@@ -535,7 +535,7 @@ fn restore() -> io::Result<()> {
 
 /// A stand-in catalogue for tests in this crate, shaped like the real one:
 /// three curated rows and three more behind `more`. Deliberately not the
-/// real ids — a test that hard-codes `mjolnir-llm`'s catalogue would fail
+/// real ids — a test that hard-codes `aldwin-llm`'s catalogue would fail
 /// every time a provider is added to it.
 #[cfg(test)]
 pub(crate) fn sample_providers() -> Vec<ProviderChoice> {
@@ -567,7 +567,7 @@ impl Default for FirstRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_permissions::Class;
+    use aldwin_permissions::Class;
 
     fn key(state: &mut FirstRun, code: KeyCode) -> bool {
         state.handle_key(code, KeyModifiers::NONE)

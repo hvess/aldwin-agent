@@ -1,4 +1,4 @@
-# Mjolnir
+# Aldwin
 
 *A tool for thought.*
 
@@ -8,7 +8,7 @@ you say so. Every write shows you a diff first. Every command asks before it
 runs. The point is that **you** finish the session understanding the code,
 not just holding a larger diff than when you started.
 
-![Mjolnir answering a question about retry backoff](assets/conversation.png)
+![Aldwin answering a question about retry backoff](assets/conversation.png)
 
 Built in Rust on [ratatui](https://ratatui.rs). Works with Anthropic or any
 OpenAI-compatible endpoint.
@@ -18,7 +18,7 @@ OpenAI-compatible endpoint.
 
 ## Install
 
-Grab a binary from [Releases](../../releases), extract, put `mjolnir` on your
+Grab a binary from [Releases](../../releases), extract, put `aldwin` on your
 `PATH`. No toolchain required. (The repo is private, so you'll need access.)
 
 | archive | for |
@@ -30,7 +30,7 @@ No Intel Mac build. No Windows — `run` leans on Unix process APIs.
 
 **macOS caveat worth knowing before you install:** the sandbox that enforces
 a read-only call is Linux-only (Landlock). On macOS there's nothing to hold a
-call to its word, so instead of quietly trusting it, Mjolnir asks about every
+call to its word, so instead of quietly trusting it, Aldwin asks about every
 call. Safe, correct, and noticeably chattier.
 
 ### Verify what you downloaded
@@ -41,7 +41,7 @@ next to its own signature proves nothing.
 
 ```sh
 ssh-keygen -Y verify -f allowed_signers \
-  -I release@mjolnir -n mjolnir-release \
+  -I release@aldwin -n aldwin-release \
   -s SHA256SUMS.sig < SHA256SUMS
 
 sha256sum -c SHA256SUMS
@@ -49,7 +49,11 @@ sha256sum -c SHA256SUMS
 
 No new tools: `ssh-keygen` came with SSH.
 
-This matters more here than for most downloads. Mjolnir's whole pitch is that
+For a release published before the project was renamed, swap in the old pair
+— `-I release@mjolnir -n mjolnir-release`. It is the same key; only the
+labels changed, and `allowed_signers` carries both.
+
+This matters more here than for most downloads. Aldwin's whole pitch is that
 its `edit` tool can't write without your say-so and that a read is enforced
 rather than trusted — none of which survives running a binary that isn't the
 one built from the source you can read.
@@ -82,7 +86,7 @@ so rather than letting you wonder why the hashes differ.
 
 ```sh
 export ANTHROPIC_API_KEY=sk-...
-mjolnir
+aldwin
 ```
 
 That's the whole CLI. No flags, no subcommands, nothing but `--help` and
@@ -90,10 +94,10 @@ That's the whole CLI. No flags, no subcommands, nothing but `--help` and
 
 **First launch** asks where the model runs, which one, and how much access
 this directory gets — then drops you straight into the session. Answers go to
-`~/.mjolnir/` (global) and `.mjolnir/` (this project), both fully commented,
+`~/.aldwin/` (global) and `.aldwin/` (this project), both fully commented,
 both meant to be read and edited.
 
-Mjolnir never stores your API key. `provider.yaml` holds the *name* of an
+Aldwin never stores your API key. `provider.yaml` holds the *name* of an
 environment variable, and reads it at startup. For an OpenAI-compatible
 endpoint:
 
@@ -148,14 +152,14 @@ waits, under every setting, with no way to switch it off.
 
 ![An edit approval showing a two-line diff with approve and deny](assets/edit.png)
 
-The one gap, stated plainly: this covers Mjolnir's own `edit` tool. An MCP
-server's tools are its own code, and Mjolnir can't render a diff for a write
+The one gap, stated plainly: this covers Aldwin's own `edit` tool. An MCP
+server's tools are its own code, and Aldwin can't render a diff for a write
 it doesn't understand the shape of.
 
 ## Sessions
 
 Conversations are written to disk as they happen, one JSONL transcript per
-session under `~/.mjolnir/history/`, mode `0600`. `/resume` lists past
+session under `~/.aldwin/history/`, mode `0600`. `/resume` lists past
 sessions in this project and picks one back up — into the transcript you see
 *and* the context the model has.
 
@@ -186,21 +190,21 @@ instead of expecting you to know the answer.
 
 ## Layout
 
-Cargo workspace, eight crates. `mjolnir-review` is a dev-only harness that
+Cargo workspace, eight crates. `aldwin-review` is a dev-only harness that
 lints, tests and screenshots the TUI, and never reaches a release build —
-the release workflow builds `-p mjolnir-cli` and nothing else. Traits live in
+the release workflow builds `-p aldwin-cli` and nothing else. Traits live in
 the crate owning the boundary, impls in the siblings that depend on it.
 
 | crate | role |
 | --- | --- |
-| `mjolnir-core` | agent loop, conversation log, event/command types, `LlmClient` and `ToolDispatcher` traits |
-| `mjolnir-config` | YAML config per domain, project and global scope, refuses to start on a half-deleted one |
-| `mjolnir-permissions` | the default-deny engine |
-| `mjolnir-tools` | read, edit, run, explain (LSP), the read-enforcing sandbox, MCP bridge |
-| `mjolnir-llm` | Anthropic and OpenAI-compatible clients — reqwest, SSE, retry, prompt caching |
-| `mjolnir-tui` | the ratatui frontend |
-| `mjolnir-cli` | the `mjolnir` binary — startup, wiring, slash commands |
-| `mjolnir-review` | dev-only: the review loop and screenshot harness |
+| `aldwin-core` | agent loop, conversation log, event/command types, `LlmClient` and `ToolDispatcher` traits |
+| `aldwin-config` | YAML config per domain, project and global scope, refuses to start on a half-deleted one |
+| `aldwin-permissions` | the default-deny engine |
+| `aldwin-tools` | read, edit, run, explain (LSP), the read-enforcing sandbox, MCP bridge |
+| `aldwin-llm` | Anthropic and OpenAI-compatible clients — reqwest, SSE, retry, prompt caching |
+| `aldwin-tui` | the ratatui frontend |
+| `aldwin-cli` | the `aldwin` binary — startup, wiring, slash commands |
+| `aldwin-review` | dev-only: the review loop and screenshot harness |
 
 Design notes live in `.claude/spec/`, and decisions that changed a stated
 constraint in `.claude/adr/`. Read the relevant one before changing a crate.
@@ -215,9 +219,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 Two tests are `#[ignore]`d because they spawn a real `rust-analyzer`:
 
 ```sh
-cargo test -p mjolnir-tools -- --ignored
+cargo test -p aldwin-tools -- --ignored
 ```
 
-`cargo run -p mjolnir-review -- review --goal "…" --focus "…"` runs the full
+`cargo run -p aldwin-review -- review --goal "…" --focus "…"` runs the full
 loop — lint, tests, design tokens, frame snapshots, and screenshots of the
 real binary driven through a real terminal.

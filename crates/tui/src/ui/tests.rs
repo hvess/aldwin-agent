@@ -14,8 +14,8 @@ use super::transcript::intro_content;
 use crate::app::App;
 use crate::log::LogEntry;
 use crate::palette::{self, DARK};
-use mjolnir_config::Config;
-use mjolnir_permissions::{Class, Engine, PromptPayload};
+use aldwin_config::Config;
+use aldwin_permissions::{Class, Engine, PromptPayload};
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::Terminal;
@@ -446,7 +446,7 @@ fn an_incrementally_synced_transcript_equals_one_built_from_scratch() {
     }
 
     app.log.push(LogEntry::ToolActivity {
-        step_id: mjolnir_core::StepId(1),
+        step_id: aldwin_core::StepId(1),
         calls: vec![ToolActivityEntry { call_id: "c1".into(), name: "bash".into(), status: ToolActivityStatus::Running }],
     });
     step(&mut app, "a dispatched tool");
@@ -644,7 +644,7 @@ fn status_line_shows_the_model_name_without_a_permission_summary() {
 fn both_bars_follow_a_model_swap() {
     let mut app = app();
     app.log.push(LogEntry::UserMessage { text: "hi".into() });
-    app.apply_event(mjolnir_core::Event::ModelChanged { provider: Some("google".into()), model: "gemini-2.5-flash".into() });
+    app.apply_event(aldwin_core::Event::ModelChanged { provider: Some("google".into()), model: "gemini-2.5-flash".into() });
 
     let out = rendered(&mut app, 100, 20);
     assert_eq!(out.matches("gemini-2.5-flash").count(), 2, "the top bar and the status line both name it: {out}");
@@ -973,7 +973,7 @@ fn the_decision_panel_shows_a_pending_permission_prompts_numbered_options() {
 /// in `permissions.yaml`, and names its own reach.
 ///
 /// What it no longer names is the *file*. The old detail column said
-/// "saved to ~/.mjolnir/permissions.yaml" where the sentence now says
+/// "saved to ~/.aldwin/permissions.yaml" where the sentence now says
 /// "everywhere", so the two persisting tiers are distinguished by reach
 /// rather than by path. That is `5a`'s own copy and a real loss of
 /// provenance — recorded in ADR 0003 rather than quietly dropped, and
@@ -987,10 +987,10 @@ fn every_option_states_its_own_rule_and_its_reach() {
     assert!(out.contains("Always allow cargo writes in this project"), "allow means every cargo write, not this one argv (ADR 0004 §2): {out:?}");
     assert!(out.contains("Always allow cargo writes everywhere"), "and the global tier must be distinguishable from the project one: {out:?}");
     assert!(out.contains("1  Allow once"), "the once tier saves nothing, so it quotes no rule: {out:?}");
-    assert!(!out.contains(".mjolnir/permissions.yaml"), "the pair shape's provenance column is gone with the pair shape: {out:?}");
+    assert!(!out.contains(".aldwin/permissions.yaml"), "the pair shape's provenance column is gone with the pair shape: {out:?}");
 }
 
-/// The old footer claimed "saved to .mjolnir/permissions.yaml" under
+/// The old footer claimed "saved to .aldwin/permissions.yaml" under
 /// every prompt, which was true of exactly one of the tiers on offer —
 /// a standing, unconditional falsehood about where a decision lands.
 /// Provenance is per-option now, so the footer must not restate it.
@@ -1605,7 +1605,7 @@ fn the_caret_is_drawn_inside_the_input_box_at_the_draft_cursor() {
 
 /// The empty composer is `14d`'s own row, glyph for glyph: `▶`, two
 /// spaces, the caret — both in `--t-mark`. The placeholder that follows it
-/// is Mjolnir's own (the design draws none), and the one thing it may not
+/// is Aldwin's own (the design draws none), and the one thing it may not
 /// do is share a cell with the caret, which is exactly what it did while
 /// the caret was the terminal's.
 #[test]
@@ -1868,7 +1868,7 @@ fn the_empty_state_shows_the_wordmark_and_the_three_facts_of_this_directory() {
     app.current_provider = Some("anthropic".into());
     let out = rendered(&mut app, 110, 40);
 
-    assert!(out.contains("  M J O L N I R  "), "the mark identifies a frame with no transcript to identify it: {out:?}");
+    assert!(out.contains("  A L D W I N  "), "the mark identifies a frame with no transcript to identify it: {out:?}");
     assert!(out.contains("anthropic"), "the provider row names the catalogue row this session runs on: {out:?}");
     assert!(out.contains("claude-sonnet-5"), "beside the model it answers with: {out:?}");
     assert!(out.contains("access") && out.contains("not set"), "and the rung this directory stands at: {out:?}");
@@ -1961,9 +1961,9 @@ fn the_empty_screens_top_bar_carries_the_model_and_not_the_version() {
 /// They used to be two independent half-width rects that could not see each
 /// other, and each filled to its own boundary. Below ~56 columns the working
 /// directory ran straight into the model name with no gap at all
-/// (`~/Projects/mjolnir-harnesclaude-sonnet-5`), and above that both were
+/// (`~/Projects/aldwin-agenclaude-sonnet-5`), and above that both were
 /// cut at the seam with nothing marking it — a bar reading
-/// `~/Projects/mjolnir-harnes` and `v0.1.`, neither of which is true. A
+/// `~/Projects/aldwin-agen` and `v0.1.`, neither of which is true. A
 /// clipped path still reads as a path and a clipped version still reads as a
 /// version, which is what made it worth fixing rather than tolerating.
 #[test]
@@ -1977,7 +1977,7 @@ fn the_top_bar_groups_never_collide_and_never_clip_silently() {
         let buffer = terminal.backend().buffer().clone();
         let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
 
-        assert!(row.starts_with("   mjolnir"), "the brand always renders, on the margin: {width} -> {row:?}");
+        assert!(row.starts_with("   aldwin"), "the brand always renders, on the margin: {width} -> {row:?}");
 
         // A version is shown whole or not at all — never a prefix of one.
         if let Some(at) = row.find('v') {
@@ -2385,7 +2385,7 @@ fn wrapped_assistant_prose_keeps_the_left_inset_on_every_row() {
 
 // ── The model picker's panel ─────────────────────────────────────────────
 
-/// An `App` with a catalogue, as mjolnir-cli's bootstrap hands one in.
+/// An `App` with a catalogue, as aldwin-cli's bootstrap hands one in.
 fn app_with_catalogue() -> App {
     app().with_catalogue(crate::first_run::sample_providers(), Some("bravo".into()))
 }

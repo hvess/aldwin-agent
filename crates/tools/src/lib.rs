@@ -1,5 +1,5 @@
 //! `ToolDispatcher` impl, built-in tool set, and the Edit approval gate. See
-//! `.claude/spec/mjolnir-tools.md`.
+//! `.claude/spec/aldwin-tools.md`.
 //!
 //! Covers the registry, dispatch flow, permissions wiring, all four
 //! built-ins (Read, Edit, Run, Explain), the read-enforcing `sandbox`, the

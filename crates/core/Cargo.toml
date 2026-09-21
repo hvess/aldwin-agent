@@ -1,5 +1,5 @@
 [package]
-name    = "mjolnir-core"
+name    = "aldwin-core"
 version.workspace = true
 edition.workspace = true
 

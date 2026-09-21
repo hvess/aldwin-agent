@@ -1,12 +1,12 @@
-# mjolnir-permissions
+# aldwin-permissions
 
 Default-deny permission engine — a grant is a program and a class, a deny is
 a lock, and a read declaration is enforced rather than believed.
 
 **Status:** active
-**Scope:** mjolnir-permissions crate. Policy engine, entry shape, prompt
+**Scope:** aldwin-permissions crate. Policy engine, entry shape, prompt
 round-trip. Excludes TUI rendering, YAML I/O (config), tool implementations
-and the sandbox (all mjolnir-tools).
+and the sandbox (all aldwin-tools).
 **Owner:** Maximilian
 **Last Updated:** 2026-09-20
 
@@ -37,7 +37,7 @@ The short version of what moved:
 
 Every persisted grant from the old model is meaningless, and a v1
 `permissions.yaml` is moved aside to `permissions.yaml.v1` rather than
-reinterpreted — see mjolnir-config's `retire_v1_permissions`.
+reinterpreted — see aldwin-config's `retire_v1_permissions`.
 
 ## Why
 
@@ -48,7 +48,7 @@ any crate that gates an action calls in rather than reimplementing policy.
 One thing it deliberately does **not** own, and the division is the design:
 **it never judges what a command does.** It is handed a declared class and
 weighs it against the rules. Verifying the declaration is the sandbox's job at
-execution time (mjolnir-tools). A policy engine that also guessed at a
+execution time (aldwin-tools). A policy engine that also guessed at a
 command's nature would be making the guess the whole model exists to avoid,
 and a wrong guess there *runs the command*.
 
@@ -170,14 +170,14 @@ and a wrong guess there *runs the command*.
   `write` precisely so a hand-written `edit:` in YAML is a load error rather
   than a rule that silently does nothing.
 - The incidental-write allowlist growing. It is the one place our judgement
-  re-enters; `.git/` was kept out of it on purpose (see mjolnir-tools).
+  re-enters; `.git/` was kept out of it on purpose (see aldwin-tools).
 - Session grants leaking to disk via a confused "remember this" path.
 
 ## Out of Scope
 
-- On-disk schema and file layout — mjolnir-config.
-- Prompt rendering and the permissions panel — mjolnir-tui.
-- The sandbox, `run`, argument containment — mjolnir-tools.
+- On-disk schema and file layout — aldwin-config.
+- Prompt rendering and the permissions panel — aldwin-tui.
+- The sandbox, `run`, argument containment — aldwin-tools.
 - Developer classification of MCP tools — ADR 0004 §4, not built.
 - Naming *which* path a refused read reached for — needs syscall
   interception; the guarantee does not depend on it.
@@ -187,5 +187,5 @@ and a wrong guess there *runs the command*.
 
 - `.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — the decision this implements.
 - `.claude/adr/0003-the-permission-option-row-is-a-sentence.md` — §1 still governs each row's shape.
-- `.claude/spec/mjolnir-tools.md` — `run`, the sandbox, argument containment.
-- `.claude/spec/mjolnir.md` — parent; default-deny and friction-as-feature.
+- `.claude/spec/aldwin-tools.md` — `run`, the sandbox, argument containment.
+- `.claude/spec/aldwin.md` — parent; default-deny and friction-as-feature.

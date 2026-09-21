@@ -3,15 +3,15 @@
 //! default — it needs the network and a key:
 //!
 //! ```sh
-//! LUMO_API_KEY=… cargo test -p mjolnir-llm --test live_lumo -- --ignored --nocapture
+//! LUMO_API_KEY=… cargo test -p aldwin-llm --test live_lumo -- --ignored --nocapture
 //! ```
 //!
 //! Point it elsewhere with `LUMO_BASE_URL` / `LUMO_MODEL` to smoke-test any
 //! other OpenAI-compatible endpoint through the same adapter.
 
 use futures::StreamExt;
-use mjolnir_core::{ContentBlock, LlmClient, LlmEvent, LlmRequest, Message, Role, StopReason, ToolDefinition};
-use mjolnir_llm::{OpenAiCompatibleClient, ProviderConfig};
+use aldwin_core::{ContentBlock, LlmClient, LlmEvent, LlmRequest, Message, Role, StopReason, ToolDefinition};
+use aldwin_llm::{OpenAiCompatibleClient, ProviderConfig};
 use serde_json::json;
 
 const DEFAULT_BASE_URL: &str = "https://lumo-api.proton.me/ai/v1/chat/completions";
@@ -19,7 +19,7 @@ const DEFAULT_MODEL: &str = "lumo-lite";
 
 fn config() -> ProviderConfig {
     ProviderConfig {
-        kind:                     mjolnir_config::ProviderKind::OpenaiCompatible,
+        kind:                     aldwin_config::ProviderKind::OpenaiCompatible,
         model:                    std::env::var("LUMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
         api_key_env:              "LUMO_API_KEY".into(),
         base_url:                 Some(std::env::var("LUMO_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into())),

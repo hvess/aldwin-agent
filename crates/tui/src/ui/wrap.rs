@@ -14,7 +14,7 @@
 //! Wrapping here means every row handed downstream is already ≤ its column
 //! width and already fully inset and filled on its own, so the wrap happens
 //! exactly once. Both `Row` and the prose path depend on that discipline;
-//! see `mjolnir-tui.md`'s Progress notes for the bugs it exists to prevent
+//! see `aldwin-tui.md`'s Progress notes for the bugs it exists to prevent
 //! from recurring.
 //!
 //! For the transcript there is no longer any downstream wrapper to fall back

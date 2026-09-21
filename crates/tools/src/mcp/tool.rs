@@ -5,12 +5,12 @@ use serde_json::Value;
 
 use super::bridge::McpBridge;
 use crate::error::ToolError;
-use mjolnir_permissions::Class;
+use aldwin_permissions::Class;
 use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 
 /// One remote MCP tool, proxied through `McpBridge`. `edit_class` is always
-/// `false` at registration — per mjolnir-tools.md, MCP tools only ever
+/// `false` at registration — per aldwin-tools.md, MCP tools only ever
 /// become edit-shaped via a first-invocation follow-up, never upfront. That
 /// follow-up (and the config persistence it needs) isn't implemented in
 /// this pass; every MCP tool goes through the standard four-tier prompt.
@@ -92,7 +92,7 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_config::{McpServer, McpTransport};
+    use aldwin_config::{McpServer, McpTransport};
     use serde_json::json;
     use std::sync::Arc as StdArc;
 
@@ -142,7 +142,7 @@ mod tests {
         let bridge = StdArc::new(McpBridge::new(vec![]));
         let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
         let request = tool.permission(&json!({"text": "hi"})).unwrap();
-        assert_eq!(request.class, mjolnir_permissions::Class::Write);
+        assert_eq!(request.class, aldwin_permissions::Class::Write);
         assert_eq!(request.program, "fake:echo");
         assert_eq!(request.argv, vec![r#"{"text":"hi"}"#.to_string()]);
     }

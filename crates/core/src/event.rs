@@ -56,7 +56,7 @@ pub enum Event {
     PermissionsChanged { payload: serde_json::Value },
 
     /// A message from outside the turn/step lifecycle — the session
-    /// initialiser (mjolnir-cli) rejecting an unknown slash command or
+    /// initialiser (aldwin-cli) rejecting an unknown slash command or
     /// reporting a `/reload-config` result, for example. Core itself never
     /// emits this; it exists so a layer above core (which owns no other
     /// vehicle for reaching the TUI's log) has one. Not turn/step-scoped
@@ -65,7 +65,7 @@ pub enum Event {
 
     /// `Command::ClearHistory` landed and `ConversationLog` was wiped — the
     /// TUI reacts by wiping its own rendered log in step (see
-    /// `mjolnir_tui::App::apply_event`), the same way `PermissionsChanged`
+    /// `aldwin_tui::App::apply_event`), the same way `PermissionsChanged`
     /// tells it to refresh the status bar rather than carrying the new
     /// state itself.
     HistoryCleared,
@@ -76,18 +76,18 @@ pub enum Event {
     /// a clear, rather than being told separately by whoever read the file.
     ///
     /// The records travel in the event rather than the TUI reading the
-    /// transcript itself: mjolnir-tui depends only on core and permissions
+    /// transcript itself: aldwin-tui depends only on core and permissions
     /// and has no filesystem access by design, the same reason the model
     /// catalogue is handed to it rather than looked up.
     HistoryLoaded { records: Vec<LogRecord> },
 
     /// `/theme light|dark` — the raw config value, same "opaque to core"
     /// shape as `PermissionsChanged`'s payload: core has no opinion on what
-    /// a theme is, mjolnir-tui parses it (`palette::Theme::from_config`).
-    /// Core itself never emits this; same reasoning as `Notice` — mjolnir-
+    /// a theme is, aldwin-tui parses it (`palette::Theme::from_config`).
+    /// Core itself never emits this; same reasoning as `Notice` — aldwin-
     /// cli's slash-command interceptor is a layer above core with no other
     /// vehicle to reach the running TUI, since it and the interceptor share
-    /// one `Event` channel by construction (see mjolnir-cli's bootstrap).
+    /// one `Event` channel by construction (see aldwin-cli's bootstrap).
     /// The interceptor persists the choice to `tui.yaml` (`Config::
     /// set_tui`) before emitting this, so a value the developer picked
     /// mid-session survives their next launch too, not just this one.
@@ -96,7 +96,7 @@ pub enum Event {
     /// `/model` swapped the client the session is running on. Same "a layer
     /// above core has no other vehicle" reasoning as `Notice` and
     /// `ThemeChanged`: core is generic over `C: LlmClient` and has no idea
-    /// its client is swappable, so mjolnir-cli's interceptor rebuilds the
+    /// its client is swappable, so aldwin-cli's interceptor rebuilds the
     /// client behind the trait and announces the result here.
     ///
     /// `model` is the bare model id, the same value the session started
@@ -127,7 +127,7 @@ pub enum Command {
     /// Core acknowledges with `Event::HistoryLoaded`.
     ///
     /// It carries the records rather than a `SessionId` because core owns no
-    /// filesystem dependency: mjolnir-cli's interceptor reads the file (it
+    /// filesystem dependency: aldwin-cli's interceptor reads the file (it
     /// holds the `Config` that knows where history lives) and core is handed
     /// the result. Same division as `ClearHistory`, which core acts on
     /// without knowing what `/clear` is.

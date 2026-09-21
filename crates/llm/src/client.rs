@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use mjolnir_core::{LlmClient, LlmError, LlmEvent, LlmRequest, RetryInfo};
+use aldwin_core::{LlmClient, LlmError, LlmEvent, LlmRequest, RetryInfo};
 use async_stream::try_stream;
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
@@ -44,7 +44,7 @@ impl std::fmt::Debug for AnthropicClient {
 impl AnthropicClient {
     /// Reads `std::env::var(config.api_key_env)` now — refuses to start on a
     /// missing var, surfacing the var name verbatim from the YAML (not a
-    /// canonicalised form), per mjolnir-llm.md's Pitfalls.
+    /// canonicalised form), per aldwin-llm.md's Pitfalls.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let api_key = std::env::var(&config.api_key_env)
             .map_err(|_| LlmClientInitError::MissingApiKeyEnv { var: config.api_key_env.clone() })?;
@@ -63,7 +63,7 @@ impl AnthropicClient {
 
         // `base_url` is deliberately NOT consulted here: per provider.yaml's
         // own annotated comment ("base_url: only used when provider is
-        // openai-compatible", see mjolnir-config's annotated.rs), the field
+        // openai-compatible", see aldwin-config's annotated.rs), the field
         // is scoped to the OpenAI-compatible adapter. Honoring it here would
         // silently redirect Anthropic requests for anyone who has a leftover
         // base_url set while `provider: anthropic`.
@@ -167,7 +167,7 @@ impl LlmClient for AnthropicClient {
                                 tokio::time::sleep(backoff(attempt)).await;
                                 continue 'attempts;
                             }
-                            // Per mjolnir-llm.md: mid-stream errors after the
+                            // Per aldwin-llm.md: mid-stream errors after the
                             // first event are never retried, even if attempts
                             // remain — retrying now would splice two
                             // different completions into one log entry.
@@ -189,13 +189,13 @@ impl LlmClient for AnthropicClient {
 mod tests {
     use super::*;
     use crate::test_server::{self, Canned};
-    use mjolnir_core::{Message, ToolDefinition};
+    use aldwin_core::{Message, ToolDefinition};
     use futures::StreamExt;
     use std::time::Duration;
 
     fn config() -> ProviderConfig {
         ProviderConfig {
-            kind: mjolnir_config::ProviderKind::Anthropic,
+            kind: aldwin_config::ProviderKind::Anthropic,
             model: "claude-sonnet-5".into(),
             api_key_env: "UNUSED".into(),
             base_url: None,

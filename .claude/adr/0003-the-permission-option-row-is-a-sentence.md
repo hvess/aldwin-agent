@@ -10,10 +10,10 @@
 > same reason it was made.
 **Amends:** ADR 0001 §3 — scope stops being an orthogonal axis the developer
 toggles and becomes a property of the row they pick
-**Affects:** `mjolnir-tui`, `mjolnir-design-conformance` (Class B 2, B 3, B 4)
+**Affects:** `aldwin-tui`, `mjolnir-design-conformance` (Class B 2, B 3, B 4)
 
 > **Note, 2026-09-20.** `mjolnir-design-conformance` was deleted with the
-> screenshot harness it belonged to — see `.claude/spec/mjolnir-review.md`'s
+> screenshot harness it belonged to — see `.claude/spec/aldwin-review.md`'s
 > Progress entry. Its Class B numbers below no longer resolve to anything on
 > disk; git history has them. The decision this record makes is unaffected
 > and still holds, which is why the body is left as it was written rather
@@ -27,7 +27,7 @@ step quieter — `Allow cargo test for this session`, `Always allow cargo * in
 this project`. What shipped is a **name + detail pair**:
 
 ```
-3  Allow for this project  saved to .mjolnir/permissions.yaml
+3  Allow for this project  saved to .aldwin/permissions.yaml
 ```
 
 That is `5c`'s command-list control, on `5a`'s screen. The count is not the
@@ -76,7 +76,7 @@ comment loses the invariant it was asserting.
 ### 2. Scope is per row, not a toggle
 
 `5a` scopes each sentence independently: its session row quotes the
-invocation, its project row quotes the program wildcard. Mjolnir built one
+invocation, its project row quotes the program wildcard. Aldwin built one
 pattern for the whole list, flipped by `Tab`. The list now reads:
 
 | # | sentence | tier | pattern |
@@ -108,7 +108,7 @@ removed along with the two rows they fed.
 This closes Class B 3 and B 4, neither of which had a design counterpart, and
 A17 and A18 with them — both were measurements of rows that no longer exist.
 
-### 4. Deny keeps Mjolnir's copy, not `5a`'s
+### 4. Deny keeps Aldwin's copy, not `5a`'s
 
 `5a`'s fourth option is `Deny and tell the agent why`. `PromptResponse::Tool`
 carries a decision, a tier and a pattern — there is no reason field and no
@@ -132,11 +132,11 @@ authority; if it bites in use, the fix is to widen row 2 to the broad unit
 and accept that rows 2–4 then differ only in duration.
 
 **The panel stops naming the file a grant lands in.** The detail column said
-`saved to .mjolnir/permissions.yaml` and `saved to ~/.mjolnir/permissions.yaml`;
+`saved to .aldwin/permissions.yaml` and `saved to ~/.aldwin/permissions.yaml`;
 the sentences say `in this project` and `everywhere`. The two tiers stay
 distinguishable — by reach, which is the fact that governs what the agent may
 do — but the literal path is gone from the screen, and `5a` has no place to
-put it: its footer's right-flush `saved to …` is the slot, and Mjolnir
+put it: its footer's right-flush `saved to …` is the slot, and Aldwin
 dropped that deliberately because it was true of one tier out of five. Taken
 as the price of the sentence form rather than fixed by re-inventing the
 column. `ui/tests.rs`'s `every_option_states_its_own_rule_and_its_reach` pins
@@ -150,7 +150,7 @@ is the affordance being removed.
 **The panel's row budget drops by three** (the summary row, the `Tab` row and
 their padding blank). `ui/decision.rs:42-48` justifies capping the panel at a
 quarter of the frame rather than `5a`'s stated half *because* those rows made
-Mjolnir's content need ~20 rows where the reference needs 18. That argument is
+Aldwin's content need ~20 rows where the reference needs 18. That argument is
 now spent, and `max_height` should be re-examined against the design's number.
 **Deliberately not changed in the same pass**: two geometry changes at once
 make the next screenshot delta unreadable about which caused what.

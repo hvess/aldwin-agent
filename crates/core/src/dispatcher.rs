@@ -8,7 +8,7 @@ use crate::{
     types::{StepId, ToolCall, ToolResult, TurnId},
 };
 
-/// Implementors live in mjolnir-tools. Approval-gated tools (Edit) block
+/// Implementors live in aldwin-tools. Approval-gated tools (Edit) block
 /// inside their own dispatch future, using `DispatchContext` to ask the
 /// developer for a decision; the agent loop just awaits.
 #[async_trait]
@@ -39,7 +39,7 @@ pub type PendingMap = Arc<Mutex<HashMap<String, PendingReply>>>;
 /// Given to a dispatch future so it can request a developer decision without
 /// reaching into the agent's internals. Concrete policy — when to gate a
 /// tool, how to render a diff, permission-engine rules — lives in
-/// mjolnir-tools and mjolnir-permissions; this only provides the round
+/// aldwin-tools and aldwin-permissions; this only provides the round
 /// trip through the agent's existing event/command boundary.
 #[derive(Clone)]
 pub struct DispatchContext {
@@ -55,7 +55,7 @@ impl DispatchContext {
     }
 
     /// Only compiled with the `test-util` feature — lets a `ToolDispatcher`
-    /// implementor (mjolnir-tools) build a real `DispatchContext` in its
+    /// implementor (aldwin-tools) build a real `DispatchContext` in its
     /// own test harness, with a held-out clone of `pending` so a test can
     /// resolve the round trip itself exactly as `Agent`'s command loop does
     /// in production. Kept as a separate, feature-gated function rather

@@ -219,7 +219,7 @@ pub enum ProviderKind {
     OpenaiCompatible,
 }
 
-/// `api_key_env` names an environment variable; resolving it is mjolnir-llm's
+/// `api_key_env` names an environment variable; resolving it is aldwin-llm's
 /// job. A raw `api_key` field is rejected by `deny_unknown_fields` — there is
 /// deliberately no field a plaintext key could go in.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,7 +233,7 @@ pub struct ProviderConfig {
     pub api_key_env: String,
     /// Extended-thinking token budget. `None` means "let the provider crate
     /// pick its own default" — this field only exists so the developer can
-    /// override it; mjolnir-config has no opinion on what a good budget is.
+    /// override it; aldwin-config has no opinion on what a good budget is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_thinking_budget: Option<u32>,
 }
@@ -277,9 +277,9 @@ impl McpConfig {
     }
 }
 
-/// Field set owned by mjolnir-tui; this crate only persists it. Kept as
-/// plain, permissive types (rather than importing mjolnir-tui's own types)
-/// since mjolnir-config is a leaf crate — `depends_on: []`.
+/// Field set owned by aldwin-tui; this crate only persists it. Kept as
+/// plain, permissive types (rather than importing aldwin-tui's own types)
+/// since aldwin-config is a leaf crate — `depends_on: []`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TuiConfig {
@@ -298,7 +298,7 @@ impl TuiConfig {
     }
 }
 
-/// Project-only. Path-keyed only, no content hash (see mjolnir-permissions).
+/// Project-only. Path-keyed only, no content hash (see aldwin-permissions).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ContextFilesConfig {

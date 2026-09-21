@@ -70,7 +70,7 @@ struct Inner {
     // this lock across the `didOpen` notify `.await` (a check-then-insert
     // split across the await let two concurrent calls on the same URI both
     // see "not yet opened" and both send `didOpen` — a protocol violation;
-    // see mjolnir-tools.md's Progress note).
+    // see aldwin-tools.md's Progress note).
     opened:  tokio::sync::Mutex<HashSet<String>>,
     // Kept alive so `kill_on_drop` fires when the last `LspClient` clone is
     // dropped — the safety net under the graceful `shutdown()` handshake.
@@ -203,7 +203,7 @@ impl LspClient {
 
     /// Graceful LSP shutdown: `shutdown` request, then `exit` notification.
     /// `kill_on_drop` on the child process is the fallback if this is never
-    /// called (or the server doesn't respond) — see mjolnir-tools.md's "LSP
+    /// called (or the server doesn't respond) — see aldwin-tools.md's "LSP
     /// servers ... shut down at process exit."
     pub async fn shutdown(&self) {
         let _ = self.request("shutdown", Value::Null).await;
@@ -305,7 +305,7 @@ mod tests {
     /// failed the whole suite there, which makes the review loop's stage 2
     /// report a missing dependency as a broken workspace.
     ///
-    ///     cargo test -p mjolnir-tools -- --ignored
+    ///     cargo test -p aldwin-tools -- --ignored
     #[tokio::test]
     #[ignore = "spawns real rust-analyzer; needs it on PATH"]
     async fn spawns_and_initializes_a_real_language_server() {

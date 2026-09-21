@@ -1,11 +1,11 @@
-# mjolnir-review
+# aldwin-review
 
-The feedback loop that runs after a change to Mjolnir is ready for submission.
+The feedback loop that runs after a change to Aldwin is ready for submission.
 
 **Status:** active — built and in use. Replaced `mjolnir-screenshot` on
 2026-09-20; see Progress.
 **Scope:** the five-stage review loop — the crate `crates/review`
-(`mjolnir-review`) that runs the four deterministic stages, and the `review`
+(`aldwin-review`) that runs the four deterministic stages, and the `review`
 skill that drives the loop and owns the fifth. Excludes what the stages
 themselves test (that is each crate's own spec) and the design system's
 content.
@@ -101,7 +101,7 @@ harmless there because a bad frame is something the judge says out loud.
    gives is a picture, and pictures are stage 5's.
 
 9. **The copy and glyph rules are scoped to app-owned rows.** They govern
-   Mjolnir's own copy, not what it echoes: the transcript renders a model's
+   Aldwin's own copy, not what it echoes: the transcript renders a model's
    reply verbatim, and an em dash or a contraction there is ordinary. A
    global buffer-level check would fail on real use, which is a check that is
    wrong rather than strict. `app_owned_rows` makes the split by scene and

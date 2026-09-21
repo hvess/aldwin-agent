@@ -10,7 +10,7 @@
 //! OpenAI's documented behavior does fragment `arguments` across chunks for
 //! other backends.
 
-use mjolnir_core::{ContentBlock, LlmRequest, Message, Role, StopReason, ToolCall, UsageStats};
+use aldwin_core::{ContentBlock, LlmRequest, Message, Role, StopReason, ToolCall, UsageStats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,7 +72,7 @@ pub struct WireFunctionCall {
 /// here — not an oversight, this provider has nothing to place a breakpoint
 /// on. `max_tokens` reuses `config.extended_thinking_budget` verbatim (no
 /// Anthropic-style headroom math): for this provider the field is just "max
-/// output tokens," which is exactly what mjolnir-config's doc comment
+/// output tokens," which is exactly what aldwin-config's doc comment
 /// already promises it can be used for.
 pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
     let tools = request
@@ -97,7 +97,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
 /// blocks rather than messages: consecutive `Text` blocks and any `ToolUse`
 /// blocks accumulate into one buffered message (role from `m.role`), and
 /// each `ToolResult` flushes as its own separate `role:"tool"` message. In
-/// practice (see mjolnir-core's agent.rs) tool results always live in their
+/// practice (see aldwin-core's agent.rs) tool results always live in their
 /// own `Role::User` message and tool uses in their own `Role::Assistant`
 /// message, so this produces exactly one OpenAI message per core message in
 /// the common case — the per-block walk just also handles the mixed case
@@ -246,7 +246,7 @@ struct ToolBuffer {
 }
 
 /// Turns a sequence of `WireChunk`s from one HTTP attempt into
-/// `mjolnir_core::LlmEvent`s.
+/// `aldwin_core::LlmEvent`s.
 ///
 /// One assembler drives exactly one attempt, and the contract spans two
 /// methods: feed every chunk to [`Assembler::handle`], then call
@@ -278,8 +278,8 @@ impl Assembler {
         Self::default()
     }
 
-    pub fn handle(&mut self, chunk: WireChunk) -> Result<Vec<mjolnir_core::LlmEvent>, WireError> {
-        use mjolnir_core::LlmEvent;
+    pub fn handle(&mut self, chunk: WireChunk) -> Result<Vec<aldwin_core::LlmEvent>, WireError> {
+        use aldwin_core::LlmEvent;
 
         let mut events = Vec::new();
 
@@ -361,7 +361,7 @@ impl Assembler {
     /// a trailing usage chunk arrives or the stream ends. Holding it is what
     /// makes token counts land for backends that report usage last; without
     /// it every step from such a backend reports zero.
-    fn end_step(&mut self, stop_reason: StopReason, events: &mut Vec<mjolnir_core::LlmEvent>) {
+    fn end_step(&mut self, stop_reason: StopReason, events: &mut Vec<aldwin_core::LlmEvent>) {
         if self.usage.is_some() {
             events.push(self.step_ended(stop_reason));
         } else {
@@ -373,12 +373,12 @@ impl Assembler {
     /// connection, an idle timeout, a framing error. A held-back StepEnded is
     /// a *complete* turn whose usage chunk never came, so it flushes (with
     /// zero usage) rather than surfacing as a stream failure.
-    pub fn finish(&mut self) -> Option<mjolnir_core::LlmEvent> {
+    pub fn finish(&mut self) -> Option<aldwin_core::LlmEvent> {
         self.pending_stop.take().map(|stop| self.step_ended(stop))
     }
 
-    fn step_ended(&self, stop_reason: StopReason) -> mjolnir_core::LlmEvent {
-        use mjolnir_core::{CacheStats, LlmEvent, StepOutcome};
+    fn step_ended(&self, stop_reason: StopReason) -> aldwin_core::LlmEvent {
+        use aldwin_core::{CacheStats, LlmEvent, StepOutcome};
         let (input_tokens, output_tokens) =
             self.usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens)).unwrap_or_default();
         LlmEvent::StepEnded {
@@ -394,7 +394,7 @@ impl Assembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
+    use aldwin_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
     use serde_json::json;
 
     fn chunk(json_str: &str) -> WireChunk {
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn build_request_maps_tool_result_to_its_own_tool_message() {
         let config = crate::config::ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "mistral-small-latest".into(),
             api_key_env: "X".into(),
             base_url: Some("https://api.mistral.ai/v1/chat/completions".into()),
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn build_request_maps_mixed_text_and_tool_use_into_one_assistant_message() {
         let config = crate::config::ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn build_request_uses_extended_thinking_budget_as_max_tokens() {
         let config = crate::config::ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn build_request_maps_tools_into_function_shape() {
         let config = crate::config::ProviderConfig {
-            kind: mjolnir_config::ProviderKind::OpenaiCompatible,
+            kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),

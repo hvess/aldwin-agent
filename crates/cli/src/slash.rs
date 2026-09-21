@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use mjolnir_config::Config;
-use mjolnir_core::{Command, Event, SessionId};
+use aldwin_config::Config;
+use aldwin_core::{Command, Event, SessionId};
 use tokio::sync::mpsc;
 
 use crate::history::History;
@@ -14,7 +14,7 @@ enum Intercepted {
     /// reaches the core.
     Handled,
     /// `/exit` — `run_interceptor` stops entirely rather than
-    /// looping again, per mjolnir-cli.md's Decisions: "CLI owns the
+    /// looping again, per aldwin-cli.md's Decisions: "CLI owns the
     /// dispatch table so slash commands can trigger ... process
     /// operations that the core has no visibility into." Ending the
     /// interceptor task drops both its `forward` (core command) and
@@ -60,7 +60,7 @@ const VALID_THEMES: [&str; 2] = ["dark", "light"];
 /// rather than swapping blind. A failed swap leaves the session on the
 /// client it already had.
 pub trait ModelSwitch: Send + Sync {
-    fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String>;
+    fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String>;
 }
 
 /// The running session, as `/model` has to see it: what it is on right now,
@@ -85,7 +85,7 @@ impl Session {
 }
 
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
-/// the core, per mjolnir-cli.md: "the core's only input is Submit, Cancel,
+/// the core, per aldwin-cli.md: "the core's only input is Submit, Cancel,
 /// ApproveTool — it has no slash-command semantics." Runs synchronously in
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
@@ -113,7 +113,7 @@ async fn intercept(
         // (wipe ConversationLog) — so it's translated and forwarded rather
         // than handled locally; core acknowledges with Event::HistoryCleared
         // once done, which is what actually tells the TUI to wipe its own
-        // rendered log (see mjolnir_tui::App::apply_event).
+        // rendered log (see aldwin_tui::App::apply_event).
         //
         // The transcript is sealed on the way past, before core is told:
         // "forget everything" is about the model's context, and the record
@@ -149,7 +149,7 @@ async fn intercept(
             handle_model(Some(other["model ".len()..].trim()), config, session, events).await;
             Intercepted::Handled
         }
-        // Bare `/resume` normally never reaches here: mjolnir-tui reads it
+        // Bare `/resume` normally never reaches here: aldwin-tui reads it
         // first and opens the picker, which answers by submitting
         // `/resume <id>`. What arrives is the bare form on a session with no
         // list to show — so this branch's job is to say why.
@@ -211,7 +211,7 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
         return None;
     }
 
-    let records = match mjolnir_config::load_session(history.dir(), &id) {
+    let records = match aldwin_config::load_session(history.dir(), &id) {
         Ok(records) => records,
         Err(e) => {
             let _ = events.send(Event::Notice { message: format!("cannot read session {arg}: {e} ({RESUME_USAGE})") }).await;
@@ -220,7 +220,7 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
     };
 
     // An empty load is not a failure: it is a transcript whose first turn
-    // never finished (see `mjolnir_config::load`). Resuming it would replace
+    // never finished (see `aldwin_config::load`). Resuming it would replace
     // the session with nothing, which is `/clear` wearing a disguise.
     if records.is_empty() {
         let _ = events
@@ -234,7 +234,7 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
         return None;
     }
 
-    let turns = records.iter().filter(|r| matches!(r, mjolnir_core::LogRecord::TurnStarted { .. })).count();
+    let turns = records.iter().filter(|r| matches!(r, aldwin_core::LogRecord::TurnStarted { .. })).count();
     let _ = events.send(Event::Notice { message: format!("resumed session {arg} — {turns} turn(s) restored") }).await;
     Some(Command::Resume { records })
 }
@@ -243,7 +243,7 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
 /// it's a config write (`Config::set_tui`, persisting the choice so it
 /// survives the developer's next launch, not just this session) plus an
 /// `Event::ThemeChanged` sent directly into the same channel the TUI reads
-/// from (see that event's own doc comment in mjolnir-core for why the
+/// from (see that event's own doc comment in aldwin-core for why the
 /// interceptor can reach the TUI this way without core's involvement).
 /// `App::theme` is read fresh by `ui::draw` on every frame, so the change
 /// is visible on the very next redraw — no restart needed.
@@ -304,10 +304,10 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// endpoint, a wire dialect and a key variable, none of which can be guessed
 /// from a name. The model half is not: a provider's real catalogue is a
 /// network call away and changes without us, so `provider.yaml` takes any
-/// model id and so does this. `mjolnir_llm::PROVIDERS`' model lists are
+/// model id and so does this. `aldwin_llm::PROVIDERS`' model lists are
 /// suggestions, and the notice says so by listing them as "known".
 ///
-/// **The bare form opens a list.** mjolnir-tui reads `/model` with no
+/// **The bare form opens a list.** aldwin-tui reads `/model` with no
 /// argument before it reaches here and opens the picker, which answers by
 /// submitting `/model <provider>/<model>` — this function still does every
 /// write, and still decides which scope it lands in. What reaches the branch
@@ -331,20 +331,20 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // The global layer is kept even when the project one shadows it, because
     // the resolved config the new client is built from overlays the two —
     // `base_url` and `extended_thinking_budget` fall back to global (see
-    // `mjolnir_llm::resolve`), so building from the project file alone would
+    // `aldwin_llm::resolve`), so building from the project file alone would
     // hand the session a client the next start would not reproduce.
     let global = config.global_provider();
     let (scope, current) = match config.project_provider() {
-        Some(project) => (mjolnir_config::Scope::Project, project),
+        Some(project) => (aldwin_config::Scope::Project, project),
         None => match &global {
-            Ok(global) => (mjolnir_config::Scope::Global, global.clone()),
+            Ok(global) => (aldwin_config::Scope::Global, global.clone()),
             Err(e) => {
                 let _ = events.send(Event::Notice { message: format!("no provider is configured: {e}") }).await;
                 return;
             }
         },
     };
-    let known = mjolnir_llm::identify(&current);
+    let known = aldwin_llm::identify(&current);
 
     let Some(arg) = arg.filter(|a| !a.is_empty()) else {
         let _ = events.send(Event::Notice { message: describe(&current, known) }).await;
@@ -376,8 +376,8 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // `/model anthropic/`, both land here as an empty model half.
     let mut next = match provider {
         Some(p) => {
-            let mut next = mjolnir_config::ProviderConfig {
-                version:                  mjolnir_config::PROVIDER_VERSION,
+            let mut next = aldwin_config::ProviderConfig {
+                version:                  aldwin_config::PROVIDER_VERSION,
                 provider:                 p.kind,
                 model:                    p.default_model().to_string(),
                 base_url:                 p.base_url.map(String::from),
@@ -399,17 +399,17 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
         }
         None => {
             if model.contains('/') {
-                let ids = mjolnir_llm::provider_ids().join(", ");
+                let ids = aldwin_llm::provider_ids().join(", ");
                 let message = format!("unknown provider {:?} (known: {ids}; {MODEL_USAGE})", model.split('/').next().unwrap_or(model));
                 let _ = events.send(Event::Notice { message }).await;
                 return;
             }
-            mjolnir_config::ProviderConfig { model: model.to_string(), ..current.clone() }
+            aldwin_config::ProviderConfig { model: model.to_string(), ..current.clone() }
         }
     };
-    next.version = mjolnir_config::PROVIDER_VERSION;
+    next.version = aldwin_config::PROVIDER_VERSION;
 
-    let now = qualified(&next, mjolnir_llm::identify(&next));
+    let now = qualified(&next, aldwin_llm::identify(&next));
 
     // "Already on" has to be true of the *session*, not only of the file.
     // The two can disagree — a hand-edited `provider.yaml` picked up by
@@ -431,8 +431,8 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // What the session would actually run on, resolved the same way startup
     // resolves it — the file just chosen over the layer below it.
     let resolved = match scope {
-        mjolnir_config::Scope::Project => mjolnir_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next)),
-        mjolnir_config::Scope::Global => mjolnir_llm::resolve(None, &next),
+        aldwin_config::Scope::Project => aldwin_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next)),
+        aldwin_config::Scope::Global => aldwin_llm::resolve(None, &next),
     };
 
     // Before the write, not after: a provider the session cannot actually
@@ -444,21 +444,21 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     }
 
     let where_ = match scope {
-        mjolnir_config::Scope::Project => "this project's provider.yaml",
-        mjolnir_config::Scope::Global => "the global provider.yaml",
+        aldwin_config::Scope::Project => "this project's provider.yaml",
+        aldwin_config::Scope::Global => "the global provider.yaml",
     };
     let message = match config.set_provider(scope, next.clone()) {
         Ok(()) => format!("now on {now} · saved to {where_}"),
         // The swap already happened, so the session really is on the new
         // model — it is only the next start that will not be.
-        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", qualified(&current, mjolnir_llm::identify(&current))),
+        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", qualified(&current, aldwin_llm::identify(&current))),
     };
     let _ = events.send(Event::Notice { message }).await;
     session.model = now;
     // The bare model id, not the qualified name: it is what the session
     // started with in `StatusInfo::model_name`, and the picker matches the
     // provider half against catalogue ids separately.
-    let changed = Event::ModelChanged { provider: mjolnir_llm::identify(&next).map(|p| p.id.to_string()), model: next.model.clone() };
+    let changed = Event::ModelChanged { provider: aldwin_llm::identify(&next).map(|p| p.id.to_string()), model: next.model.clone() };
     let _ = events.send(changed).await;
 }
 
@@ -469,14 +469,14 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
 /// rejecting `/model Anthropic` would be the odd one out. Model ids are left
 /// exactly as typed — they are opaque strings a host compares byte for byte,
 /// and some really are mixed-case.
-fn named_provider(name: &str) -> Option<&'static mjolnir_llm::Provider> {
-    mjolnir_llm::provider(&name.trim().to_ascii_lowercase())
+fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
+    aldwin_llm::provider(&name.trim().to_ascii_lowercase())
 }
 
 /// `provider/model` when the endpoint is one the catalogue knows, and the
 /// bare model id when the developer has pointed `provider.yaml` at an
 /// endpoint of their own — naming a provider there would be a guess.
-pub(crate) fn qualified(config: &mjolnir_config::ProviderConfig, known: Option<&mjolnir_llm::Provider>) -> String {
+pub(crate) fn qualified(config: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::Provider>) -> String {
     match known {
         Some(p) => format!("{}/{}", p.id, config.model),
         None => config.model.clone(),
@@ -485,7 +485,7 @@ pub(crate) fn qualified(config: &mjolnir_config::ProviderConfig, known: Option<&
 
 /// What the bare `/model` reports: where the developer stands, what else
 /// that provider offers, and every provider there is.
-fn describe(current: &mjolnir_config::ProviderConfig, known: Option<&mjolnir_llm::Provider>) -> String {
+fn describe(current: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::Provider>) -> String {
     let mut out = format!("model: {}", qualified(current, known));
     if let Some(p) = known {
         let others: Vec<&str> = p.models.iter().map(|m| m.id).filter(|id| *id != current.model).collect();
@@ -498,7 +498,7 @@ fn describe(current: &mjolnir_config::ProviderConfig, known: Option<&mjolnir_llm
         // answer.
         out.push_str(&format!(" · at {}", current.base_url.as_deref().unwrap_or("the provider's default endpoint")));
     }
-    out.push_str(&format!(" · providers: {}", mjolnir_llm::provider_ids().join(", ")));
+    out.push_str(&format!(" · providers: {}", aldwin_llm::provider_ids().join(", ")));
     out.push_str(&format!(" ({MODEL_USAGE})"));
     out
 }
@@ -563,14 +563,14 @@ mod tests {
     /// resolved configs available to assert on afterwards.
     #[derive(Clone, Default)]
     struct FakeSwitch {
-        seen:       Arc<Mutex<Vec<mjolnir_llm::ProviderConfig>>>,
+        seen:       Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>,
         /// Set to stand in for the one failure a real swap has: a provider
         /// whose `api_key_env` is not exported.
         fails_with: Option<String>,
     }
 
     impl ModelSwitch for FakeSwitch {
-        fn switch(&self, config: &mjolnir_llm::ProviderConfig) -> Result<(), String> {
+        fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String> {
             if let Some(e) = &self.fails_with {
                 return Err(e.clone());
             }
@@ -585,7 +585,7 @@ mod tests {
 
     /// A session whose switch records, and the record itself — for the tests
     /// that care about what the client was actually rebuilt on.
-    fn recording_session() -> (Session, Arc<Mutex<Vec<mjolnir_llm::ProviderConfig>>>) {
+    fn recording_session() -> (Session, Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>) {
         let switch = FakeSwitch::default();
         let seen = switch.seen.clone();
         (Session::new(SESSION_MODEL.into(), Box::new(switch)), seen)
@@ -603,7 +603,7 @@ mod tests {
     /// A history with one finished turn already recorded, plus the channel
     /// its notices arrive on.
     fn recorded_history(text: &str) -> (tempfile::TempDir, Arc<History>, SessionId, mpsc::Receiver<Event>) {
-        use mjolnir_core::{LogRecord, TurnEndReason, TurnId};
+        use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel(8);
@@ -613,10 +613,10 @@ mod tests {
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(1) },
             LogRecord::UserMessage { turn_id: TurnId(1), text: text.into() },
-            LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: mjolnir_core::StepId(1), text: "sure".into() },
+            LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: aldwin_core::StepId(1), text: "sure".into() },
             LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
         ] {
-            mjolnir_core::RecordSink::append(history.as_ref(), &record);
+            aldwin_core::RecordSink::append(history.as_ref(), &record);
         }
         // The session under test is a *new* one, as a fresh launch would be:
         // the recorded turn is now a past session to resume.
@@ -658,7 +658,7 @@ mod tests {
             panic!("a resume must reach core");
         };
         assert!(
-            records.iter().any(|r| matches!(r, mjolnir_core::LogRecord::UserMessage { text, .. } if text == "the question I asked")),
+            records.iter().any(|r| matches!(r, aldwin_core::LogRecord::UserMessage { text, .. } if text == "the question I asked")),
             "the conversation came back"
         );
         let _ = drain(&mut rx).await;
@@ -668,7 +668,7 @@ mod tests {
     /// so the continued conversation lands in the file it came from.
     #[tokio::test]
     async fn resuming_moves_the_writer_onto_the_resumed_transcript() {
-        use mjolnir_core::{LogRecord, TurnEndReason, TurnId};
+        use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let (_project, _global, cfg) = config();
         let (dir, history, id, _rx) = recorded_history("first");
@@ -681,7 +681,7 @@ mod tests {
             LogRecord::TurnStarted { turn_id: TurnId(2) },
             LogRecord::TurnEnded { turn_id: TurnId(2), reason: TurnEndReason::EndTurn },
         ] {
-            mjolnir_core::RecordSink::append(history.as_ref(), &record);
+            aldwin_core::RecordSink::append(history.as_ref(), &record);
         }
 
         let resumed = crate::history::session_choices(dir.path())
@@ -710,14 +710,14 @@ mod tests {
     /// offers such a session at all, so this is the typed-id path.
     #[tokio::test]
     async fn resuming_a_session_with_no_finished_turn_reports_rather_than_wiping() {
-        use mjolnir_core::{LogRecord, TurnId};
+        use aldwin_core::{LogRecord, TurnId};
 
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
         let (history, _) = History::open(dir.path().to_path_buf(), "m".into(), tx.clone());
         let history = history.expect("a store");
-        mjolnir_core::RecordSink::append(history.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
+        aldwin_core::RecordSink::append(history.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
         // Captured before sealing: an unfinished session is not listed, which
         // is the point of `an_unfinished_session_is_not_listed` below.
         let id = history.current();
@@ -922,12 +922,12 @@ mod tests {
         // reload_all() fails on that one layer.
         config
             .add_grant(
-                mjolnir_config::Scope::Project,
-                mjolnir_config::GrantList::Allow,
-                mjolnir_config::GrantEntry::classed("rg", mjolnir_config::Class::Read),
+                aldwin_config::Scope::Project,
+                aldwin_config::GrantList::Allow,
+                aldwin_config::GrantEntry::classed("rg", aldwin_config::Class::Read),
             )
             .unwrap();
-        let bad_path = project.path().join(".mjolnir").join("permissions.yaml");
+        let bad_path = project.path().join(".aldwin").join("permissions.yaml");
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
 
         let (tx, mut rx) = mpsc::channel(8);
@@ -1015,13 +1015,13 @@ mod tests {
 
     /// Every `/model` test needs a provider already on disk — the session
     /// this command runs in cannot exist without one.
-    fn with_provider(config: &Config, scope: mjolnir_config::Scope, id: &str) {
-        let p = mjolnir_llm::provider(id).expect("a catalogue provider");
+    fn with_provider(config: &Config, scope: aldwin_config::Scope, id: &str) {
+        let p = aldwin_llm::provider(id).expect("a catalogue provider");
         config
             .set_provider(
                 scope,
-                mjolnir_config::ProviderConfig {
-                    version:                  mjolnir_config::PROVIDER_VERSION,
+                aldwin_config::ProviderConfig {
+                    version:                  aldwin_config::PROVIDER_VERSION,
                     provider:                 p.kind,
                     model:                    p.default_model().into(),
                     base_url:                 p.base_url.map(String::from),
@@ -1048,7 +1048,7 @@ mod tests {
     #[tokio::test]
     async fn model_with_no_argument_reports_where_the_developer_stands() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         let result = intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
@@ -1065,7 +1065,7 @@ mod tests {
     #[tokio::test]
     async fn a_bare_model_id_changes_the_model_and_leaves_the_provider_alone() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1073,7 +1073,7 @@ mod tests {
         assert!(message.contains("anthropic/claude-opus-5"), "{message}");
         let saved = cfg.global_provider().unwrap();
         assert_eq!(saved.model, "claude-opus-5");
-        assert_eq!(saved.provider, mjolnir_config::ProviderKind::Anthropic, "the provider must be untouched");
+        assert_eq!(saved.provider, aldwin_config::ProviderKind::Anthropic, "the provider must be untouched");
     }
 
     /// The change is what the session runs on from here — the client is
@@ -1082,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn changing_the_model_moves_the_running_session_onto_it() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
@@ -1094,7 +1094,7 @@ mod tests {
         let built = seen.lock().unwrap().clone();
         assert_eq!(built.len(), 1, "the client is rebuilt exactly once");
         assert_eq!(built[0].model, "claude-opus-5");
-        assert_eq!(built[0].kind, mjolnir_config::ProviderKind::Anthropic);
+        assert_eq!(built[0].kind, aldwin_config::ProviderKind::Anthropic);
 
         match rx.recv().await {
             Some(Event::ModelChanged { provider, model }) => {
@@ -1112,7 +1112,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_cannot_be_built_leaves_the_session_and_the_file_alone() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let switch = FakeSwitch { fails_with: Some("GOOGLE_API_KEY is not set".into()), ..Default::default() };
         let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
         let (tx, mut rx) = mpsc::channel(8);
@@ -1130,17 +1130,17 @@ mod tests {
     #[tokio::test]
     async fn a_qualified_argument_moves_the_endpoint_and_the_key_variable_too() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("google/gemini-2.5-flash"), "{message}");
         let saved = cfg.global_provider().unwrap();
-        assert_eq!(saved.provider, mjolnir_config::ProviderKind::OpenaiCompatible);
+        assert_eq!(saved.provider, aldwin_config::ProviderKind::OpenaiCompatible);
         assert_eq!(saved.model, "gemini-2.5-flash");
         assert_eq!(saved.api_key_env, "GOOGLE_API_KEY");
-        assert_eq!(saved.base_url, mjolnir_llm::provider("google").unwrap().base_url.map(String::from));
+        assert_eq!(saved.base_url, aldwin_llm::provider("google").unwrap().base_url.map(String::from));
     }
 
     /// A provider named with no model takes that provider's default, so the
@@ -1148,12 +1148,12 @@ mod tests {
     #[tokio::test]
     async fn a_provider_with_no_model_takes_that_providers_default() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model google/".into() }, &cfg, &mut session(), None, &tx).await;
 
         let _ = notice(&mut rx).await;
-        assert_eq!(cfg.global_provider().unwrap().model, mjolnir_llm::provider("google").unwrap().default_model());
+        assert_eq!(cfg.global_provider().unwrap().model, aldwin_llm::provider("google").unwrap().default_model());
     }
 
     /// Everything past the *first* slash is the model, so a model id that
@@ -1161,7 +1161,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_first_slash_splits_so_a_slashed_model_id_survives() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1179,14 +1179,14 @@ mod tests {
     #[tokio::test]
     async fn a_bare_provider_name_switches_provider_rather_than_becoming_a_model_id() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("openai/gpt-5"), "{message}");
         let saved = cfg.global_provider().unwrap();
-        assert_eq!(saved.model, mjolnir_llm::provider("openai").unwrap().default_model());
+        assert_eq!(saved.model, aldwin_llm::provider("openai").unwrap().default_model());
         assert_eq!(saved.api_key_env, "OPENAI_API_KEY", "the endpoint and key must move with the name");
     }
 
@@ -1196,7 +1196,7 @@ mod tests {
     #[tokio::test]
     async fn naming_the_current_provider_keeps_the_current_model() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         // One session across both calls: the first moves it onto
         // `claude-opus-5`, and "already on" is now a statement about the
         // session as much as about the file.
@@ -1215,14 +1215,14 @@ mod tests {
     #[tokio::test]
     async fn a_bare_provider_and_a_trailing_slash_mean_the_same_thing() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
 
         intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = notice(&mut rx).await;
         let bare = cfg.global_provider().unwrap();
 
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         intercept(Command::Submit { text: "/model openai/".into() }, &cfg, &mut session(), None, &tx).await;
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap(), bare);
@@ -1233,7 +1233,7 @@ mod tests {
     #[tokio::test]
     async fn the_provider_half_is_case_insensitive_and_the_model_half_is_not() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1248,7 +1248,7 @@ mod tests {
     #[tokio::test]
     async fn a_slashed_argument_with_an_unknown_provider_is_rejected_not_written() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1263,8 +1263,8 @@ mod tests {
     #[tokio::test]
     async fn the_scope_written_is_the_one_that_actually_supplies_the_setting() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
-        with_provider(&cfg, mjolnir_config::Scope::Project, "google");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Project, "google");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1279,7 +1279,7 @@ mod tests {
     #[tokio::test]
     async fn setting_the_current_model_reports_no_change_and_writes_nothing() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session(), None, &tx).await;
 
@@ -1296,7 +1296,7 @@ mod tests {
     #[tokio::test]
     async fn what_the_file_already_says_is_still_a_swap_when_the_session_is_elsewhere() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         // The session booted on a different model from the one on disk.
         let (mut session, seen) = recording_session();
         session.model = "anthropic/claude-opus-5".into();
@@ -1318,7 +1318,7 @@ mod tests {
     #[tokio::test]
     async fn each_swap_advances_what_the_session_is_running() {
         let (_project, _global, cfg) = config();
-        with_provider(&cfg, mjolnir_config::Scope::Global, "anthropic");
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
 
@@ -1348,10 +1348,10 @@ mod tests {
     async fn an_endpoint_the_catalogue_does_not_know_is_reported_as_itself() {
         let (_project, _global, cfg) = config();
         cfg.set_provider(
-            mjolnir_config::Scope::Global,
-            mjolnir_config::ProviderConfig {
-                version:                  mjolnir_config::PROVIDER_VERSION,
-                provider:                 mjolnir_config::ProviderKind::OpenaiCompatible,
+            aldwin_config::Scope::Global,
+            aldwin_config::ProviderConfig {
+                version:                  aldwin_config::PROVIDER_VERSION,
+                provider:                 aldwin_config::ProviderKind::OpenaiCompatible,
                 model:                    "qwen3-coder".into(),
                 base_url:                 Some("http://localhost:8000/v1/chat/completions".into()),
                 api_key_env:              "VLLM_API_KEY".into(),

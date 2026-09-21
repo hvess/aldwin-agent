@@ -135,7 +135,7 @@ fn theme(theme: Theme) -> &'static SynTheme {
     let build = |which: Theme| {
         let pal = which.palette();
         SynTheme {
-            name: Some(format!("mjolnir-{which:?}")),
+            name: Some(format!("aldwin-{which:?}")),
             author: None,
             settings: ThemeSettings { foreground: Some(syn_color(pal.code)), ..ThemeSettings::default() },
             scopes: SYNTAX_SCOPES

@@ -23,15 +23,15 @@
 //!   anything here that isn't `Color::Rgb` is drawing outside it.
 //!
 //! ```text
-//! cargo run -p mjolnir-tui --example snapshot -- /tmp/out [cols] [rows]
+//! cargo run -p aldwin-tui --example snapshot -- /tmp/out [cols] [rows]
 //! ```
 
 use std::io;
 use std::sync::Arc;
 
-use mjolnir_config::Config;
-use mjolnir_permissions::{Class, Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, ModelChoice, PromptResolution, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus};
+use aldwin_config::Config;
+use aldwin_permissions::{Class, Engine, PromptPayload};
+use aldwin_tui::{App, LogEntry, ModelChoice, PromptResolution, ProviderChoice, Theme, ToolActivityEntry, ToolActivityStatus};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
@@ -67,7 +67,7 @@ fn main() -> io::Result<()> {
             scene(scene_name, &mut app);
 
             let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
-            terminal.draw(|f| mjolnir_tui::__preview_draw(f, &mut app)).unwrap();
+            terminal.draw(|f| aldwin_tui::__preview_draw(f, &mut app)).unwrap();
 
             let path = format!("{out_dir}/{scene_name}-{suffix}.html");
             std::fs::write(&path, page(terminal.backend().buffer(), scene_name, suffix))?;
@@ -77,7 +77,7 @@ fn main() -> io::Result<()> {
         for (index, name) in FIRST_RUN_STEPS.iter().enumerate() {
             let state = first_run_state(index);
             let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
-            terminal.draw(|f| mjolnir_tui::__preview_draw_first_run(f, &state, theme)).unwrap();
+            terminal.draw(|f| aldwin_tui::__preview_draw_first_run(f, &state, theme)).unwrap();
 
             let path = format!("{out_dir}/{name}-{suffix}.html");
             std::fs::write(&path, page(terminal.backend().buffer(), name, suffix))?;
@@ -89,10 +89,10 @@ fn main() -> io::Result<()> {
 
 /// A first-run screen with `index` as the open step, on a catalogue shaped
 /// like the real one — three curated rows behind a `more`, each with its own
-/// models. Deliberately not `mjolnir-llm`'s actual catalogue: this example
+/// models. Deliberately not `aldwin-llm`'s actual catalogue: this example
 /// does not depend on that crate, and a screenshot harness that did would
 /// change every time a provider was added.
-fn first_run_state(index: usize) -> mjolnir_tui::__PreviewFirstRun {
+fn first_run_state(index: usize) -> aldwin_tui::__PreviewFirstRun {
     // Listed deepest-first so the purposes below zip onto the right rows —
     // the same order, and the same copy, as the reference's `14b`.
     let providers: Vec<ProviderChoice> = [
@@ -112,7 +112,7 @@ fn first_run_state(index: usize) -> mjolnir_tui::__PreviewFirstRun {
     })
     .collect();
 
-    let mut state = mjolnir_tui::__PreviewFirstRun::new(providers, 3, true, true);
+    let mut state = aldwin_tui::__PreviewFirstRun::new(providers, 3, true, true);
     state.index = index;
     state
 }
@@ -131,7 +131,7 @@ fn page(buf: &Buffer, scene_name: &str, theme: &str) -> String {
     // regenerated — the desk sat two turns behind at `#a39fac` while the
     // token said `#cfcad9`, and nothing could catch it, because a literal
     // agrees with itself.
-    let desk = mjolnir_tui::__preview_scrim_hex(if theme == "light" { Theme::Light } else { Theme::Dark });
+    let desk = aldwin_tui::__preview_scrim_hex(if theme == "light" { Theme::Light } else { Theme::Dark });
     let mut out = format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{scene_name} {theme}</title><style>\
          body{{margin:0;background:{desk};padding:20px}}\
@@ -284,14 +284,14 @@ fn table(app: &mut App) {
 fn tools(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "grep for TODO across the repo and summarize".into() });
     app.log.push(LogEntry::ToolActivity {
-        step_id: mjolnir_core::StepId(1),
+        step_id: aldwin_core::StepId(1),
         calls: vec![
             ToolActivityEntry { call_id: "c1".into(), name: "shell".into(), status: ToolActivityStatus::Completed { is_error: false, summary: "42 matches across 17 files".into() } },
             ToolActivityEntry { call_id: "c2".into(), name: "read".into(), status: ToolActivityStatus::Running },
         ],
     });
     app.turn_active = true;
-    app.status.running_tools = vec![mjolnir_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() }];
+    app.status.running_tools = vec![aldwin_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() }];
     app.status.turn = Some(4);
     app.status.step = Some(1);
 }
@@ -301,14 +301,14 @@ const DIFF: &str = "--- a/src/page.rs\n+++ b/src/page.rs\n@@\n fn page(items: &[
 fn approval(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "fix the off-by-one in the pagination helper".into() });
     app.log.push(LogEntry::ApprovalCard { call_id: "call-1".into(), diff: DIFF.into(), resolution: None });
-    app.pending_approvals.push_back(mjolnir_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: DIFF.into() });
+    app.pending_approvals.push_back(aldwin_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: DIFF.into() });
 }
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
     let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
 
 /// The scene the developer reported as "misaligned and wonky": a *resolved*

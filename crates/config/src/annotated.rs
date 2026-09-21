@@ -1,4 +1,4 @@
-//! First-launch YAML written to `~/.mjolnir/` on a fresh install — a tour of
+//! First-launch YAML written to `~/.aldwin/` on a fresh install — a tour of
 //! the format in the developer's editor. Each string must parse under its
 //! domain's real schema (checked in this module's tests); the exact wording
 //! is a separate deliverable from the structure.
@@ -22,13 +22,13 @@
 //! happening in the first place the way the type system would.
 
 pub const PERMISSIONS_HEADER: &str = "\
-# Mjolnir permissions — one scope layer. Nothing runs that a rule here, or a
+# Aldwin permissions — one scope layer. Nothing runs that a rule here, or a
 # prompt you answered, has not allowed.
 #
-# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies in
-# every project) and <project>/.mjolnir/permissions.yaml (this project only).
+# Aldwin reads up to two of these: ~/.aldwin/permissions.yaml (applies in
+# every project) and <project>/.aldwin/permissions.yaml (this project only).
 # Whichever file you are looking at is one of those two, never both. Two more
-# layers never touch disk: session grants, gone when Mjolnir exits, and a
+# layers never touch disk: session grants, gone when Aldwin exits, and a
 # single turn\'s \"allow once\", gone immediately.
 #
 #   default:  what runs when no entry below covers the call.
@@ -72,17 +72,17 @@ pub const PERMISSIONS_HEADER: &str = "\
 #
 # You will rarely hand-edit this: answering a permission prompt writes the
 # rule for you, and these comments stay where they are. If you do edit it
-# while Mjolnir is running, /reload-config picks the change up.
+# while Aldwin is running, /reload-config picks the change up.
 ";
 
 pub const PERMISSIONS: &str = "\
-# Mjolnir permissions — one scope layer. Nothing runs that a rule here, or a
+# Aldwin permissions — one scope layer. Nothing runs that a rule here, or a
 # prompt you answered, has not allowed.
 #
-# Mjolnir reads up to two of these: ~/.mjolnir/permissions.yaml (applies in
-# every project) and <project>/.mjolnir/permissions.yaml (this project only).
+# Aldwin reads up to two of these: ~/.aldwin/permissions.yaml (applies in
+# every project) and <project>/.aldwin/permissions.yaml (this project only).
 # Whichever file you are looking at is one of those two, never both. Two more
-# layers never touch disk: session grants, gone when Mjolnir exits, and a
+# layers never touch disk: session grants, gone when Aldwin exits, and a
 # single turn\'s \"allow once\", gone immediately.
 #
 #   default:  what runs when no entry below covers the call.
@@ -126,7 +126,7 @@ pub const PERMISSIONS: &str = "\
 #
 # You will rarely hand-edit this: answering a permission prompt writes the
 # rule for you, and these comments stay where they are. If you do edit it
-# while Mjolnir is running, /reload-config picks the change up.
+# while Aldwin is running, /reload-config picks the change up.
 version: 2
 default: ask
 allow: []
@@ -134,22 +134,22 @@ deny: []
 ";
 
 pub const PROVIDER_HEADER: &str = "\
-# Mjolnir provider settings.
+# Aldwin provider settings.
 #   provider:                  anthropic | openai-compatible
 #   model:                     the model id to use for every request
 #   base_url:                  only used when provider is openai-compatible, and
 #                              it is the full chat-completions URL, not a prefix
 #                              — e.g. https://host/v1/chat/completions
 #   api_key_env:               the NAME of an environment variable holding your
-#                              API key — Mjolnir never reads or stores the key
+#                              API key — Aldwin never reads or stores the key
 #                              itself here, only this variable's name. Export it
-#                              before starting Mjolnir.
+#                              before starting Aldwin.
 #   extended_thinking_budget:  token budget for extended thinking. Omit to use
-#                              mjolnir-llm's built-in default.
+#                              aldwin-llm's built-in default.
 ";
 
 pub const MCP_HEADER: &str = "\
-# Mjolnir MCP server registry.
+# Aldwin MCP server registry.
 # Each entry under servers needs a unique name and one of:
 #   kind: stdio, command: <path>, args: [...]
 #   kind: http,  url: <endpoint>
@@ -158,7 +158,7 @@ pub const MCP_HEADER: &str = "\
 ";
 
 pub const MCP: &str = "\
-# Mjolnir MCP server registry.
+# Aldwin MCP server registry.
 # Each entry under servers needs a unique name and one of:
 #   kind: stdio, command: <path>, args: [...]
 #   kind: http,  url: <endpoint>
@@ -169,7 +169,7 @@ servers: []
 ";
 
 pub const TUI_HEADER: &str = "\
-# Mjolnir TUI preferences (global only — there is no project-scope tui.yaml).
+# Aldwin TUI preferences (global only — there is no project-scope tui.yaml).
 # theme, layout, and keybinds are all optional; omit whatever you don't want
 # to override.
 #   theme:  dark (default) | light. Read once at session start; changing it
@@ -178,7 +178,7 @@ pub const TUI_HEADER: &str = "\
 ";
 
 pub const TUI: &str = "\
-# Mjolnir TUI preferences (global only — there is no project-scope tui.yaml).
+# Aldwin TUI preferences (global only — there is no project-scope tui.yaml).
 # theme, layout, and keybinds are all optional; omit whatever you don't want
 # to override.
 #   theme:  dark (default) | light. Read once at session start; changing it

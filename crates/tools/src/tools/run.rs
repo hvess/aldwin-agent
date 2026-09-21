@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use mjolnir_permissions::Class;
+use aldwin_permissions::Class;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
@@ -267,7 +267,7 @@ mod tests {
     /// the read-enforcement tests would pass without testing anything.
     fn tool() -> (tempfile::TempDir, RunTool) {
         let dir = tempfile::Builder::new()
-            .prefix("mjolnir-run-")
+            .prefix("aldwin-run-")
             .tempdir_in(env!("CARGO_MANIFEST_DIR"))
             .unwrap();
         let tool = RunTool::new(dir.path().to_path_buf());

@@ -1,19 +1,19 @@
 [package]
-name    = "mjolnir-cli"
+name    = "aldwin-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "mjolnir"
+name = "aldwin"
 path = "src/main.rs"
 
 [dependencies]
-mjolnir-core        = { path = "../core" }
-mjolnir-config      = { path = "../config" }
-mjolnir-permissions = { path = "../permissions" }
-mjolnir-tools       = { path = "../tools" }
-mjolnir-llm         = { path = "../llm" }
-mjolnir-tui         = { path = "../tui" }
+aldwin-core        = { path = "../core" }
+aldwin-config      = { path = "../config" }
+aldwin-permissions = { path = "../permissions" }
+aldwin-tools       = { path = "../tools" }
+aldwin-llm         = { path = "../llm" }
+aldwin-tui         = { path = "../tui" }
 tokio                = { workspace = true }
 futures              = { workspace = true }
 thiserror            = { workspace = true }

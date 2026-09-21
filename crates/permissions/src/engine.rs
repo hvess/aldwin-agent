@@ -2,12 +2,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use mjolnir_config::{Class, Config, GrantEntry, GrantList, Rung, Scope as ConfigScope};
+use aldwin_config::{Class, Config, GrantEntry, GrantList, Rung, Scope as ConfigScope};
 
 use crate::error::PermissionError;
 use crate::prompt::{Choice, ContextFileTier, PromptPayload};
 
-/// Where a rule came from. Distinct from `mjolnir_config::Scope` because
+/// Where a rule came from. Distinct from `aldwin_config::Scope` because
 /// session has no config-backed counterpart, and `turn` is not a scope at all
 /// — a turn answer writes nothing anywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,8 +23,8 @@ impl GrantScope {
     pub fn where_it_lives(self) -> &'static str {
         match self {
             GrantScope::Session => "this session",
-            GrantScope::Project => "<project>/.mjolnir/permissions.yaml",
-            GrantScope::Global => "~/.mjolnir/permissions.yaml",
+            GrantScope::Project => "<project>/.aldwin/permissions.yaml",
+            GrantScope::Global => "~/.aldwin/permissions.yaml",
         }
     }
 }
@@ -74,7 +74,7 @@ struct SessionState {
 
 /// The permission engine of ADR 0004. Owns precedence, the standing rung, and
 /// the in-memory session layer; project and global layers persist through
-/// `mjolnir_config::Config`, which is cheap to clone (internally `Arc`).
+/// `aldwin_config::Config`, which is cheap to clone (internally `Arc`).
 ///
 /// The order it resolves in, and why it is this order:
 ///
@@ -324,7 +324,7 @@ mod tests {
     fn engine() -> (tempfile::TempDir, tempfile::TempDir, Engine) {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
-        let config = Config::open_at(project.path(), global.path().join(".mjolnir")).unwrap();
+        let config = Config::open_at(project.path(), global.path().join(".aldwin")).unwrap();
         (project, global, Engine::new(config))
     }
 
@@ -509,7 +509,7 @@ mod tests {
         let outcome = check(&e, "curl", Class::Write);
         assert!(!asks(&outcome));
         let Outcome::Locked { scope, .. } = outcome else { panic!("expected a lock") };
-        assert_eq!(scope.where_it_lives(), "~/.mjolnir/permissions.yaml");
+        assert_eq!(scope.where_it_lives(), "~/.aldwin/permissions.yaml");
     }
 
     // ── What each row writes ─────────────────────────────────────────────
@@ -531,7 +531,7 @@ mod tests {
 
         assert_eq!(check(&e, "git", Class::Read), Outcome::Allow);
         assert!(
-            !project.path().join(".mjolnir/permissions.yaml").exists(),
+            !project.path().join(".aldwin/permissions.yaml").exists(),
             "a session answer must not create a project file"
         );
     }

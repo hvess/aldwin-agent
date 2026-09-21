@@ -1,4 +1,4 @@
-# mjolnir-tui
+# aldwin-tui
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
@@ -38,7 +38,7 @@ Three things a reader of this crate should know:
   and `MARGIN_X` — which is why `LABEL_COL` is now a module constant.
 * **`max_height` still caps the panel at a quarter of the frame.** Its doc
   comment justified that against `5a`'s stated half on the grounds that the
-  grant-summary and `Tab` rows made Mjolnir's panel need ~20 rows. Those rows
+  grant-summary and `Tab` rows made Aldwin's panel need ~20 rows. Those rows
   are gone and the argument is largely spent, but it was deliberately left
   alone in the same pass: two geometry changes at once make the next
   screenshot delta unreadable about which caused what.
@@ -46,11 +46,11 @@ Three things a reader of this crate should know:
 Measured over the five permission scenes at three sizes in both themes — 30
 frames, clean. *(The conformance catalogue this closed seven entries in was
 deleted on 2026-09-20 with the harness that produced it; see
-`.claude/spec/mjolnir-review.md`'s Progress entry for why. The measurement
+`.claude/spec/aldwin-review.md`'s Progress entry for why. The measurement
 stands, the catalogue numbers no longer resolve, and git history has them.)*
 
 **Progress (2026-09-19, the conformance catalogue's unblocked layout items):**
-*(That catalogue was deleted on 2026-09-20 — see `mjolnir-review.md`. The
+*(That catalogue was deleted on 2026-09-20 — see `aldwin-review.md`. The
 work below was done and stands; its item numbers no longer resolve.)*
 Six Class A deviations, plus
 one the gates found while they were being captured. Each is recorded in full
@@ -82,7 +82,7 @@ code should care.
 * **A `@@` line is a hunk header.** `diff::Kind::Hunk`, rendered in
   `--tui-hunk-header` with an empty gutter, anchoring the line numbers from
   its own offsets. This only ever shows in a ```diff fence in assistant
-  prose; `mjolnir_tools::diff::unified` emits no header, so the approval
+  prose; `aldwin_tools::diff::unified` emits no header, so the approval
   card's own numbering is unchanged.
 * **First run's option list is sized by its content.**
   `first_run::option_rows` measures the list once and gives every row the
@@ -163,7 +163,7 @@ re-verify Shift+Enter specifically.
 **Progress (2026-08-29, follow-up):** A `/`-prefixed `UserMessage` (a
 slash command) now renders dim rather than sharing plain user messages'
 normal style, per developer request once `/help`/`/exit` landed in
-mjolnir-cli — otherwise a command looks identical to a chat message in
+aldwin-cli — otherwise a command looks identical to a chat message in
 the log, undermining the point of having named commands at all. See
 `is_command` in `ui.rs`; duplicates cli's own `/`-prefix check since tui
 can't depend on cli (wrong direction) to reuse it.
@@ -212,7 +212,7 @@ then pass again once restored.
 **Progress (2026-08-29, markdown support):** Assistant prose was rendering
 raw markdown source (`**bold**`, `` `code` ``, `# heading`, `- item`,
 literal asterisks and backticks included) — reported directly by the
-developer ("LLM output is in markdown, but mjolnir doesn't support it").
+developer ("LLM output is in markdown, but aldwin doesn't support it").
 `ui::render_markdown_line` now parses each prose line (fenced code was
 already handled separately, see the 2026-08-29 second-follow-up entry
 below) for bold/italic/inline-code/strikethrough/links, and per-line block
@@ -241,10 +241,10 @@ messages — a `/`-prefixed slash command keeps its plain dim style with no
 background, preserving the harness-directed-vs-conversation distinction.
 (2) A welcome banner now renders above the conversation log on every draw
 (`ui::intro_lines`, always exactly `log::INTRO_LINE_COUNT` rows): an ASCII
-rendering of the little owl from mjolnir.md's Mascot section (boxy
+rendering of the little owl from aldwin.md's Mascot section (boxy
 outline, `◉` camera-iris eyes as the one expressive feature, perched on a
 rail rather than ambulatory, talons gripping rather than acting), the
-`MJOLNIR` wordmark and tagline, and a version/model line
+`ALDWIN` wordmark and tagline, and a version/model line
 (`v{CARGO_PKG_VERSION} · {model_name}`). It isn't a `LogEntry` — it isn't a
 core event, so it doesn't belong in the append-only event log semantics
 that `log.rs`'s doc comments describe — instead `ui::draw_log` prepends it
@@ -254,7 +254,7 @@ accounts for the transient thinking indicator. The owl uses ACCENT
 (cyan) for its outline/eyes and the wordmark — a deliberate, scoped
 expansion of accent beyond "card border and focused input only" (see the
 Palette bullet below), not a resolution of the still-open mascot color
-palette question in mjolnir.md's Mascot section.
+palette question in aldwin.md's Mascot section.
 
 **Progress (2026-08-29, git commit in the banner):** The banner's version
 line originally showed only `CARGO_PKG_VERSION` — reported back by the
@@ -265,7 +265,7 @@ developer which build they're actually running. `crates/tui/build.rs`
 now shells out to `git rev-parse --short=8 HEAD` (falling back to
 `"unknown"` if git isn't available, e.g. a source tarball with no `.git`)
 and `git status --porcelain` for a `-dirty` suffix, exposing the result as
-`MJOLNIR_GIT_HASH` via `cargo:rustc-env`; `ui::intro_lines` reads it with
+`ALDWIN_GIT_HASH` via `cargo:rustc-env`; `ui::intro_lines` reads it with
 `env!(...)` alongside `CARGO_PKG_VERSION`. Also explains the "why is my
 build binary not showing the new intro at all" report immediately prior
 to this entry — the real cause there was a stale prebuilt binary, not a
@@ -286,7 +286,7 @@ real reference photo (thresholded to pure black/white, trimmed, resized
 preserving aspect ratio, then read back pixel-for-pixel with one source
 pixel mapped to one Braille dot — 2×4 real sub-character dots per cell,
 not the `░▒▓█` shading-level approximation every earlier attempt used).
-This settles mjolnir.md's Mascot section in a new direction; that
+This settles aldwin.md's Mascot section in a new direction; that
 section's "little owl" rationale is superseded, not merely
 supplemented — update it to describe Mjolnir if/when that file gets its
 own pass. `INTRO_LINE_COUNT` grew to 28 (21 art rows + blank + wordmark +
@@ -382,7 +382,7 @@ built, not from Hermes) and two other distinct bold/3D fonts as
 alternatives; developer chose to keep ANSI Shadow anyway, since it's a
 public FIGlet font, not something proprietary to Hermes. (3) The
 hammer's real width (27 cols) plus a 3-space gap plus ANSI Shadow's
-"MJOLNIR" (59 cols) pushes total banner content past 80 columns for the
+"ALDWIN" (59 cols) pushes total banner content past 80 columns for the
 first time — this broke over a dozen `ui.rs` tests that had assumed an
 80-col `TestBackend`/`rendered()` call, not because their own assertions
 were wrong but because the intro banner's own content wrapped inside an
@@ -408,7 +408,7 @@ debug the asymmetry's exact origin. (2) "The hammer needs padding all the
 way around it" — `ui::intro_lines` now emits one blank `Line` before and
 after the art block, and `ui::bordered`'s `LEFT_MARGIN` grew from 2 to 3.
 (3) "Different colors/gradient ... to make it more fancy" — new
-`ui::mjolnir_row_color(row, total)`, a top-to-bottom RGB lerp (near-white
+`ui::aldwin_row_color(row, total)`, a top-to-bottom RGB lerp (near-white
 cyan at the top fading to deep blue at the base) applied per-row to the
 hammer art's style; every other element (wordmark, tagline, stats) stays
 on the existing flat palette. (4) The tagline changed from "a tool for
@@ -472,7 +472,7 @@ gets clipped) before confirming it passes against the fix.
 3. **Input didn't support multi-line navigation.** Up/Down now move the cursor between the draft's lines first (`App::move_cursor_vertical`, preserving column where possible, by source line not wrapped screen row), falling through to log-scroll only when there's no such line to move to (single-line draft, or already at its first/last line) — same fallback shape the old empty-input-only vim bindings tried for, but keyed off cursor position instead of buffer emptiness so it can't eat a keystroke.
 4. **No loading feedback between turns.** `App` gained `turn_active` (true from `TurnStarted` to `TurnEnded`) and a free-running `tick: u64` counter, advanced every 120ms by a `tokio::time::interval` in `run.rs`'s `select!`. The log's trailing indicator is now an animated Braille-dot spinner (`ui::SPINNER_FRAMES` — the same glyph family `MJOLNIR_ART` traces the hammer in): "thinking…" while an extended-thinking block is open, else "working…" for the rest of an active turn, so the stretch between tool calls and before the first token streams back is no longer silent.
 5. **Approval-card diffs were hard to read.** Every diff line rendered in the same plain `BRIGHT` — no color, no signal. `ui::render_approval_card`/`render_diff_line` now give added/removed lines a full-width background tint (same "pad to render width" technique as the user-message chat-bubble background), and collapse unmodified context beyond `DIFF_CONTEXT_RADIUS` (2) lines from the nearest change into a single "N unchanged lines" marker instead of listing every line.
-6. **No way to clear context mid-session.** New `Command::ClearHistory` / `Event::HistoryCleared` round trip (mjolnir-core) and a `/clear` slash command (mjolnir-cli, forwarded rather than handled locally like `/help`, since core has to act on it) — wipes `ConversationLog` and, via `HistoryCleared`, the TUI's own rendered `log` and turn state in step, so the welcome banner reappears the same way it does for a genuinely fresh session.
+6. **No way to clear context mid-session.** New `Command::ClearHistory` / `Event::HistoryCleared` round trip (aldwin-core) and a `/clear` slash command (aldwin-cli, forwarded rather than handled locally like `/help`, since core has to act on it) — wipes `ConversationLog` and, via `HistoryCleared`, the TUI's own rendered `log` and turn state in step, so the welcome banner reappears the same way it does for a genuinely fresh session.
 7. Two smaller polish items: inline `` `code` `` in assistant prose used `Modifier::REVERSED` (bright-white block), which read as jarring against real terminal themes — swapped for a plain distinguishing color (`CODE_FG`), a scoped exception to the "modifiers only, never a new color" rule below (that rule predates this ask). And the ordinary end-of-turn line read as flat/mechanical ("— turn ended —") — reworded to "— answered —"; the cancelled/error variants keep their own wording since those already name a different outcome.
 8. **Slash commands only read as dim after Enter, not while being typed.** `is_command`'s dim styling (item covered in the 2026-08-29 second-follow-up entry above) only ever touched the already-submitted `LogEntry::UserMessage`; `draw_input` rendered the draft as a single unstyled `Paragraph::new(&str)`, so a command looked identical to a plain message until it was already sent. `draw_input` now builds its `Paragraph` from a `Text` of per-line `Line`s instead of the raw `&str`, so per-word styling can ride along. First cut only checked whether the input's very first character was `/`, mirroring `is_command`'s whole-message rule — developer follow-up caught that a command word typed anywhere past position 0 (e.g. `hi /exit there`) went unstyled even though it's the identical word. Reworked per explicit developer direction into `ui::highlight_command_tokens` (`KNOWN_COMMAND_WORDS`, duplicated from `cli::slash::intercept`'s match arms for the same reason `is_command` is duplicated): scans every whitespace-delimited word on every line and dims an exact match wherever it falls, deliberately *not* mirroring `is_command`'s "must be the whole message's leading token" rule — this is a cosmetic hint that a recognized command word was typed, independent of whether it would actually be intercepted (only a real leading `/`, per `is_command`, ever is).
 
@@ -591,7 +591,7 @@ becoming part of the supported public API) plus a driver script
 (tmux capture-pane → ANSI-to-HTML → headless chromium screenshot) — not
 committed, but documented here since it's the reason this pass could be
 visually validated step by step rather than shipped on faith. 89
-`mjolnir-tui` tests pass (up from 82; new coverage: the inner-width
+`aldwin-tui` tests pass (up from 82; new coverage: the inner-width
 regression above, sidebar width-gate-overrides-preference, Ctrl+T toggle,
 footer/card key-label parity, sidebar shows tool name not call_id), full
 workspace `cargo test`/`cargo clippy -- -D warnings` both clean. Many
@@ -606,7 +606,7 @@ badge, chip styling):** A follow-up UX pass, at the developer's explicit
 request, studying darrenburns/posting (a Textual-based terminal HTTP
 client the developer named directly, citing its design as something to
 learn from) and applying its *structural* design discipline — not its
-literal pink/magenta palette, which would clash with Mjolnir's own
+literal pink/magenta palette, which would clash with Aldwin's own
 established cyan/hammer identity. Read posting's `themes.py` (its `Theme`
 model: primary/secondary/background/surface/panel/warning/error/success/
 accent, plus per-HTTP-method colors and a `border-title-status` pattern)
@@ -663,18 +663,18 @@ Explicitly not adopted from posting, and why: jump-mode (single-key focus
 jumping between named widgets) and the command palette are real, well-
 executed posting features, but they exist to navigate *many* simultaneous
 focusable panes (collection tree, seven request tabs, five response tabs) —
-Mjolnir has exactly one focusable widget (the input box) outside of a
+Aldwin has exactly one focusable widget (the input box) outside of a
 modal card, so there is nothing for either feature to navigate between yet;
 building either now would be speculative complexity with no current use,
 not a UX gap this session actually has. Per-pane tabs (Headers/Body/Query/
-...) don't apply either — Mjolnir's "content" is one linear conversation
+...) don't apply either — Aldwin's "content" is one linear conversation
 log, not several independent structured sections. These are noted here as
 considered-and-deferred, not silently dropped, in case the interaction
 model ever grows enough panes to make them worth revisiting.
 
-92 `mjolnir-tui` tests pass (up from 89; new coverage: `tool_color`
+92 `aldwin-tui` tests pass (up from 89; new coverage: `tool_color`
 determinism, the live/scrolled badge in both states, its absence during the
-hero), full workspace `cargo test`/`cargo clippy -p mjolnir-tui -- -D
+hero), full workspace `cargo test`/`cargo clippy -p aldwin-tui -- -D
 warnings` both clean.
 
 **Progress (2026-08-31, chat padding, code-block redesign, diff line
@@ -717,7 +717,7 @@ plus one at the bottom — "a real code block in a document," per the
 developer's own phrasing, not ASCII art. (6) Diff lines (both the Edit
 approval card and a ```diff fence in assistant prose) gained an old-file/
 new-file line-number gutter (`number_diff_lines`, `diff_gutter`) — numbered
-relative to the shown diff since `mjolnir_tools::diff::unified` emits no
+relative to the shown diff since `aldwin_tools::diff::unified` emits no
 `@@ -a,b +c,d @@` hunk header to anchor an absolute file offset on (it diffs
 a single already-replaced hunk, not a whole file; see that function's own
 doc comment). A context line shows the same number on both sides, a removed
@@ -729,13 +729,13 @@ older than that commit, not a real gap — confirmed by inspecting the
 already-current source before touching it, rather than re-doing work that
 was already done.
 
-Verified two ways: 93 `mjolnir-tui` tests pass (up from 91; two coordinate-
+Verified two ways: 93 `aldwin-tui` tests pass (up from 91; two coordinate-
 pinned tests — `user_and_assistant_messages_are_visually_distinct`,
 `a_slash_command_renders_differently_from_a_plain_user_message`, and three
 more — were converted from hand-derived row offsets to `find_row` since the
 padding changes shifted them, the same migration this file's history already
 describes doing once before for the same reason), `cargo clippy -p
-mjolnir-tui --all-targets -- -D warnings` clean; and a throwaway scratch unit
+aldwin-tui --all-targets -- -D warnings` clean; and a throwaway scratch unit
 test (written, run once with `--nocapture` to dump the rendered buffer as a
 text+background-color-tag grid, then deleted — not committed, same spirit as
 the design-iteration harness in `examples/preview.rs`) confirmed the actual
@@ -762,7 +762,7 @@ again after the edit landed. The approval gate itself (`ToolApprovalRequested`
 every emission site (`core::dispatcher`) and the `edit_class: true` bypass of
 the generic four-tier check (`tools::dispatcher`, `permissions::Engine::
 check_tool`) — so this was never a duplicate-render bug in the log. The
-actual cause lives in `mjolnir-core`'s base system prompt
+actual cause lives in `aldwin-core`'s base system prompt
 (`crates/core/src/prompt.rs`): it told the model to "always propose a diff
 and wait for approval," which is instructions to do by hand, in chat text,
 exactly what the `edit` tool's own structural gate already does
@@ -776,23 +776,23 @@ comment above `BASE` already calls the prose "its own deliverable," open to
 revision without touching the structural-ordering guarantees the rest of
 that file's tests do cover).
 
-Verified: `mjolnir-tui`'s existing 93 tests still pass unmodified (none
+Verified: `aldwin-tui`'s existing 93 tests still pass unmodified (none
 asserted an exact blank-row count around assistant text, only that *a*
 blank row exists between entries — `a_blank_line_separates_consecutive_
-log_entries`); `mjolnir-core`'s 11 tests pass unmodified; `cargo clippy -p
-mjolnir-tui -p mjolnir-core --all-targets` clean on both touched files.
+log_entries`); `aldwin-core`'s 11 tests pass unmodified; `cargo clippy -p
+aldwin-tui -p aldwin-core --all-targets` clean on both touched files.
 
 **Progress (2026-08-31, duplicated-input turn + wrapped-prose padding):**
 Two more developer-reported live-use bugs, one in each of a
-still-active spec (`mjolnir-tui`) and an already-archived one
-(`mjolnir-core`) — noted here since this file is where a developer would
+still-active spec (`aldwin-tui`) and an already-archived one
+(`aldwin-core`) — noted here since this file is where a developer would
 look first for a TUI-surfaced complaint, even though the root cause landed
 outside this crate. (1) The developer reported that submitted input
 sometimes reached the model duplicated — visible by asking the model to
 echo back what was sent. Not a TUI input-handling bug (`handle_key` already
 filters to `KeyEventKind::Press`, and crossterm reports paste as ordinary
 key events with bracketed paste unhandled/off, so pasted text was never
-actually duplicated at the input layer) — the real bug was in `mjolnir-
+actually duplicated at the input layer) — the real bug was in `aldwin-
 core::Agent::run_turn` (`crates/core/src/agent.rs`): the `Command::Submit`
 handler appended the new turn's `UserMessage` to `self.log` *before*
 calling `run_turn`, which then built its first step's request as
@@ -833,10 +833,10 @@ single unbroken 300-character run in a narrow viewport and asserts every
 wrapped row shares the same left inset (confirmed to fail — `[1, 0, 0, 0,
 0, 0, 0, 0]` — against the pre-fix code before confirming it passes).
 
-Verified: `mjolnir-tui`'s 94 tests pass (93 + the one new one) and
-`mjolnir-core`'s 12 tests pass (11 + the one new one), `cargo build
+Verified: `aldwin-tui`'s 94 tests pass (93 + the one new one) and
+`aldwin-core`'s 12 tests pass (11 + the one new one), `cargo build
 --workspace` and `cargo test --workspace` clean, `cargo clippy -p
-mjolnir-tui --all-targets` clean on the touched file (`ui.rs`); `agent.rs`'s
+aldwin-tui --all-targets` clean on the touched file (`ui.rs`); `agent.rs`'s
 new test reuses the same `loop { match ev_rx.recv()... { Event::X => break,
 _ => {} } }` idiom every other test in that file already uses, including
 clippy's pre-existing `single_match` note on that idiom, which this file
@@ -847,7 +847,7 @@ the LLM requests multiple diffs or permissions at once, it breaks the
 approval process and the user can only approve one thing." Root cause: both
 gates (`App::pending_approval`/`pending_prompt`, `crates/tui/src/app.rs`)
 were a single `Option<T>`, but the underlying round trip was never
-single-outstanding — `mjolnir-core`'s `Agent::dispatch_tools` drives every
+single-outstanding — `aldwin-core`'s `Agent::dispatch_tools` drives every
 tool call in a step concurrently via `future::join_all`, and each
 Edit/permission-gated call independently calls `DispatchContext::
 request_approval`/`request_prompt`, keyed by its own `call_id` in a shared
@@ -893,8 +893,8 @@ each push) before confirming they pass against the real fix.
 `footer_shows_no_queue_count_for_a_single_pending_approval` (`ui.rs`) cover
 the new hint.
 
-Verified: `mjolnir-tui` 98 tests pass (94 + 4 new), full workspace build/
-test (306 tests) and `cargo clippy -p mjolnir-tui --all-targets` clean on
+Verified: `aldwin-tui` 98 tests pass (94 + 4 new), full workspace build/
+test (306 tests) and `cargo clippy -p aldwin-tui --all-targets` clean on
 every touched file (`app.rs`, `ui.rs`, `examples/preview.rs` — the latter's
 design-iteration harness also constructed the old `Option` fields directly
 and needed the same field-name/queue update to keep compiling).
@@ -980,7 +980,7 @@ This is not misleading: `join_all`-driven parallel tool dispatch means other
 non-gated calls can genuinely still be running while one call sits blocked
 on approval, so "working…" stays accurate throughout.
 
-Test suite: `mjolnir-tui` 104 tests pass (98 + 6 new — the two clipping/
+Test suite: `aldwin-tui` 104 tests pass (98 + 6 new — the two clipping/
 truncation regressions above, plus four asserting the core behavior directly:
 pending content is absent from the log, a resolved card's record is
 unchanged, the panel stays visible when the log is scrolled away from the
@@ -991,10 +991,10 @@ radius`, `diff_lines_show_old_and_new_line_numbers`, and the renamed
 `footer_*` key-label tests) were updated to populate `App::pending_approvals`/
 `pending_prompts` instead of pushing an unresolved `LogEntry` directly, since
 that's no longer where this content renders. Full workspace `cargo test`
-(311 tests, 1 ignored, pre-existing) and `cargo clippy -p mjolnir-tui
+(311 tests, 1 ignored, pre-existing) and `cargo clippy -p aldwin-tui
 --all-targets -- -D warnings` both clean; a pre-existing, unrelated
-`single_match` clippy failure in `mjolnir-core::agent.rs`'s own test module
-(the same idiom mjolnir-tui.md's 2026-08-31 wrapped-row-scroll-math entry
+`single_match` clippy failure in `aldwin-core::agent.rs`'s own test module
+(the same idiom aldwin-tui.md's 2026-08-31 wrapped-row-scroll-math entry
 already disclosed for a different file) was confirmed present on the
 pre-change tree too, via a stash-based comparison, before ruling it out as
 unrelated to this change.
@@ -1038,8 +1038,8 @@ their own fresh leading inset (a single space now interrupts the run at
 each wrap point, which is the fix working, not a regression) — switched to
 counting characters (`out.matches('x').count() == 200`) instead, which
 verifies the same "nothing was dropped" property without depending on
-exact spacing. `mjolnir-tui` 105 tests pass (104 + 1 new); full workspace
-`cargo test` (312 tests) and `cargo clippy -p mjolnir-tui --all-targets --
+exact spacing. `aldwin-tui` 105 tests pass (104 + 1 new); full workspace
+`cargo test` (312 tests) and `cargo clippy -p aldwin-tui --all-targets --
 -D warnings` both clean.
 
 **Progress (2026-09-02, decision panel becomes a numbered, arrow/digit-
@@ -1072,7 +1072,7 @@ tail, keyed on which `DecisionOutcome` variant it got rather than needing to
 re-inspect the payload). Ctrl+C is deliberately *not* wired to "whatever the
 list's last option is" — a Tool prompt's last option is "always deny," a far
 more consequential, harder-to-reverse action than the one-time decline
-Ctrl+C has always meant (mjolnir-tui.md's 2026-08-29 live-run fix and the
+Ctrl+C has always meant (aldwin-tui.md's 2026-08-29 live-run fix and the
 Pitfall below) — `decline_outcome()` maps it explicitly to the same low-stakes
 outcome as before, independent of list order.
 
@@ -1105,7 +1105,7 @@ sized to the *actual* rendered options-block length: a Tool prompt's full
 line), and a fixed guess would either truncate real, selectable options away
 or over-protect rows that aren't the list at all.
 
-Verified: `mjolnir-tui` 109 tests pass (105 + 4 new — a numbered
+Verified: `aldwin-tui` 109 tests pass (105 + 4 new — a numbered
 Approve/Deny list renders correctly, a Tool prompt's full 8-option list
 renders with correct numbering, the `▸` cursor marker moves when
 `decision_selected` changes, and the large-diff truncation guard still
@@ -1118,7 +1118,7 @@ input instead (`approval_card_enter_confirms_the_default_first_option`,
 `permission_prompt_resolves_on_a_numbered_selection_and_records_resolution`,
 plus the two queued-request regression tests updated to select by digit
 instead of by letter). Full workspace `cargo test` (316 tests) and `cargo
-clippy -p mjolnir-tui --all-targets -- -D warnings` both clean. Visually
+clippy -p aldwin-tui --all-targets -- -D warnings` both clean. Visually
 verified via the same disposable `TestBackend`-dump-to-`eprintln!` technique
 as the same-day entries above (not committed): both an Approve/Deny list and
 a full 8-option Tool-prompt list render with correct numbering and cursor
@@ -1203,12 +1203,12 @@ New regression test `a_pending_approval_takes_priority_over_an_already_pending_p
 approval resolves first through `handle_key` alone (public behavior — the
 resolved `Command` and which queue empties — not `pending_front()`'s own
 plumbing), so this stays a guarantee about what the developer actually
-experiences, not a test of the accessor's internals. `mjolnir-tui` 112 tests
+experiences, not a test of the accessor's internals. `aldwin-tui` 112 tests
 pass (111 + 1 new); full workspace `cargo test` (319 tests) and `cargo
-clippy -p mjolnir-tui --all-targets -- -D warnings` both clean.
+clippy -p aldwin-tui --all-targets -- -D warnings` both clean.
 
-`mjolnir-tui` 111 tests pass (109 + 2 new); full workspace `cargo test` (318
-tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
+`aldwin-tui` 111 tests pass (109 + 2 new); full workspace `cargo test` (318
+tests) and `cargo clippy -p aldwin-tui --all-targets -- -D warnings` both
 clean.
 
 **Progress (2026-09-02, directory-scope prompt option + humanized prompt
@@ -1219,7 +1219,7 @@ asked ("a human readable explanation... and then underneath in small/
 greyed out text what the raw tool call actually is"). Two changes, both
 scoped to a pending `PromptPayload::Tool` in the decision panel — no
 change to the Approve/Deny binary shape a pending `ToolApprovalRequested`
-(Edit) uses, per mjolnir's non-negotiable "Edit is never allowlistable."
+(Edit) uses, per aldwin's non-negotiable "Edit is never allowlistable."
 
 (1) `render_prompt_card` now shows a per-kind humanized sentence
 ("Claude wants to read a file") as the accent/bold title, with the
@@ -1231,21 +1231,21 @@ one string a developer had to parse.
 (2) A new Tab-toggleable scope for the tier options' persisted pattern
 (`App::decision_pattern_scope`, `PatternScope::{Exact,Directory}`) —
 available only when the payload says `path_like: true` (threaded from
-mjolnir-tools' new `Tool::permission_target_is_path`, through
-mjolnir-permissions' `check_tool`) and the target has an enclosing
+aldwin-tools' new `Tool::permission_target_is_path`, through
+aldwin-permissions' `check_tool`) and the target has an enclosing
 directory to broaden to (`App::directory_glob`: `"./crates/tui/src/
 ui.rs"` → `"./crates/tui/src/**"`; a bare filename with no `/` offers
 nothing). Deliberately *not* a 9th option or a doubled allow/deny×scope
-list — per this spec's own Pitfall-adjacent discipline (see mjolnir-
+list — per this spec's own Pitfall-adjacent discipline (see aldwin-
 permissions.md's "four-tier prompt growing a fifth option... each tier
 doubles cognitive load") the 8 tier labels stay exactly as they were;
 Tab flips which pattern they'd all persist, shown via a new dim hint
 line above the list (`ui::scope_hint_line`, `App::decision_scope_hint`)
 — "scope: this file (...) · Tab for this directory (...)" and its
 reverse once toggled. The chosen pattern rides in a new `pattern` field
-on `PromptResponse::Tool` (mjolnir-permissions), replacing the
+on `PromptResponse::Tool` (aldwin-permissions), replacing the
 dispatcher's old behavior of always persisting the exact target
-verbatim — see mjolnir-permissions.md/mjolnir-tools.md's matching
+verbatim — see aldwin-permissions.md/aldwin-tools.md's matching
 Progress notes for the wire-type and dispatcher side. Resets to `Exact`
 at the same three points `decision_selected` already resets (a fresh
 request becoming the new front, or `resolve_decision` popping to the
@@ -1257,9 +1257,9 @@ availability/absence, Tab toggling and its no-op case, the actual
 persisted-pattern round trip with and without toggling, and the reset-
 on-next-prompt guarantee) and 5 `ui.rs` tests (humanized title + dim raw
 call, their relative styling, the hint line's presence/wording in both
-scope states, and its absence for a non-path-like target). `mjolnir-tui`
+scope states, and its absence for a non-path-like target). `aldwin-tui`
 128 tests pass (112 + 16 new); full workspace `cargo test` and `cargo
-clippy -p mjolnir-permissions -p mjolnir-tools -p mjolnir-tui
+clippy -p aldwin-permissions -p aldwin-tools -p aldwin-tui
 --all-targets -- -D warnings` (this pass's actually-touched crates) both
 clean. `examples/preview.rs` gained a `prompt_path` scene exercising the
 new hint, alongside the existing `prompt` scene (a `shell` target, which
@@ -1328,7 +1328,7 @@ developer feedback, three items fixed together:
    over a bordered TUI can grab a border character" in general (still true
    of a deliberate Shift-drag, same as any other bordered terminal app,
    and out of this crate's control) — documented here rather than silently
-   assumed away. See `mjolnir-tui.md`'s Out of Scope bullet below, narrowed
+   assumed away. See `aldwin-tui.md`'s Out of Scope bullet below, narrowed
    accordingly (mirrors how the 2026-08-31 sidebar entry narrowed the
    split-pane rejection rather than reopening it outright).
 
@@ -1354,7 +1354,7 @@ developer feedback, three items fixed together:
    the Palette Decisions entry, "Minimal monochrome palette... blocked on
    the mascot palette question"), it just no longer depends on the
    terminal's ambient default color anywhere, so it can't clash with it
-   either. `TuiConfig.theme: Option<String>` (mjolnir-config) already exists
+   either. `TuiConfig.theme: Option<String>` (aldwin-config) already exists
    in the schema for a future real second (light-tuned) palette, but every
    past palette change in this file was screenshot-verified against a real
    render before shipping (see the `examples/preview.rs` harness and its
@@ -1375,15 +1375,15 @@ were unstyled — that was the bug, not the spec). `status_line_shows_
 activity_running_tools_and_message_count` (pre-existing) updated: it
 asserted the old generic "working" text was still present once a tool
 started running, which is no longer true by design once item 1 landed.
-`mjolnir-tui` 134 tests pass (128 + 6 new: 3 in `app.rs` for item 2, 3 in
+`aldwin-tui` 134 tests pass (128 + 6 new: 3 in `app.rs` for item 2, 3 in
 `ui.rs` for item 1 — item 4's test replaced an existing one rather than
 adding a new one, since the old assertion was pinning down the bug); full
-workspace `cargo test` (347 tests) and `cargo clippy -p mjolnir-tui
+workspace `cargo test` (347 tests) and `cargo clippy -p aldwin-tui
 --all-targets -- -D warnings` both clean.
 
 **Progress (2026-09-02, self-review of the batch above finds a real gap in
 item 1):** A manual audit of this session's own diff (correctness pass over
-`activity_label`/`run.rs`/`handle_mouse`, plus the mjolnir-config side of
+`activity_label`/`run.rs`/`handle_mouse`, plus the aldwin-config side of
 the same batch) found one confirmed, low-severity defect: `activity_label`'s
 single-running-tool arm read `one.name` directly, not through the same
 empty-name→`call_id` fallback (`App::apply_event`'s doc comment on
@@ -1396,8 +1396,8 @@ the two can't drift apart on this again. Confirmed via a deliberate revert
 of just the fix: `status_line_falls_back_to_the_call_id_for_a_running_tool_
 with_no_name` fails (asserting on the literal "using …" the pre-fix code
 produces) before confirming it passes against the shared-helper fix.
-`mjolnir-tui` 135 tests pass (134 + 1); full workspace `cargo test` (348
-tests) and `cargo clippy -p mjolnir-tui --all-targets -- -D warnings` both
+`aldwin-tui` 135 tests pass (134 + 1); full workspace `cargo test` (348
+tests) and `cargo clippy -p aldwin-tui --all-targets -- -D warnings` both
 clean.
 
 **Progress (2026-09-02, DIM/BRIGHT were still terminal-remappable — the
@@ -1432,10 +1432,10 @@ any terminal palette. Verified against the same reproducing Solarized Light
 xterm session (real 16-color `-xrm` overrides, not just `-bg`/`-fg`) before
 and after: the before capture shows the status-line metadata essentially
 invisible; the after capture, same palette, same scene, shows it clearly
-legible. `mjolnir-tui` 135 tests pass unmodified (no test hardcoded the old
+legible. `aldwin-tui` 135 tests pass unmodified (no test hardcoded the old
 `Color::White`/`Color::DarkGray` values directly — all reference the `DIM`/
 `BRIGHT` constants, which is exactly why none needed touching); full
-workspace `cargo test` (348 tests) and `cargo clippy -p mjolnir-tui
+workspace `cargo test` (348 tests) and `cargo clippy -p aldwin-tui
 --all-targets -- -D warnings` both clean.
 
 Lesson recorded plainly since it's a real process gap, not just a code one:
@@ -1455,7 +1455,7 @@ itself* to look light (matching a light terminal, not fighting it) any way
 to get that.
 
 `palette.rs` is now a `Palette` struct (every color as a field) with two
-fixed instances, `DARK` (`DARK`'s values are `mjolnir-tui`'s pre-existing
+fixed instances, `DARK` (`DARK`'s values are `aldwin-tui`'s pre-existing
 palette verbatim — zero visual change for anyone not opting in) and `LIGHT`
 (new: a light lavender-white background family mirroring `DARK`'s indigo-
 slate hue rather than flat neutral white, and every foreground/accent/diff/
@@ -1469,14 +1469,14 @@ per app theme either.
 
 Selected once at startup via a new `Theme` enum (`Dark`/`Light`) and
 `Theme::from_config`, which finally wires up `TuiConfig.theme: Option<
-String>` — present in mjolnir-config's schema since V0 but never read by
+String>` — present in aldwin-config's schema since V0 but never read by
 anything until now. `App` gained a `theme: Theme` field (`App::with_theme`,
 a builder method rather than a new `App::new` parameter, so the many
 existing `App::new(model, permissions)` call sites — tests, `examples/
-preview.rs`, mjolnir-cli's bootstrap — didn't all need to thread a theme
-through just to keep their existing `Dark` default); `mjolnir-cli`'s
+preview.rs`, aldwin-cli's bootstrap — didn't all need to thread a theme
+through just to keep their existing `Dark` default); `aldwin-cli`'s
 bootstrap resolves `config.global_tui().theme` into a `Theme` and passes it
-into `mjolnir_tui::run`, which threads it into `App::new(...).with_theme
+into `aldwin_tui::run`, which threads it into `App::new(...).with_theme
 (theme)` before the first draw. `tui.yaml`'s annotated header documents the
 field's two values.
 
@@ -1519,19 +1519,19 @@ either direction. New tests in `palette.rs`: `from_config` case-
 insensitivity and its default-to-`Dark` fallback (`None`, `"dark"`, garbage,
 empty string), `DARK != LIGHT`, and a cheap real-invariant check (`LIGHT`'s
 background is lighter and its primary text darker than `DARK`'s, by luma).
-`mjolnir-tui` 140 tests pass (135 + 5 new — no existing test needed touching
+`aldwin-tui` 140 tests pass (135 + 5 new — no existing test needed touching
 beyond passing `&DARK`/`&palette::DARK` explicitly at pure-function call
 sites, since `DARK`'s values are unchanged from what those tests already
 asserted against); full workspace `cargo test` (353 tests) and `cargo
-clippy -p mjolnir-tui -p mjolnir-cli --all-targets -- -D warnings` both
+clippy -p aldwin-tui -p aldwin-cli --all-targets -- -D warnings` both
 clean.
 
 **Progress (2026-09-02, `/theme` — switching from inside the harness, live,
 no restart):** Direct developer follow-up to the light-theme entry above:
 "shouldn't we add a slash command for users to select the theme from
-inside the harness itself?" mjolnir-cli's interceptor gained `/theme
+inside the harness itself?" aldwin-cli's interceptor gained `/theme
 light|dark` (see its own archived spec's post-archive addition for the
-command/config side) and mjolnir-core gained `Event::ThemeChanged { theme:
+command/config side) and aldwin-core gained `Event::ThemeChanged { theme:
 String }` (see its own matching post-archive addition) as the vehicle to
 reach a *running* TUI — the interceptor has no other way in, since it and
 the TUI only share the one `Event` channel.
@@ -1568,30 +1568,30 @@ command. Fixed, with a new regression test
 (`theme_command_word_is_dimmed_live_like_every_other_known_command`)
 guarding that one constant specifically, the same way
 `command_word_is_dimmed_live_even_mid_message` already guards `/exit`.
-`mjolnir-tui` 143 tests pass (140 + 3 new); `mjolnir-cli` 27 tests pass
+`aldwin-tui` 143 tests pass (140 + 3 new); `aldwin-cli` 27 tests pass
 (22 + 5 new, covering the no-argument report, persist-and-emit for both
 directions, case-insensitivity, and invalid-value rejection neither
 persisting nor emitting `ThemeChanged`); full workspace `cargo test`
 (361 tests) and
-`cargo clippy -p mjolnir-tui -p mjolnir-cli --all-targets -- -D warnings`
-both clean (`cargo clippy -p mjolnir-core` — the lib itself, not its
+`cargo clippy -p aldwin-tui -p aldwin-cli --all-targets -- -D warnings`
+both clean (`cargo clippy -p aldwin-core` — the lib itself, not its
 pre-existing test-module `single_match` finding disclosed in the
 2026-09-02 self-review Progress entry above and confirmed unrelated via a
 stash comparison — also clean).
 
-- **Layout (rewritten 2026-09-02 onto the Mjolnir Design System — see that Progress entry for the full account):** Seven bands top to bottom: a persistent 3-row top bar (`draw_top_bar` — `mjolnir` identity left, model/version right) and its 1-row rule; the body (full-width scrollable conversation log — no sidebar; the 2026-08-31/09-02 sidebar was already fully removed from the code before this pass, this corrects prose that had drifted stale); a 1-row spacer; a 1-row status line (live activity — `draw_status_line`); the decision panel (zero-height and invisible whenever nothing is pending); and the multi-line input area. `panel_max_height` reserves the top bar's and the decision panel's own chrome (title band + footer, applied outside `clamp_panel`'s budget) explicitly, so the two never silently exceed the frame between them.
+- **Layout (rewritten 2026-09-02 onto the Mjolnir Design System — see that Progress entry for the full account):** Seven bands top to bottom: a persistent 3-row top bar (`draw_top_bar` — `aldwin` identity left, model/version right) and its 1-row rule; the body (full-width scrollable conversation log — no sidebar; the 2026-08-31/09-02 sidebar was already fully removed from the code before this pass, this corrects prose that had drifted stale); a 1-row spacer; a 1-row status line (live activity — `draw_status_line`); the decision panel (zero-height and invisible whenever nothing is pending); and the multi-line input area. `panel_max_height` reserves the top bar's and the decision panel's own chrome (title band + footer, applied outside `clamp_panel`'s budget) explicitly, so the two never silently exceed the frame between them.
 - **Conversation Log:** Rendered inside a borderless, opaque `ground`-filled ratatui panel with a `Scrollbar` shown when content overflows the viewport. Append-only rendered view of core events; the welcome hero (see the 2026-09-02 Progress entry) only shows when the log is empty. Each `UserMessage`/`AssistantText` entry leads with a one-line `you`/`harness` speaker label (`speaker_you`/`speaker_agent`) — no filled chat-bubble background any more (2026-09-02; the design system's own `Prose`/`Turn` components carry none). Tool-activity entries lead with `●` (done, `glyph_done` or `del` on error) / `◐` (running, `glyph_running`) — no bracketed text tag, no `▸`/`✓`/`✗`. `RetryAttempt`/`Error`/`Notice` lead with a colored lowercase label word instead of a glyph (the design system's fixed glyph table has no roles for any of the three). Tool activity (ToolDispatched → ToolCompleted) renders inline as grouped entries per step. ThinkingStart/an active turn with no thinking block show an animated spinner (`◐◓◑◒`, 2026-09-02, replacing the earlier Braille cycle) in the status line only. Scroll: auto-follows new content when the view is at the bottom; disengages when the user scrolls up; re-engages on End. Line scroll via arrow keys or the mouse wheel; page scroll via PgUp/PgDn.
-- **Decision Panel (chrome rewritten 2026-09-02 onto the design system's Permission screen — behavior unchanged):** ToolApprovalRequested/PromptRequested render in a fixed full-width panel above the input (`ui::decision_panel_lines`), never inline while pending. Chrome: an accent-700 top rule, a title band (`permission`, no glyph, the payload's own kind badge right-aligned in `gauge_fill`), the body (humanized title, diff or raw call), the numbered options list (`▌` mark colored `mark`/`mark_idle` by selection, paired with a `band` background — no separate cursor glyph, no per-row shortcut letters), and a footer (`↑↓ to move   1-N to pick   ⏎ to confirm` left, `saved to .mjolnir/permissions.yaml` right). Enter confirms the selected option, a digit `1`-`9` jumps to and confirms one directly, Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending. Once resolved, the full card (diff included) still renders inline in the log as a permanent historical record.
+- **Decision Panel (chrome rewritten 2026-09-02 onto the design system's Permission screen — behavior unchanged):** ToolApprovalRequested/PromptRequested render in a fixed full-width panel above the input (`ui::decision_panel_lines`), never inline while pending. Chrome: an accent-700 top rule, a title band (`permission`, no glyph, the payload's own kind badge right-aligned in `gauge_fill`), the body (humanized title, diff or raw call), the numbered options list (`▌` mark colored `mark`/`mark_idle` by selection, paired with a `band` background — no separate cursor glyph, no per-row shortcut letters), and a footer (`↑↓ to move   1-N to pick   ⏎ to confirm` left, `saved to .aldwin/permissions.yaml` right). Enter confirms the selected option, a digit `1`-`9` jumps to and confirms one directly, Ctrl+C always resolves the safe one-time decline regardless of cursor position. Input is blocked while pending. Once resolved, the full card (diff included) still renders inline in the log as a permanent historical record.
 - **Input Area:** Multi-line textarea with a visible terminal cursor, an accent `▶` prompt glyph on its first line only (2026-09-02, `Composer.jsx`), dim placeholder text when empty, and Up/Down line navigation within the draft. Any word matching a known slash command dims live, anywhere it's typed on any line. Enter submits; Shift+Enter inserts a newline. Ctrl+C cancels the active turn or exits when idle. Input is blocked while a decision is pending.
 - **Status Line / Top Bar (2026-09-02, restructured onto the design system — see that Progress entry):** `draw_top_bar` is the static identity row (harness name, model, version) at the very top of the frame; `draw_status_line`, one row directly above the decision panel/input, is the live-activity row: a spinner plus activity label, model name, turn/step counter, any tools currently in flight (in `value`, uniformly — not hashed per name any more, since the design system's own `ToolLine` doesn't color by tool identity), a running message count, and a right-aligned Ctrl+C hint. There is no sidebar. Neither band participates in `ScrollState` — only the log panel scrolls.
 - **Palette (rebuilt 2026-09-02 onto the Mjolnir Design System — see that Progress entry for the full field-by-field account):** `palette.rs`'s `Palette` struct now mirrors the design system's own `--tui-*` semantic tokens (31 fields — `ground`/`bar`/`bar_bottom`/`line`/`rule`/`text`/`body`/`code`/`context`/`value`/`label`/`dim`/`quiet`/`mark`/`mark_idle`/`band`/`accent_text`/`speaker_you`/`speaker_agent`/`gauge_fill`/`gauge_track`/`glyph_done`/`glyph_running`/`glyph_pending`/`hunk_header`/`modal_line`/`diff_box`/`add`+`add_bg`+`add_code`/`del`+`del_bg`+`del_code`), not the old flat `dim`/`bright`/`user_fg`/`bg_*`/`code_*`/`diff_*_fg`/`diff_*_bg`/`warning_fg`/`panel_border`/`tool_palette` set — every value is the design system's own resolved hex (dark ground `#161826`, accent dusty azure `#84aed9`), not hand-picked. `DARK`/`LIGHT` selected once at startup via `Theme::from_config`/`TuiConfig.theme`, switchable live via `/theme`, threaded explicitly through `ui.rs`'s render functions — unchanged mechanism, only the field set changed. Text hierarchy is now `text` (primary, the "you" turn's content) / `body` (agent prose) / `code` / `context` (stdout) / `value` (right-flush facts) / `label` (muted labels) / `dim` (dimmest metadata) / `quiet` (quietest tier) — replacing the old two-tier `bright`/`dim` split. Rules are flat, single-color (`rule`, one step more muted than `line`) — not Nocturne's fading-gradient signature the design system's own token layer still ships but whose revision log marks unused by the actual reference screens. No per-tool-name color hashing any more (`tool_color`/`TOOL_PALETTE` removed outright — the reference `ToolLine` doesn't do this). Permission allow/deny states (`access_spans`) render as plain colored text (`add`/`del`), not a filled chip — the design system's own rule is that the accent is "a mark or a line, never a filled field," and none of its components use a background-filled badge for a state word. Fenced code blocks sit on `diff_box`, the system's one nested-quote surface, in both themes. *(Corrected 2026-09-03 — see that Progress entry: this was a fixed theme-invariant `CODE_SYNTAX_BG` while `highlight.rs` was pinned to a dark `syntect` theme; the highlighter now picks the matching half of the `base16-ocean` pair from `Palette::theme`, so the surface no longer has to stay dark in a light session.)*
 
 **Progress (2026-09-02, full visual redesign onto the Mjolnir Design System):**
-The developer imported a new design system (`claude.ai/design`, project "Mjolnir
+The developer imported a new design system (`claude.ai/design`, project "Aldwin
 Design System", plus a second scratch project "Design system tokens
 discussion" holding the actual handoff bundle and its revision log — the
 source of record for every concrete decision below) and asked for it applied
-to mjolnir's existing functionality: same interactions, new look, small
+to aldwin's existing functionality: same interactions, new look, small
 layout refactors acceptable, no new features. This is a visual/layout pass
 only — every keybinding, gate, queueing, and scroll behavior this file
 already documents is unchanged; only how it's drawn changed.
@@ -1633,16 +1633,16 @@ structural addition, not a bare reskin).** Every one of the design system's
 five reference screens opens with a persistent 3-row identity bar plus a
 1-row rule (`TopBar.jsx`, `tokens/cells.css`'s `--bar-top-h`); the
 2026-08-31 redesign had folded identity into the single status line instead.
-`draw_top_bar` restores it: `mjolnir` in `text`, no glyph (the design
+`draw_top_bar` restores it: `aldwin` in `text`, no glyph (the design
 system's own revision log: "the top bar carries no accent mark: the name is
 the brand, and a pip there indicated nothing") on the left; model name and
 build version on the right (the reference's `model · gauge · cost` group
-doesn't port literally — mjolnir tracks neither a context-window gauge nor a
+doesn't port literally — aldwin tracks neither a context-window gauge nor a
 per-session cost anywhere in `StatusInfo`, so neither is fabricated).
 `draw_status_line` keeps the live-activity job it already had (spinner,
 activity label, turn/step, running tools, message count) and gains a
 right-aligned Ctrl+C hint (`^c to cancel`/`^c to exit`, matching
-`StatusLine.jsx`'s own `right` prop, adapted to Mjolnir's real binding).
+`StatusLine.jsx`'s own `right` prop, adapted to Aldwin's real binding).
 
 **Hero.** The hand-traced Braille hammer (`MJOLNIR_ART`) and FIGlet
 wordmark (`WORDMARK_ART`) are gone outright — not trimmed, removed — per the
@@ -1674,13 +1674,13 @@ code-text color (`add`/`del` vs. `add_code`/`del_code`), matching
 
 **Decision panel.** The source's own revision log settled this screen
 *back* onto a bottom-anchored full-width panel after trying a centered
-modal-with-scrim — i.e. the exact shape mjolnir already had from the
+modal-with-scrim — i.e. the exact shape aldwin already had from the
 2026-09-02 decision-panel entry above — so no layout reversal was needed
 here, only chrome: a `panel_band` (accent-700 top rule + an accent-900
 title band reading `permission`, no glyph, with the payload's own kind
 right-aligned in `gauge_fill` — "bash"/"read"/"edit"/etc., mirroring
 `Modal.jsx`'s `badge` prop) and a footer (`↑↓ to move   1-N to pick   ⏎ to
-confirm` left, `saved to .mjolnir/permissions.yaml` right, no `esc to
+confirm` left, `saved to .aldwin/permissions.yaml` right, no `esc to
 close` — a permission has to be answered, so there's no escape hatch key to
 advertise). Both are assembled *outside* `clamp_panel`'s truncation budget
 now (`decision_panel_lines` applies them after clamping, not before) —
@@ -1697,7 +1697,7 @@ distinct glyph.
 
 **Composer.** `draw_input` gained `Composer.jsx`'s accent `▶` prompt glyph
 on the textarea's first line (continuation lines don't carry it — multi-line
-drafts are mjolnir's own extension beyond the reference's single-line
+drafts are aldwin's own extension beyond the reference's single-line
 composer). This is the one place the redesign touched the cursor-placement
 code this file's history treats carefully: the glyph's 2-column width has
 to be added back into `draw_input`'s `set_cursor_position` math for line 0
@@ -1709,7 +1709,7 @@ started (only stray doc-comment mentions remained, cleaned up here) — the
 relative to the code even before the design-system import; this pass is
 what finally corrects that prose (see the Design section below).
 
-**Verified:** 139 `mjolnir-tui` tests pass (138 existing, reworked in place
+**Verified:** 139 `aldwin-tui` tests pass (138 existing, reworked in place
 where they pinned old field names/glyphs/wording, plus one new regression
 test for the composer cursor fix — none deleted for coverage, only for
 features that no longer exist: the mascot-art shape/gradient tests and the
@@ -1719,8 +1719,8 @@ describes doing repeatedly (widening for the ANSI Shadow wordmark, again
 for the chat-padding pass) — the new top bar plus decision-panel chrome
 raises the realistic minimum terminal size a full 8-tier permission prompt
 needs room for. Full workspace `cargo test` (356 tests) and `cargo clippy -p
-mjolnir-tui --all-targets -- -D warnings` both clean; a pre-existing,
-unrelated `single_match` clippy failure in `mjolnir-core::agent.rs`'s own
+aldwin-tui --all-targets -- -D warnings` both clean; a pre-existing,
+unrelated `single_match` clippy failure in `aldwin-core::agent.rs`'s own
 test module (already disclosed in this file's 2026-09-02 self-review
 Progress entry above) reconfirmed present with this pass's changes stashed
 out, via the same stash-comparison discipline that entry established.
@@ -1790,7 +1790,7 @@ directly:
   when the harness is speaking about it; fixed across every
   `humanize_*`/`ApprovalCard` title.
 - **Top bar showed no working directory.** The reference's identity group
-  is always `mjolnir   ~/src/gateway` (`· branch*` too, but mjolnir tracks
+  is always `aldwin   ~/src/gateway` (`· branch*` too, but aldwin tracks
   no git state anywhere and a runtime git shell-out is a real new
   capability, not a display fix — left out, disclosed, not silently
   faked). `current_dir_display` adds the cwd, `~`-shortened, using only
@@ -1804,14 +1804,14 @@ directly:
   instead of a two-state guess).
 
 Verified two ways per fix, not just by reading the diff: `cargo test`
-(140 `mjolnir-tui`, 358 workspace, all passing — several existing tests
+(140 `aldwin-tui`, 358 workspace, all passing — several existing tests
 needed taller `TestBackend`s, since the corrected chrome has a real,
 larger minimum size than the first pass's under-built version did, the
 same category of change this file's history already describes doing
 repeatedly) and a second round of `examples/preview.rs` screenshots,
 compared frame-by-frame against the same Chromium-rendered reference used
 to find the bugs — not just against the first pass's own (wrong) output.
-`cargo clippy -p mjolnir-tui --all-targets -- -D warnings` clean.
+`cargo clippy -p aldwin-tui --all-targets -- -D warnings` clean.
 
 Lesson recorded plainly since it's a real process gap: reading a design
 system's component source and prose is not the same as looking at its
@@ -1886,7 +1886,7 @@ directly: `the_status_line_sits_below_the_composer_not_above_it` (order, not
 coordinates, so a height change can't silently flip it back),
 `speaker_rows_sit_on_the_grids_label_and_body_columns`, and
 `the_transcript_dims_while_a_decision_panel_is_open`. Whole workspace green
-(143 in `mjolnir-tui`), `cargo clippy -p mjolnir-tui --all-targets` clean,
+(143 in `aldwin-tui`), `cargo clippy -p aldwin-tui --all-targets` clean,
 both themes re-screenshotted against the Chromium-rendered reference.
 
 Lesson, again a process one: the token layer and the component prose were
@@ -1903,7 +1903,7 @@ them defects and one a design question answered by the developer directly.
   `/theme`. `cancel_or_quit` decided whether a turn was running by scanning
   the log backwards for the most recent `UserMessage` ("running") or
   `TurnEnded` ("finished"). A slash command is submitted like any other
-  message, so `submit` logs a `UserMessage` for it — but mjolnir-cli's
+  message, so `submit` logs a `UserMessage` for it — but aldwin-cli's
   interceptor answers `/theme`, `/help`, `/reload-config` and any unknown
   command itself: the core never sees them, no turn starts, and no
   `TurnEnded` is ever appended. From the first such command onward the scan
@@ -1928,9 +1928,9 @@ them defects and one a design question answered by the developer directly.
   used to be the only such line, and rendered for path-like targets only,
   which is exactly why a shell prompt explained nothing). `DecisionOption`
   gained a `detail` column saying what each answer does: "this call only;
-  nothing is saved", "saved to .mjolnir/permissions.yaml", "saved to
-  ~/.mjolnir/permissions.yaml". The panel footer's standing "saved to
-  .mjolnir/permissions.yaml" note is gone — it was true of exactly one tier
+  nothing is saved", "saved to .aldwin/permissions.yaml", "saved to
+  ~/.aldwin/permissions.yaml". The panel footer's standing "saved to
+  .aldwin/permissions.yaml" note is gone — it was true of exactly one tier
   on offer, an unconditional falsehood under every prompt.
 - **"Do we need all of the deny options?"** No, and the developer chose the
   narrower list: four allow tiers and one `Deny` (tier `Once`), down from
@@ -1948,7 +1948,7 @@ Tests: the Ctrl+C fix is pinned by
 `the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved`, and
 `the_option_detail_column_is_dropped_rather_than_wrapped_on_a_narrow_frame`
 (the detail column is dropped wholesale below its fit width, never wrapped
-per-row into a ladder). 150 in `mjolnir-tui`, whole workspace green, clippy
+per-row into a ladder). 150 in `aldwin-tui`, whole workspace green, clippy
 clean on the touched crates. The panel was read back as a real render before
 being called done, per this file's standing discipline — that pass is what
 caught the rule line sitting flush against the near-identical raw-call line
@@ -1965,13 +1965,13 @@ above it, now parted by a padding row.
 
 - **Minimal monochrome palette with one accent color in V0.** — Avoids colour decisions blocked on the open mascot palette. One accent is sufficient to make the approval card unmistakable. Rich theming deferred until the mascot palette is settled. *Extended, not reopened, across several 2026-08-29/08-31 Progress entries:* a small, cohesive set of semantic colors (diff add/remove, code, user tint, warning) was added incrementally, each scoped to one clear role — this is still a fixed, hardcoded palette, not the configurable/user-selectable "rich theming" this decision deferred; that remains blocked on the mascot palette question.
 
-- **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in mjolnir-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
+- **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in aldwin-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 
 - **Input blocked while an approval card is pending.** — Structural friction — the developer cannot queue submissions while an edit awaits approval. Consistent with "Edit is never allowlistable in any configuration" from the parent spec.
 
 ## Steps
 
-1. Create crates/tui — Cargo.toml with ratatui, crossterm, tokio; depends on mjolnir-core.
+1. Create crates/tui — Cargo.toml with ratatui, crossterm, tokio; depends on aldwin-core.
 
 2. Define App struct: core event receiver, command sender, log snapshot, approval-pending flag, input buffer.
    - Why: Approval-pending flag drives input-blocking; keeping it on App avoids threading it through every handler.
@@ -2074,7 +2074,7 @@ unchanged apart from the two fixes.
 
 **Progress (2026-09-03, version reporting + snapshot determinism):** the
 developer reported that the TUI's top bar showed `v0.1.0` on a v0.1.11
-build, and that `mjolnir --version` was wrong the same way. One root cause:
+build, and that `aldwin --version` was wrong the same way. One root cause:
 releases were tag-only. `Cargo.toml`'s workspace version sat at `0.1.0`
 through eleven tagged releases, and both the top bar and clap's `version`
 read `CARGO_PKG_VERSION`, so every build in that stretch reported `0.1.0`
@@ -2085,7 +2085,7 @@ because the manifest and the tag never met anywhere.
   `release.yml` fails the build when a `v*` tag disagrees with it, which is
   what stops the two drifting again.
 - `version.rs` holds `VERSION`, `GIT_HASH` and `VERSION_FULL`
-  (`0.1.12 (a1b2c3d4)`). `mjolnir --version` prints the full form: on this
+  (`0.1.12 (a1b2c3d4)`). `aldwin --version` prints the full form: on this
   harness most builds sit after the last tag, so the release number alone
   cannot tell two of them apart.
 - `StatusInfo` gained `version`, `commit` and `cwd`, filled by `App::new`.
@@ -2202,7 +2202,7 @@ against its markup alone:
 Verified by re-rendering all six scenes in both themes and comparing against
 a Chromium render of `Agent TUI v2.dc.html`'s own `4a` and `5a` frames, not
 against the previous pass's output. `cargo test --workspace` green (155 in
-`mjolnir-tui`), `cargo clippy -p mjolnir-tui --all-targets -D warnings`
+`aldwin-tui`), `cargo clippy -p aldwin-tui --all-targets -D warnings`
 clean. `render.snap` regenerated deliberately after eyeballing the frames.
 
 **Progress (2026-09-03, follow-up — the border was still not on the bar's
@@ -2464,21 +2464,21 @@ box-drawing glyph anywhere.
 **Progress (2026-09-06, screen 5d — first run):** Built. `crates/tui/src/
 first_run.rs` holds the state and its own terminal loop; `crates/tui/src/ui/
 first_run.rs` draws it. It runs *before* the session TUI because the model
-answer decides which LLM client `mjolnir-cli`'s bootstrap constructs, so it
+answer decides which LLM client `aldwin-cli`'s bootstrap constructs, so it
 cannot be a mode inside `App`.
 
 Triggered by either question being unanswered: no provider config resolves
-(the model is unknown), or the project has no `.mjolnir/permissions.yaml`
+(the model is unknown), or the project has no `.aldwin/permissions.yaml`
 (this directory's access posture is undeclared). Only the unanswered steps
 are shown, and the `n of m` counter reads off that list — entering a new
 directory with a model already configured asks one question, not two.
 
 Faithful to the design system's Brand mark and First run sections: a one-row
-reverse-video wordmark (`  M J O L N I R  `, accent as ground, desk as ink —
+reverse-video wordmark (`  A L D W I N  `, accent as ground, desk as ink —
 never the multi-row block that was built and cut), the positioning line in
 `--tui-dim`, three blank rows between sections, the shared option row
 (`▌`, two spaces, a 16-cell name field, then a purpose statement), and
-`config → ~/.mjolnir/` in the footer.
+`config → ~/.aldwin/` in the footer.
 
 Three deliberate deviations, each because the design's own wording would have
 been false here:
@@ -2551,9 +2551,9 @@ changed:
 1. The permission panel's option rows still derive their name column from
    the longest label instead of the system's fixed 16-cell field, so the
    panel's list and first run's list are two geometries for what the design
-   calls one control. The cause is upstream of the grid — Mjolnir's option
+   calls one control. The cause is upstream of the grid — Aldwin's option
    labels are sentences ("Allow for this session", 22 cells) that cannot fit
-   16, and Mjolnir added a detail column the reference's `5a` has no
+   16, and Aldwin added a detail column the reference's `5a` has no
    equivalent for. Fixing it means shortening permission copy.
 2. Markdown headings render `BOLD | UNDERLINED`, where the design says one
    size and one weight throughout and that "hierarchy is color and
@@ -2562,7 +2562,7 @@ changed:
 
 **Progress (2026-09-06, thinking flag outlives its turn):** Found while
 wiring Proton's Lumo in as an OpenAI-compatible provider (see
-`.claude/spec/archive/mjolnir-llm.md`'s entry of the same date), not by a
+`.claude/spec/archive/aldwin-llm.md`'s entry of the same date), not by a
 TUI change. `App::thinking` was cleared only by `Event::ThinkingEnd` and
 `HistoryCleared`, so a stream that died mid-thinking — transport error,
 idle timeout, anything that ends a turn without the closing event — left
@@ -2613,7 +2613,7 @@ Two earlier deviations are now closed, and one stays:
    cells 3–10 and asserts the 2-cell gutter behind it stays blank.
 2. **`/model` in the prose is now true.** The clause was dropped twice for
    naming a command that did not exist; `/model [provider/]model` was built
-   alongside this (see `.claude/spec/archive/mjolnir-cli.md`).
+   alongside this (see `.claude/spec/archive/aldwin-cli.md`).
 3. **`/access` is still dropped.** The access step's design copy promises
    "/access changes it later" and there is no such command, so the sentence
    ends at "Which actions run without asking." A test asserts the string
@@ -2625,14 +2625,14 @@ fourth curated row. It is the one row whose copy — "local models · no key" �
 the harness cannot honour: `api_key_env` is required in `provider.yaml` and
 the OpenAI-compatible client refuses to start when the variable it names is
 unset, so the row would be an option that cannot open a session. See
-`.claude/spec/archive/mjolnir-llm.md`'s catalogue note.
+`.claude/spec/archive/aldwin-llm.md`'s catalogue note.
 
 Layering: this crate still does not know what an endpoint or a key variable
 is. `ProviderChoice { id, purpose }` is the display half of a catalogue row,
-handed in by mjolnir-cli, and `Answers::provider` is the id handed back —
+handed in by aldwin-cli, and `Answers::provider` is the id handed back —
 an `Option`, so the access-only run cannot overwrite a provider it never
 asked about. `MODELS` and `ModelChoice` are gone from this crate; the
-catalogue that replaced them is `mjolnir_llm::PROVIDERS`.
+catalogue that replaced them is `aldwin_llm::PROVIDERS`.
 
 `FirstRun::default()` is now `#[cfg(test)]` and builds a stand-in catalogue
 (`alpha`…`foxtrot`, three curated) rather than the real one, so a test does
@@ -2650,7 +2650,7 @@ round's own new code.
 
 **The identity bar's working directory sat on cell 16.** Both top bars —
 `chrome::draw_top_bar` and first run's — put `--group-gap`'s six cells
-between `mjolnir` and the cwd. Cell 16 is a position no token in
+between `aldwin` and the cwd. Cell 16 is a position no token in
 `cells.css` names. The reference's own `4a`, `5a`, `5c` and `5d` bars all
 put the directory *three* cells after the seven-letter name, which is cell
 13 — the body column, the same cell a transcript turn's content starts on.
@@ -2673,7 +2673,7 @@ else.
 
 **First run re-asked a question the directory had already answered.**
 `FirstRun::new` took only `ask_provider`, and put `Step::Access` in the
-list unconditionally — so losing `~/.mjolnir/provider.yaml` in a project
+list unconditionally — so losing `~/.aldwin/provider.yaml` in a project
 that already had a `permissions.yaml` re-asked the access question. That is
 worse than noise: `bootstrap` writes the answer with `Config::add_grant`,
 which only ever *adds*, so an answer of `all` in that state would silently
@@ -2702,7 +2702,7 @@ when trying to do it via slash commands it says the model is already
 selected when it isn't." Both halves were real, and the first had a cause
 outside this crate.
 
-*Onboarding.* `Store::init_global_if_empty` seeded `~/.mjolnir/provider.yaml`
+*Onboarding.* `Store::init_global_if_empty` seeded `~/.aldwin/provider.yaml`
 with `anthropic` / `claude-sonnet-5`, and it ran **before** the first-run
 screen's own test for whether the question was open
 (`config.global_provider().is_err()`, `bootstrap.rs`). The seed had always
@@ -2747,8 +2747,8 @@ by both.
 
 The picker **answers by typing the command**: committing submits
 `/model <provider>/<model>` exactly as if the developer had typed it, so
-mjolnir-cli's interceptor stays the only thing that decides which scope the
-write lands in and what is reported. Per mjolnir-cli.md the CLI owns the
+aldwin-cli's interceptor stays the only thing that decides which scope the
+write lands in and what is reported. Per aldwin-cli.md the CLI owns the
 dispatch table; a picker that wrote `provider.yaml` itself would be a second
 implementation of `/model` in the frontend, free to disagree with the first.
 It opens on the row the session is running on and marks it `· current`, and
@@ -2764,14 +2764,14 @@ Not fixed, and worth knowing: a *bare model id* is still written onto
 whatever endpoint is configured, so `/model claude-opus-5` in a Lumo
 project saves `openai-compatible` + Lumo's `base_url` + `claude-opus-5` and
 reports success — a config that fails at the host on the next start. The
-catalogue is a seed rather than a ceiling (`mjolnir-llm`'s own note), so
+catalogue is a seed rather than a ceiling (`aldwin-llm`'s own note), so
 refusing an unlisted id is not obviously right; the picker sidesteps it,
 and the text form still does not.
 
 **Progress (2026-09-06, the model switch actually switches):** Two reports,
 one about each half of the same round above. "When switching models, I
 notice the top and bottom bars are not reflected with the new model name",
-and "when there is no `.mjolnir` directory in the current path mjolnir is
+and "when there is no `.aldwin` directory in the current path aldwin is
 invoked from, the onboarding screen does not allow for a model to be
 selected."
 
@@ -2781,7 +2781,7 @@ The notice said "this session keeps …, restart to use it," which is a
 frontend explaining a limitation of its own wiring rather than a limitation
 of the problem. `Agent<C, D>` does own its client for the life of the
 process — but it does not have to own the *same* client. It is now handed a
-`ClientHandle` (mjolnir-cli's `bootstrap`), an `Arc<RwLock<Arc<AnyLlmClient>>>`
+`ClientHandle` (aldwin-cli's `bootstrap`), an `Arc<RwLock<Arc<AnyLlmClient>>>`
 whose `LlmClient::stream` resolves the inner client once, when a request
 starts, and holds it for that request: a swap landing mid-turn cannot pull
 the client out from under a stream already running, and the next turn picks
@@ -2814,7 +2814,7 @@ what supplies the setting, and only a *changed* one is written.
 Where it is written changed with it. A true first run still writes global —
 a project-scope file would leave every other directory unconfigured. But
 once a global default exists, an answer given while onboarding a directory
-is about that directory, and lands in its own `.mjolnir/provider.yaml`
+is about that directory, and lands in its own `.aldwin/provider.yaml`
 beside the `permissions.yaml` the same screen is already writing. Picking a
 model for one project must not silently move the default everywhere.
 
@@ -3666,11 +3666,31 @@ specified, and it is not separable from the wheel while capture stays off (which
 it must, or text selection goes) — but it is a real rough edge worth a decision
 of its own rather than a silent change here.
 
+**Progress (2026-09-21, the rebrand: Mjolnir → Aldwin):** A name change, and
+the only thing in this crate it moved is a width. `BRAND` went from seven
+letters to six, so the identity bar's pad went from three cells to four — the
+*position* did not move, because `brand_pad()` has always been
+`CONTENT_INDENT - MARGIN_X - BRAND.width()` rather than a literal 3, and the
+cwd still lands on cell 13 in every scene
+(`the_identity_bar_puts_the_working_directory_on_the_body_column`, unchanged
+and still passing). The first-run wordmark is the one place a number had to
+move: the rule is the **two-space pad, one space between letters**, from which
+`  M J O L N I R  ` derived a 17-cell field and `  A L D W I N  ` derives 15.
+The reference frames still spell the old name, so the app and the design now
+disagree on that width by design — recorded as `wordmark-letters-are-the-old-name`
+in `crates/review/baseline.json` and retired when the design system is renamed
+upstream and re-synced (`aldwin-open-tasks.md` entry 2a). `render.snap` and the
+three README screenshots were regenerated; stages 0–4 of the review loop are
+clean. Everything else was the name itself: crates `mjolnir-*` → `aldwin-*`,
+binary `mjolnir` → `aldwin`, config dir `~/.mjolnir/` → `~/.aldwin/` (with
+`migrate_legacy_global_dir` chaining both rebrands, newest-first), and the
+repository `mjolnir-harness` → `aldwin-agent`.
+
 ## References
 
-- .claude/spec/mjolnir.md — parent spec; layout decisions, UX posture, Edit friction rules.
-- .claude/spec/mjolnir-core.md — event/command types, turn/step model, thinking-content contract.
-- .claude/spec/mjolnir-tools.md — ToolApprovalRequested semantics, ApproveTool command.
+- .claude/spec/aldwin.md — parent spec; layout decisions, UX posture, Edit friction rules.
+- .claude/spec/aldwin-core.md — event/command types, turn/step model, thinking-content contract.
+- .claude/spec/aldwin-tools.md — ToolApprovalRequested semantics, ApproveTool command.
 - https://ratatui.rs/ — ratatui.
 - https://docs.rs/crossterm/ — crossterm terminal backend.
 

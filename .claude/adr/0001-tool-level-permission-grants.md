@@ -12,8 +12,8 @@
 > disagreeing.
 
 **Originally accepted:** 2026-09-06
-**Supersedes:** the exact-argv grant unit described in `mjolnir-permissions.md`
-**Affects:** `mjolnir-permissions`, `mjolnir-tui` (prompt copy, first run), `.mjolnir/permissions.yaml`
+**Supersedes:** the exact-argv grant unit described in `aldwin-permissions.md`
+**Affects:** `aldwin-permissions`, `aldwin-tui` (prompt copy, first run), `.aldwin/permissions.yaml`
 
 ## Context
 
@@ -74,14 +74,14 @@ the tree cannot be granted at all.
 
 ### 3. Scope is directory × duration, which the existing scopes already are
 
-"This directory" is the project scope — `.mjolnir/permissions.yaml` in the
+"This directory" is the project scope — `.aldwin/permissions.yaml` in the
 project root. "Always" is that file; "session" is the in-memory session grant
 already held by the engine. No new scope is introduced; the three that exist
 (session, project, global) are relabelled in the UI to say what they mean.
 
 ### 4. A directory with no permissions file is a first run
 
-Entering a project that has no `.mjolnir/permissions.yaml` is the trigger for
+Entering a project that has no `.aldwin/permissions.yaml` is the trigger for
 the first-run screen (design system screen `5d`). The screen asks two questions
 — model, then access posture for this directory — and writes both.
 

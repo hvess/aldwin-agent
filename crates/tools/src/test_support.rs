@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use mjolnir_core::{DispatchContext, Event, PendingMap, StepId, TurnId};
+use aldwin_core::{DispatchContext, Event, PendingMap, StepId, TurnId};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -27,7 +27,7 @@ pub const ALWAYS_DENY: FixedApproval = FixedApproval(false);
 
 /// Builds a real `DispatchContext` (via core's now-public constructor) plus
 /// a held-out clone of the event receiver and the `call_id`-keyed pending
-/// map (see `mjolnir_core::PendingReply`), so a test can resolve the round
+/// map (see `aldwin_core::PendingReply`), so a test can resolve the round
 /// trip itself exactly as `Agent`'s command loop does in production.
 pub fn dispatch_context() -> (DispatchContext, mpsc::Receiver<Event>, PendingMap) {
     let (tx, rx) = mpsc::channel(16);

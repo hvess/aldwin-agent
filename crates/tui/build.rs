@@ -1,4 +1,4 @@
-//! Embeds the current git commit into `MJOLNIR_GIT_HASH` at compile time,
+//! Embeds the current git commit into `ALDWIN_GIT_HASH` at compile time,
 //! for the welcome banner (`ui::intro_lines`). `CARGO_PKG_VERSION` alone
 //! (the workspace's shared `0.1.0`) doesn't move between commits on this
 //! actively-developed harness, so it can't tell a developer which build
@@ -34,7 +34,7 @@ fn main() {
         .unwrap_or(false);
 
     let hash = if dirty { format!("{hash}-dirty") } else { hash };
-    println!("cargo:rustc-env=MJOLNIR_GIT_HASH={hash}");
+    println!("cargo:rustc-env=ALDWIN_GIT_HASH={hash}");
 
     // Best-effort rebuild trigger on a new commit or checkout — workspace
     // root is two levels up from this crate. Not watching refs/heads too:

@@ -26,11 +26,11 @@ pub enum GrantList {
 /// Result of [`Config::init_global_if_empty`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitOutcome {
-    /// `~/.mjolnir/` did not exist; created it and wrote all four annotated files.
+    /// `~/.aldwin/` did not exist; created it and wrote all four annotated files.
     Created,
-    /// `~/.mjolnir/` exists and all four domain files are present.
+    /// `~/.aldwin/` exists and all four domain files are present.
     AlreadyPresent,
-    /// `~/.mjolnir/` exists but is missing one or more domain files. The
+    /// `~/.aldwin/` exists but is missing one or more domain files. The
     /// caller must refuse to start rather than auto-fill the gap.
     PartiallyPresent { missing: Vec<&'static str> },
 }
@@ -61,7 +61,7 @@ struct Inner {
     project_context_files: RwLock<ContextFilesConfig>,
 }
 
-/// Typed access to Mjolnir's on-disk config. Cheap to clone — internally an
+/// Typed access to Aldwin's on-disk config. Cheap to clone — internally an
 /// `Arc`, so every clone shares the same in-memory snapshots. Reads never
 /// touch disk; they answer from the snapshot loaded at [`Config::open`] or
 /// refreshed by [`Config::reload_all`].
@@ -92,22 +92,33 @@ fn load_provider(path: &Path) -> Result<Option<ProviderConfig>, ConfigError> {
     Ok(Some(cfg))
 }
 
-/// One-time best-effort migration for the Amundsen→Mjolnir rebrand:
-/// existing installs have their config at the old `~/.amundsen/`. If the
-/// new `~/.mjolnir/` doesn't exist yet but the old one does, move it over
-/// so a rebuild-and-reinstall doesn't silently orphan a developer's
-/// existing permissions grants and provider config behind a renamed
-/// directory `Config::open` no longer looks at. Best-effort: a failed
-/// rename (e.g. a cross-device home directory) just leaves `global_dir`
-/// nonexistent, which `init_global_if_empty` already treats as a normal
-/// fresh install — migration must never block startup.
+/// One-time best-effort migration across the project's two rebrands:
+/// Amundsen→Mjolnir, then Mjolnir→Aldwin. Existing installs have their
+/// config at `~/.mjolnir/`, and installs that never saw the middle name at
+/// `~/.amundsen/`. If the new `~/.aldwin/` doesn't exist yet but one of the
+/// old ones does, move it over so a rebuild-and-reinstall doesn't silently
+/// orphan a developer's existing permissions grants and provider config
+/// behind a renamed directory `Config::open` no longer looks at.
+///
+/// The order is newest-first, so a machine carrying both — one that upgraded
+/// through the first rebrand while an empty `.amundsen/` was recreated by an
+/// older binary — takes the one that was last in use. Only one dir is ever
+/// moved; the other is left where it is rather than merged, because merging
+/// two permissions files means choosing between them silently.
+///
+/// Best-effort: a failed rename (e.g. a cross-device home directory) just
+/// leaves `global_dir` nonexistent, which `init_global_if_empty` already
+/// treats as a normal fresh install — migration must never block startup.
 fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
     if new_dir.exists() {
         return;
     }
-    let legacy_dir = home.join(".amundsen");
-    if legacy_dir.exists() {
-        let _ = std::fs::rename(&legacy_dir, new_dir);
+    for legacy in [".mjolnir", ".amundsen"] {
+        let legacy_dir = home.join(legacy);
+        if legacy_dir.exists() {
+            let _ = std::fs::rename(&legacy_dir, new_dir);
+            return;
+        }
     }
 }
 
@@ -138,12 +149,12 @@ fn retire_v1_permissions(path: &Path) -> Option<PathBuf> {
 
 impl Config {
     /// Read every existing layer once, resolving global scope to
-    /// `~/.mjolnir/`. See [`Config::open_at`] for the same thing with an
+    /// `~/.aldwin/`. See [`Config::open_at`] for the same thing with an
     /// explicit global root (used by tests, so they never touch the real
     /// home directory).
     pub fn open(project_root: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
-        let global_dir = home.join(".mjolnir");
+        let global_dir = home.join(".aldwin");
         migrate_legacy_global_dir(&home, &global_dir);
         Self::open_at(project_root, global_dir)
     }
@@ -157,7 +168,7 @@ impl Config {
         global_dir:   impl Into<PathBuf>,
     ) -> Result<Self, ConfigError> {
         let global_dir = global_dir.into();
-        let project_dir = project_root.as_ref().join(".mjolnir");
+        let project_dir = project_root.as_ref().join(".aldwin");
 
         let mut retired = Vec::new();
         for dir in [&project_dir, &global_dir] {
@@ -218,10 +229,10 @@ impl Config {
         self.scope_dir(scope).join(format!("{domain}.yaml"))
     }
 
-    /// Where this project's transcripts live — `~/.mjolnir/history/<slug>/`.
+    /// Where this project's transcripts live — `~/.aldwin/history/<slug>/`.
     ///
     /// Global-scoped and keyed by project, not written into the project's own
-    /// `.mjolnir/`: a transcript carries whatever the session's tool results
+    /// `.aldwin/`: a transcript carries whatever the session's tool results
     /// carried, and that is not something to leave sitting inside a tree the
     /// developer may well be committing.
     pub fn history_dir(&self) -> PathBuf {
@@ -275,7 +286,7 @@ impl Config {
     /// mutator on this same domain, or `reload_all` re-reading it from disk
     /// on a different task) must block until this call has fully landed on
     /// both disk and memory, or the two writes can silently clobber each
-    /// other. See mjolnir-permissions.md's Pitfall: "storage must express
+    /// other. See aldwin-permissions.md's Pitfall: "storage must express
     /// deny-wins, not last-write-wins" — a lost concurrent write is exactly
     /// that failure mode, just for grants generally rather than only
     /// allow/deny ordering. Every domain-mutating method in this file
@@ -340,7 +351,7 @@ impl Config {
     /// Writes `permissions.yaml` for `scope` if it does not exist yet,
     /// leaving whatever it already holds untouched if it does.
     ///
-    /// The point is the file's *existence*, not its contents: mjolnir-cli
+    /// The point is the file's *existence*, not its contents: aldwin-cli
     /// treats a project with no permissions file as one whose access
     /// question has never been answered, so an answer of "allow nothing"
     /// still has to leave a file behind or it would be asked again on every
@@ -507,7 +518,7 @@ impl Config {
 
     // ── First launch ─────────────────────────────────────────────────────
 
-    /// Create `~/.mjolnir/` and write the annotated global files if the
+    /// Create `~/.aldwin/` and write the annotated global files if the
     /// directory does not exist. Idempotent — a directory that already
     /// exists is inspected for completeness rather than touched.
     ///
@@ -566,7 +577,7 @@ impl Config {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Covers this crate's real failure modes per mjolnir-config.md's Pitfalls:
+// Covers this crate's real failure modes per aldwin-config.md's Pitfalls:
 // deny-wins staying structural, version-bump rejection, partial-init refusing
 // to start, reload retaining the previous snapshot on a bad file while still
 // naming it, and project scope not materialising until first write.
@@ -586,23 +597,47 @@ mod tests {
         // Use a not-yet-existing subdirectory so "does the dir exist" checks
         // (init_global_if_empty, project-scope materialisation) start from
         // true absence rather than an empty-but-present tempdir.
-        let global_root = global.path().join(".mjolnir");
+        let global_root = global.path().join(".aldwin");
         let config = Config::open_at(project.path(), &global_root).unwrap();
         (project, global, config)
     }
 
     #[test]
     fn legacy_global_dir_is_migrated_when_the_new_one_does_not_exist() {
-        let home = tempdir().unwrap();
-        let legacy_dir = home.path().join(".amundsen");
-        std::fs::create_dir(&legacy_dir).unwrap();
-        std::fs::write(legacy_dir.join("provider.yaml"), "version: 1\n").unwrap();
+        for legacy in [".mjolnir", ".amundsen"] {
+            let home = tempdir().unwrap();
+            let legacy_dir = home.path().join(legacy);
+            std::fs::create_dir(&legacy_dir).unwrap();
+            std::fs::write(legacy_dir.join("provider.yaml"), "version: 1\n").unwrap();
 
-        let new_dir = home.path().join(".mjolnir");
+            let new_dir = home.path().join(".aldwin");
+            migrate_legacy_global_dir(home.path(), &new_dir);
+
+            assert!(!legacy_dir.exists(), "the old {legacy}/ should be moved, not copied");
+            assert!(new_dir.join("provider.yaml").exists(), "the migrated file must survive the move");
+        }
+    }
+
+    /// Both rebrands' directories present. The newer name wins, and the older
+    /// one is left alone rather than merged into it.
+    #[test]
+    fn the_more_recent_legacy_dir_wins_when_both_exist() {
+        let home = tempdir().unwrap();
+        for (legacy, body) in [(".mjolnir", "mjolnir"), (".amundsen", "amundsen")] {
+            let dir = home.path().join(legacy);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("provider.yaml"), body).unwrap();
+        }
+
+        let new_dir = home.path().join(".aldwin");
         migrate_legacy_global_dir(home.path(), &new_dir);
 
-        assert!(!legacy_dir.exists(), "the old .amundsen/ should be moved, not copied");
-        assert!(new_dir.join("provider.yaml").exists(), "the migrated file must survive the move");
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("provider.yaml")).unwrap(),
+            "mjolnir",
+            "the directory the developer was last using is the one that carries over"
+        );
+        assert!(home.path().join(".amundsen").exists(), "the older one stays put — merging would pick between two files silently");
     }
 
     #[test]
@@ -612,7 +647,7 @@ mod tests {
         std::fs::create_dir(&legacy_dir).unwrap();
         std::fs::write(legacy_dir.join("provider.yaml"), "legacy").unwrap();
 
-        let new_dir = home.path().join(".mjolnir");
+        let new_dir = home.path().join(".aldwin");
         std::fs::create_dir(&new_dir).unwrap();
         std::fs::write(new_dir.join("provider.yaml"), "current").unwrap();
 
@@ -625,11 +660,11 @@ mod tests {
     #[test]
     fn migration_is_a_no_op_when_no_legacy_dir_exists() {
         let home = tempdir().unwrap();
-        let new_dir = home.path().join(".mjolnir");
+        let new_dir = home.path().join(".aldwin");
 
         migrate_legacy_global_dir(home.path(), &new_dir);
 
-        assert!(!new_dir.exists(), "nothing to migrate — a fresh install must not have .mjolnir/ conjured from nothing");
+        assert!(!new_dir.exists(), "nothing to migrate — a fresh install must not have .aldwin/ conjured from nothing");
     }
 
     #[test]
@@ -649,18 +684,18 @@ mod tests {
     #[test]
     fn project_scope_directory_is_not_created_until_first_write() {
         let (project, _global, config) = fresh();
-        let mjolnir_dir = project.path().join(".mjolnir");
-        assert!(!mjolnir_dir.exists());
+        let aldwin_dir = project.path().join(".aldwin");
+        assert!(!aldwin_dir.exists());
 
         config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
-        assert!(mjolnir_dir.is_dir());
-        assert!(mjolnir_dir.join("permissions.yaml").is_file());
+        assert!(aldwin_dir.is_dir());
+        assert!(aldwin_dir.join("permissions.yaml").is_file());
     }
 
     #[test]
     fn init_global_if_empty_is_created_then_already_present() {
         let (_project, global, config) = fresh();
-        let global_dir = global.path().join(".mjolnir");
+        let global_dir = global.path().join(".aldwin");
         assert!(!global_dir.exists());
 
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
@@ -688,7 +723,7 @@ mod tests {
     fn init_writes_no_provider_so_the_question_is_still_open() {
         let (_project, global, config) = fresh();
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
-        assert!(!global.path().join(".mjolnir").join("provider.yaml").exists(), "init must not guess a provider");
+        assert!(!global.path().join(".aldwin").join("provider.yaml").exists(), "init must not guess a provider");
         assert!(config.global_provider().is_err(), "which is what first run reads to know the question is unanswered");
         assert_eq!(
             config.init_global_if_empty().unwrap(),
@@ -700,7 +735,7 @@ mod tests {
     #[test]
     fn init_global_if_empty_partial_directory_refuses_to_start() {
         let (_project, global, config) = fresh();
-        let global_dir = global.path().join(".mjolnir");
+        let global_dir = global.path().join(".aldwin");
 
         config.init_global_if_empty().unwrap();
         std::fs::remove_file(global_dir.join("mcp.yaml")).unwrap();
@@ -783,10 +818,10 @@ mod tests {
         config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
         config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
 
-        let project_text = std::fs::read_to_string(project.path().join(".mjolnir").join("permissions.yaml")).unwrap();
-        let global_text = std::fs::read_to_string(global.path().join(".mjolnir").join("permissions.yaml")).unwrap();
+        let project_text = std::fs::read_to_string(project.path().join(".aldwin").join("permissions.yaml")).unwrap();
+        let global_text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml")).unwrap();
         for text in [&project_text, &global_text] {
-            assert!(text.starts_with("# Mjolnir permissions"), "grant persistence must not strip the annotated header: {text:?}");
+            assert!(text.starts_with("# Aldwin permissions"), "grant persistence must not strip the annotated header: {text:?}");
             assert!(text.contains("program"), "header should still explain the entry shape: {text:?}");
         }
         assert!(project_text.contains("git: read"));
@@ -811,12 +846,12 @@ mod tests {
         config.add_mcp_server(Scope::Global, McpServer { name: "fs".into(), transport: McpTransport::Stdio { command: "fs-server".into(), args: vec![] }, env: Default::default() }).unwrap();
         config.set_tui(TuiConfig { theme: Some("dark".into()), ..TuiConfig::empty() }).unwrap();
 
-        let provider_text = std::fs::read_to_string(global.path().join(".mjolnir").join("provider.yaml")).unwrap();
-        let mcp_text = std::fs::read_to_string(global.path().join(".mjolnir").join("mcp.yaml")).unwrap();
-        let tui_text = std::fs::read_to_string(global.path().join(".mjolnir").join("tui.yaml")).unwrap();
-        assert!(provider_text.starts_with("# Mjolnir provider settings"), "{provider_text:?}");
-        assert!(mcp_text.starts_with("# Mjolnir MCP server registry"), "{mcp_text:?}");
-        assert!(tui_text.starts_with("# Mjolnir TUI preferences"), "{tui_text:?}");
+        let provider_text = std::fs::read_to_string(global.path().join(".aldwin").join("provider.yaml")).unwrap();
+        let mcp_text = std::fs::read_to_string(global.path().join(".aldwin").join("mcp.yaml")).unwrap();
+        let tui_text = std::fs::read_to_string(global.path().join(".aldwin").join("tui.yaml")).unwrap();
+        assert!(provider_text.starts_with("# Aldwin provider settings"), "{provider_text:?}");
+        assert!(mcp_text.starts_with("# Aldwin MCP server registry"), "{mcp_text:?}");
+        assert!(tui_text.starts_with("# Aldwin TUI preferences"), "{tui_text:?}");
     }
 
     #[test]
@@ -851,7 +886,7 @@ mod tests {
         config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
         config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
 
-        let text = std::fs::read_to_string(global.path().join(".mjolnir").join("permissions.yaml")).unwrap();
+        let text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml")).unwrap();
         let body = text.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
 
         let expected = [
@@ -872,14 +907,14 @@ mod tests {
 
         // And the explanation survives the writes, which is the half that
         // regressed last time.
-        assert!(text.starts_with("# Mjolnir permissions"), "{text}");
+        assert!(text.starts_with("# Aldwin permissions"), "{text}");
     }
 
     #[test]
     fn a_v1_permissions_file_is_moved_aside_rather_than_reinterpreted() {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
-        let dir = project.path().join(".mjolnir");
+        let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("permissions.yaml"),
@@ -887,7 +922,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config::open_at(project.path(), global.path().join(".mjolnir")).unwrap();
+        let config = Config::open_at(project.path(), global.path().join(".aldwin")).unwrap();
 
         assert_eq!(config.project_permissions(), PermissionsConfig::empty());
         assert_eq!(config.retired_permissions(), [dir.join("permissions.yaml.v1")]);
@@ -900,18 +935,18 @@ mod tests {
     #[test]
     fn unknown_major_version_is_rejected() {
         let (project, _global, _config) = fresh();
-        let dir = project.path().join(".mjolnir");
+        let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("permissions.yaml"), "version: 99\nallow: []\ndeny: []\n").unwrap();
 
-        let err = Config::open_at(project.path(), _global.path().join(".mjolnir")).unwrap_err();
+        let err = Config::open_at(project.path(), _global.path().join(".aldwin")).unwrap_err();
         assert!(matches!(err, ConfigError::UnknownVersion { found: 99, expected: PERMISSIONS_VERSION, .. }));
     }
 
     #[test]
     fn empty_api_key_env_refuses_to_start() {
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".mjolnir");
+        let dir = global.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("provider.yaml"),
@@ -928,7 +963,7 @@ mod tests {
         // Backward compatibility: files written before this field existed
         // must keep loading, with the field defaulting to None.
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".mjolnir");
+        let dir = global.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("provider.yaml"), "version: 1\nprovider: anthropic\nmodel: m\napi_key_env: X\n").unwrap();
 
@@ -954,7 +989,7 @@ mod tests {
     #[test]
     fn raw_api_key_field_is_rejected_by_the_schema() {
         let (_project, global, _config) = fresh();
-        let dir = global.path().join(".mjolnir");
+        let dir = global.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("provider.yaml"),
@@ -979,7 +1014,7 @@ mod tests {
         };
         let err = config.set_provider(Scope::Global, bad).unwrap_err();
         assert!(matches!(err, ConfigError::MissingApiKeyEnv { .. }));
-        assert!(!_global.path().join(".mjolnir").join("provider.yaml").exists());
+        assert!(!_global.path().join(".aldwin").join("provider.yaml").exists());
         assert!(config.global_provider().is_err());
     }
 
@@ -1029,7 +1064,7 @@ mod tests {
         config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
 
         // Hand-edit project permissions.yaml into garbage, but leave global alone.
-        let dir = project.path().join(".mjolnir");
+        let dir = project.path().join(".aldwin");
         std::fs::write(dir.join("permissions.yaml"), "not: [valid, yaml: at all").unwrap();
 
         let result = config.reload_all();
@@ -1046,7 +1081,7 @@ mod tests {
     #[test]
     fn reload_all_picks_up_hand_edits_that_are_still_valid() {
         let (project, _global, config) = fresh();
-        let dir = project.path().join(".mjolnir");
+        let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("permissions.yaml"), "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\ndeny: []\n")
             .unwrap();

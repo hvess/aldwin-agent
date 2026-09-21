@@ -1,15 +1,15 @@
 # ADR 0005 — A session outlives its process
 
 **Status:** accepted, 2026-09-20
-**Supersedes:** one clause of the V0 Decision in `.claude/spec/mjolnir.md` line
+**Supersedes:** one clause of the V0 Decision in `.claude/spec/aldwin.md` line
 83 — "Sessions are ephemeral" — which is amended to point here. (An earlier
-draft of `mjolnir-history.md` also named a matching line in
-`mjolnir-permissions.md`'s Out of Scope; that spec was rewritten for ADR 0004
+draft of `aldwin-history.md` also named a matching line in
+`aldwin-permissions.md`'s Out of Scope; that spec was rewritten for ADR 0004
 and no longer carries one.)
-**Affects:** `mjolnir-core` (`RecordSink`, `Command::Resume`,
-`Event::HistoryLoaded`), `mjolnir-config` (`history.rs`, the `~/.mjolnir/`
-layout), `mjolnir-cli` (`/resume`, `/clear`), `mjolnir-tui` (the session
-picker), `.claude/spec/mjolnir-history.md`
+**Affects:** `aldwin-core` (`RecordSink`, `Command::Resume`,
+`Event::HistoryLoaded`), `aldwin-config` (`history.rs`, the `~/.aldwin/`
+layout), `aldwin-cli` (`/resume`, `/clear`), `aldwin-tui` (the session
+picker), `.claude/spec/aldwin-history.md`
 
 ## Context
 
@@ -34,7 +34,7 @@ have left.
 
 **A conversation is written to disk as it happens, and `/resume` picks one back
 up.** One session is one append-only JSONL transcript under
-`~/.mjolnir/history/<project-slug>/<session-id>.jsonl`, mode `0600`. Resuming
+`~/.aldwin/history/<project-slug>/<session-id>.jsonl`, mode `0600`. Resuming
 replaces the running session's `ConversationLog` and rendered log with the
 loaded records and continues writing into that same file.
 
@@ -53,25 +53,25 @@ Four boundaries make this a persistence decision rather than a memory one:
    developer already approved this" would rebuild a persistent allowlist behind
    ADR 0004's back.
 4. **Only `/resume` reaches it.** There is no `--resume` or `--continue` flag,
-   so `archive/mjolnir-cli.md:209`'s zero-arg Decision stands unreversed. A
+   so `archive/aldwin-cli.md:209`'s zero-arg Decision stands unreversed. A
    launch-time entry point is a separate question for a separate ADR.
 
 ## Consequences
 
-**The V0 Decision is narrowed, not deleted.** `mjolnir.md` line 83 keeps its
-other two halves: memory is still developer-authored, and Mjolnir still does
+**The V0 Decision is narrowed, not deleted.** `aldwin.md` line 83 keeps its
+other two halves: memory is still developer-authored, and Aldwin still does
 not propose entries or prompt at end of session. What changes is the first
 clause only.
 
 **A transcript is a secrets surface with a disk lifetime.** Tool results carry
 file contents and command output — a key read out of a `.env`, a token echoed
 by a command. This was a memory-lifetime exposure and is now a disk-lifetime
-one. `0600` and a project-scoped directory under `~/.mjolnir/` are the floor.
+one. `0600` and a project-scoped directory under `~/.aldwin/` are the floor.
 There is no opt-out in V1, and that is a known gap rather than a judgement that
 none is needed.
 
 **Nothing prunes.** Transcripts accumulate until the developer deletes them.
-Clearing out `~/.mjolnir/history/` is their business, like any other directory
+Clearing out `~/.aldwin/history/` is their business, like any other directory
 of their own files. A retention policy earns a config domain when it becomes
 annoying, not before.
 

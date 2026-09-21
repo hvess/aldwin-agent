@@ -1,8 +1,8 @@
-# Mjolnir
+# Aldwin
 
 ## Project Overview
 
-Mjolnir is a Rust TUI coding agent — a discussion-first harness where the developer's understanding is the product, not the agent's throughput. It is not a mobile SDK project. Do not apply mobile SDK, FFI, Android, or iOS framing here.
+Aldwin is a Rust TUI coding agent — a discussion-first harness where the developer's understanding is the product, not the agent's throughput. It is not a mobile SDK project. Do not apply mobile SDK, FFI, Android, or iOS framing here.
 
 Workspace: seven Cargo crates under `crates/`. Specs for all seven live in `.claude/spec/`. Read the relevant spec before working on any crate.
 
@@ -18,14 +18,14 @@ and history as of 2026-09-20 — implemented, tested, and audited with no known
 gaps. Four stay active: permissions, tools, tui and review. When a spec step is completed, note it;
 when all steps are done, move the spec to `.claude/spec/archive/`.
 
-`mjolnir-review.md` is the feedback loop that runs after a change is ready
+`aldwin-review.md` is the feedback loop that runs after a change is ready
 for submission — five stages, four of them deterministic and one a blind
 subagent. `.claude/skills/review/SKILL.md` drives it; run `/review` when a
 feature is finished. Read the spec's Progress entry before changing how any
 stage works: it records what the loop replaced and why, and the failure it
 replaced is easy to rebuild by accident.
 
-`mjolnir-open-tasks.md` is a ledger rather than a spec: known, understood,
+`aldwin-open-tasks.md` is a ledger rather than a spec: known, understood,
 undone work, each entry citing its evidence.
 
 ## Design System
@@ -71,7 +71,7 @@ Two rules that now govern every layout decision (Turn 13):
 
 **The design system reaches the app by generation, not by hand.**
 `crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css` by
-`cargo run -p mjolnir-review -- tokens --write` and committed; the review
+`cargo run -p aldwin-review -- tokens --write` and committed; the review
 loop's stage 3 regenerates it and fails on any diff. Do not edit it, and do
 not add a colour or a grid constant to the app by writing a literal — add it
 to the design, re-sync, regenerate.
@@ -83,7 +83,7 @@ file when the design is fixed upstream. Keep it short — the list is a bug
 list for the design system, and a previous version of this idea grew to
 fourteen entries and became the problem it was built to solve.
 
-`.claude/spec/mjolnir-tui.md`'s Progress entries record what was measured
+`.claude/spec/aldwin-tui.md`'s Progress entries record what was measured
 and what it corrected; read the 2026-09-06 entry before touching layout in
 `crates/tui/src/ui/`.
 
@@ -111,7 +111,7 @@ a decision they cover.
   and the panel no longer names the file a grant lands in.
 
 - **0005 — A session outlives its process.** Reverses one clause of
-  `mjolnir.md`'s V0 "sessions are ephemeral" Decision: a conversation is
+  `aldwin.md`'s V0 "sessions are ephemeral" Decision: a conversation is
   written to disk as it happens and `/resume` picks one back up. The other two
   clauses are deliberately untouched — memory stays developer-authored and
   nothing crosses into a *new* session. Four boundaries keep it a persistence

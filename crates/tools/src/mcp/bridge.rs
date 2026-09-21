@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mjolnir_config::{McpServer, McpTransport};
+use aldwin_config::{McpServer, McpTransport};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
@@ -68,7 +68,7 @@ impl McpBridge {
     }
 
     /// Returns `(content, is_error)` — the caller (McpTool) decides how to
-    /// fold `is_error` into mjolnir-tools' own `ToolError` convention.
+    /// fold `is_error` into aldwin-tools' own `ToolError` convention.
     pub async fn call_tool(
         &self,
         server_name: &str,
@@ -88,7 +88,7 @@ impl McpBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_config::McpTransport;
+    use aldwin_config::McpTransport;
     use serde_json::json;
 
     fn fake_server() -> McpServer {

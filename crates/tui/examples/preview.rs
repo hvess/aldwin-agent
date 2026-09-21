@@ -12,9 +12,9 @@
 use std::io;
 use std::sync::Arc;
 
-use mjolnir_config::Config;
-use mjolnir_permissions::{Class, Engine, PromptPayload};
-use mjolnir_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
+use aldwin_config::Config;
+use aldwin_permissions::{Class, Engine, PromptPayload};
+use aldwin_tui::{App, LogEntry, Theme, ToolActivityEntry, ToolActivityStatus, TurnEndReasonKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{execute, ExecutableCommand};
@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
     stdout.execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|f| mjolnir_tui::__preview_draw(f, &mut app))?;
+    terminal.draw(|f| aldwin_tui::__preview_draw(f, &mut app))?;
 
     // Hold the alternate screen open until the driving script has captured
     // it; it sends a keypress (or kills the process) to release us.
@@ -74,7 +74,7 @@ fn conversation(app: &mut App) {
 fn tools(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "grep for TODO across the repo and summarize".into() });
     app.log.push(LogEntry::ToolActivity {
-        step_id: mjolnir_core::StepId(1),
+        step_id: aldwin_core::StepId(1),
         calls: vec![
             ToolActivityEntry { call_id: "c1".into(), name: "shell".into(), status: ToolActivityStatus::Completed { is_error: false, summary: "42 matches across 17 files".into() } },
             ToolActivityEntry { call_id: "c2".into(), name: "read".into(), status: ToolActivityStatus::Running },
@@ -84,8 +84,8 @@ fn tools(app: &mut App) {
     // Two differently-named tools running at once — visualizes the status
     // line's "running N tools…" activity label and its trailing tools list.
     app.status.running_tools = vec![
-        mjolnir_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() },
-        mjolnir_tui::__PreviewRunningTool { call_id: "c3".into(), name: "shell".into() },
+        aldwin_tui::__PreviewRunningTool { call_id: "c2".into(), name: "read".into() },
+        aldwin_tui::__PreviewRunningTool { call_id: "c3".into(), name: "shell".into() },
     ];
     app.status.turn = Some(4);
     app.status.step = Some(1);
@@ -95,14 +95,14 @@ fn approval(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "fix the off-by-one in the pagination helper".into() });
     let diff = "--- a/src/page.rs\n+++ b/src/page.rs\n@@\n fn page(items: &[Item], size: usize, n: usize) -> &[Item] {\n     let start = n * size;\n-    let end = start + size;\n+    let end = (start + size).min(items.len());\n     &items[start..end]\n }\n";
     app.log.push(LogEntry::ApprovalCard { call_id: "call-1".into(), diff: diff.into(), resolution: None });
-    app.pending_approvals.push_back(mjolnir_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: diff.into() });
+    app.pending_approvals.push_back(aldwin_tui::__PreviewPendingApproval { call_id: "call-1".into(), diff: diff.into() });
 }
 
 fn prompt(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "run the test suite".into() });
     let payload = PromptPayload::Tool { program: "cargo".into(), argv: vec!["test".into(), "--workspace".into()], declared: Class::Write };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-2".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-2".into(), payload });
 }
 
 /// A path-like Tool prompt (`read`) — shows the humanized title/dim raw-call
@@ -113,7 +113,7 @@ fn prompt_path(app: &mut App) {
     app.log.push(LogEntry::UserMessage { text: "what does the dispatcher do on a deny-by-absence?".into() });
     let payload = PromptPayload::Tool { program: "read".into(), argv: vec!["./crates/tools/src/dispatcher.rs".into()], declared: Class::Read };
     app.log.push(LogEntry::PermissionPrompt { call_id: "call-3".into(), payload: payload.clone(), resolution: None });
-    app.pending_prompts.push_back(mjolnir_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
+    app.pending_prompts.push_back(aldwin_tui::__PreviewPendingPrompt { call_id: "call-3".into(), payload });
 }
 
 fn long(app: &mut App) {
@@ -123,7 +123,7 @@ fn long(app: &mut App) {
     }
     app.log.push(LogEntry::TurnEnded { reason: TurnEndReasonKind::EndTurn });
     app.log.push(LogEntry::RetryAttempt {
-        info: mjolnir_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 },
+        info: aldwin_core::RetryInfo { provider: "anthropic".into(), status: Some(529), message: "overloaded, retrying".into(), attempt: 1 },
     });
     app.log.push(LogEntry::Error { message: "provider returned 529 overloaded".into() });
     app.status.turn = Some(9);

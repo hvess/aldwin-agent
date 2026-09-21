@@ -1,4 +1,4 @@
-//! Themeable color palette for `ui.rs` — ported from the Mjolnir Design
+//! Themeable color palette for `ui.rs` — ported from the Aldwin Design
 //! System (`claude.ai/design`, synced 2026-09-07 from the bound copy in the
 //! "Design system tokens discussion" project, which is the current one —
 //! see `.claude/design/IMPORT.md`) rather than hand-picked. Field names
@@ -306,13 +306,13 @@ impl Theme {
         }
     }
 
-    /// Parses `tui.yaml`'s `theme` field (`mjolnir_config::TuiConfig::theme`)
+    /// Parses `tui.yaml`'s `theme` field (`aldwin_config::TuiConfig::theme`)
     /// — case-insensitive `"light"` selects `Light`; `None`, `"dark"`, or
     /// anything unrecognized selects `Dark`, the long-standing default. An
     /// unrecognized value doesn't refuse to start: consistent with this
     /// being a purely cosmetic setting, a typo shouldn't block the session
     /// the way a malformed permissions or provider file does. `pub`, not
-    /// `pub(crate)` — `mjolnir-cli`'s bootstrap calls this to resolve
+    /// `pub(crate)` — `aldwin-cli`'s bootstrap calls this to resolve
     /// `Config::global_tui().theme` before constructing the TUI's `App`.
     pub fn from_config(theme: Option<&str>) -> Theme {
         match theme {

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-/// Builds the opaque additional-context string handed to mjolnir-core: the
+/// Builds the opaque additional-context string handed to aldwin-core: the
 /// absolute cwd path, then the full text of each *approved* context file
 /// (in the order given). `approved` is expected to already be the fully
 /// resolved list — see `context_approval::resolve`, which is what actually
@@ -14,7 +14,7 @@ pub fn build(cwd: &Path, approved: &[PathBuf]) -> String {
         // A path that's approved but no longer exists (renamed, deleted
         // since approval) is skipped rather than treated as an error —
         // GC of stale approved-path entries is explicitly deferred past V0
-        // per mjolnir-permissions.md's Pitfalls; this is just the read
+        // per aldwin-permissions.md's Pitfalls; this is just the read
         // side tolerating that gap gracefully.
         if let Ok(contents) = std::fs::read_to_string(path) {
             sections.push(format!("--- {} ---\n{}", path.display(), contents));

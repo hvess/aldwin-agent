@@ -1,6 +1,6 @@
 //! Scenes — the states the binary is put into before capture.
 //!
-//! A scene is a seeded `HOME`/`.mjolnir` config, a queue of canned provider
+//! A scene is a seeded `HOME`/`.aldwin` config, a queue of canned provider
 //! replies, and the keys to type. The real binary then plays it out: real
 //! HTTP, real streaming adapter, real core loop, real TUI. Nothing is poked
 //! into the UI's memory, which is the difference between this and
@@ -37,7 +37,7 @@ pub struct Script {
     /// of the JSONL format here would drift from the one being reviewed.
     ///
     /// `started_at` is fixed per scene so the picker's date column is stable
-    /// between runs. It is rendered in *local* time by mjolnir-cli, so the
+    /// between runs. It is rendered in *local* time by aldwin-cli, so the
     /// date can still differ between machines in distant timezones — noon
     /// UTC is chosen to keep that within a day either way.
     pub history: &'static [(&'static str, u64, usize)],
@@ -263,7 +263,7 @@ pub fn script(name: &str) -> Result<Script> {
 /// Write the config a scene runs under, and parse its keys.
 pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Result<Prepared> {
     // Absolute, always. `HOME` is resolved by the app against its own working
-    // directory, so a relative one sends it looking for `~/.mjolnir` inside
+    // directory, so a relative one sends it looking for `~/.aldwin` inside
     // the project — it finds nothing, opens first run, and every frame in the
     // session is the same wrong screen in the wrong theme. That is exactly
     // what a relative `--run` produced, and it looked plausible.
@@ -273,13 +273,13 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
     let home = home.canonicalize()?;
     let cwd = cwd.canonicalize()?;
 
-    // `~/.mjolnir` is materialised by the product's own writer rather than a
+    // `~/.aldwin` is materialised by the product's own writer rather than a
     // copy of its templates here. Seeding one file by hand does not work and
     // fails loudly: `init_global_if_empty` treats a directory missing any of
     // permissions.yaml, mcp.yaml or tui.yaml as half-deleted and refuses to
     // start.
-    let global = home.join(".mjolnir");
-    let config = mjolnir_config::Config::open_at(&cwd, &global)
+    let global = home.join(".aldwin");
+    let config = aldwin_config::Config::open_at(&cwd, &global)
         .map_err(|e| Error::other(format!("seeding global config: {e}")))?;
     config
         .init_global_if_empty()
@@ -296,13 +296,13 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         std::fs::write(
             global.join("provider.yaml"),
             format!(
-                "version: 1\nprovider: openai-compatible\nmodel: gpt-5\nbase_url: {endpoint}\napi_key_env: MJOLNIR_SHOT_KEY\n"
+                "version: 1\nprovider: openai-compatible\nmodel: gpt-5\nbase_url: {endpoint}\napi_key_env: ALDWIN_SHOT_KEY\n"
             ),
         )?;
 
         // The file's existence is what says this directory's access posture
         // has been declared; an empty allow list is a real answer.
-        let project = cwd.join(".mjolnir");
+        let project = cwd.join(".aldwin");
         std::fs::create_dir_all(&project)?;
         // v2 (ADR 0004): entries are `program: class`, not `kind:pattern`.
         // Writing a v1 file here would not merely be stale — `Config::open`
@@ -336,10 +336,10 @@ fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
     if script.history.is_empty() {
         return Ok(());
     }
-    use mjolnir_config::{HistoryStore, SessionHeader, HISTORY_VERSION};
-    use mjolnir_core::{LogRecord, SessionId, StepId, TurnEndReason, TurnId};
+    use aldwin_config::{HistoryStore, SessionHeader, HISTORY_VERSION};
+    use aldwin_core::{LogRecord, SessionId, StepId, TurnEndReason, TurnId};
 
-    let dir = mjolnir_config::history_project_dir(&global.join("history"), cwd);
+    let dir = aldwin_config::history_project_dir(&global.join("history"), cwd);
     for (index, (text, started_at, turns)) in script.history.iter().enumerate() {
         let id = SessionId(format!("{started_at:010}-0-{index}"));
         let header = SessionHeader {

@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use mjolnir_core::LlmError;
+use aldwin_core::LlmError;
 
 /// What one read off the SSE stream produced this iteration — shared by both
 /// clients' attempt loops since neither variant is wire-type-specific
 /// (`LlmEvent` is core's normalised type, `String` is a plain error message).
 pub enum AttemptOutcome {
-    Events(Vec<mjolnir_core::LlmEvent>),
+    Events(Vec<aldwin_core::LlmEvent>),
     Failed(String),
 }
 

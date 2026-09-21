@@ -19,7 +19,7 @@ use crate::log::LogEntry;
 /// The harness name, and nothing else — "the name is the brand, and a pip
 /// there indicated nothing". Written once because two screens draw this bar:
 /// the session's and first run's.
-pub(super) const BRAND: &str = "mjolnir";
+pub(super) const BRAND: &str = "aldwin";
 
 /// Cells between the brand and whatever follows it in the identity bar, so
 /// that what follows lands on the body column. Derived from `BRAND`'s own
@@ -120,7 +120,7 @@ impl Composer {
 /// is the brand, and a pip there indicated nothing"), then the working
 /// directory. Right: the model name and, once a session has started, the
 /// running build version — the
-/// closest real facts Mjolnir has to the reference's `model · gauge · cost`
+/// closest real facts Aldwin has to the reference's `model · gauge · cost`
 /// group; a context-window gauge and a per-session cost aren't tracked
 /// anywhere in `StatusInfo`, so neither is fabricated here.
 pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
@@ -182,7 +182,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
 /// half-width rects that could not see each other, so each filled to its own
 /// boundary: below ~56 cells the working directory ran straight into the
 /// model name with no gap at all, and above that both were cut at the seam
-/// with nothing marking it — a bar reading `~/Projects/mjolnir-harnes` and
+/// with nothing marking it — a bar reading `~/Projects/aldwin-agen` and
 /// `v0.1.`, neither of which is a true statement. Composing one line is what
 /// makes `--group-gap` guaranteed rather than incidental.
 ///
@@ -218,7 +218,7 @@ pub(super) fn identity_bar_row(
         .unwrap_or_default();
     let right_w = group_width(&chosen);
 
-    // "mjolnir   ~/src/gateway" — the directory starts on the body column,
+    // "aldwin    ~/src/gateway" — the directory starts on the body column,
     // cell 13, like every other left-hand word in the system. That is a pad
     // derived from the brand's own width, not a gap; see `grid::GROUP_GAP`.
     let cwd = elide(cwd, room_for(right_w));
@@ -380,7 +380,7 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // Right-aligned key hint — `StatusLine.jsx`'s own `right` prop (`esc to
-    // stop`), adapted to Mjolnir's real binding: Ctrl+C, not Esc, is what
+    // stop`), adapted to Aldwin's real binding: Ctrl+C, not Esc, is what
     // cancels a turn or exits an idle session. Must read the same "is
     // anything running" state `App::cancel_or_quit` acts on, or the hint
     // promises one thing and the key does the other.
@@ -497,7 +497,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // already did on the first-run screen.
     if app.input.is_empty() {
         app.composer_top = 0;
-        let text = if blocked { "waiting on your decision above…" } else { "Ask Mjolnir anything" };
+        let text = if blocked { "waiting on your decision above…" } else { "Ask Aldwin anything" };
         let mut placeholder = vec![prompt()];
         if !blocked {
             placeholder.push(caret(pal));

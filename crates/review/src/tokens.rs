@@ -119,7 +119,7 @@ fn header(cells: &str) -> String {
     format!(
         "//! The design system, in Rust. **Generated — do not edit.**\n\
          //!\n\
-         //! Emitted by `mjolnir-review tokens --write` from\n\
+         //! Emitted by `aldwin-review tokens --write` from\n\
          //! `.claude/design/tokens/`. The review loop's stage 3 regenerates\n\
          //! this file and fails if the result differs, so the app's palette\n\
          //! and the imported design cannot drift apart.\n\

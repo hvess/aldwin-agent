@@ -90,7 +90,7 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
     let mut out = String::new();
     out.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-    out.push_str("<title>Mjolnir review</title><style>");
+    out.push_str("<title>Aldwin review</title><style>");
     out.push_str(STYLE);
     out.push_str("</style></head><body><main>");
 

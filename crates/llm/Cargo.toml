@@ -1,5 +1,5 @@
 [package]
-name    = "mjolnir-llm"
+name    = "aldwin-llm"
 version.workspace = true
 edition.workspace = true
 
@@ -8,8 +8,8 @@ edition.workspace = true
 test-server = []
 
 [dependencies]
-mjolnir-core   = { path = "../core" }
-mjolnir-config = { path = "../config" }
+aldwin-core   = { path = "../core" }
+aldwin-config = { path = "../config" }
 tokio             = { workspace = true }
 futures           = { workspace = true }
 serde             = { workspace = true }

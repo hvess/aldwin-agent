@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-20
 **Supersedes:** ADR 0001 in full. Amends ADR 0003 §2 and §4 (the option list).
-**Affects:** `mjolnir-permissions`, `mjolnir-tools`, `mjolnir-config`, `mjolnir-tui`,
+**Affects:** `aldwin-permissions`, `aldwin-tools`, `aldwin-config`, `aldwin-tui`,
 and the non-negotiables in `.claude/CLAUDE.md`
 
 ## Context
@@ -67,10 +67,10 @@ was never wrong, it was being applied at the wrong granularity.
 `read` observes. `write` changes something and cannot be shown as a diff
 first. `edit` modifies files and **always** shows a diff — it is outside the
 permissions model entirely, reachable by no scope, no default, and no list.
-Mjolnir's `edit` tool holds it; an MCP tool may hold it once the developer has
+Aldwin's `edit` tool holds it; an MCP tool may hold it once the developer has
 said which argument is the path and which is the content, which is later work.
 
-Until that exists, the guarantee is worded narrowly and honestly: *Mjolnir's
+Until that exists, the guarantee is worded narrowly and honestly: *Aldwin's
 `edit` tool never lands without a diff you accepted.* An MCP server you have
 granted `write` can modify files without one, and the documentation says so.
 
@@ -102,7 +102,7 @@ Four scopes: **turn**, **session**, **project**, **global**. Global means *in
 every project*, not *anywhere on the filesystem*.
 
 Reach is a separate, structural boundary: every tool's path arguments must
-resolve inside the project root, which is the directory Mjolnir was launched
+resolve inside the project root, which is the directory Aldwin was launched
 in. No grant can point a tool out of the tree.
 
 This bounds what we point at, not what a running program does. `cargo` writes

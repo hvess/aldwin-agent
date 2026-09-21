@@ -7,16 +7,16 @@
 //!
 //! **It answers by typing the command, not by writing config.** Committing
 //! composes `/model <provider>/<model>` and submits it exactly as if the
-//! developer had typed it, so mjolnir-cli's interceptor stays the one place
+//! developer had typed it, so aldwin-cli's interceptor stays the one place
 //! that decides which scope to write and what to report. This screen owns
 //! how the question is *asked*; it owns nothing about what the answer does.
-//! Per mjolnir-cli.md the CLI owns the dispatch table, and a picker that
+//! Per aldwin-cli.md the CLI owns the dispatch table, and a picker that
 //! wrote `provider.yaml` itself would be a second implementation of `/model`
 //! sitting in the frontend, free to disagree with the first.
 //!
 //! The catalogue reaches this crate the same way first run's does: as
 //! display halves handed in by the caller ([`ProviderChoice`]), never as
-//! endpoints or key variables, which belong to mjolnir-llm.
+//! endpoints or key variables, which belong to aldwin-llm.
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
@@ -69,7 +69,7 @@ impl ModelPicker {
     /// Opens on the row the session is already running on, so the first
     /// thing the list says is where the developer stands. `None` when there
     /// is no catalogue to show — the command then falls through to
-    /// mjolnir-cli's own `/model`, which reports rather than picks.
+    /// aldwin-cli's own `/model`, which reports rather than picks.
     pub fn open(providers: Vec<ProviderChoice>, current_provider: Option<&str>, current_model: &str) -> Option<Self> {
         if providers.is_empty() {
             return None;

@@ -1,5 +1,5 @@
 //! ratatui frontend rendering core's event stream. See
-//! `.claude/spec/mjolnir-tui.md`.
+//! `.claude/spec/aldwin-tui.md`.
 //!
 //! `App` (`app.rs`) holds all state and the pure event/key handling logic —
 //! unit-tested without a terminal. `ui/` renders it: `ui/mod.rs` owns the
@@ -14,7 +14,7 @@
 //! scene at four frame sizes in both themes, so a refactor that was meant
 //! to preserve output can be shown to have done so.
 //!
-//! One thing from mjolnir-tui.md's Pitfalls is not fully addressed: tool-
+//! One thing from aldwin-tui.md's Pitfalls is not fully addressed: tool-
 //! activity groups render each call as one bounded summary line (via
 //! `log::summarise`) rather than literally collapsing after a timed delay —
 //! this bounds flooding without needing a redraw timer, but isn't the

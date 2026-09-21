@@ -48,6 +48,13 @@
       "design_also_says": "The top-level README's own `5d` section now reads `ask · read · write`, three points, corrected upstream on 2026-09-20 with the rest of the ADR 0004 copy (see `.claude/design/IMPORT.md`). `all` was dropped because no point on the scale can mean everything runs: ADR 0004 §3 puts `edit` outside the permissions model, so a diff is shown and waited on at every rung.",
       "app_follows": "The corrected README: the `access` fact reads the standing rung — `ask` / `read` / `write`, or `not set` when neither file states one — followed by `edits always ask`, the one fact no rung changes. This is a *narrowing* of the entry that stood here before, whose retirement condition was the permissions rework and is now met: the app no longer prints three per-tool `read:`/`shell:`/`edit:` states, and the rung it prints instead is exactly what `permissions.yaml` stores, so the fact can no longer drift from the file. What survives is only the bound copy's Turn 14 prose, which a re-sync should bring forward; delete this entry then.",
       "glyphs": ""
+    },
+    {
+      "id": "wordmark-letters-are-the-old-name",
+      "design_says": "HANDOFF.md:440-442 — the brand mark is `  M J O L N I R  `, a 17-cell reverse-video field, and both `.dc.html` frames render those seven letters.",
+      "design_also_says": "The same note states the rule as the padding — TWO spaces at each end, letters one space apart — from which the 17 is derived, not stated independently.",
+      "app_follows": "The rule. The project was renamed Mjolnir -> Aldwin (2026-09-21); six letters with the same pad make a 15-cell field. This entry retires when the upstream design system is rebranded and the frames are re-synced.",
+      "glyphs": ""
     }
   ]
 }

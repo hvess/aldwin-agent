@@ -22,7 +22,7 @@ pub struct McpRegistrationFailure {
 }
 
 /// Enumerates every configured server's tools and registers them.
-/// Per mjolnir-tools.md: MCP-supplied names that collide with a built-in
+/// Per aldwin-tools.md: MCP-supplied names that collide with a built-in
 /// (or another already-registered MCP tool) are namespaced `<server>:<name>`;
 /// otherwise the bare remote name is used. This is where each server
 /// actually gets spawned (via `McpBridge::list_tools`) — see `McpBridge`'s
@@ -70,7 +70,7 @@ pub async fn register_mcp_tools(bridge: Arc<McpBridge>, registry: &mut Registry)
 mod tests {
     use super::*;
     use crate::registry::{Tool, ToolDescriptor, ToolSource};
-    use mjolnir_config::{McpServer, McpTransport};
+    use aldwin_config::{McpServer, McpTransport};
 
     fn fake_server(name: &str) -> McpServer {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp_server.py");
@@ -101,7 +101,7 @@ mod tests {
             fn permission(&self, _input: &serde_json::Value) -> Result<crate::registry::PermissionRequest, ToolError> {
                 Ok(crate::registry::PermissionRequest {
                     program: "stub".into(),
-                    class:   mjolnir_permissions::Class::Write,
+                    class:   aldwin_permissions::Class::Write,
                     argv:    Vec::new(),
                 })
             }

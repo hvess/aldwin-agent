@@ -16,7 +16,7 @@ pub struct StepId(pub u64);
 /// Three fields, each answering a different collision. Epoch seconds order
 /// the directory — the field is fixed-width until the year 2286, so ids sort
 /// lexicographically into start order and `list` can read a directory rather
-/// than every header in it. The pid separates two Mjolnirs running in the
+/// than every header in it. The pid separates two Aldwins running in the
 /// same project at the same time. The counter separates two sessions in *one*
 /// process: `/clear` seals and opens a new one, and seconds alone would hand
 /// two clears in the same second the same id — which, since transcripts are

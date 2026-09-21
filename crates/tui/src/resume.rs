@@ -2,12 +2,12 @@
 //!
 //! One list where [`crate::picker`] has two, and the same control otherwise:
 //! it answers by composing `/resume <id>` and submitting it exactly as if
-//! the developer had typed it. mjolnir-cli's interceptor stays the one place
+//! the developer had typed it. aldwin-cli's interceptor stays the one place
 //! that knows what resuming *does* — this screen owns only how the question
 //! is asked. Same rule, same reason, as the model picker's own doc comment.
 //!
-//! The rows arrive as display halves from mjolnir-cli's bootstrap
-//! ([`SessionChoice`]), never as paths: mjolnir-tui reads no files, which is
+//! The rows arrive as display halves from aldwin-cli's bootstrap
+//! ([`SessionChoice`]), never as paths: aldwin-tui reads no files, which is
 //! why the transcript directory is not mentioned anywhere in this crate.
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};

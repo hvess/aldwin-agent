@@ -18,6 +18,133 @@ dependencies = [
 ]
 
 [[package]]
+name = "aldwin-cli"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "aldwin-core",
+ "aldwin-llm",
+ "aldwin-permissions",
+ "aldwin-tools",
+ "aldwin-tui",
+ "async-stream",
+ "chrono",
+ "clap",
+ "futures",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aldwin-config"
+version = "0.2.0"
+dependencies = [
+ "aldwin-core",
+ "dirs",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aldwin-core"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "aldwin-llm"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "aldwin-core",
+ "async-stream",
+ "eventsource-stream",
+ "futures",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aldwin-permissions"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aldwin-review"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "aldwin-core",
+ "aldwin-llm",
+ "clap",
+ "flate2",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "unicode-width",
+]
+
+[[package]]
+name = "aldwin-tools"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "aldwin-core",
+ "aldwin-permissions",
+ "async-trait",
+ "libc",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "aldwin-tui"
+version = "0.2.0"
+dependencies = [
+ "aldwin-config",
+ "aldwin-core",
+ "aldwin-permissions",
+ "crossterm",
+ "futures",
+ "ratatui",
+ "serde_json",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "unicode-width",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1353,133 +1480,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mjolnir-cli"
-version = "0.2.0"
-dependencies = [
- "async-stream",
- "chrono",
- "clap",
- "futures",
- "mjolnir-config",
- "mjolnir-core",
- "mjolnir-llm",
- "mjolnir-permissions",
- "mjolnir-tools",
- "mjolnir-tui",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mjolnir-config"
-version = "0.2.0"
-dependencies = [
- "dirs",
- "mjolnir-core",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "mjolnir-core"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "mjolnir-llm"
-version = "0.2.0"
-dependencies = [
- "async-stream",
- "eventsource-stream",
- "futures",
- "mjolnir-config",
- "mjolnir-core",
- "rand 0.8.8",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mjolnir-permissions"
-version = "0.2.0"
-dependencies = [
- "mjolnir-config",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "mjolnir-review"
-version = "0.2.0"
-dependencies = [
- "clap",
- "flate2",
- "libc",
- "mjolnir-config",
- "mjolnir-core",
- "mjolnir-llm",
- "serde",
- "serde_json",
- "tokio",
- "unicode-width",
-]
-
-[[package]]
-name = "mjolnir-tools"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "libc",
- "mjolnir-config",
- "mjolnir-core",
- "mjolnir-permissions",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "mjolnir-tui"
-version = "0.2.0"
-dependencies = [
- "crossterm",
- "futures",
- "mjolnir-config",
- "mjolnir-core",
- "mjolnir-permissions",
- "ratatui",
- "serde_json",
- "syntect",
- "tempfile",
- "tokio",
- "unicode-width",
 ]
 
 [[package]]

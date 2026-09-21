@@ -1,9 +1,9 @@
-# mjolnir-llm
+# aldwin-llm
 
 V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, no wire-type leakage.
 
 **Status:** archived — implemented, tested, audited
-**Scope:** mjolnir-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
+**Scope:** aldwin-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
 **Last Updated:** 2026-09-06
 
@@ -41,7 +41,7 @@ different value — not introduced speculatively. Two new/updated
 asserts the serialised request body is exactly `{"type": "adaptive"}`,
 and `build_request_max_tokens_gives_headroom_above_the_thinking_budget`
 (renamed from the old budget_tokens-comparing version) confirms
-`max_tokens` sizing is unaffected. All 49 `mjolnir-llm` tests pass,
+`max_tokens` sizing is unaffected. All 49 `aldwin-llm` tests pass,
 workspace build/test/clippy clean.
 
 **Post-archive fix (2026-09-06, first live OpenAI-compatible endpoint —
@@ -83,8 +83,8 @@ one), two client tests over captured Lumo frames, and
 set, retargetable at any OpenAI-compatible endpoint via `LUMO_BASE_URL` /
 `LUMO_MODEL`. Both pass against the live API: text streams, usage lands
 non-zero, and a `get_weather` tool call comes back parsed. All 55
-`mjolnir-llm` tests plus the workspace suite pass, clippy clean. One
-downstream fix this surfaced, recorded in `.claude/spec/mjolnir-tui.md`:
+`aldwin-llm` tests plus the workspace suite pass, clippy clean. One
+downstream fix this surfaced, recorded in `.claude/spec/aldwin-tui.md`:
 `App::thinking` was never cleared by `TurnEnded`, so a stream dying
 mid-thinking left the spinner claiming the agent was still thinking.
 
@@ -96,8 +96,8 @@ a short list of model ids.
 
 It lives in this crate because every field in it is knowledge this crate
 already owns — which wire dialect a host speaks, what its endpoint is, and
-which variable holds its key. mjolnir-tui renders the list but must not
-depend on this crate (`depends_on: [mjolnir-core]`), so mjolnir-cli maps
+which variable holds its key. aldwin-tui renders the list but must not
+depend on this crate (`depends_on: [aldwin-core]`), so aldwin-cli maps
 each row down to the display half (`ProviderChoice { id, purpose }`) and
 hands *that* to `run_first_run`. Nothing about an endpoint crosses into the
 TUI.
@@ -137,7 +137,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 ## Vocabulary
 
 - **Wire Event:** SSE from Anthropic's Messages API. Parsed internally; never crosses the trait boundary.
-- **Breakpoint Marker:** Abstract pointer from mjolnir-core ("cache up to here"). Translated to a cache_control `{ type: ephemeral }` placement on a specific content block at request-build time.
+- **Breakpoint Marker:** Abstract pointer from aldwin-core ("cache up to here"). Translated to a cache_control `{ type: ephemeral }` placement on a specific content block at request-build time.
 
 ## Design
 
@@ -149,13 +149,13 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 - **Retry:** Retryable: 408, 429, 500, 502, 503, 504, 529, plus connect/read/write transport failures. Full-jitter exponential backoff (1s base, 30s cap), max 4 attempts. Every attempt emits RetryAttempt { provider: "anthropic", status, retry_in, message } with the verbatim upstream message. Mid-stream errors after the first event are not retried — the step ends with a structured error and partial output stays in the log.
 - **Idle Timeout:** 60s SSE silence drops the stream and engages the retry path. Not user-tunable in V0.
 - **Extended Thinking:** Enabled by default, always adaptive — `thinking: { type: "adaptive" }` (see the 2026-09-01 post-archive fix above; the pre-4.6 `{ type: "enabled", budget_tokens: N }` shape this line originally described is rejected on every current Claude model). `extended_thinking_budget` (resolved from provider.yaml) no longer names a literal request field; it sizes `max_tokens`' headroom above the response instead.
-- **Provider Config Resolution:** Composes its own view from mjolnir-config's raw project_provider() and global_provider() snapshots — flat project-over-global overlay. Reads std::env::var(api_key_env) at construction; refuses to start on a missing var, surfacing the var name verbatim from the YAML.
+- **Provider Config Resolution:** Composes its own view from aldwin-config's raw project_provider() and global_provider() snapshots — flat project-over-global overlay. Reads std::env::var(api_key_env) at construction; refuses to start on a missing var, surfacing the var name verbatim from the YAML.
 - **API Version:** anthropic-version header pinned in code as a const. Provider config cannot override it.
 - **Cancellation:** Dropping the returned event stream is sufficient — reqwest drops the connection, no detached tasks, no buffer survives the drop.
 
 ## Interfaces
 
-- **Anthropic Client:** AnthropicClient implements mjolnir_core::LlmClient. Constructed from a resolved ProviderConfig.
+- **Anthropic Client:** AnthropicClient implements aldwin_core::LlmClient. Constructed from a resolved ProviderConfig.
 - **Provider Config:** ProviderConfig { kind, model, api_key_env, base_url (V0.5), extended_thinking_budget }. Built via `resolve(project, global) -> Result<ProviderConfig, ConfigError>`.
 - **Errors:** LlmError (transport, HTTP status, SSE parse, schema mismatch, retry exhausted, idle timeout, cancelled). Mapped to core's StepEnded.error variant at the trait boundary.
 
@@ -179,7 +179,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 - **Extended thinking enabled by default; budget configured in provider.yaml.** — Thinking is what differentiates Claude on the kinds of questions this project is built around. Budget is the developer's concern, so it surfaces in YAML. *Adjusted, not reversed, 2026-09-01:* the wire request itself now always sends adaptive thinking (the only mode current models accept — see the post-archive fix above); the YAML budget's job narrowed from "the thinking budget" to "how much headroom `max_tokens` gets," but stays developer-configurable in the same place under the same name, so no provider.yaml written for this decision needs to change.
 
-- **anthropic-version pinned in code, not config.** — The API version is Mjolnir's contract with Anthropic, not the developer's.
+- **anthropic-version pinned in code, not config.** — The API version is Aldwin's contract with Anthropic, not the developer's.
 
 - **Provider config resolution lives in this crate — flat project-over-global field overlay.** — Only one provider is active at a time; field overlay is the right shape, not a name-keyed union.
 
@@ -198,11 +198,11 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 ## Out of Scope
 
-- LlmClient trait definition — mjolnir-core.
-- Agent loop, conversation log, turn/step bookkeeping — mjolnir-core.
-- Tool execution and approval gate — mjolnir-tools.
-- Permission engine — mjolnir-permissions.
-- provider.yaml on-disk format — mjolnir-config.
+- LlmClient trait definition — aldwin-core.
+- Agent loop, conversation log, turn/step bookkeeping — aldwin-core.
+- Tool execution and approval gate — aldwin-tools.
+- Permission engine — aldwin-permissions.
+- provider.yaml on-disk format — aldwin-config.
 - OpenAI-compatible adapter implementation — V0.5.
 - Gemini, Bedrock, Vertex adapters — parent spec exclusion.
 - LLM call audit log, persisted usage history — V0 surfaces usage on StepEnded but does not persist.
@@ -211,9 +211,9 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 ## References
 
-- .claude/spec/mjolnir.md — parent.
-- .claude/spec/mjolnir-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
-- .claude/spec/mjolnir-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
+- .claude/spec/aldwin.md — parent.
+- .claude/spec/aldwin-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
+- .claude/spec/aldwin-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
 - https://docs.anthropic.com/en/api/messages — Messages API.
 - https://docs.anthropic.com/en/api/messages-streaming — SSE event shapes.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — cache_control placement.

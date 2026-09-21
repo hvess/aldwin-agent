@@ -121,6 +121,13 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
     for block in &m.content {
         match block {
             ContentBlock::Text { text: t } => text.push_str(t),
+            // Dropped on the way out, deliberately. An OpenAI-compatible
+            // endpoint has no assistant-side reasoning block to send one
+            // back into — `reasoning` is a response-only field — so echoing
+            // it the way Anthropic requires would be a 400 here. It is still
+            // carried in core's history: which provider can accept it back
+            // is a wire question, not a history one.
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
             ContentBlock::ToolUse(call) => tool_calls.push(map_tool_call(call)),
             ContentBlock::ToolResult(result) => {
                 flush(&mut text, &mut tool_calls, out);
@@ -271,6 +278,9 @@ pub struct Assembler {
     pending_stop: Option<StopReason>,
     /// Whether a ThinkingStart has been emitted without its ThinkingEnd.
     in_reasoning: bool,
+    /// Reasoning text accumulated since `ThinkingStart`, handed over whole
+    /// on `ThinkingEnd`.
+    reasoning_buf: String,
 }
 
 impl Assembler {
@@ -301,15 +311,25 @@ impl Assembler {
         let text = choice.delta.content.filter(|t| !t.is_empty());
         let tool_calls = choice.delta.tool_calls.unwrap_or_default();
 
-        // Thinking is bracketed, not transcribed: the first reasoning
-        // fragment opens it and the first non-reasoning thing — text, a tool
-        // call, or the finish_reason — closes it.
+        // Thinking is bracketed by the same rule as before — the first
+        // reasoning fragment opens it, the first non-reasoning thing closes
+        // it — but the text is now accumulated and handed over on the close
+        // rather than discarded (ADR 0006). There is no signature on this
+        // wire: the field is Anthropic's, and an empty one is honest about
+        // that rather than fabricating a stamp nothing issued.
         if reasoning.is_some() && !self.in_reasoning {
             events.push(LlmEvent::ThinkingStart);
             self.in_reasoning = true;
         }
+        if let Some(fragment) = &reasoning {
+            self.reasoning_buf.push_str(fragment);
+            events.push(LlmEvent::ThinkingDelta { text: fragment.clone() });
+        }
         if self.in_reasoning && (text.is_some() || !tool_calls.is_empty() || choice.finish_reason.is_some()) {
-            events.push(LlmEvent::ThinkingEnd);
+            events.push(LlmEvent::ThinkingEnd {
+                text:      std::mem::take(&mut self.reasoning_buf),
+                signature: String::new(),
+            });
             self.in_reasoning = false;
         }
 
@@ -536,20 +556,43 @@ mod tests {
     }
 
     /// `lumo-max` streams thinking as `delta.reasoning` alongside content.
-    /// Core has no thinking-text event, so the fragments bracket into
-    /// ThinkingStart/ThinkingEnd and the text itself is dropped.
+    /// The fragments still bracket into ThinkingStart/ThinkingEnd, but since
+    /// ADR 0006 the text is accumulated and handed over on the close rather
+    /// than dropped. There is no signature on this wire, so it closes with an
+    /// empty one rather than a fabricated stamp.
     #[test]
-    fn reasoning_deltas_bracket_into_thinking_start_and_end() {
+    fn reasoning_deltas_bracket_and_carry_their_text() {
         let mut a = Assembler::new();
         let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"17*"}}]}"#)).unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ThinkingStart]), "got {out:?}");
+        assert!(matches!(&out[..], [LlmEvent::ThinkingStart, LlmEvent::ThinkingDelta { .. }]), "got {out:?}");
         let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"23"}}]}"#)).unwrap();
-        assert!(out.is_empty(), "thinking opens once, got {out:?}");
+        assert!(matches!(&out[..], [LlmEvent::ThinkingDelta { .. }]), "thinking opens once, got {out:?}");
         let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"391","reasoning":null}}]}"#)).unwrap();
-        let [LlmEvent::ThinkingEnd, LlmEvent::TextDelta { text }] = &out[..] else { panic!("got {out:?}") };
+        let [LlmEvent::ThinkingEnd { text: thought, signature }, LlmEvent::TextDelta { text }] = &out[..] else {
+            panic!("got {out:?}")
+        };
+        assert_eq!(thought, "17*23", "the whole block, not just the last fragment");
+        assert!(signature.is_empty(), "this wire issues no signature");
         assert_eq!(text, "391");
         let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"!"}}]}"#)).unwrap();
         assert!(matches!(&out[..], [LlmEvent::TextDelta { .. }]), "thinking closes once, got {out:?}");
+    }
+
+    #[test]
+    /// An OpenAI-compatible endpoint has no assistant-side reasoning block,
+    /// so a carried thinking block must not be echoed into the request.
+    fn thinking_blocks_are_not_sent_back_on_this_wire() {
+        let messages = [Message {
+            role:    Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking { text: "private".into(), signature: String::new() },
+                ContentBlock::Text { text: "visible".into() },
+            ],
+        }];
+        let mut out = Vec::new();
+        map_message_into(&messages[0], &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content.as_deref(), Some("visible"));
     }
 
     #[test]
@@ -559,7 +602,7 @@ mod tests {
         let out = a
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#))
             .unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ThinkingEnd, LlmEvent::StepEnded { .. }]), "got {out:?}");
+        assert!(matches!(&out[..], [LlmEvent::ThinkingEnd { .. }, LlmEvent::StepEnded { .. }]), "got {out:?}");
     }
 
     #[test]

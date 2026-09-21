@@ -16,7 +16,15 @@ pub struct StepOutcome {
 pub enum LlmEvent {
     TextDelta        { text: String },
     ThinkingStart,
-    ThinkingEnd,
+    /// One fragment of thinking text. Carried, not dropped — see
+    /// `ContentBlock::Thinking` and ADR 0006 for why.
+    ThinkingDelta    { text: String },
+    /// Closes the block opened by `ThinkingStart`, carrying the whole of it
+    /// so the caller can commit one `ContentBlock::Thinking` without having
+    /// to re-accumulate the deltas it already saw.
+    ThinkingEnd      { text: String, signature: String },
+    /// A thinking block the provider encrypted. Opaque, echoed back as-is.
+    RedactedThinking { data: String },
     ToolUseRequested { call: ToolCall },
     StepEnded        { outcome: StepOutcome },
     RetryAttempt     { info: RetryInfo },
@@ -35,6 +43,9 @@ pub enum Event {
 
     TextDelta    { turn_id: TurnId, step_id: StepId, text: String },
     ThinkingStart { turn_id: TurnId, step_id: StepId },
+    /// Thinking text as it streams. The TUI renders it in the scrim roles
+    /// rather than as assistant prose; nothing else consumes it.
+    ThinkingDelta { turn_id: TurnId, step_id: StepId, text: String },
     ThinkingEnd   { turn_id: TurnId, step_id: StepId },
 
     ToolUseRequested    { turn_id: TurnId, step_id: StepId, call: ToolCall },
@@ -57,10 +68,15 @@ pub enum Event {
 
     /// A message from outside the turn/step lifecycle — the session
     /// initialiser (aldwin-cli) rejecting an unknown slash command or
-    /// reporting a `/reload-config` result, for example. Core itself never
-    /// emits this; it exists so a layer above core (which owns no other
-    /// vehicle for reaching the TUI's log) has one. Not turn/step-scoped
-    /// and never appended to the conversation log — this is UI-facing only.
+    /// reporting a `/reload-config` result, for example. It exists so a
+    /// layer above core (which owns no other vehicle for reaching the TUI's
+    /// log) has one. Not turn/step-scoped and never appended to the
+    /// conversation log — this is UI-facing only.
+    ///
+    /// Core emits it in exactly one case, added with ADR 0006: a step that
+    /// ends the turn having produced nothing the developer can see. That
+    /// used to render as a blank turn and read as a hang; the floor is that
+    /// a turn always says *something*, even if only that it said nothing.
     Notice { message: String },
 
     /// `Command::ClearHistory` landed and `ConversationLog` was wiped — the
@@ -149,6 +165,13 @@ pub enum LogRecord {
     TurnStarted  { turn_id: TurnId },
     UserMessage  { turn_id: TurnId, text: String },
     AssistantMessage { turn_id: TurnId, step_id: StepId, text: String },
+    /// A completed extended-thinking block. Persisted because a resumed
+    /// session that dropped it would send the provider an assistant turn
+    /// whose tool call has no thinking in front of it, which is rejected —
+    /// ADR 0006 §3.
+    Thinking     { turn_id: TurnId, step_id: StepId, text: String, signature: String },
+    /// The encrypted counterpart, kept for the same reason.
+    RedactedThinking { turn_id: TurnId, step_id: StepId, data: String },
     ToolUse      { turn_id: TurnId, step_id: StepId, call: ToolCall },
     ToolResult   { turn_id: TurnId, step_id: StepId, result: crate::types::ToolResult },
     StepBoundary { turn_id: TurnId, step_id: StepId, outcome: StepOutcome },

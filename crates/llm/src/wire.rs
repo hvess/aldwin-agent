@@ -83,6 +83,21 @@ pub enum WireContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control:                 Option<WireCacheControl>,
     },
+    /// Echoed back verbatim on the assistant turn that produced it. The
+    /// signature is the provider's own stamp over the block: it is not
+    /// ours to regenerate, reorder or omit, and a turn that calls a tool
+    /// after thinking is rejected outright without it.
+    Thinking {
+        thinking:                      String,
+        signature:                     String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control:                 Option<WireCacheControl>,
+    },
+    RedactedThinking {
+        data:                          String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control:                 Option<WireCacheControl>,
+    },
     ToolUse {
         id:                            String,
         name:                          String,
@@ -100,9 +115,16 @@ pub enum WireContentBlock {
 }
 
 impl WireContentBlock {
+    /// Whether the provider accepts a cache breakpoint on this block.
+    fn cacheable(&self) -> bool {
+        !matches!(self, WireContentBlock::Thinking { .. } | WireContentBlock::RedactedThinking { .. })
+    }
+
     fn set_cache_control(&mut self) {
         let slot = match self {
             WireContentBlock::Text { cache_control, .. } => cache_control,
+            WireContentBlock::Thinking { cache_control, .. } => cache_control,
+            WireContentBlock::RedactedThinking { cache_control, .. } => cache_control,
             WireContentBlock::ToolUse { cache_control, .. } => cache_control,
             WireContentBlock::ToolResult { cache_control, .. } => cache_control,
         };
@@ -136,12 +158,23 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
         last.cache_control = Some(WireCacheControl::ephemeral());
     }
 
+    // Indices are kept aligned with `request.messages` until the breakpoint
+    // is placed; a message that mapped to nothing is removed only afterwards.
     let mut messages: Vec<WireMessage> = request.messages.iter().map(map_message).collect();
     if let Some(&break_at) = request.cache_breakpoints.last() {
-        if let Some(block) = messages.get_mut(break_at).and_then(|m| m.content.last_mut()) {
+        // The provider refuses `cache_control` on a thinking block, and a
+        // message may have been emptied by `map_message`. So: the last block
+        // that can carry one, in the nearest message at or before the index
+        // that has one. Moving a breakpoint earlier only shortens the cached
+        // prefix; putting it on a thinking block fails the request.
+        let end = break_at.min(messages.len().saturating_sub(1));
+        if let Some(block) =
+            messages.iter_mut().take(end + 1).rev().find_map(|m| m.content.iter_mut().rev().find(|b| b.cacheable()))
+        {
             block.set_cache_control();
         }
     }
+    messages.retain(|m| !m.content.is_empty());
 
     let budget = config.extended_thinking_budget;
     WireRequest {
@@ -155,8 +188,35 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     }
 }
 
+/// Maps one message, deciding which of its thinking blocks may go back.
+///
+/// Carrying thinking in history (ADR 0006) is unconditional; *sending* it is
+/// not, and two cases are dropped here rather than sent to fail:
+///
+/// - **A block with no signature.** It came from an OpenAI-compatible
+///   provider, which issues none, and `/model` can move a running session
+///   from one onto this wire. The signature is how this provider verifies the
+///   block is its own; an empty one is a guaranteed rejection.
+/// - **Thinking with nothing after it.** The provider wants thinking back
+///   when the same turn went on to call a tool. A turn that *only* thought —
+///   the 14,096-token case ADR 0006 opens with — has no tool call to justify
+///   it, and an assistant message made of nothing but thinking is not a reply
+///   the conversation can carry. The message maps to empty and
+///   `build_request` removes it; two user messages in a row are accepted.
 fn map_message(m: &Message) -> WireMessage {
-    WireMessage { role: role_str(&m.role), content: m.content.iter().map(map_content_block).collect() }
+    let said_or_did_something =
+        m.content.iter().any(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::ToolUse(_) | ContentBlock::ToolResult(_)));
+    let content = m
+        .content
+        .iter()
+        .filter(|b| match b {
+            ContentBlock::Thinking { signature, .. } => said_or_did_something && !signature.is_empty(),
+            ContentBlock::RedactedThinking { .. } => said_or_did_something,
+            _ => true,
+        })
+        .map(map_content_block)
+        .collect();
+    WireMessage { role: role_str(&m.role), content }
 }
 
 fn role_str(role: &Role) -> &'static str {
@@ -169,6 +229,12 @@ fn role_str(role: &Role) -> &'static str {
 fn map_content_block(b: &ContentBlock) -> WireContentBlock {
     match b {
         ContentBlock::Text { text } => WireContentBlock::Text { text: text.clone(), cache_control: None },
+        ContentBlock::Thinking { text, signature } => {
+            WireContentBlock::Thinking { thinking: text.clone(), signature: signature.clone(), cache_control: None }
+        }
+        ContentBlock::RedactedThinking { data } => {
+            WireContentBlock::RedactedThinking { data: data.clone(), cache_control: None }
+        }
         ContentBlock::ToolUse(call) => {
             WireContentBlock::ToolUse { id: call.id.clone(), name: call.name.clone(), input: call.input.clone(), cache_control: None }
         }
@@ -225,10 +291,12 @@ pub struct WireDeltaUsage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireContentBlockStart {
     // `text`/`thinking` bodies on these two start events are always empty
-    // in practice (content streams in via later deltas) — the variant tag
-    // alone is what block-kind tracking needs, so the payload isn't parsed.
+    // in practice (content streams in via later deltas), so only the tag is
+    // needed. `redacted_thinking` is the exception: it does not stream, so
+    // its whole payload arrives here and is captured.
     Text,
     Thinking,
+    RedactedThinking { #[serde(default)] data: String },
     ToolUse { id: String, name: String },
     #[serde(other)]
     Other,
@@ -238,9 +306,8 @@ pub enum WireContentBlockStart {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireDelta {
     TextDelta { text: String },
-    // Dropped at the parse site by construction — see Assembler::handle.
-    ThinkingDelta,
-    SignatureDelta,
+    ThinkingDelta { #[serde(default)] thinking: String },
+    SignatureDelta { #[serde(default)] signature: String },
     InputJsonDelta { #[serde(default)] partial_json: String },
     #[serde(other)]
     Other,
@@ -286,6 +353,7 @@ pub enum WireError {
 enum BlockKind {
     Text,
     Thinking,
+    RedactedThinking,
     ToolUse,
     Other,
 }
@@ -296,16 +364,28 @@ struct ToolBuffer {
     json: String,
 }
 
+/// One in-flight thinking block: its text as the deltas build it, and the
+/// signature, which arrives as its own delta near the end.
+#[derive(Default)]
+struct ThinkingBuffer {
+    text:      String,
+    signature: String,
+}
+
 /// Turns a sequence of `WireEvent`s from one HTTP attempt into
-/// `aldwin_core::LlmEvent`s. Per aldwin-llm.md: thinking content is
-/// dropped at the parse site (only start/end markers cross the boundary);
-/// tool input is buffered and emitted as one `ToolUseRequested` on
+/// `aldwin_core::LlmEvent`s. Thinking is buffered like tool input and
+/// closed out on `content_block_stop`, so the whole block — text and the
+/// provider's signature over it — crosses the boundary as one
+/// `ThinkingEnd` (ADR 0006; it was dropped here until then, which both
+/// blanked reasoning-only turns and made the next request invalid). Tool
+/// input is buffered and emitted as one `ToolUseRequested` on
 /// `content_block_stop`; usage is folded from `message_start` +
 /// `message_delta`.
 #[derive(Default)]
 pub struct Assembler {
-    blocks:         HashMap<usize, BlockKind>,
-    tool_buffers:   HashMap<usize, ToolBuffer>,
+    blocks:            HashMap<usize, BlockKind>,
+    tool_buffers:      HashMap<usize, ToolBuffer>,
+    thinking_buffers:  HashMap<usize, ThinkingBuffer>,
     input_tokens:   u32,
     cache_creation: u32,
     cache_read:     u32,
@@ -338,7 +418,14 @@ impl Assembler {
                 }
                 WireContentBlockStart::Thinking => {
                     self.blocks.insert(index, BlockKind::Thinking);
+                    self.thinking_buffers.insert(index, ThinkingBuffer::default());
                     vec![LlmEvent::ThinkingStart]
+                }
+                // Arrives whole rather than in deltas, so it is emitted on
+                // sight; there is no block to buffer.
+                WireContentBlockStart::RedactedThinking { data } => {
+                    self.blocks.insert(index, BlockKind::RedactedThinking);
+                    vec![LlmEvent::RedactedThinking { data }]
                 }
                 WireContentBlockStart::ToolUse { id, name } => {
                     self.blocks.insert(index, BlockKind::ToolUse);
@@ -360,12 +447,30 @@ impl Assembler {
                     }
                     vec![]
                 }
-                // ThinkingDelta / SignatureDelta dropped here at the parse
-                // site by construction — no arm buffers or re-emits them.
+                // Buffered *and* forwarded: the buffer is what gets committed
+                // to history at `content_block_stop`, the event is what lets
+                // the TUI show reasoning as it arrives instead of a spinner.
+                WireDelta::ThinkingDelta { thinking } => {
+                    if let Some(buf) = self.thinking_buffers.get_mut(&index) {
+                        buf.text.push_str(&thinking);
+                    }
+                    vec![LlmEvent::ThinkingDelta { text: thinking }]
+                }
+                // Never rendered — it is the provider's stamp over the block,
+                // carried only so the block can be echoed back intact.
+                WireDelta::SignatureDelta { signature } => {
+                    if let Some(buf) = self.thinking_buffers.get_mut(&index) {
+                        buf.signature.push_str(&signature);
+                    }
+                    vec![]
+                }
                 _ => vec![],
             },
             WireEvent::ContentBlockStop { index } => match self.blocks.remove(&index) {
-                Some(BlockKind::Thinking) => vec![LlmEvent::ThinkingEnd],
+                Some(BlockKind::Thinking) => {
+                    let buf = self.thinking_buffers.remove(&index).unwrap_or_default();
+                    vec![LlmEvent::ThinkingEnd { text: buf.text, signature: buf.signature }]
+                }
                 Some(BlockKind::ToolUse) => {
                     let buf = self.tool_buffers.remove(&index).expect("ToolUse block always has a buffer");
                     let input = if buf.json.is_empty() {
@@ -433,7 +538,10 @@ mod tests {
     }
 
     #[test]
-    fn thinking_content_is_dropped_only_markers_cross() {
+    /// ADR 0006 reversed this: thinking used to be dropped at the parse site
+    /// and only its brackets crossed. It is now buffered across deltas and
+    /// handed over whole on stop, signature included.
+    fn thinking_buffers_across_deltas_and_closes_with_its_signature() {
         let mut a = Assembler::new();
         let start = a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#)).unwrap();
         assert!(matches!(&start[..], [LlmEvent::ThinkingStart]));
@@ -441,13 +549,62 @@ mod tests {
         let delta = a
             .handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning..."}}"#))
             .unwrap();
-        assert!(delta.is_empty());
+        assert!(matches!(&delta[..], [LlmEvent::ThinkingDelta { text }] if text == "reasoning..."), "got {delta:?}");
 
+        let more = a
+            .handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" and more"}}"#))
+            .unwrap();
+        assert!(matches!(&more[..], [LlmEvent::ThinkingDelta { .. }]));
+
+        // The signature is carried but never surfaced as an event: it is the
+        // provider's stamp, not something to render.
         let sig = a.handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}"#)).unwrap();
         assert!(sig.is_empty());
 
         let stop = a.handle(ev(r#"{"type":"content_block_stop","index":0}"#)).unwrap();
-        assert!(matches!(&stop[..], [LlmEvent::ThinkingEnd]));
+        let [LlmEvent::ThinkingEnd { text, signature }] = &stop[..] else { panic!("got {stop:?}") };
+        assert_eq!(text, "reasoning... and more");
+        assert_eq!(signature, "abc");
+    }
+
+    #[test]
+    /// The encrypted counterpart arrives whole on the start event rather than
+    /// in deltas, and is passed straight through.
+    fn redacted_thinking_is_carried_opaquely() {
+        let mut a = Assembler::new();
+        let out = a
+            .handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"EncRypTed=="}}"#))
+            .unwrap();
+        let [LlmEvent::RedactedThinking { data }] = &out[..] else { panic!("got {out:?}") };
+        assert_eq!(data, "EncRypTed==");
+    }
+
+    #[test]
+    /// The round trip ADR 0006 exists for: a thinking block that came back
+    /// from the provider has to serialise into the next request intact, or
+    /// the turn that follows it with a tool call is rejected.
+    fn a_thinking_block_serialises_back_with_its_signature() {
+        let messages = vec![Message {
+            role:    Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking { text: "step one".into(), signature: "sig-1".into() },
+                ContentBlock::Text { text: "done".into() },
+            ],
+        }];
+        let config = crate::config::ProviderConfig {
+            kind: aldwin_config::ProviderKind::Anthropic,
+            model: "claude-sonnet-5".into(),
+            api_key_env: "X".into(),
+            base_url: None,
+            extended_thinking_budget: 1000,
+        };
+        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[] };
+        let wire = build_request(&config, &request);
+        let json = serde_json::to_value(&wire).unwrap();
+        let block = &json["messages"][0]["content"][0];
+        assert_eq!(block["type"], "thinking");
+        assert_eq!(block["thinking"], "step one");
+        assert_eq!(block["signature"], "sig-1");
     }
 
     #[test]
@@ -535,6 +692,62 @@ mod tests {
         let mut a = Assembler::new();
         assert!(a.handle(ev(r#"{"type":"ping"}"#)).unwrap().is_empty());
         assert!(a.handle(ev(r#"{"type":"some_future_event"}"#)).unwrap().is_empty());
+    }
+
+    fn anthropic() -> crate::config::ProviderConfig {
+        crate::config::ProviderConfig {
+            kind: aldwin_config::ProviderKind::Anthropic,
+            model: "claude-sonnet-5".into(),
+            api_key_env: "X".into(),
+            base_url: None,
+            extended_thinking_budget: 1000,
+        }
+    }
+
+    fn user(text: &str) -> Message {
+        Message { role: Role::User, content: vec![ContentBlock::Text { text: text.into() }] }
+    }
+
+    /// Audit: the turn ADR 0006 was written for — a step that only thought —
+    /// became an assistant message of nothing but thinking, with the cache
+    /// breakpoint on the thinking block. Both are rejected by the provider.
+    #[test]
+    fn a_thinking_only_turn_is_not_sent_and_never_carries_the_breakpoint() {
+        let messages = vec![
+            user("first"),
+            Message {
+                role:    Role::Assistant,
+                content: vec![ContentBlock::Thinking { text: "hmm".into(), signature: "sig".into() }],
+            },
+            user("continue"),
+        ];
+        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[1] };
+        let wire = build_request(&anthropic(), &request);
+
+        assert_eq!(wire.messages.len(), 2, "the thinking-only message is dropped");
+        assert!(wire.messages.iter().all(|m| m.role == "user"));
+        let json = serde_json::to_value(&wire).unwrap();
+        assert!(!json.to_string().contains("\"thinking\":\"hmm\""));
+        // The breakpoint moved back onto the nearest block that can hold it.
+        assert!(matches!(wire.messages[0].content[0], WireContentBlock::Text { cache_control: Some(_), .. }));
+    }
+
+    /// Audit: `/model` can move a session from an OpenAI-compatible provider,
+    /// whose reasoning has no signature, onto this wire.
+    #[test]
+    fn unsigned_thinking_from_another_provider_is_not_sent() {
+        let messages = vec![Message {
+            role:    Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking { text: "unsigned".into(), signature: String::new() },
+                ContentBlock::Text { text: "answer".into() },
+            ],
+        }];
+        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[0] };
+        let wire = build_request(&anthropic(), &request);
+
+        assert_eq!(wire.messages[0].content.len(), 1);
+        assert!(matches!(wire.messages[0].content[0], WireContentBlock::Text { cache_control: Some(_), .. }));
     }
 
     #[test]

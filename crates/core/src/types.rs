@@ -73,6 +73,22 @@ pub struct ToolResult {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text       { text: String },
+    /// An extended-thinking block, kept verbatim with the signature the
+    /// provider stamped it with.
+    ///
+    /// It is carried rather than dropped for two separate reasons. The first
+    /// is correctness: when a turn that produced thinking goes on to call a
+    /// tool, the provider requires the thinking block back — signature and
+    /// all — on the assistant message that requested the call, and rejects
+    /// the request without it. The second is that a step whose entire output
+    /// was a thinking block used to reach the developer as a blank turn
+    /// (14,096 tokens spent, nothing rendered, "Continue" typed by hand).
+    /// See ADR 0006.
+    Thinking   { text: String, signature: String },
+    /// Thinking the provider encrypted rather than showed. Opaque to us and
+    /// echoed back untouched, for the same wire-correctness reason as
+    /// `Thinking` — there is nothing here to render.
+    RedactedThinking { data: String },
     ToolUse    (ToolCall),
     ToolResult (ToolResult),
 }

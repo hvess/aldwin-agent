@@ -605,6 +605,11 @@ impl App {
                 }
             }
             LogRecord::TurnEnded { reason, .. } => self.log.push(LogEntry::TurnEnded { reason: reason.into() }),
+            // Thinking is carried in the transcript for the wire's sake
+            // (ADR 0006), not for the reader's: the log shows what the agent
+            // said, not what it thought. Drawing it needs a treatment the
+            // design system does not specify yet — open-tasks entry 24.
+            LogRecord::Thinking { .. } | LogRecord::RedactedThinking { .. } => {}
             LogRecord::TurnStarted { .. } | LogRecord::StepBoundary { .. } => {}
         }
     }
@@ -625,6 +630,9 @@ impl App {
                 }
             }
             Event::ThinkingStart { .. } => self.thinking = true,
+            // Keeps the indicator alive across a long block without drawing
+            // the text — see the `replay` arm above for why it isn't shown.
+            Event::ThinkingDelta { .. } => self.thinking = true,
             Event::ThinkingEnd { .. } => self.thinking = false,
             Event::ToolUseRequested { call, .. } => {
                 self.pending_tool_names.insert(call.id, call.name);

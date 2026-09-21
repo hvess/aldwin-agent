@@ -227,6 +227,13 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         let mut text_buf   = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut step_outcome: Option<StepOutcome> = None;
+        // This step's assistant content, **in the order it arrived**. The
+        // provider wants its blocks back as it emitted them; with interleaved
+        // thinking that can be thinking, text, thinking again, and sorting
+        // the thinking to the front would hand back a turn it never wrote.
+        // Text is flushed into here whenever something else interrupts it.
+        let mut content: Vec<ContentBlock> = Vec::new();
+        let mut produced_text = false;
 
         // Inner block: stream lives here, releasing the borrow on messages_snap at end.
         let stream_terminal: StepTerminal = {
@@ -284,8 +291,35 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                     LlmEvent::ThinkingStart => {
                                         let _ = events.send(Event::ThinkingStart { turn_id, step_id }).await;
                                     }
-                                    LlmEvent::ThinkingEnd => {
+                                    LlmEvent::ThinkingDelta { text } => {
+                                        let _ = events.send(Event::ThinkingDelta {
+                                            turn_id, step_id, text,
+                                        }).await;
+                                    }
+                                    LlmEvent::ThinkingEnd { text, signature } => {
+                                        if !text_buf.is_empty() {
+                                            let said = std::mem::take(&mut text_buf);
+                                            self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: said.clone() });
+                                            content.push(ContentBlock::Text { text: said });
+                                            produced_text = true;
+                                        }
+                                        content.push(ContentBlock::Thinking {
+                                            text: text.clone(), signature: signature.clone(),
+                                        });
+                                        self.log.append(LogRecord::Thinking {
+                                            turn_id, step_id, text, signature,
+                                        });
                                         let _ = events.send(Event::ThinkingEnd { turn_id, step_id }).await;
+                                    }
+                                    LlmEvent::RedactedThinking { data } => {
+                                        if !text_buf.is_empty() {
+                                            let said = std::mem::take(&mut text_buf);
+                                            self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: said.clone() });
+                                            content.push(ContentBlock::Text { text: said });
+                                            produced_text = true;
+                                        }
+                                        content.push(ContentBlock::RedactedThinking { data: data.clone() });
+                                        self.log.append(LogRecord::RedactedThinking { turn_id, step_id, data });
                                     }
                                     LlmEvent::ToolUseRequested { call } => {
                                         let _ = events.send(Event::ToolUseRequested {
@@ -313,14 +347,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }
         }; // stream dropped here
 
-        // Commit accumulated text to log and messages before anything else.
+        // Commit this step's assistant content to log and messages before
+        // anything else. Everything up to the last interruption is already in
+        // `content` and in the log (appended as it happened, so a crash
+        // mid-step cannot lose it, and a replay of the log reproduces this
+        // same order); what remains is the trailing text.
         if !text_buf.is_empty() {
             let text = std::mem::take(&mut text_buf);
             self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: text.clone() });
-            messages.push(Message {
-                role:    Role::Assistant,
-                content: vec![ContentBlock::Text { text }],
-            });
+            content.push(ContentBlock::Text { text });
+            produced_text = true;
+        }
+        if !content.is_empty() {
+            messages.push(Message { role: Role::Assistant, content });
         }
 
         match stream_terminal {
@@ -351,6 +390,21 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
 
         let outcome = step_outcome.expect("StepTerminal::Ok implies StepEnded was received");
+
+        // The floor against a silent turn. A step that ends the turn with no
+        // text and no tool call has nothing to render, and before ADR 0006 it
+        // reached the developer as an empty response — the observed case spent
+        // 14,096 output tokens entirely inside a thinking block, drew nothing,
+        // and was answered by hand with "Continue". Thinking is carried now,
+        // so that particular turn would render; this covers whatever else ends
+        // a turn with nothing to show, and says so rather than looking hung.
+        if matches!(outcome.stop_reason, StopReason::EndTurn) && !produced_text && tool_calls.is_empty() {
+            let _ = events
+                .send(Event::Notice {
+                    message: "the agent ended the turn without a reply".into(),
+                })
+                .await;
+        }
 
         match outcome.stop_reason {
             StopReason::EndTurn  => StepResult::EndTurn(outcome),
@@ -495,6 +549,24 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         role:    Role::Assistant,
                         content: vec![ContentBlock::Text { text: text.clone() }],
                     });
+                }
+                // Thinking is logged as each block closes, and text is
+                // flushed to the log whenever thinking interrupts it — so
+                // replaying in log order reproduces the order the provider
+                // emitted, which is the order it wants back (ADR 0006 §2).
+                LogRecord::Thinking { text, signature, .. } => {
+                    let block = ContentBlock::Thinking { text: text.clone(), signature: signature.clone() };
+                    match messages.last_mut() {
+                        Some(last) if last.role == Role::Assistant => last.content.push(block),
+                        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
+                    }
+                }
+                LogRecord::RedactedThinking { data, .. } => {
+                    let block = ContentBlock::RedactedThinking { data: data.clone() };
+                    match messages.last_mut() {
+                        Some(last) if last.role == Role::Assistant => last.content.push(block),
+                        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
+                    }
                 }
                 LogRecord::ToolUse { call, .. } => {
                     if let Some(last) = messages.last_mut() {
@@ -720,6 +792,145 @@ mod tests {
         assert!(matches!(snap[2], LogRecord::AssistantMessage { .. }));
         assert!(matches!(snap[3], LogRecord::StepBoundary { .. }));
         assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
+    }
+
+    /// ADR 0006. A step whose whole output was a thinking block used to
+    /// commit nothing: the block was dropped at the wire and the turn
+    /// reached the developer blank. The observed case spent 14,096 output
+    /// tokens that way and was answered by hand with "Continue".
+    #[tokio::test]
+    async fn a_thinking_only_step_is_neither_dropped_nor_silent() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::ThinkingStart,
+            LlmEvent::ThinkingDelta { text: "weighing it up".into() },
+            LlmEvent::ThinkingEnd { text: "weighing it up".into(), signature: "sig-1".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+        ]]);
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+
+        let mut noticed = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::Notice { .. } => noticed = true,
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+
+        // The thinking survived into the transcript...
+        let snap = log.snapshot();
+        assert!(
+            snap.iter().any(|r| matches!(r, LogRecord::Thinking { text, signature, .. }
+                                          if text == "weighing it up" && signature == "sig-1")),
+            "thinking must be persisted: {snap:?}"
+        );
+        // ...and the developer was told the turn produced no reply, rather
+        // than being shown nothing at all.
+        assert!(noticed, "a turn with no visible output must say so");
+    }
+
+    /// The wire-correctness half: thinking that preceded a tool call has to
+    /// go back in front of it, in the assistant message that made the call,
+    /// or the provider rejects the next request.
+    #[tokio::test]
+    async fn thinking_goes_back_ahead_of_the_tool_call_it_preceded() {
+        let call = ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) };
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ThinkingStart,
+                LlmEvent::ThinkingEnd { text: "first, read it".into(), signature: "sig-1".into() },
+                LlmEvent::TextDelta { text: "Reading it now.".into() },
+                LlmEvent::ToolUseRequested { call },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![
+                LlmEvent::TextDelta { text: "done".into() },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            ],
+        ]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        loop {
+            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
+            }
+        }
+
+        // The second step's request is where the first step's assistant turn
+        // shows up as history.
+        let seen = seen_messages.lock().unwrap();
+        let second = &seen[1];
+        let assistant = second.iter().find(|m| m.role == Role::Assistant).expect("an assistant message");
+        assert!(
+            matches!(assistant.content.first(), Some(ContentBlock::Thinking { signature, .. }) if signature == "sig-1"),
+            "thinking must come first: {:?}",
+            assistant.content
+        );
+        assert!(
+            matches!(assistant.content.last(), Some(ContentBlock::ToolUse(_))),
+            "the tool call still comes last: {:?}",
+            assistant.content
+        );
+    }
+
+    /// Audit: thinking was sorted to the front of the message. With
+    /// interleaved thinking the provider can emit text *between* two thinking
+    /// blocks, and it wants the turn back as it wrote it — live, and again
+    /// when the log is replayed for the next turn.
+    #[tokio::test]
+    async fn interleaved_blocks_keep_the_order_they_arrived_in() {
+        let script = vec![
+            LlmEvent::ThinkingStart,
+            LlmEvent::ThinkingEnd { text: "one".into(), signature: "s1".into() },
+            LlmEvent::TextDelta { text: "between".into() },
+            LlmEvent::ThinkingStart,
+            LlmEvent::ThinkingEnd { text: "two".into(), signature: "s2".into() },
+            LlmEvent::TextDelta { text: "after".into() },
+            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+        ];
+        let client = ScriptedClient::new(vec![
+            script,
+            vec![LlmEvent::TextDelta { text: "ok".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+        ]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(64);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        for text in ["first", "second"] {
+            cmd_tx.send(Command::Submit { text: text.into() }).await.unwrap();
+            loop {
+                if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                    break;
+                }
+            }
+        }
+
+        // The second turn's request is rebuilt from the log.
+        let seen = seen_messages.lock().unwrap();
+        let assistant = seen[1].iter().find(|m| m.role == Role::Assistant).expect("an assistant message");
+        let shape: Vec<&str> = assistant
+            .content
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Thinking { text, .. } => text.as_str(),
+                ContentBlock::Text { text } => text.as_str(),
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(shape, vec!["one", "between", "two", "after"]);
     }
 
     /// Regression test: `run_turn` used to build its first step's request by

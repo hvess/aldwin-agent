@@ -20,8 +20,12 @@ pub enum ToolError {
     #[error("{path}: {source}")]
     Io { path: PathBuf, #[source] source: std::io::Error },
 
-    #[error("path {path:?} resolves outside the project root")]
-    PathEscapesProject { path: String },
+    /// The message names the roots rather than only the refusal: the
+    /// observed failure was a model told "outside the project root" with no
+    /// way to learn what the root *was*, which silently pushed the work onto
+    /// `run` — the one tool that was not checking (ADR 0007).
+    #[error("path {path:?} is outside this workspace. Reachable roots: {roots}. To reach it, the developer adds its directory under `roots:` in .aldwin/permissions.yaml and runs /reload-config — say so rather than routing around this with a shell")]
+    PathEscapesWorkspace { path: String, roots: String },
 
     #[error("{path}: expected exactly one occurrence of the given text, found {count}")]
     AmbiguousMatch { path: PathBuf, count: usize },
@@ -62,15 +66,28 @@ pub enum ToolError {
     CommandFailed { output: String },
 
     /// Reads cannot be enforced here, so a read declaration cannot be
-    /// honoured — the call is refused rather than run unconfined.
+    /// honoured — the call is not run unconfined.
+    ///
+    /// **This is a question, not a failure**, and the dispatcher turns it
+    /// into one (ADR 0004 §4: "where a `read` grant cannot be honoured,
+    /// every call asks"). It reached the model as a flat error until ADR
+    /// 0007, which on a platform with no enforcement primitive meant every
+    /// read-declared call failed — so the model stopped declaring reads
+    /// after two attempts and spent the next 69 calls declaring `ls` and
+    /// `grep` as writes. Carries `program`/`args` so the prompt can name
+    /// what it is asking about.
     #[error("this call was declared a read, but reads cannot be enforced on this system: {source}")]
-    SandboxUnavailable { #[source] source: std::io::Error },
+    SandboxUnavailable { program: String, args: Vec<String>, #[source] source: std::io::Error },
 
     #[error("no such program: {program}")]
     ProgramNotFound { program: String },
 
-    #[error("command timed out after {seconds}s")]
-    Timeout { seconds: u64 },
+    /// Carries whatever the program wrote before the budget ran out —
+    /// without it, a long command that failed reported only that it was
+    /// long, and the 30-minute clone that prompted this left nothing at all
+    /// to diagnose it with.
+    #[error("command timed out after {seconds}s\n{partial}")]
+    Timeout { seconds: u64, partial: String },
 
     #[error("permission engine error: {0}")]
     Permission(#[from] aldwin_permissions::PermissionError),

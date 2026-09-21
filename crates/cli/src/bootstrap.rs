@@ -309,7 +309,6 @@ pub async fn run() -> Result<(), StartupError> {
     let permissions = Arc::new(Engine::new(config.clone()));
 
     let approved_context_files = context_approval::resolve(&cwd, &permissions);
-    let additional_context = context::build(&cwd, &approved_context_files);
 
     let project_provider = config.project_provider();
     let global_provider = config.global_provider().map_err(StartupError::NoProvider)?;
@@ -322,7 +321,16 @@ pub async fn run() -> Result<(), StartupError> {
     let session_model = slash::qualified(&effective_provider, aldwin_llm::identify(&effective_provider));
     let client = ClientHandle::new(build_client(provider_config)?);
 
-    let mut registry = aldwin_tools::builtin_registry(cwd.clone());
+    // Reach: the project root, plus whatever `.aldwin/permissions.yaml`
+    // declares (ADR 0007). Project scope only, and stated rather than
+    // inferred — nothing here goes looking for sibling checkouts.
+    //
+    // A relative root resolves against the project root, so
+    // `roots: [../proton-libs]` in a project file means what it looks like.
+    let workspace = aldwin_tools::Workspace::new(cwd.clone());
+    let reach_notice = apply_roots(&config, &cwd, &workspace);
+    let additional_context = context::build(&cwd, &workspace.roots(), &approved_context_files);
+    let mut registry = aldwin_tools::builtin_registry(workspace.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
     // Best-effort per server/tool (see register_mcp_tools' own doc comment)
     // — one broken server must not prevent the session from starting, or
@@ -368,7 +376,18 @@ pub async fn run() -> Result<(), StartupError> {
         Some(history) => agent.with_sink(history),
         None => agent,
     };
-    let session_state = slash::Session::new(session_model, Box::new(client));
+    let session_state = {
+        let (config, cwd, workspace) = (config.clone(), cwd.clone(), workspace.clone());
+        slash::Session::new(session_model, Box::new(client))
+            .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
+    };
+    // Reach wider than the project is said out loud, once, at the top of the
+    // session. `.aldwin/permissions.yaml` can arrive with a clone, and a
+    // `roots:` in it widens where every tool may point; the developer should
+    // not have to open the file to find that out.
+    if let Some(message) = reach_notice {
+        let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
+    }
 
     let interceptor = tokio::spawn(slash::run_interceptor(
         tui_cmd_rx,
@@ -419,6 +438,33 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
         by_name.insert(server.name.clone(), server);
     }
     by_name.into_values().collect()
+}
+
+/// Points `workspace` at the roots the project's `permissions.yaml` declares
+/// now, and returns what the developer should be told about it: the roots in
+/// force beyond the project, and any that were written down but do not exist
+/// — a typo there silently narrows reach, which reads as the agent refusing
+/// for no reason. `None` when there is nothing beyond the project root and
+/// nothing was dropped.
+///
+/// Called at startup and again after `/reload-config`. A relative root
+/// resolves against the project root, so `roots: [../proton-libs]` means
+/// what it looks like.
+fn apply_roots(config: &Config, cwd: &std::path::Path, workspace: &aldwin_tools::Workspace) -> Option<String> {
+    let declared: Vec<std::path::PathBuf> =
+        config.project_permissions().roots.iter().map(|r| if r.is_absolute() { r.clone() } else { cwd.join(r) }).collect();
+    let dropped = workspace.set_extra_roots(declared);
+    let extra: Vec<String> = workspace.roots().iter().skip(1).map(|r| r.display().to_string()).collect();
+
+    let mut parts = Vec::new();
+    if !extra.is_empty() {
+        parts.push(format!("tools can also reach {} (roots in .aldwin/permissions.yaml)", extra.join(", ")));
+    }
+    if !dropped.is_empty() {
+        let names: Vec<String> = dropped.iter().map(|r| r.display().to_string()).collect();
+        parts.push(format!("ignored roots that do not exist: {}", names.join(", ")));
+    }
+    if parts.is_empty() { None } else { Some(parts.join(" · ")) }
 }
 
 #[cfg(test)]
@@ -630,5 +676,31 @@ mod tests {
                 provider.id
             );
         }
+    }
+
+    /// ADR 0007 / audit: reach beyond the project is said out loud, a root
+    /// that does not exist is reported rather than silently dropped, and a
+    /// reload re-reads the file — the header promises that for every key.
+    #[test]
+    fn roots_are_applied_reported_and_re_read_on_reload() {
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let sibling = tempfile::tempdir().unwrap();
+        let aldwin = project.path().join(".aldwin");
+        std::fs::create_dir_all(&aldwin).unwrap();
+        let file = aldwin.join("permissions.yaml");
+        std::fs::write(&file, "version: 2\n").unwrap();
+
+        let config = Config::open_at(project.path(), global.path()).unwrap();
+        let workspace = aldwin_tools::Workspace::new(project.path());
+        assert_eq!(apply_roots(&config, project.path(), &workspace), None, "nothing to say about a plain project");
+
+        std::fs::write(&file, format!("version: 2\nroots:\n- {}\n- ../no-such-dir\n", sibling.path().display())).unwrap();
+        config.reload_all().unwrap();
+        let notice = apply_roots(&config, project.path(), &workspace).expect("a notice");
+
+        assert_eq!(workspace.roots().len(), 2);
+        assert!(notice.contains(&sibling.path().canonicalize().unwrap().display().to_string()), "{notice}");
+        assert!(notice.contains("no-such-dir"), "a dropped root must be named: {notice}");
     }
 }

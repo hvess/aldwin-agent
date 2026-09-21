@@ -910,6 +910,24 @@ mod tests {
         assert!(text.starts_with("# Aldwin permissions"), "{text}");
     }
 
+    /// ADR 0007 §1. `roots` is read, an empty one is never written (so a
+    /// file that declares none still reads as the four keys it always had),
+    /// and `deny_unknown_fields` still rejects a misspelling rather than
+    /// silently ignoring the reach a developer thought they had declared.
+    #[test]
+    fn roots_are_read_from_a_permissions_file_and_a_misspelling_is_an_error() {
+        let parsed: PermissionsConfig =
+            serde_yaml_ng::from_str("version: 2\nroots:\n- ../proton-libs\n- /abs/other\n").unwrap();
+        assert_eq!(parsed.roots, vec![PathBuf::from("../proton-libs"), PathBuf::from("/abs/other")]);
+
+        let none: PermissionsConfig = serde_yaml_ng::from_str("version: 2\n").unwrap();
+        assert!(none.roots.is_empty());
+        let written = serde_yaml_ng::to_string(&none).unwrap();
+        assert!(!written.contains("roots"), "an empty list must not be written: {written}");
+
+        assert!(serde_yaml_ng::from_str::<PermissionsConfig>("version: 2\nroot:\n- ../x\n").is_err());
+    }
+
     #[test]
     fn a_v1_permissions_file_is_moved_aside_rather_than_reinterpreted() {
         let project = tempfile::tempdir().unwrap();

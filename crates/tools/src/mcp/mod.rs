@@ -88,7 +88,7 @@ mod tests {
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
-        let mut registry = crate::builtin_registry(std::path::PathBuf::from("."));
+        let mut registry = crate::builtin_registry(crate::Workspace::new("."));
         // Alias one built-in's registered name to "echo" indirectly isn't
         // possible without changing a built-in's name, so instead prove the
         // mechanism directly: pre-register something under "echo" the same

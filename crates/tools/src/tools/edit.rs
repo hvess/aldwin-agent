@@ -1,10 +1,10 @@
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::diff;
 use crate::error::ToolError;
+use crate::paths::Workspace;
 use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 use aldwin_permissions::Class;
@@ -15,11 +15,11 @@ use aldwin_permissions::Class;
 /// dispatcher permission check is never even consulted for this tool.
 pub struct EditTool {
     descriptor:   ToolDescriptor,
-    project_root: PathBuf,
+    workspace:    Workspace,
 }
 
 impl EditTool {
-    pub fn new(project_root: PathBuf) -> Self {
+    pub fn new(workspace: Workspace) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name:         "edit".into(),
@@ -36,7 +36,7 @@ impl EditTool {
                 edit_class: true,
                 source:     ToolSource::Builtin,
             },
-            project_root,
+            workspace,
         }
     }
 }
@@ -74,7 +74,7 @@ impl Tool for EditTool {
 
     async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let args = edit_args(&input)?;
-        let path = crate::paths::resolve_in_project(&self.project_root, &args.path)?;
+        let path = self.workspace.resolve(&args.path)?;
 
         let current = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
 
@@ -111,6 +111,7 @@ impl Tool for EditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use crate::test_support::{dispatch_context, ALWAYS_APPROVE, ALWAYS_DENY};
     use aldwin_core::Event;
     use tempfile::tempdir;
@@ -125,7 +126,7 @@ mod tests {
     async fn approved_edit_writes_the_replacement() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "fn a() {}\nfn b() {}\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let out = tool
             .call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { println!(\"hi\"); }"}), &ALWAYS_APPROVE)
@@ -140,17 +141,17 @@ mod tests {
     #[tokio::test]
     async fn absolute_path_cannot_escape_the_project_root() {
         let dir = tempdir().unwrap();
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "/etc/passwd", "before": "root", "after": "x"}), &ALWAYS_APPROVE).await.unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
+        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }));
     }
 
     #[tokio::test]
     async fn denied_edit_leaves_the_file_untouched() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { x(); }"}), &ALWAYS_DENY).await.unwrap_err();
         assert!(matches!(err, ToolError::Denied));
@@ -163,7 +164,7 @@ mod tests {
     async fn zero_matches_is_a_structured_error_not_a_prompt() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "f.rs", "before": "fn missing() {}", "after": "x"}), &ALWAYS_APPROVE).await.unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 0, .. }));
@@ -191,7 +192,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let path = write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
         let gate = ChangeFileThenApprove { path: path.clone() };
 
         let err = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { x(); }"}), &gate).await.unwrap_err();
@@ -205,7 +206,7 @@ mod tests {
     async fn multiple_matches_is_ambiguous() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "x\nx\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "f.rs", "before": "x", "after": "y"}), &ALWAYS_APPROVE).await.unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 2, .. }));
@@ -218,7 +219,7 @@ mod tests {
     async fn drives_the_real_approval_round_trip() {
         let dir = tempdir().unwrap();
         write(&dir, "f.rs", "old\n");
-        let tool = EditTool::new(dir.path().to_path_buf());
+        let tool = EditTool::new(Workspace::new(dir.path()));
 
         let (ctx, mut events, pending) = dispatch_context();
 

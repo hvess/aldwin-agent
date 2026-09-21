@@ -169,6 +169,46 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
                 let input = as_write(call.input);
                 finish(&call.id, tool.call(&call.id, input, ctx).await)
             }
+            // There is no enforcement primitive on this platform, so the read
+            // declaration cannot be honoured — which ADR 0004 §4 answers with
+            // "every call asks", not with an error. It *was* an error until
+            // ADR 0007, and the cost was not one failed call: the model saw
+            // two reads fail, concluded the read path was broken, and spent
+            // the remaining 69 calls of that session declaring `ls`, `grep`
+            // and `cat` as writes. A class nobody can use safely is a class
+            // nobody uses.
+            //
+            // Same question as above, same guarantee behind it — nothing ran,
+            // because the sandbox refused to be built rather than refusing
+            // mid-call.
+            //
+            // Unlike a refused read — a rare event, worth a question every
+            // time — this happens on *every* read-declared call where there
+            // is no sandbox. So the engine is consulted first, under the
+            // prompt gate: once the developer has allowed this program's
+            // writes at any tier, the answer stands and nothing is asked
+            // again. Asking unconditionally made "always allow" a no-op and
+            // would have taught the model, again, to stop declaring reads.
+            Err(ToolError::SandboxUnavailable { program, args, .. }) => {
+                let _gate = self.prompt_gate.lock().await;
+                match self.permissions.check(&program, Class::Write, &args) {
+                    Outcome::Allow => {}
+                    Outcome::Locked { scope, .. } => {
+                        return error_result(
+                            &call.id,
+                            ToolError::Locked { program: program.clone(), where_it_lives: scope.where_it_lives() },
+                        );
+                    }
+                    Outcome::Ask(_) => {
+                        if let Some(refusal) = self.offer_as_write(&program, &args, &call, ctx).await {
+                            return refusal;
+                        }
+                    }
+                }
+                drop(_gate);
+                let input = as_write(call.input);
+                finish(&call.id, tool.call(&call.id, input, ctx).await)
+            }
             other => finish(&call.id, other),
         }
     }
@@ -219,6 +259,10 @@ mod tests {
         calls:        std::sync::atomic::AtomicUsize,
         /// When set, a `read`-declared call comes back as `ReadRefused`.
         refuses_read: bool,
+        /// When set, a `read`-declared call comes back as
+        /// `SandboxUnavailable` — what `run` returns on a platform with no
+        /// enforcement primitive.
+        no_sandbox:   bool,
     }
 
     #[async_trait]
@@ -241,6 +285,13 @@ mod tests {
         async fn call(&self, _id: &str, input: Value, _gate: &dyn crate::gate::ApprovalGate) -> Result<String, ToolError> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let declared = input.get("class").and_then(Value::as_str).unwrap_or("read");
+            if self.no_sandbox && declared == "read" {
+                return Err(ToolError::SandboxUnavailable {
+                    program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    args:    Vec::new(),
+                    source:  std::io::Error::new(std::io::ErrorKind::Unsupported, "no enforcement here"),
+                });
+            }
             if self.refuses_read && declared == "read" {
                 return Err(ToolError::ReadRefused {
                     program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -262,6 +313,22 @@ mod tests {
             },
             calls:        std::sync::atomic::AtomicUsize::new(0),
             refuses_read,
+            no_sandbox:   false,
+        })
+    }
+
+    fn fake_run_without_a_sandbox(name: &str) -> Arc<FakeRun> {
+        Arc::new(FakeRun {
+            descriptor:   ToolDescriptor {
+                name:         name.into(),
+                description:  "fake".into(),
+                input_schema: json!({}),
+                edit_class:   false,
+                source:       ToolSource::Builtin,
+            },
+            calls:        std::sync::atomic::AtomicUsize::new(0),
+            refuses_read: false,
+            no_sandbox:   true,
         })
     }
 
@@ -407,6 +474,78 @@ mod tests {
         assert!(!result.is_error, "{}", result.content);
         assert_eq!(result.content, "ran as write", "the re-run must be declared honestly");
         assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then re-run");
+    }
+
+    /// ADR 0004 §4, as built by ADR 0007 §6: where a read cannot be
+    /// enforced, **every call asks**. This was a flat error. On macOS that
+    /// failed every read-declared call, and in the session that surfaced it
+    /// the model declared `read` twice, saw both fail, and declared the next
+    /// 69 calls `write` — `ls` and `grep` among them.
+    #[tokio::test]
+    async fn a_read_that_cannot_be_enforced_becomes_a_question_not_an_error() {
+        let tool = fake_run_without_a_sandbox("run");
+        let mut registry = Registry::new();
+        registry.register(tool.clone()).unwrap();
+        let (_d, permissions) = engine();
+        permissions.record("ls", Class::Read, Choice::AllowSession).unwrap();
+
+        let dispatcher = Dispatcher::new(registry, permissions);
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let call = dispatcher.dispatch(call_of("ls", "read"), &ctx);
+        let resolve = answer(&mut events, &pending, Choice::AllowOnce);
+        let (result, payload) = tokio::join!(call, resolve);
+
+        assert!(
+            matches!(payload, PromptPayload::WriteAttempt { ref program, .. } if program == "ls"),
+            "an unenforceable read must raise the write question: {payload:?}"
+        );
+        assert!(!result.is_error, "the model must not be handed an error for this: {}", result.content);
+        assert_eq!(result.content, "ran as write");
+        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then re-run");
+    }
+
+    /// Audit: the question was asked unconditionally, so on a platform with
+    /// no sandbox "allow ls writes for this session" changed nothing and the
+    /// very next `ls` asked again.
+    #[tokio::test]
+    async fn an_unenforceable_read_is_not_asked_about_once_writes_are_allowed() {
+        let tool = fake_run_without_a_sandbox("run");
+        let mut registry = Registry::new();
+        registry.register(tool.clone()).unwrap();
+        let (_d, permissions) = engine();
+        permissions.record("ls", Class::Write, Choice::AllowSession).unwrap();
+
+        let dispatcher = Dispatcher::new(registry, permissions);
+        let (ctx, mut events, _pending) = dispatch_context();
+
+        let result = dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
+
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.content, "ran as write");
+        assert!(
+            !matches!(events.try_recv(), Ok(Event::PromptRequested { .. })),
+            "a standing grant must not be asked about again"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unenforceable_read_the_developer_declines_does_not_run_unconfined() {
+        let tool = fake_run_without_a_sandbox("run");
+        let mut registry = Registry::new();
+        registry.register(tool.clone()).unwrap();
+        let (_d, permissions) = engine();
+        permissions.record("ls", Class::Read, Choice::AllowSession).unwrap();
+
+        let dispatcher = Dispatcher::new(registry, permissions);
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let call = dispatcher.dispatch(call_of("ls", "read"), &ctx);
+        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
+        let (result, _) = tokio::join!(call, resolve);
+
+        assert!(result.is_error);
+        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a no means it never runs unconfined");
     }
 
     #[tokio::test]

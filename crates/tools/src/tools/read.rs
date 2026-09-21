@@ -1,20 +1,20 @@
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
+use crate::paths::Workspace;
 use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 use aldwin_permissions::Class;
 
 pub struct ReadTool {
     descriptor:   ToolDescriptor,
-    project_root: PathBuf,
+    workspace:    Workspace,
 }
 
 impl ReadTool {
-    pub fn new(project_root: PathBuf) -> Self {
+    pub fn new(workspace: Workspace) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name:         "read".into(),
@@ -27,7 +27,7 @@ impl ReadTool {
                 edit_class: false,
                 source:     ToolSource::Builtin,
             },
-            project_root,
+            workspace,
         }
     }
 }
@@ -62,7 +62,7 @@ impl Tool for ReadTool {
 
     async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
         let path_str = path_arg(&input)?;
-        let path = crate::paths::resolve_in_project(&self.project_root, &path_str)?;
+        let path = self.workspace.resolve(&path_str)?;
         tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path, source })
     }
 }
@@ -76,7 +76,7 @@ mod tests {
     async fn reads_an_existing_file() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("hello.txt"), "hi there").unwrap();
-        let tool = ReadTool::new(dir.path().to_path_buf());
+        let tool = ReadTool::new(Workspace::new(dir.path()));
 
         let out = tool.call("c1", json!({"path": "hello.txt"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap();
         assert_eq!(out, "hi there");
@@ -85,25 +85,25 @@ mod tests {
     #[tokio::test]
     async fn absolute_path_cannot_escape_the_project_root() {
         let dir = tempdir().unwrap();
-        let tool = ReadTool::new(dir.path().to_path_buf());
+        let tool = ReadTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "/etc/passwd"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
+        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }));
     }
 
     #[tokio::test]
     async fn dot_dot_cannot_escape_the_project_root() {
         let dir = tempdir().unwrap();
-        let tool = ReadTool::new(dir.path().to_path_buf());
+        let tool = ReadTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "../../../../etc/passwd"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesProject { .. }));
+        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }));
     }
 
     #[tokio::test]
     async fn missing_file_is_a_structured_io_error() {
         let dir = tempdir().unwrap();
-        let tool = ReadTool::new(dir.path().to_path_buf());
+        let tool = ReadTool::new(Workspace::new(dir.path()));
 
         let err = tool.call("c1", json!({"path": "missing.txt"}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
         assert!(matches!(err, ToolError::Io { .. }));
@@ -111,14 +111,14 @@ mod tests {
 
     #[test]
     fn missing_path_field_is_invalid_input() {
-        let tool = ReadTool::new(PathBuf::from("."));
+        let tool = ReadTool::new(Workspace::new("."));
         let err = tool.permission(&json!({})).unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[test]
     fn the_permission_request_is_always_a_read_of_the_given_path() {
-        let tool = ReadTool::new(PathBuf::from("."));
+        let tool = ReadTool::new(Workspace::new("."));
         let request = tool.permission(&json!({"path": "./src/main.rs"})).unwrap();
         assert_eq!(request.program, "read");
         assert_eq!(request.class, Class::Read);

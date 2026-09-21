@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
+use crate::paths::Workspace;
 use crate::gate::ApprovalGate;
 use crate::lsp::{self, LspClient};
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
@@ -28,12 +28,12 @@ enum Op {
 /// persist in `clients` for the tool's (i.e. the session's) lifetime.
 pub struct ExplainTool {
     descriptor:   ToolDescriptor,
-    project_root: PathBuf,
+    workspace:    Workspace,
     clients:      tokio::sync::Mutex<HashMap<&'static str, Arc<LspClient>>>,
 }
 
 impl ExplainTool {
-    pub fn new(project_root: PathBuf) -> Self {
+    pub fn new(workspace: Workspace) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name: "explain".into(),
@@ -54,7 +54,7 @@ impl ExplainTool {
                 edit_class: false,
                 source:     ToolSource::Builtin,
             },
-            project_root,
+            workspace,
             clients: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -75,7 +75,7 @@ impl ExplainTool {
         if let Some(client) = clients.get(language_id) {
             return Ok(client.clone());
         }
-        let client = Arc::new(LspClient::spawn(command, args, &self.project_root).await?);
+        let client = Arc::new(LspClient::spawn(command, args, &self.workspace.project_root()).await?);
         clients.insert(language_id, client.clone());
         Ok(client)
     }
@@ -128,7 +128,7 @@ impl Tool for ExplainTool {
         let path_str = required_str(&input, "path")?;
         let line = required_u64(&input, "line")?;
         let character = required_u64(&input, "character")?;
-        let path = crate::paths::resolve_in_project(&self.project_root, path_str)?;
+        let path = self.workspace.resolve(path_str)?;
         let server = lsp::language_for_path(&path).ok_or_else(|| invalid(format!("no language server configured for {}", path.display())))?;
         let client = self.client_for_language(server.language_id, server.command, server.args).await?;
 
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn permission_target_prefers_path_then_query() {
-        let tool = ExplainTool::new(PathBuf::from("."));
+        let tool = ExplainTool::new(Workspace::new("."));
         let by_path = tool.permission(&json!({"path": "src/main.rs"})).unwrap();
         assert_eq!(by_path.argv, vec!["src/main.rs".to_string()]);
         assert_eq!(by_path.class, Class::Read);
@@ -327,21 +327,21 @@ mod tests {
 
     #[tokio::test]
     async fn missing_op_is_invalid_input() {
-        let tool = ExplainTool::new(PathBuf::from("."));
+        let tool = ExplainTool::new(Workspace::new("."));
         let err = tool.call("c1", json!({}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[tokio::test]
     async fn definition_without_path_is_invalid_input() {
-        let tool = ExplainTool::new(PathBuf::from("."));
+        let tool = ExplainTool::new(Workspace::new("."));
         let err = tool.call("c1", json!({"op": "definition", "line": 0, "character": 0}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[tokio::test]
     async fn unconfigured_language_is_invalid_input_not_an_lsp_error() {
-        let tool = ExplainTool::new(PathBuf::from("."));
+        let tool = ExplainTool::new(Workspace::new("."));
         let err = tool
             .call("c1", json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}), &crate::test_support::ALWAYS_APPROVE)
             .await
@@ -363,7 +363,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn callee() -> i32 { 1 }\npub fn caller() -> i32 { callee() }\n").unwrap();
 
-        let tool = ExplainTool::new(dir.path().to_path_buf());
+        let tool = ExplainTool::new(Workspace::new(dir.path()));
 
         // Poll until rust-analyzer has indexed enough to answer, rather than
         // a fixed sleep — indexing time varies with machine load.

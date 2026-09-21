@@ -45,6 +45,19 @@ pub const PERMISSIONS_HEADER: &str = "\
 #             override it — not the other file, not a session, not a single
 #             turn. Undoing one is an edit to this file, made deliberately,
 #             outside the moment that wanted it.
+#   roots:    extra directories the tools may be pointed at, beyond this
+#             project. Reach, not a grant: a root says nothing about which
+#             programs run or at which class — those are still asked. A
+#             relative root is read from the project directory.
+#
+#               roots:
+#                 - ../proton-libs
+#                 - /Users/you/Documents/other-checkout
+#
+#             Project files only; a global roots list would widen reach in
+#             every project at once. Without one, every tool — run included —
+#             is confined to this project, and a path outside it is refused
+#             rather than quietly reached.
 #
 # An entry is a program and a class:
 #
@@ -99,6 +112,19 @@ pub const PERMISSIONS: &str = "\
 #             override it — not the other file, not a session, not a single
 #             turn. Undoing one is an edit to this file, made deliberately,
 #             outside the moment that wanted it.
+#   roots:    extra directories the tools may be pointed at, beyond this
+#             project. Reach, not a grant: a root says nothing about which
+#             programs run or at which class — those are still asked. A
+#             relative root is read from the project directory.
+#
+#               roots:
+#                 - ../proton-libs
+#                 - /Users/you/Documents/other-checkout
+#
+#             Project files only; a global roots list would widen reach in
+#             every project at once. Without one, every tool — run included —
+#             is confined to this project, and a path outside it is refused
+#             rather than quietly reached.
 #
 # An entry is a program and a class:
 #

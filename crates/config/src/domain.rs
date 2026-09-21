@@ -204,11 +204,23 @@ pub struct PermissionsConfig {
     pub allow: Vec<GrantEntry>,
     #[serde(default)]
     pub deny: Vec<GrantEntry>,
+    /// Extra directories tools may be pointed at, beyond the project root
+    /// (ADR 0007). Reach, not a grant: a root widens *where* a call may
+    /// point, and changes nothing about which programs run or under which
+    /// class. Both questions still get asked over a second root.
+    ///
+    /// It lives here, in the file that already answers "what may this agent
+    /// touch", and it is stated rather than inferred — nothing walks up to
+    /// find sibling checkouts. Project scope only: a global root list would
+    /// silently widen reach in every directory, which is the one direction a
+    /// default-deny harness must not move on its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<PathBuf>,
 }
 
 impl PermissionsConfig {
     pub fn empty() -> Self {
-        Self { version: PERMISSIONS_VERSION, default: None, allow: vec![], deny: vec![] }
+        Self { version: PERMISSIONS_VERSION, default: None, allow: vec![], deny: vec![], roots: vec![] }
     }
 }
 

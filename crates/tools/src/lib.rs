@@ -30,18 +30,17 @@ pub use error::ToolError;
 pub use gate::ApprovalGate;
 pub use mcp::{register_mcp_tools, McpBridge, McpError, McpTool};
 pub use registry::{PermissionRequest, Registry, Tool, ToolDescriptor, ToolSource};
+pub use paths::Workspace;
 pub use tools::{EditTool, ExplainTool, ReadTool, RunTool};
 
-use std::path::PathBuf;
-
-/// Registers the four V0 built-ins (Read, Edit, Run, Explain) rooted at
-/// `project_root`.
-pub fn builtin_registry(project_root: PathBuf) -> Registry {
+/// Registers the four V0 built-ins (Read, Edit, Run, Explain) over
+/// `workspace` — every one of them, `run` included, contained by it.
+pub fn builtin_registry(workspace: Workspace) -> Registry {
     let mut registry = Registry::new();
-    registry.register(std::sync::Arc::new(ReadTool::new(project_root.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(EditTool::new(project_root.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(RunTool::new(project_root.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(ExplainTool::new(project_root))).expect("built-in names are unique");
+    registry.register(std::sync::Arc::new(ReadTool::new(workspace.clone()))).expect("built-in names are unique");
+    registry.register(std::sync::Arc::new(EditTool::new(workspace.clone()))).expect("built-in names are unique");
+    registry.register(std::sync::Arc::new(RunTool::new(workspace.clone()))).expect("built-in names are unique");
+    registry.register(std::sync::Arc::new(ExplainTool::new(workspace))).expect("built-in names are unique");
     registry
 }
 
@@ -51,7 +50,7 @@ mod tests {
 
     #[test]
     fn builtin_registry_has_all_four_v0_tools() {
-        let registry = builtin_registry(PathBuf::from("."));
+        let registry = builtin_registry(Workspace::new("."));
         let mut names: Vec<String> = registry.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
         assert_eq!(names, vec!["edit".to_string(), "explain".to_string(), "read".to_string(), "run".to_string()]);

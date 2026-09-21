@@ -18,19 +18,30 @@
 //! interpreter, its shared libraries and `/etc` to run at all, so confining
 //! reads to the project would confine the sandbox to programs that need
 //! nothing. Keeping the model honest about this is why ADR 0004 §5 states the
-//! claim as *no tool is pointed outside your project by us* — argument
+//! claim as *no tool is pointed outside your workspace by us* — argument
 //! containment is a separate check in `paths.rs`, and it is what bounds
 //! reach.
 //!
+//! That sentence was false when it was written, and is worth recording as
+//! such: `run` did not call `paths.rs` at all, so the containment this module
+//! deferred to did not exist for the one tool that executes programs. ADR
+//! 0007 made every tool go through `Workspace`, which is what makes the
+//! deferral honest.
+//!
+//! On macOS the primitive is Seatbelt, reached through `sandbox-exec` — see
+//! `macos.rs` for why that backend confines by rewriting the command rather
+//! than by acting inside the forked child.
+//!
 //! **Two gaps, stated rather than papered over.** Landlock's network control
-//! covers TCP bind and connect; UDP and unix sockets are outside it. And a
+//! covers TCP bind and connect; UDP and unix sockets are outside it (SBPL's
+//! `network*` does cover them, so this gap is Linux's alone). And a
 //! denial reaches us as an ordinary failure from the child, so this module
 //! reports *that a call could not complete with the tree read-only*, not
 //! which path it reached for. Naming the path needs syscall interception —
 //! worth building, and not needed for the guarantee, which comes from the
 //! write being impossible rather than from our seeing it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Whether this build, on this kernel, can hold a read declaration to its
 /// word — and if not, why, in words a developer can act on.
@@ -60,7 +71,22 @@ impl Availability {
 /// read. Git's own `GIT_OPTIONAL_LOCKS=0` (set in [`read_only_env`]) is what
 /// makes `git status` work instead, which is the case the exemption would
 /// have been for.
-fn incidental_writes(project_root: &Path) -> Vec<PathBuf> {
+/// Whether `resolved` — an already symlink-resolved path — is one of the
+/// incidental paths, or under one.
+///
+/// `run`'s argument containment asks this, because the two lists have to
+/// agree: a sandbox that lets a read write to `/dev/null` next to containment
+/// that refuses `/dev/null` as an *argument* made `grep x file /dev/null`
+/// fail under either class. Compared on resolved forms, since `/tmp` is a
+/// symlink on macOS.
+pub fn is_incidental(resolved: &std::path::Path, roots: &[PathBuf]) -> bool {
+    incidental_writes(roots).iter().any(|p| {
+        let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
+        resolved.starts_with(&canonical)
+    })
+}
+
+fn incidental_writes(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = vec![
         PathBuf::from("/dev/null"),
         PathBuf::from("/dev/zero"),
@@ -70,11 +96,15 @@ fn incidental_writes(project_root: &Path) -> Vec<PathBuf> {
         PathBuf::from("/dev/tty"),
         PathBuf::from("/dev/shm"),
         PathBuf::from("/tmp"),
-        // Build caches. Artifacts, not source — a read that refreshes one has
-        // changed nothing a developer wrote.
-        project_root.join("target"),
-        project_root.join("node_modules/.cache"),
     ];
+    // Build caches. Artifacts, not source — a read that refreshes one has
+    // changed nothing a developer wrote. Every root gets the same exemption:
+    // a workspace whose second root had to be treated more strictly than its
+    // first would just be a read that mysteriously fails over there.
+    for root in roots {
+        paths.push(root.join("target"));
+        paths.push(root.join("node_modules/.cache"));
+    }
     if let Some(tmp) = std::env::var_os("TMPDIR") {
         paths.push(PathBuf::from(tmp));
     }
@@ -100,13 +130,26 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{availability, ReadOnly};
 
-#[cfg(not(target_os = "linux"))]
+// Compiled on every platform, used only on macOS. The backend is ordinary
+// Rust — a profile string and a command rewrite, no FFI — so there is no
+// reason to let it rot behind a `cfg` that this project's own machines never
+// build. Its unit tests run everywhere too, and skip themselves where
+// `sandbox-exec` is absent.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod macos;
+
+#[cfg(target_os = "macos")]
+pub use macos::{availability, ReadOnly};
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod elsewhere {
     use super::*;
     use std::io;
 
     pub fn availability() -> Availability {
-        Availability::Unavailable { reason: "reads can only be enforced on Linux, via Landlock" }
+        Availability::Unavailable {
+            reason: "reads can only be enforced on Linux (Landlock) and macOS (Seatbelt)",
+        }
     }
 
     /// A stand-in that refuses to be built, so a platform without enforcement
@@ -115,13 +158,21 @@ mod elsewhere {
     pub struct ReadOnly(std::convert::Infallible);
 
     impl ReadOnly {
-        pub fn build(_project_root: &Path) -> io::Result<Self> {
+        pub fn build(_roots: &[PathBuf]) -> io::Result<Self> {
             Err(io::Error::new(io::ErrorKind::Unsupported, availability_reason()))
         }
 
-        /// # Safety
-        /// Unreachable: [`ReadOnly::build`] never succeeds off Linux.
-        pub unsafe fn engage(&self) -> io::Result<()> {
+        pub fn abi(&self) -> i32 {
+            match self.0 {}
+        }
+
+        /// Unreachable: [`ReadOnly::build`] never succeeds on this platform.
+        pub fn command_line(&self, _program: &str, _args: &[String]) -> (String, Vec<String>) {
+            match self.0 {}
+        }
+
+        /// Unreachable, as above.
+        pub fn install(self, _cmd: &mut tokio::process::Command) {
             match self.0 {}
         }
     }
@@ -134,5 +185,5 @@ mod elsewhere {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub use elsewhere::{availability, ReadOnly};

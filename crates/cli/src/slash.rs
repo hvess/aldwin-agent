@@ -76,11 +76,23 @@ pub struct Session {
     /// will actually run on.
     model:  String,
     switch: Box<dyn ModelSwitch>,
+    /// Run after a successful `/reload-config`, for state that does not share
+    /// the `Config` handle and so does not see the reload on its own — today,
+    /// the workspace roots (ADR 0007). Returns a line for the developer, or
+    /// `None` when there is nothing to say.
+    after_reload: Option<AfterReload>,
 }
+
+pub type AfterReload = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
 impl Session {
     pub fn new(model: String, switch: Box<dyn ModelSwitch>) -> Self {
-        Self { model, switch }
+        Self { model, switch, after_reload: None }
+    }
+
+    pub fn with_after_reload(mut self, hook: AfterReload) -> Self {
+        self.after_reload = Some(hook);
+        self
     }
 }
 
@@ -106,7 +118,7 @@ async fn intercept(
             Intercepted::Handled
         }
         "reload-config" => {
-            handle_reload_config(config, events).await;
+            handle_reload_config(config, session, events).await;
             Intercepted::Handled
         }
         // Unlike /help and /reload-config, this one core needs to act on
@@ -503,7 +515,7 @@ fn describe(current: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::
     out
 }
 
-async fn handle_reload_config(config: &Config, events: &mpsc::Sender<Event>) {
+async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc::Sender<Event>) {
     match config.reload_all() {
         // No PermissionsEngine re-instantiation needed: Engine holds this
         // same (Arc-backed) Config handle, so reload_all()'s in-place
@@ -514,6 +526,11 @@ async fn handle_reload_config(config: &Config, events: &mpsc::Sender<Event>) {
         Ok(()) => {
             let _ = events.send(Event::Notice { message: "config reloaded".into() }).await;
             let _ = events.send(Event::PermissionsChanged { payload: serde_json::Value::Null }).await;
+            // The permissions header promises an edit to the file is picked
+            // up here. `roots:` was the one key for which that was not true.
+            if let Some(message) = session.after_reload.as_ref().and_then(|hook| hook()) {
+                let _ = events.send(Event::Notice { message }).await;
+            }
         }
         Err(failures) => {
             let detail = failures.iter().map(|f| format!("{}: {}", f.path.display(), f.error)).collect::<Vec<_>>().join("; ");

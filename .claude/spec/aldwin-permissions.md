@@ -8,7 +8,18 @@ a lock, and a read declaration is enforced rather than believed.
 round-trip. Excludes TUI rendering, YAML I/O (config), tool implementations
 and the sandbox (all aldwin-tools).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-21
+
+**Progress (2026-09-21, ADR 0007 — reach became a list, and the fallback was
+built):** The engine itself is untouched; two things next to it changed.
+`PermissionsConfig` gained `roots` — extra directories tools may be pointed
+at. It is **reach, not a grant**: it says nothing about which programs run or
+at which class, and both are still asked over a second root. Project scope
+only, never inferred, omitted from the file when empty. And ADR 0004 §4's
+no-enforcement fallback — "every call asks" — is now what happens:
+`SandboxUnavailable` raises the same `WriteAttempt` prompt as a refused read,
+where it used to be a flat error that made the `read` class unusable on any
+platform without a sandbox.
 
 **Progress (2026-09-20, ADR 0004 — the model was reopened from first
 principles):** Everything below is new. The previous model — `kind:pattern`

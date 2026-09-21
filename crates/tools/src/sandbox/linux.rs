@@ -104,7 +104,10 @@ pub struct ReadOnly {
 }
 
 impl ReadOnly {
-    pub fn build(project_root: &Path) -> io::Result<Self> {
+    /// `roots` is the whole workspace (ADR 0007), not one project root: the
+    /// incidental-write exemptions are per-root, so a second root's
+    /// `target/` is exempt on the same terms as the first's.
+    pub fn build(roots: &[std::path::PathBuf]) -> io::Result<Self> {
         let abi = abi_version()?;
         let handled_net = if abi >= 4 { NET_BIND_TCP | NET_CONNECT_TCP } else { 0 };
 
@@ -129,7 +132,7 @@ impl ReadOnly {
 
         // ...and write only here. A path that does not exist is not an error:
         // a project with no `target/` simply has nothing to exempt.
-        for path in incidental_writes(project_root) {
+        for path in incidental_writes(roots) {
             let _ = add_path_rule(&ruleset, &path, writable_rights(abi, &path));
         }
 
@@ -140,6 +143,25 @@ impl ReadOnly {
         self.abi
     }
 
+    /// The command line to actually spawn. Unchanged on Linux: the
+    /// confinement is engaged in the child, not by wrapping the program.
+    pub fn command_line(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
+        (program.to_string(), args.to_vec())
+    }
+
+    /// Confines `cmd` so the program it spawns runs read-only.
+    ///
+    /// The ruleset is engaged inside the forked child, which is why `build`
+    /// did all the allocating work up front: [`engage`] is two syscalls with
+    /// no allocation, which is what `pre_exec` permits. See the module docs.
+    pub fn install(self, cmd: &mut tokio::process::Command) {
+        // SAFETY: `engage` is two syscalls with no allocation, which is what
+        // `pre_exec` permits — see its own safety note.
+        unsafe {
+            cmd.pre_exec(move || self.engage());
+        }
+    }
+
     /// Engage the ruleset on the calling process. Everything it goes on to
     /// `exec`, and every child of that, inherits it and cannot widen it.
     ///
@@ -148,7 +170,7 @@ impl ReadOnly {
     /// nothing and takes no locks — two syscalls — which is what makes it
     /// safe to call there. Calling it on the parent would confine Aldwin
     /// itself, permanently.
-    pub unsafe fn engage(&self) -> io::Result<()> {
+    unsafe fn engage(&self) -> io::Result<()> {
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -241,7 +263,7 @@ mod tests {
     }
 
     fn sandboxed<S: AsRef<std::ffi::OsStr>>(root: &Path, argv: &[S]) -> std::process::Output {
-        let plan = ReadOnly::build(root).expect("ruleset builds");
+        let plan = ReadOnly::build(std::slice::from_ref(&root.to_path_buf())).expect("ruleset builds");
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]).current_dir(root).stdin(std::process::Stdio::null());
         // SAFETY: two syscalls, no allocation — see `engage`.

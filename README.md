@@ -28,10 +28,12 @@ Grab a binary from [Releases](../../releases), extract, put `aldwin` on your
 
 No Intel Mac build. No Windows — `run` leans on Unix process APIs.
 
-**macOS caveat worth knowing before you install:** the sandbox that enforces
-a read-only call is Linux-only (Landlock). On macOS there's nothing to hold a
-call to its word, so instead of quietly trusting it, Aldwin asks about every
-call. Safe, correct, and noticeably chattier.
+**macOS caveat worth knowing before you install:** Linux enforces a read-only
+call with Landlock; macOS does it with Seatbelt, through `sandbox-exec`. The
+macOS half is newer and less exercised than the Linux one. If it can't be set
+up — or on a platform with no such primitive at all — Aldwin doesn't quietly
+trust the call: it asks you whether to run it as a write. Safe, correct, and
+chattier.
 
 ### Verify what you downloaded
 
@@ -134,8 +136,23 @@ staple a second command onto an approved first one.
 **A read is enforced, not believed.** When the agent declares a call a read,
 it runs with your tree read-only and the network unreachable. Declare wrong
 and nothing lands — you get asked whether to allow it as a write instead. A
-mistaken declaration costs a prompt, not a repository. *(Linux only; see the
-macOS note above.)*
+mistaken declaration costs a prompt, not a repository. *(Landlock on Linux,
+Seatbelt on macOS; see the note above.)*
+
+**Every tool stays inside your workspace — `run` too.** A path argument that
+points outside the project is refused before the program starts, and the
+refusal says what *is* reachable. Working across sibling checkouts is a line
+in the project's `.aldwin/permissions.yaml`, not a shell workaround:
+
+```yaml
+roots:
+  - ../proton-libs
+```
+
+A root widens where a call may point. It grants nothing: which programs run,
+and at which class, is still asked. The honest asterisk is a shell — a path
+inside `bash -c '…'` is a string nobody parses, which is one more reason
+granting `bash` is a deliberate act.
 
 **A deny is a lock.** Nothing narrower overrides it — not a session, not a
 turn, not the other config file. A locked call is refused without a prompt,

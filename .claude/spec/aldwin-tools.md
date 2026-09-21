@@ -5,7 +5,61 @@ ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 **Status:** active — one known gap, see Progress below
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-05-20
+**Last Updated:** 2026-09-21
+
+**Progress (2026-09-21, ADR 0007 — `run` joins the model the other tools live in):**
+Prompted by a reviewed session transcript, not by a plan. The 2026-09-20 entry
+below says reach "is bounded by `paths.rs`'s argument containment". That was
+true of `read`, `edit` and `explain` and **false of `run`, which never called
+`paths.rs`** — so the boundary held on the tools that show a diff and was
+absent from the one that executes programs. In the transcript: `edit` refused
+a sibling directory, and `run` wrote a 135-line file there through
+`bash -c 'cat > …'` and later `rm -rf`'d two checkouts, with no prompt. 71
+`run` calls; 33 were `bash -c`; the single `edit` call failed; the diff gate
+fired zero times.
+
+- **`paths::Workspace` replaces `resolve_in_project`.** A canonical, shared root list;
+  `roots[0]` is the project root, the rest come from `roots:` in the *project*
+  `permissions.yaml`. All four built-ins take a `Workspace`, and
+  `builtin_registry` does too. Absolute paths are now accepted when contained
+  (a second root is unaddressable otherwise); the double lexical-then-canonical
+  check, and so the symlink-escape refusal, is unchanged.
+- **`run` contains its arguments.** Checked when absolute or climbing with
+  `..`; everything else is relative under an already-contained `cwd`. Globs and
+  flags are deliberately left alone (`path_like` and its test say which).
+  `bash -c '…'` is the stated hole — open-tasks entry 26.
+- **`run` takes `cwd`.** Per call, contained like any path. This is what most
+  of those 33 shell calls were standing in for.
+- **A timeout keeps the output.** `drain` accumulates into a shared buffer, so
+  `ToolError::Timeout` carries `partial`. A 30-minute clone used to report
+  only that it was long.
+- **A non-zero exit is not a refused read.** `looks_like_denial` needs
+  evidence — a permission/read-only message on stderr, or death by signal.
+  `grep` exiting 1 used to raise `ReadRefused` and ask about a write nobody
+  attempted.
+- **`SandboxUnavailable` is a question.** It carries `program`/`args` and the
+  dispatcher routes it to `offer_as_write`, as ADR 0004 §4 always specified.
+  It was a flat error, which on macOS failed every read-declared call; the
+  model declared `read` twice and then declared 69 consecutive calls `write`.
+- **The sandbox seam is `command_line` + `install`,** not `engage`. Linux
+  returns the program untouched and confines in the child; macOS returns
+  `sandbox-exec -p <profile> -- <program>` and installs nothing. The command
+  line is asked for *before* stdio and `setsid` are configured because
+  `Command` has no getter for either — a backend that rebuilt the command
+  would drop the pipes and `run` would panic taking stdout.
+- **An audit the same day found eleven defects in the above, all fixed.** The
+  ones that change how to read this crate: containment is decided on
+  *resolved* paths only (a lexical pre-check against canonical roots refused
+  every symlinked prefix, i.e. `/tmp` on macOS) and also on the path as the
+  filesystem resolves it (`out/../x` after a symlink); `Workspace` roots are
+  shared and replaceable, so `/reload-config` re-reads them; the sandbox's
+  incidental paths are legitimate `run` arguments (`sandbox::is_incidental`);
+  output is accumulated as bytes; a timeout `killpg`s the group `setsid`
+  created; and an unenforceable read consults the engine before it asks. The
+  refusal message had named a `--root` flag that never existed.
+- **`sandbox/macos.rs` is compiled everywhere and used on macOS.** No FFI, so
+  no reason to hide it behind a `cfg` this project's machines never build.
+  Never run on a Mac — open-tasks entry 25.
 
 **Progress (2026-09-20, ADR 0004 — `shell` is gone and a sandbox arrived):**
 The largest change this crate has had. Read

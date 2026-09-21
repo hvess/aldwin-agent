@@ -20,6 +20,14 @@ use crate::app::App;
 use aldwin_permissions::Rung;
 use crate::highlight;
 use crate::log::{LogEntry, ToolActivityStatus};
+use crate::palette::Palette;
+
+/// The agent's speaker label. The product's own name, lowercase like every
+/// label in the 8-cell column — the reference writes `aldwin` under `you`,
+/// where it wrote `harness` before the rebrand made the harness the agent.
+/// The top bar's `Aldwin` is the same word as a *brand* and is capitalised
+/// there; see `chrome::BRAND`.
+pub(super) const AGENT_LABEL: &str = "aldwin";
 
 /// Builds every line the log panel's *inner* area can show, at `ctx.width`
 /// × `height` (the panel's inner rect — see `super::draw` on why this must
@@ -449,14 +457,14 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
                 text.lines().flat_map(|l| wrap_line(Line::from(Span::styled(l.to_string(), style)), ctx.body().width as usize)).collect();
             with_label_column(content, label("you", pal.speaker_you))
         }
-        LogEntry::AssistantText { text } => with_label_column(render_assistant_text(text, ctx), label("harness", pal.speaker_agent)),
+        LogEntry::AssistantText { text } => with_label_column(render_assistant_text(text, ctx), label(AGENT_LABEL, pal.speaker_agent)),
         // `ToolLine.jsx`: a status glyph, the tool name, a right-flush
         // result summary. `ToolActivityEntry` carries no separate target
         // path distinct from the tool's own name (unlike the reference's
         // `read src/gateway/mod.rs`), so the call id stands in for it,
         // parenthesized. The design system's glyph table has no distinct
         // "failed" mark (`readme.md`'s Iconography table: only `●` done /
-        // `◐` running / `○` pending / `✔` accepted — "if a mark is needed
+        // `◐` running / `○` pending / `✓` accepted — "if a mark is needed
         // and it is not in that table, do not draw one") — an error keeps
         // the `●` done glyph but in `del` (red) instead of `add`, the same
         // "colour carries the meaning" rule the rest of this system leans
@@ -487,30 +495,42 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
                     // `status` and nothing else, so the real target is not
                     // available to render. See the conformance spec; that
                     // half is a data source, not a layout fix.
-                    let target = if c.name.is_empty() {
-                        c.call_id.clone()
+                    //
+                    // Two spans, because they are two tones: the name is
+                    // `quiet` on every row whatever the call is doing, and
+                    // only what follows it moves with the call's state.
+                    let (name, target) = if c.name.is_empty() {
+                        (String::new(), c.call_id.clone())
                     } else {
                         let field = 6.max(c.name.width() + 2);
-                        format!("{:<field$}({})", c.name, c.call_id)
+                        (format!("{:<field$}", c.name), format!("({})", c.call_id))
                     };
-                    // A *running* call's name is `accent_text` in the
-                    // reference ("`◐  bash  cargo test…`" — the live row is
-                    // the one the eye should land on), a finished one's is
-                    // ordinary `body`.
+                    // Three states, three glyphs, and only the failure
+                    // takes a hue (`2a`, `2d`): a running call is the gold
+                    // `◐` with its target in primary text — the live row is
+                    // the one the eye should land on — a finished one a
+                    // neutral `●` over `body`, and a failed one `✗` with its
+                    // right-flush summary in the same rose. A status hue
+                    // "appears only when something is a status", so the
+                    // summary of a call that *worked* stays metadata grey.
                     let (glyph, text_color, summary) = match &c.status {
-                        ToolActivityStatus::Running => (Span::styled("◐  ", Style::default().fg(pal.glyph_running)), pal.accent_text, None),
-                        ToolActivityStatus::Completed { is_error: false, summary } => (Span::styled("●  ", Style::default().fg(pal.glyph_done)), pal.body, Some(summary.clone())),
-                        ToolActivityStatus::Completed { is_error: true, summary } => (Span::styled("●  ", Style::default().fg(pal.del)), pal.body, Some(summary.clone())),
+                        ToolActivityStatus::Running => (Span::styled("◐  ", Style::default().fg(pal.glyph_running)), pal.text, None),
+                        ToolActivityStatus::Completed { is_error: false, summary } => {
+                            (Span::styled("●  ", Style::default().fg(pal.done)), pal.body, Some((summary.clone(), pal.dim)))
+                        }
+                        ToolActivityStatus::Completed { is_error: true, summary } => {
+                            (Span::styled("✗  ", Style::default().fg(pal.err)), pal.text, Some((summary.clone(), pal.err)))
+                        }
                     };
-                    let left = vec![glyph, Span::styled(target, Style::default().fg(text_color))];
+                    let left = vec![glyph, Span::styled(name, Style::default().fg(pal.quiet)), Span::styled(target, Style::default().fg(text_color))];
                     let right = match summary {
-                        Some(s) => vec![Span::styled(s, Style::default().fg(pal.dim))],
+                        Some((s, fg)) => vec![Span::styled(s, Style::default().fg(fg))],
                         None => vec![],
                     };
                     justified_line(left, right, inner_width)
                 })
                 .collect();
-            with_label_column(content, label("harness", pal.speaker_agent))
+            with_label_column(content, label(AGENT_LABEL, pal.speaker_agent))
         }
         // No glyph and no dedicated "warning" colour — the design system
         // has neither, and its palette has nothing named for a transient
@@ -544,8 +564,9 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
         // designs at all and are all misaligned and wonky."
         LogEntry::PermissionPrompt { payload, resolution: Some(resolved), .. } => {
             let (kind, target) = payload_call(payload);
-            let summary = Span::styled(resolved.label.clone(), Style::default().fg(if resolved.allowed { pal.dim } else { pal.del }));
-            with_label_column(vec![tool_line(&kind, &target, resolved.allowed, vec![summary], ctx)], label("harness", pal.speaker_agent))
+            let outcome = if resolved.allowed { Outcome::Done } else { Outcome::Denied };
+            let summary = Span::styled(resolved.label.clone(), Style::default().fg(outcome.summary_fg(pal)));
+            with_label_column(vec![tool_line(&kind, &target, outcome, vec![summary], ctx)], label(AGENT_LABEL, pal.speaker_agent))
         }
         // An answered Edit gets the same tool line, over the diff it was
         // answering — `Turn.jsx`'s own `write src/gateway/limit.rs  +84`
@@ -556,36 +577,95 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
         LogEntry::ApprovalCard { diff, resolution: Some(approved), .. } => {
             let (path, body) = diff::parse_body(diff);
             let body = diff::number_lines(body);
-            let summary = if *approved { diff::stat_spans(&body, ctx) } else { vec![Span::styled("denied", Style::default().fg(pal.del))] };
-            let mut content = vec![tool_line("edit", &path.map(|p| diff::strip_prefix(&p)).unwrap_or_default(), *approved, summary, ctx)];
+            let outcome = if *approved { Outcome::Done } else { Outcome::Denied };
+            let summary =
+                if *approved { diff::stat_spans(&body, ctx) } else { vec![Span::styled("denied", Style::default().fg(outcome.summary_fg(pal)))] };
+            let mut content = vec![tool_line("edit", &path.map(|p| diff::strip_prefix(&p)).unwrap_or_default(), outcome, summary, ctx)];
             if *approved {
                 content.extend(diff::boxed(&body, diff::Budget { collapse_context: true, max_rows: None }, Row::field(pal.diff_box), ctx.body()));
             }
-            with_label_column(content, label("harness", pal.speaker_agent))
+            with_label_column(content, label(AGENT_LABEL, pal.speaker_agent))
         }
         LogEntry::ApprovalCard { resolution: None, .. } | LogEntry::PermissionPrompt { resolution: None, .. } => Vec::new(),
+        // Statuses, each its glyph and its one hue, and nothing else on the
+        // row borrows either (`2d`). They were prose: `error:` in bold rose,
+        // `notice:` in grey, a cancelled turn between two em dashes — three
+        // conventions, one of which asked for a weight the design system
+        // does not use ("no bold is required anywhere; hierarchy is color
+        // and position") and one for a glyph its table does not have.
+        //
+        // A *cancelled* turn is `!`, not `✗`. The developer stopped it; it
+        // did not fail. That is the same line `Outcome` draws between a call
+        // that was refused and one that broke.
         LogEntry::TurnEnded { reason } => {
             use crate::log::TurnEndReasonKind;
-            let spans = match reason {
-                TurnEndReasonKind::EndTurn => return vec![],
-                TurnEndReasonKind::Cancelled => vec![Span::styled("— turn cancelled —", Style::default().fg(pal.dim))],
-                TurnEndReasonKind::Error(message) => vec![Span::styled(format!("— turn ended in error: {message} —"), Style::default().fg(pal.dim))],
-            };
-            body_lines(spans, None, ctx)
+            match reason {
+                TurnEndReasonKind::EndTurn => vec![],
+                TurnEndReasonKind::Cancelled => status_line('!', pal.warn, "turn cancelled", pal.warn, ctx),
+                TurnEndReasonKind::Error(message) => status_line('✗', pal.err, &format!("turn ended in error: {message}"), pal.err, ctx),
+            }
         }
-        LogEntry::Error { message } => body_lines(
-            vec![
-                Span::styled("error: ", Style::default().fg(pal.del).add_modifier(Modifier::BOLD)),
-                Span::styled(message.clone(), Style::default().fg(pal.del)),
-            ],
-            None,
-            ctx,
-        ),
-        LogEntry::Notice { message } => body_lines(
-            vec![Span::styled("notice: ", Style::default().fg(pal.quiet)), Span::styled(message.clone(), Style::default().fg(pal.dim))],
-            None,
-            ctx,
-        ),
+        LogEntry::Error { message } => status_line('✗', pal.err, message, pal.err, ctx),
+        // The info line: a sky `·` pointer and the sentence in `quiet`.
+        // The pointer is the only place that hue appears outside a code
+        // block, and the text does *not* take it — an info line is advice,
+        // not a state, so only its mark is coloured.
+        LogEntry::Notice { message } => status_line('·', pal.info, message, pal.quiet, ctx),
+    }
+}
+
+/// One status row in the transcript: glyph, two spaces, the sentence — the
+/// shape a tool line opens with, so a failure reads as part of the run of
+/// rows it interrupts rather than as a banner dropped into it.
+///
+/// Wrapped here rather than left to overflow. A provider error is
+/// arbitrarily long and entirely ordinary, and continuation rows hang under
+/// the sentence, not under the glyph.
+fn status_line(glyph: char, glyph_fg: Color, text: &str, text_fg: Color, ctx: Ctx) -> Vec<Line<'static>> {
+    const LEAD: usize = 3;
+    let room = (ctx.body().width as usize).saturating_sub(LEAD).max(1);
+    let rows = wrap_line(Line::from(Span::styled(text.to_string(), Style::default().fg(text_fg))), room);
+    let lines = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut row)| {
+            let lead = if i == 0 { Span::styled(format!("{glyph}  "), Style::default().fg(glyph_fg)) } else { Span::raw(" ".repeat(LEAD)) };
+            row.spans.insert(0, lead);
+            row
+        })
+        .collect();
+    with_label_column(lines, None)
+}
+
+/// How an answered call came out, which is what picks its glyph.
+///
+/// The reference draws these as two different marks on purpose (`2d`). A
+/// call the developer *refused* is `!` in the warn hue — it did not fail,
+/// it was stopped — while a call that ran and broke is `✗` in the err hue.
+/// Aldwin used to draw both as a rose `●`, which said "something red
+/// happened" and left the reader to work out whether it was them or the
+/// code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Done,
+    Denied,
+}
+
+impl Outcome {
+    fn glyph(self, pal: &Palette) -> (char, Color) {
+        match self {
+            Outcome::Done => ('●', pal.done),
+            Outcome::Denied => ('!', pal.warn),
+        }
+    }
+
+    /// The right-flush summary takes the glyph's hue when the row is a
+    /// status and stays metadata grey when it is not.
+    fn summary_fg(self, pal: &Palette) -> Color {
+        match self {
+            Outcome::Done => pal.dim,
+            Outcome::Denied => pal.warn,
+        }
     }
 }
 
@@ -601,7 +681,7 @@ fn render_entry(entry: &LogEntry, opens: bool, ctx: Ctx) -> Vec<Line<'static>> {
 /// left edge, the failure this module's own doc comment describes. A shell
 /// command is arbitrarily long and completely ordinary input, so this is
 /// the common case, not the exotic one.
-fn tool_line(kind: &str, target: &str, ok: bool, summary: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
+fn tool_line(kind: &str, target: &str, outcome: Outcome, summary: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
     /// `read  ` / `write ` / `edit  ` / `bash  ` — the reference pads every
     /// tool name into the same column so the targets line up under one
     /// another.
@@ -612,9 +692,12 @@ fn tool_line(kind: &str, target: &str, ok: bool, summary: Vec<Span<'static>>, ct
     // Two cells of gap between the target and the summary at minimum, so
     // the two never read as one string.
     let room = width.saturating_sub(2 + NAME_COL).saturating_sub(summary_width).saturating_sub(2);
+    let (glyph, glyph_fg) = outcome.glyph(pal);
     let left = vec![
-        Span::styled("●  ", Style::default().fg(if ok { pal.glyph_done } else { pal.del })),
-        Span::styled(format!("{kind:<NAME_COL$}"), Style::default().fg(pal.label)),
+        Span::styled(format!("{glyph}  "), Style::default().fg(glyph_fg)),
+        // `--tui-quiet`, which the token layer names for exactly this: "tool
+        // names, stdout, an option's purpose".
+        Span::styled(format!("{kind:<NAME_COL$}"), Style::default().fg(pal.quiet)),
         Span::styled(elide(target, room), Style::default().fg(pal.text)),
     ];
     justified_line(left, summary, width)
@@ -663,40 +746,60 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
                 let (_, parsed) = diff::parse_body(&diff_text);
                 lines.extend(diff::boxed(&diff::number_lines(parsed), diff::Budget::default(), Row::field(pal.diff_box), body));
             }
-            // A real code-block box, with a dim language label instead of
-            // the fence's own literal ` ``` ` markers, on `diff_box` — the
-            // design system's one nested-quote surface, already carrying
-            // the inline diff for the same reason (a quoted block inside
-            // prose). `highlight_lines` builds its syntect theme from this
-            // theme's palette — the five `--tui-syn-*` roles — so the code
-            // on this surface follows the palette like every other cell.
-            //
-            // Built from the same `Row::field` the diff uses. The two are
-            // the *same* component in the design system — one quoted block
-            // on one nested surface — and they must not diverge again: this
-            // one once rendered as a bare field while the diff had a drawn
-            // box, so a code fence and a diff fence in the same reply read
-            // as two unrelated treatments ("the diff boxes in the chat ...
-            // are completely different from the diff box seen in the
-            // permissions dialog"). Now neither is stroked and both are the
-            // same recessed field, so they agree by construction.
-            //
-            // The blank first and last rows are the field's own: they give
-            // the step off the surrounding ground a full row to read
-            // against at the top and bottom, which is what the drawn edge
-            // used to do.
-            Segment::Code { lang, body: code } => {
-                let row = Row::field(pal.diff_box).pad(1);
-                let label = if lang.is_empty() { "code".to_string() } else { lang.clone() };
-                lines.extend(row.text(&label, pal.label, body));
-                lines.push(row.blank(body));
-                for code_line in highlight::highlight_lines(&lang, &code, pal.theme) {
-                    let spans: Vec<Span<'static>> = code_line.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.diff_box))).collect();
-                    lines.extend(row.build(spans, body));
-                }
-                lines.push(row.blank(body));
-            }
+            Segment::Code { lang, body: code } => lines.extend(code_block(&lang, &code, body)),
         }
+    }
+    lines
+}
+
+/// A fenced code block — the design system's `2b`: a caption row on the
+/// transcript's own ground, then the code on `diff_box` behind a numbered
+/// gutter.
+///
+/// ```text
+/// rust                                              7 lines     <- ground
+///    1 pub fn retry_after(&self) -> Duration {                  <- diff_box
+///    2     let deficit = 1.0 - self.tokens;
+/// ```
+///
+/// **The caption sits outside the field, not in it.** It was the field's
+/// first row until the repaint, under a blank row of padding with another at
+/// the foot. The reference has neither: the block "keeps that same ground
+/// for all of its rows … and takes no border, because it is a band and not a
+/// box", and a band has no inside to pad. The caption is *about* the block,
+/// so it reads on the ground the prose around it reads on — language in
+/// `label`, the line count flush right in `dim`.
+///
+/// The gutter is the inline diff's own 5-cell field (`--gutter-line-no-inline`,
+/// a 4-cell number and one cell of separation), which is what makes a code
+/// fence and a diff fence in one reply line their code up on one column. Its
+/// tone is `label` where the diff's is `quiet` — the reference draws them a
+/// rung apart, because a diff's numbers are file positions a reader acts on
+/// and these are only an index into the quotation.
+///
+/// Two things the reference's caption carries are **not fabricated**: a file
+/// path, and `7 of 96 lines`. A fence in a model's reply names a language and
+/// nothing else, so there is no file to name and no total to be a part of;
+/// rows are numbered from 1 because that is the one numbering a quotation
+/// with no stated origin actually has.
+fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
+    use crate::tokens::GUTTER_LINE_NO_INLINE as GUTTER;
+    let pal = ctx.pal;
+    let rows = highlight::highlight_lines(lang, code, pal.theme);
+
+    let caption = if lang.is_empty() { "code" } else { lang };
+    let count = format!("{} line{}", rows.len(), if rows.len() == 1 { "" } else { "s" });
+    let mut lines = vec![justified_line(
+        vec![Span::styled(caption.to_string(), Style::default().fg(pal.label))],
+        vec![Span::styled(count, Style::default().fg(pal.dim))],
+        ctx.width as usize,
+    )];
+
+    let field = Row::field(pal.diff_box);
+    for (i, row) in rows.into_iter().enumerate() {
+        let mut spans = vec![Span::styled(format!("{:>width$} ", i + 1, width = GUTTER - 1), Style::default().fg(pal.label).bg(pal.diff_box))];
+        spans.extend(row.into_iter().map(|s| Span::styled(s.content, s.style.bg(pal.diff_box))));
+        lines.extend(field.build(spans, ctx));
     }
     lines
 }
@@ -709,37 +812,28 @@ fn is_command(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
-/// The empty state — the design system's `14d`, and the screen a returning
+/// The empty state — the design system's `1d`, and the screen a returning
 /// developer actually opens into: what `aldwin` shows in a repository it
 /// has been pointed at before, and what `/clear` leaves behind.
 ///
-/// The wordmark leads, because "the mark identifies a frame with no
-/// transcript to identify it" — this and first run are the only two places
-/// it appears. Then three facts on the ordinary 8-cell label column, so the
-/// empty frame lines up on the same edge the transcript will use the moment
-/// there is one. Then the one line saying what to do next.
+/// Two facts on the ordinary 8-cell label column, so the empty frame lines
+/// up on the same edge the transcript will use the moment there is one, then
+/// the one line saying what to do next.
 ///
 /// # What is not here
 ///
-/// Turn 14 took the build's **version and commit** off this screen. The
-/// version lives in first run's top bar and the session's top bar carries
-/// the model instead, so neither fact is lost — but neither belongs in the
-/// resting state either. (`tests::the_top_bar_reports_the_running_builds_version`
-/// still pins the version; the commit's own assertion went with this
-/// change, and `version.rs` pins the constant itself.)
+/// The lantern-gold repaint took two things off this screen. **The
+/// wordmark** — a reverse-video row that led it — is gone from the design
+/// altogether; the top bar's `Aldwin` identifies the frame. And **the `in`
+/// row** went because it restated the working directory the top bar carries
+/// one row above it, in the same column. Before that, Turn 14 had already
+/// removed the build's version and commit.
 ///
-/// Two of `14d`'s own values are **not fabricated**, the same call
+/// Two of `1d`'s own values are **not fabricated**, the same call
 /// `chrome::draw_top_bar` makes about the reference's context gauge and
-/// session cost:
-///
-/// * the `in` row shows the working directory alone — the reference adds a
-///   git branch and a dirty marker, and nothing in `StatusInfo` tracks one;
-/// * the `access` row shows the three permission states this directory
-///   actually has, rather than the reference's single tier word. A tier is
-///   what first run *writes*; it is not what is stored, and a
-///   `permissions.yaml` edited by hand need not correspond to any tier at
-///   all. Reporting one would be a guess printed as a fact on the screen
-///   whose whole job is to say what this directory permits.
+/// session cost: the top bar's git branch and dirty marker, which nothing in
+/// `StatusInfo` tracks, and a bare tier word for `access` — see
+/// [`access_spans`].
 pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let status = &app.status;
@@ -762,25 +856,18 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
         // the one thing it does not promise, and on a session whose model id
         // happens to match a catalogue row's the result read as a bug.
         Some(id) => vec![
-            Span::styled(id.to_string(), Style::default().fg(pal.value)),
+            Span::styled(id.to_string(), Style::default().fg(pal.text)),
             Span::styled(" · ".to_string(), Style::default().fg(pal.dim)),
-            Span::styled(status.model_name.clone(), Style::default().fg(pal.value)),
+            Span::styled(status.model_name.clone(), Style::default().fg(pal.text)),
         ],
         // Only an `App` nobody gave a session to — tests and
         // `examples/preview.rs`. A configured session always has a kind.
-        None => vec![Span::styled(status.model_name.clone(), Style::default().fg(pal.value))],
+        None => vec![Span::styled(status.model_name.clone(), Style::default().fg(pal.text))],
     };
 
     let access = access_spans(status.access, ctx);
 
     let mut content: Vec<Line<'static>> = Vec::with_capacity(INTRO_ROWS);
-    content.push(super::first_run::wordmark(ctx));
-    content.push(Line::default());
-    // Elided, not wrapped — `INTRO_ROWS` below promises one row per fact,
-    // and a deep checkout is the one value here that routinely outruns the
-    // body column.
-    let cwd = elide(&status.cwd.clone().unwrap_or_default(), ctx.body().width as usize);
-    content.push(field("in", vec![Span::styled(cwd, Style::default().fg(pal.value))]));
     content.push(field("provider", provider));
     content.push(field("access", access));
     content.push(Line::default());
@@ -795,15 +882,13 @@ pub(super) fn intro_content(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
 }
 
 /// Rows [`intro_content`] always renders. Fixed, not derived: every row is
-/// one line whatever the model name or directory is, since each is elided
-/// rather than wrapped.
+/// one line whatever the model name is.
 ///
-/// Was 8 until the transcript band got its own blank row at each end
-/// (`super::LOG_PAD_ROWS`). The eighth was this screen's own trailing gap to
-/// the composer, hand-rolled here because nothing else provided one; the
-/// band now spaces *every* transcript off the bars, so keeping it too put
-/// two blank rows under the hero where `14d` has one.
-pub(super) const INTRO_ROWS: usize = 7;
+/// Four: two facts, a blank, the hint. The blank row *above* them is not
+/// counted here because it is not this screen's — it is the transcript
+/// band's own (`super::LOG_PAD_ROWS`), which is exactly what the reference's
+/// `padding-top: var(--row)` on the body band is.
+pub(super) const INTRO_ROWS: usize = 4;
 
 /// One `label: state` pair in the hero's access row. No filled chip — the
 /// design system's own rule is that the accent is "a mark or a line, never
@@ -823,10 +908,11 @@ pub(super) const INTRO_ROWS: usize = 7;
 ///
 /// The `access` fact: the rung in force, and the one thing no rung changes.
 ///
-/// `value` is not a guess: `--tui-value` is the role named for "right-flush
-/// facts and permission \"off\" values", which is literally this. It also
-/// makes the row consistent with its own siblings — `in` and `provider` two
-/// rows up are already `value`, so the hero reads as one key/value block.
+/// The rung is `text`, as the reference draws every value on this screen
+/// (`1d`: both facts inherit the frame's `--tui-text`), which also keeps it
+/// consistent with `provider` one row up so the two read as one key/value
+/// block. It was `value` until the repaint re-scoped that role to "a
+/// right-flush value", which this is not.
 ///
 /// The trailing clause is quieter than the rung because it is not a setting:
 /// under ADR 0004 §3 editing is outside the permissions model, so "edits
@@ -836,7 +922,7 @@ pub(super) const INTRO_ROWS: usize = 7;
 fn access_spans(rung: Option<Rung>, ctx: Ctx) -> Vec<Span<'static>> {
     let word = rung.map_or("not set", Rung::label);
     vec![
-        Span::styled(word.to_string(), Style::default().fg(ctx.pal.value)),
+        Span::styled(word.to_string(), Style::default().fg(ctx.pal.text)),
         // One space each side of the `·`, the same separator the `provider`
         // row above uses: these are two facts inside one group, and two
         // adjacent rows of one table drawing two different separators is
@@ -846,22 +932,19 @@ fn access_spans(rung: Option<Rung>, ctx: Ctx) -> Vec<Span<'static>> {
     ]
 }
 
-/// Pushes [`intro_content`] to the *bottom* of the log panel's inner
-/// `height`, against the composer.
+/// [`intro_content`], anchored to the **top** of the log panel.
 ///
-/// It used to be vertically centred. `14d`'s body band is
-/// `justify-content: flex-end`, like the transcript's own — which is the
-/// point: the empty state sits exactly where the first turn will appear, so
-/// typing into the composer does not make the screen jump. A centred hero
-/// had the facts drift upward as the terminal grew.
+/// This has now been in all three places. It was vertically centred, and
+/// the facts drifted upward as the terminal grew. It was then pushed to the
+/// bottom, against the composer, because `14d`'s body band was
+/// `justify-content: flex-end` like the transcript's own. `1d`'s is not: the
+/// band is a plain column, so the facts sit directly under the top bar, in
+/// the same two rows at every terminal height — which is the property
+/// centring never had, reached from the other end.
 ///
-/// On a terminal too short for the content, `pad_top` saturates to 0 and it
-/// starts at the top and scrolls like any other tall log content would.
-fn hero_lines(app: &App, height: u16, ctx: Ctx) -> Vec<Line<'static>> {
-    let content = intro_content(app, ctx);
-    let pad_top = (height as usize).saturating_sub(content.len());
-    let mut lines = Vec::with_capacity(pad_top + content.len());
-    lines.extend(std::iter::repeat_with(Line::default).take(pad_top));
-    lines.extend(content);
-    lines
+/// `height` is unused and kept: the caller sizes every other log state by
+/// it, and a hero that ignores the band's height is a fact about *this*
+/// screen that belongs here rather than at the call site.
+fn hero_lines(app: &App, _height: u16, ctx: Ctx) -> Vec<Line<'static>> {
+    intro_content(app, ctx)
 }

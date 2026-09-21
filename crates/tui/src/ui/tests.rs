@@ -13,7 +13,7 @@ use super::transcript::intro_content;
 
 use crate::app::App;
 use crate::log::LogEntry;
-use crate::palette::{self, DARK};
+use crate::palette::DARK;
 use aldwin_config::Config;
 use aldwin_permissions::{Class, Engine, PromptPayload};
 use ratatui::backend::TestBackend;
@@ -206,7 +206,7 @@ fn the_bottom_bar_is_parted_from_the_transcript_by_tone_with_no_rule_drawn() {
 
     // The composer row, found by its prompt glyph, is the second of the
     // bar's five rows, so the bar's own first row is one above it.
-    let first = find_row(&buffer, "▶") - 1;
+    let first = find_row(&buffer, "▸") - 1;
     let cell = &buffer[(0, first)];
     assert!(!cell.modifier.contains(Modifier::UNDERLINED), "no rule above the bar — the step down from the transcript is the boundary");
     assert_eq!(cell.bg, DARK.bar_bottom, "the bar's own surface starts on its first row, not one row late");
@@ -260,7 +260,7 @@ fn speaker_rows_sit_on_the_grids_label_and_body_columns() {
     let buffer = terminal.backend().buffer().clone();
 
     let row_text = |y: u16| -> String { (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
-    for (label, body) in [("you", "question"), ("harness", "answer")] {
+    for (label, body) in [("you", "question"), ("aldwin", "answer")] {
         let y = find_row(&buffer, body);
         let row = row_text(y);
         assert!(
@@ -272,37 +272,38 @@ fn speaker_rows_sit_on_the_grids_label_and_body_columns() {
     }
 }
 
-/// The transcript recedes to 35% while a decision is open — the
-/// reference puts the whole conversation column at `opacity:.35` in both
-/// of its panel scenes, so the panel is the one live surface. See
-/// `fade_area`/`palette::PANEL_TRANSCRIPT_OPACITY`.
+/// The transcript recedes while a decision is open, so the panel is the one
+/// live surface — by *recolouring* to the `--tui-scrim-*` roles, which is how
+/// the reference does it (`3a`, `3b`) and what `semantic.css` means by "a
+/// recolour, never alpha". See `scrim_area` / `Palette::scrimmed`.
+///
+/// This used to assert an exact `opacity:.45` composite. The value it lands
+/// on now is a token, which is the point: a dimmed cell is as checkable
+/// against the design as an undimmed one.
 #[test]
 fn the_transcript_dims_while_a_decision_panel_is_open() {
     let text = "an earlier answer";
     let mut app = app();
     app.log.push(LogEntry::AssistantText { text: text.into() });
 
-    let undimmed = {
+    let render = |app: &mut crate::app::App| {
         let backend = TestBackend::new(100, 28);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| draw(f, &mut app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        buffer[(CONTENT_INDENT as u16, find_row(&buffer, text))].fg
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
     };
 
-    app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
-    let backend = TestBackend::new(100, 28);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &mut app)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let dimmed = buffer[(CONTENT_INDENT as u16, find_row(&buffer, text))].fg;
+    let buffer = render(&mut app);
+    let row = find_row(&buffer, text);
+    assert_eq!(buffer[(CONTENT_INDENT as u16, row)].fg, DARK.body, "prose is `body` while nothing is open");
+    assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.speaker_agent, "and its speaker label is the agent tone");
 
-    assert_ne!(dimmed, undimmed, "the transcript must recede while a decision panel is open");
-    assert_eq!(
-        dimmed,
-        palette::fade(undimmed, DARK.ground, palette::PANEL_TRANSCRIPT_OPACITY),
-        "it must recede by exactly the reference's 35%, composited onto the ground it sits on"
-    );
+    app.pending_approvals.push_back(crate::app::PendingApproval { call_id: "c1".into(), diff: "-old\n+new".into() });
+    let buffer = render(&mut app);
+    let row = find_row(&buffer, text);
+    assert_eq!(buffer[(CONTENT_INDENT as u16, row)].fg, DARK.scrim_text, "prose sinks to `scrim-text`");
+    assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.scrim_mark, "a speaker label sinks further, to `scrim-mark`");
+    assert_eq!(buffer[(CONTENT_INDENT as u16, row)].bg, DARK.ground, "the ground under it is left alone");
 }
 
 /// Regression test for the bug the user actually hit: scroll math
@@ -610,13 +611,58 @@ fn a_long_notice_wraps_under_the_body_column_not_against_the_frame_edge() {
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
 
-    let first = find_row(&buffer, "notice:");
+    // A notice is the info line now: a sky `·` on the body column, two
+    // spaces, the sentence in `quiet` (`2d`). No `notice:` word — the glyph
+    // is the label.
+    let first = find_row(&buffer, "·  wrapme");
+    assert_eq!(buffer[(CONTENT_INDENT as u16, first)].symbol(), "·", "the pointer sits on the body column");
+    assert_eq!(buffer[(CONTENT_INDENT as u16, first)].fg, DARK.info, "in the info hue");
+    assert_eq!(buffer[(CONTENT_INDENT as u16 + 3, first)].fg, DARK.quiet, "and the sentence does not borrow it");
+
     let rows: Vec<String> = (first..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+    assert!(!rows.concat().contains("notice:"), "{rows:?}");
     let continuation: Vec<&String> = rows.iter().skip(1).take_while(|r| r.contains("wrapme")).collect();
     assert!(!continuation.is_empty(), "the notice must actually wrap at this width: {rows:?}");
     for row in continuation {
-        assert_eq!(row.len() - row.trim_start().len(), CONTENT_INDENT, "every wrapped row keeps the body column's inset: {row:?}");
+        // Under the sentence, not under the glyph — and, the thing this test
+        // was written for, never against the frame's left edge.
+        assert_eq!(row.len() - row.trim_start().len(), CONTENT_INDENT + 3, "every wrapped row hangs under the sentence: {row:?}");
+        assert!(row.trim_end().chars().count() <= width as usize - MARGIN_X, "and stays inside the right margin: {row:?}");
     }
+}
+
+/// `2d`: a failure is `✗` in the err hue and takes no weight. It was
+/// `error:` in **bold** rose, the one bold run in the app, in a system whose
+/// type rule is "no bold is required anywhere; hierarchy is color and
+/// position". A cancelled turn is `!` — the developer stopped it, it did not
+/// fail — which is the same line drawn between a refused call and a broken
+/// one.
+#[test]
+fn failures_are_status_rows_with_a_glyph_a_hue_and_no_weight() {
+    use ratatui::style::Modifier;
+    let cell = |entry: LogEntry, needle: &str| {
+        let mut app = app();
+        app.log.push(entry);
+        let backend = TestBackend::new(110, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let y = find_row(&buffer, needle);
+        for x in 0..110 {
+            assert!(!buffer[(x, y)].modifier.contains(Modifier::BOLD), "cell {x} of {needle:?} is bold");
+        }
+        (buffer[(CONTENT_INDENT as u16, y)].symbol().to_string(), buffer[(CONTENT_INDENT as u16, y)].fg, buffer[(CONTENT_INDENT as u16 + 3, y)].fg)
+    };
+
+    let (glyph, glyph_fg, text_fg) = cell(LogEntry::Error { message: "connection reset".into() }, "connection reset");
+    assert_eq!((glyph.as_str(), glyph_fg, text_fg), ("✗", DARK.err, DARK.err));
+
+    let ended = LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Error("overloaded".into()) };
+    let (glyph, glyph_fg, _) = cell(ended, "overloaded");
+    assert_eq!((glyph.as_str(), glyph_fg), ("✗", DARK.err));
+
+    let (glyph, glyph_fg, text_fg) = cell(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Cancelled }, "turn cancelled");
+    assert_eq!((glyph.as_str(), glyph_fg, text_fg), ("!", DARK.warn, DARK.warn), "stopped is a warning, not a failure");
 }
 
 /// Regression test for the 2026-08-31 status-line correction: the old
@@ -861,7 +907,9 @@ fn a_resolved_approval_still_leaves_a_full_record_in_the_conversation_log() {
     let out = rendered(&mut app, 100, 20);
     assert!(out.contains("old") && out.contains("new"), "a resolved card should keep the diff it was answering: {out:?}");
     assert!(out.contains("edit") && out.contains("src/page.rs"), "the record should name the tool and the file it touched: {out:?}");
-    assert!(out.contains("+1") && out.contains("-1"), "the record should carry the diff stat flush right, as ToolLine does: {out:?}");
+    // U+2212, not a hyphen: the removed *count* is a number, and the row's
+    // own `- ` sign a few cells below it is the hyphen. See `diff::stat_spans`.
+    assert!(out.contains("+1 \u{2212}1"), "the record should carry the diff stat flush right, as ToolLine does: {out:?}");
     assert!(!out.contains("The agent wants to"), "the panel's own prompting sentence has no place in the historical record: {out:?}");
 }
 
@@ -1003,7 +1051,7 @@ fn the_panel_footer_makes_no_blanket_claim_about_where_answers_are_saved() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
-    let footer_row = find_row(&buffer, "to confirm");
+    let footer_row = find_row(&buffer, "⏎ confirm");
     let footer: String = (0..buffer.area.width).map(|x| buffer[(x, footer_row)].symbol().to_string()).collect();
     assert!(!footer.contains("permissions.yaml"), "the key-hint row must not carry a where-it-saves claim of its own: {footer:?}");
 }
@@ -1109,7 +1157,7 @@ fn the_panel_draws_all_eight_rows_in_one_list() {
     ] {
         assert!(out.contains(&format!("{n}  {sentence}")), "row {n} must read {sentence:?}: {out:?}");
     }
-    assert!(out.contains("1-8 to pick"), "the footer must offer all eight: {out:?}");
+    assert!(out.contains("1-8 pick"), "the footer must offer all eight: {out:?}");
 }
 
 /// The prompt shows the class the agent declared, because that is the claim
@@ -1520,7 +1568,7 @@ fn command_token_is_dimmed_live_in_the_input_box() {
     // `BottomBar.jsx`'s five rows at the bottom of a 20-row frame —
     // blank(15) / composer(16) / blank(17) / status(18) / blank(19) —
     // so a single-line draft sits on row 16. Its content starts at the
-    // grid's 3-cell `MARGIN_X`, plus 3 more for the accent `▶  ` prompt
+    // grid's 3-cell `MARGIN_X`, plus 3 more for the accent `▸  ` prompt
     // prefix (the glyph and the two spaces after it): `/` lands in cell 6.
     let slash_cell = &buffer[(6, 16)]; // '/'
     let arg_cell = &buffer[(13, 16)]; // 'n' of "now"
@@ -1548,7 +1596,7 @@ fn command_word_is_dimmed_live_even_mid_message() {
     let buffer = terminal.backend().buffer().clone();
 
     // Composer row 16, content from cell 6 (3-cell `MARGIN_X` + the
-    // 3-cell `▶  ` prompt prefix) — see
+    // 3-cell `▸  ` prompt prefix) — see
     // `command_token_is_dimmed_live_in_the_input_box` above.
     let leading_cell = &buffer[(6, 16)]; // 'h' of "hi"
     let slash_cell = &buffer[(9, 16)]; // '/' of "/exit"
@@ -1577,7 +1625,7 @@ fn theme_command_word_is_dimmed_live_like_every_other_known_command() {
 /// Regression test: no visible cursor at all was a standing complaint —
 /// the input box rendered the draft text but never said where the cursor
 /// sat within it. It said so with the *terminal's* cursor until the caret
-/// became a drawn `▌` (`14d`: the composer is `▶  ▌`, both `--t-mark`),
+/// became a drawn `▌` (`14d`: the composer is `▸  ▌`, both `--t-mark`),
 /// which is what this now asserts — including that nothing asks the
 /// terminal to paint a second one.
 #[test]
@@ -1599,11 +1647,11 @@ fn the_caret_is_drawn_inside_the_input_box_at_the_draft_cursor() {
     assert_eq!(
         x,
         MARGIN_X as u16 + 3 + 2,
-        "and right after \"hi\": the grid's left margin, the accent `▶  ` prompt prefix on the first line, then the two typed chars"
+        "and right after \"hi\": the grid's left margin, the accent `▸  ` prompt prefix on the first line, then the two typed chars"
     );
 }
 
-/// The empty composer is `14d`'s own row, glyph for glyph: `▶`, two
+/// The empty composer is `14d`'s own row, glyph for glyph: `▸`, two
 /// spaces, the caret — both in `--t-mark`. The placeholder that follows it
 /// is Aldwin's own (the design draws none), and the one thing it may not
 /// do is share a cell with the caret, which is exactly what it did while
@@ -1617,14 +1665,14 @@ fn the_empty_composer_draws_the_references_prompt_and_caret() {
     let buffer = terminal.backend().buffer().clone();
 
     let row = 20 - 4;
-    assert_eq!(buffer[(MARGIN_X as u16, row)].symbol(), "▶");
+    assert_eq!(buffer[(MARGIN_X as u16, row)].symbol(), "▸");
     assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.mark);
     assert_eq!(caret_at(&buffer), (MARGIN_X as u16 + 3, row), "the caret is two cells past the glyph, as the reference draws it");
     let text: String = (0..buffer.area.width).map(|x| buffer[(x, row)].symbol().to_string()).collect();
-    assert!(text.starts_with("   ▶  ▌ Ask"), "and the placeholder starts past the caret rather than under it: {text:?}");
+    assert!(text.starts_with("   ▸  ▌ Ask"), "and the placeholder starts past the caret rather than under it: {text:?}");
 }
 
-/// The composer's `▶` prompt (from `Composer.jsx`) is a *gutter*, not a
+/// The composer's `▸` prompt (from `Composer.jsx`) is a *gutter*, not a
 /// prefix on line 0: the glyph is drawn on the first row only, but all
 /// three of its cells are reserved on every row, so a multi-line draft
 /// keeps one left edge instead of stepping back three columns after its
@@ -1644,7 +1692,7 @@ fn every_row_of_a_multiline_draft_shares_the_first_rows_left_edge() {
     let first = find_row(&buffer, "alpha");
     let second = find_row(&buffer, "bravo");
     assert_eq!(second, first + 1, "the two source lines are two consecutive rows");
-    // By cell, not by byte: the `▶` ahead of the first row is three bytes
+    // By cell, not by byte: the `▸` ahead of the first row is three bytes
     // wide and one cell wide, and `str::find` would report the difference
     // as a column offset that isn't there.
     let column_of = |y: u16, needle: &str| -> u16 {
@@ -1756,13 +1804,26 @@ fn a_blank_line_separates_consecutive_log_entries() {
 /// separates the two speakers without it.
 #[test]
 fn no_chat_message_renders_the_old_assistant_marker() {
+    // Scoped to the message's own row rather than the whole frame. The
+    // status line now opens `●  idle` — the reference's settled glyph, in
+    // the bottom band — and a frame-wide search would read that as the
+    // speaker marker coming back, which it is not.
+    let message_row = |app: &mut App| {
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let y = find_row(&buffer, "hi");
+        (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()
+    };
+
     let mut assistant_app = app();
     assistant_app.log.push(LogEntry::AssistantText { text: "hi".into() });
-    assert!(!rendered(&mut assistant_app, 100, 20).contains('●'), "the assistant marker was removed and must not reappear");
+    assert!(!message_row(&mut assistant_app).contains('●'), "the assistant marker was removed and must not reappear");
 
     let mut user_app = app();
     user_app.log.push(LogEntry::UserMessage { text: "hi".into() });
-    assert!(!rendered(&mut user_app, 100, 20).contains('●'));
+    assert!(!message_row(&mut user_app).contains('●'));
 }
 
 #[test]
@@ -1781,19 +1842,162 @@ fn fenced_code_block_is_stripped_of_its_fences_and_syntax_highlighted() {
     assert!(out.contains("rust"), "the language tag should appear in the block's header");
     assert!(out.contains("fn main"), "the code itself must still be shown");
 
-    // `CONTENT_INDENT`, not column 0 — the turn's label column
-    // (`with_label_column`) sits ahead of every row's real content now.
-    let label_row = find_row(&buffer, "rust");
-    assert_eq!(buffer[(CONTENT_INDENT as u16, label_row)].bg, DARK.diff_box, "the language label row should sit on `diff_box`, the design system's nested-quote surface");
+    // `2b`: the caption is *about* the block, so it sits on the transcript's
+    // own ground with the line count flush right; the field starts on the
+    // row under it. `CONTENT_INDENT`, not column 0 — the turn's label column
+    // (`with_label_column`) sits ahead of every row's real content.
+    let caption_row = find_row(&buffer, "rust");
+    let at = CONTENT_INDENT as u16;
+    assert_eq!(buffer[(at, caption_row)].bg, DARK.ground, "the caption reads on the ground the prose around it reads on");
+    assert_eq!(buffer[(at, caption_row)].fg, DARK.label, "the language is a label");
+    let caption: String = (0..110).map(|x| buffer[(x, caption_row)].symbol().to_string()).collect();
+    assert!(caption.trim_end().ends_with("1 line"), "with the line count flush right, singular for one: {caption:?}");
+    assert_eq!(caption.trim_end().chars().count(), 110 - MARGIN_X, "flush to the right margin, not past it: {caption:?}");
+
+    // The field: no padding row above the code, a 5-cell gutter holding a
+    // right-aligned number, then the code on the same column the inline
+    // diff puts its own.
+    let code_row = find_row(&buffer, "fn main");
+    assert_eq!(code_row, caption_row + 1, "the block is a band, not a box: no blank row pads it");
+    assert_eq!(buffer[(at, code_row)].bg, DARK.diff_box, "the code sits on `diff_box`, the quoted-code ground");
+    let gutter: String = (at..at + 5).map(|x| buffer[(x, code_row)].symbol().to_string()).collect();
+    assert_eq!(gutter, "   1 ", "a 4-cell right-aligned number and one cell of separation");
+    assert_eq!(buffer[(at + 3, code_row)].fg, DARK.label, "the gutter is `label`, a rung under the diff's `quiet`");
+    assert_eq!(buffer[(at + 5, code_row)].symbol(), "f", "code starts past the gutter");
+    assert_eq!(buffer[(at, code_row + 1)].bg, DARK.ground, "and no blank row pads the foot either");
 
     // At least two distinct foreground colors within the code line —
     // proof it went through the highlighter, not just plain dim text.
     // Restricted to a narrow column range so unstyled padding cells
     // past the printed text can't manufacture a spurious second color.
-    let code_row = find_row(&buffer, "fn main");
-    assert_eq!(buffer[(CONTENT_INDENT as u16, code_row)].bg, DARK.diff_box, "the code line should sit on `diff_box` too, so the block reads as one filled field — a real code block in a document");
-    let colors: std::collections::HashSet<Color> = (CONTENT_INDENT as u16..CONTENT_INDENT as u16 + 20).map(|x| buffer[(x, code_row)].fg).collect();
+    let colors: std::collections::HashSet<Color> = (at + 5..at + 25).map(|x| buffer[(x, code_row)].fg).collect();
     assert!(colors.len() > 1, "expected the highlighted code line to use more than one color, got {colors:?}");
+}
+
+/// `2c`: a draft of more than one row says how many, flush right on the
+/// band's top row in `dim`. A one-row draft says nothing — the band's own
+/// height already does.
+#[test]
+fn a_multi_row_draft_states_its_line_count_flush_right() {
+    let render = |input: &str| {
+        let mut app = app();
+        app.input = input.into();
+        app.cursor = input.chars().count();
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+    let row_text = |b: &ratatui::buffer::Buffer, y: u16| -> String { (0..120).map(|x| b[(x, y)].symbol().to_string()).collect() };
+
+    let one = render("round up");
+    assert!(!row_text(&one, find_row(&one, "▸")).contains("line"), "one row needs no count");
+
+    let four = render("round up, and while you are in there:\n- keep the f64\n- add the 0.4s case\n- leave mod.rs alone");
+    let y = find_row(&four, "▸");
+    let top = row_text(&four, y);
+    assert!(top.trim_end().ends_with("4 lines"), "{top:?}");
+    assert_eq!(top.trim_end().chars().count(), 120 - MARGIN_X, "flush to the right margin: {top:?}");
+    assert_eq!(four[(120 - MARGIN_X as u16 - 1, y)].fg, DARK.dim);
+    // Continuation rows hang three cells in under the prompt, on cell 6.
+    let second = row_text(&four, y + 1);
+    assert_eq!(second.find("- keep").map(|b| second[..b].chars().count()), Some(MARGIN_X + 3), "{second:?}");
+}
+
+/// The status row's hint tracks what a key does *now*, and never names a
+/// key Aldwin does not bind. The reference draws `esc stop` and `esc clear`;
+/// Esc does neither here, so neither is on screen.
+#[test]
+fn the_status_hint_follows_the_draft_and_names_only_bound_keys() {
+    let status = |app: &mut App| -> String {
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let y = find_row(&buffer, "idle");
+        (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect()
+    };
+
+    let mut empty = app();
+    assert!(status(&mut empty).trim_end().ends_with("^c exit"), "nothing to send, so: how to leave");
+
+    let mut drafted = app();
+    drafted.input = "round up".into();
+    let row = status(&mut drafted);
+    assert!(row.trim_end().ends_with("⏎ send"), "a draft is waiting, so: what Enter does: {row:?}");
+    assert!(!row.contains("newline"), "a one-line draft does not name the newline key: {row:?}");
+
+    let mut multi = app();
+    multi.input = "one\ntwo".into();
+    let row = status(&mut multi);
+    assert!(row.contains("●  idle      ⇧⏎ newline"), "the activity, a group gap, then the key that adds a line: {row:?}");
+    assert!(row.trim_end().ends_with("⏎ send"), "{row:?}");
+
+    for row in [status(&mut empty), status(&mut drafted), status(&mut multi)] {
+        assert!(!row.contains("esc"), "Esc is unbound in the composer and must not be named: {row:?}");
+    }
+}
+
+/// `2d`: a failed turn puts a one-row notice on the bottom band's first
+/// row — the row that is otherwise blank — so the band stays five rows and
+/// nothing above it moves. It is derived from the log's last entry, so it
+/// clears itself the moment anything else happens.
+#[test]
+fn a_failed_turn_leaves_a_notice_on_the_bottom_bands_first_row_until_something_else_happens() {
+    let (width, height) = (120u16, 36u16);
+    let render = |app: &mut App| {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+    let row_text = |b: &ratatui::buffer::Buffer, y: u16| -> String { (0..width).map(|x| b[(x, y)].symbol().to_string()).collect() };
+    let band_top = height - 5;
+
+    let mut app = app();
+    app.log.push(LogEntry::UserMessage { text: "go".into() });
+    let calm = render(&mut app);
+    assert!(row_text(&calm, band_top).trim().is_empty(), "the band opens on a blank row when nothing failed");
+    let prompt_row = find_row(&calm, "▸");
+
+    app.log.push(LogEntry::TurnEnded { reason: crate::log::TurnEndReasonKind::Error("overloaded_error\nsecond line".into()) });
+    let failed = render(&mut app);
+    let notice = row_text(&failed, band_top);
+    assert_eq!(notice.trim_end(), "   ✗  turn failed · overloaded_error · output above", "{notice:?}");
+    assert_eq!(failed[(MARGIN_X as u16, band_top)].fg, DARK.err, "the glyph is the err hue");
+    assert_eq!(failed[(MARGIN_X as u16 + 3, band_top)].fg, DARK.err, "and so is the state");
+    assert_eq!(failed[(MARGIN_X as u16 + 17, band_top)].fg, DARK.quiet, "the detail after it is not");
+    assert_eq!(failed[(60, band_top)].bg, DARK.bar_bottom, "it is a row of the band, not of the transcript");
+    assert_eq!(find_row(&failed, "▸"), prompt_row, "and it took the blank's row: the prompt did not move");
+
+    app.log.push(LogEntry::UserMessage { text: "again".into() });
+    assert!(row_text(&render(&mut app), band_top).trim().is_empty(), "the next message clears it");
+}
+
+/// An inline `` `span` `` takes the quoted-code ground as well as the code
+/// tone, and keeps it across a wrap. The ground is what makes it read as
+/// quoted: `code` and `body` are one rung apart, which does not pick a word
+/// out of a sentence.
+#[test]
+fn an_inline_code_span_sits_on_the_quoted_code_ground() {
+    let mut app = app();
+    app.log.push(LogEntry::AssistantText { text: "The header comes from `refill_per_sec`, an f64.".into() });
+    let backend = TestBackend::new(110, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+
+    let y = find_row(&buffer, "refill_per_sec");
+    let row: String = (0..110).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+    assert!(!row.contains('`'), "the backticks are delimiters and do not reach the screen: {row:?}");
+    let start = row.find("refill_per_sec").map(|b| row[..b].chars().count()).unwrap() as u16;
+    let end = start + "refill_per_sec".len() as u16;
+    for x in start..end {
+        assert_eq!(buffer[(x, y)].bg, DARK.diff_box, "cell {x} of the span is on the quoted-code ground");
+        assert_eq!(buffer[(x, y)].fg, DARK.code);
+    }
+    assert_eq!(buffer[(start - 1, y)].bg, DARK.ground, "the space before it is prose: the span is not padded");
+    assert_eq!(buffer[(end, y)].bg, DARK.ground, "nor after — the comma sits on the ground");
 }
 
 /// A ```diff fence renders as the design system's recessed field: the diff
@@ -1859,22 +2063,29 @@ fn an_ordinary_turn_end_renders_no_log_row() {
     assert!(rendered(&mut cancelled_app, 100, 20).contains("cancelled"), "a cancelled turn must still render inline");
 }
 
-/// The empty state — the design system's `14d`. Replaces the removed
-/// mascot-art tests (the hero has no art; see `intro_content`) and the
-/// tagline/version/commit block Turn 14 took off this screen.
+/// The empty state — the design system's `1d`: two facts on the label
+/// column and the line saying what to do next.
+///
+/// It led with a reverse-video wordmark and an `in` row until the
+/// lantern-gold repaint. Both absences are asserted, not just the presences:
+/// the wordmark is gone from the design, and the `in` row restated the
+/// directory the top bar already carries one row above.
 #[test]
-fn the_empty_state_shows_the_wordmark_and_the_three_facts_of_this_directory() {
+fn the_empty_state_shows_the_two_facts_of_this_directory_and_no_wordmark() {
     let mut app = app();
     app.current_provider = Some("anthropic".into());
+    app.status.cwd = Some("~/src/gateway".into());
     let out = rendered(&mut app, 110, 40);
 
-    assert!(out.contains("  A L D W I N  "), "the mark identifies a frame with no transcript to identify it: {out:?}");
     assert!(out.contains("anthropic"), "the provider row names the catalogue row this session runs on: {out:?}");
     assert!(out.contains("claude-sonnet-5"), "beside the model it answers with: {out:?}");
     assert!(out.contains("access") && out.contains("not set"), "and the rung this directory stands at: {out:?}");
     assert!(out.contains("edits always ask"), "with the one fact no rung changes: {out:?}");
     assert!(out.contains("Ask for a change, or / for commands."), "the one line saying what to do next: {out:?}");
     assert_eq!(intro_content(&app, ctx(80)).len(), super::transcript::INTRO_ROWS, "intro_content must stay in sync with INTRO_ROWS");
+
+    assert!(!out.contains("A L D W I N"), "the wordmark is gone; the top bar's `Aldwin` identifies the frame: {out:?}");
+    assert_eq!(out.matches("~/src/gateway").count(), 1, "the directory is stated once, in the top bar: {out:?}");
 }
 
 /// Turn 14 took the build's version and commit off this screen. The version
@@ -1900,21 +2111,36 @@ fn the_provider_row_falls_back_to_the_model_alone_for_an_unnamed_endpoint() {
     assert!(!out.contains(" · claude-sonnet-5"), "no separator with nothing on its left: {out:?}");
 }
 
-/// The empty state sits against the composer, where the first turn will
-/// appear — not centred. A centred hero made the screen jump on the first
-/// message and drift upward as the terminal grew.
+/// The empty state sits directly under the top bar, in the same rows at
+/// every terminal height — `1d`'s body band is a plain column.
+///
+/// This has been pinned the other way. It was centred, which made the facts
+/// drift upward as the terminal grew; then bottom-anchored, as `14d` had it.
+/// What the two fixes share is the property asserted here: the rows do not
+/// move when the terminal is resized. Only the *conversation* hangs off the
+/// composer, and the second half of this test pins that it still does.
 #[test]
-fn the_empty_state_is_anchored_to_the_bottom_of_the_log() {
+fn the_empty_state_is_anchored_under_the_top_bar_at_every_height() {
+    for height in [24u16, 40, 60] {
+        let mut app = app();
+        let backend = TestBackend::new(110, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        // Top bar is rows 0..3; one blank row of the band's own; then facts.
+        assert_eq!(find_row(&buffer, "provider"), 4, "one blank row under the bar, at height {height}");
+        assert_eq!(find_row(&buffer, "Ask for a change"), 7, "facts, a blank, the hint, at height {height}");
+    }
+
     let mut app = app();
+    app.log.push(LogEntry::UserMessage { text: "a first message".into() });
     let (width, height) = (110u16, 40u16);
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
-
     let last = (0..height).filter(|y| (0..width).any(|x| buffer[(x, *y)].bg == DARK.ground)).max().expect("a log row");
-    let prose = find_row(&buffer, "Ask for a change");
-    assert_eq!(last - prose, 1, "one blank row between the prose and the composer band, as `14d` has it");
+    assert_eq!(last - find_row(&buffer, "a first message"), 1, "a conversation still hangs off the composer, as `2a` has it");
 }
 
 /// Regression guard for the reported defect: the top bar printed
@@ -1977,7 +2203,7 @@ fn the_top_bar_groups_never_collide_and_never_clip_silently() {
         let buffer = terminal.backend().buffer().clone();
         let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
 
-        assert!(row.starts_with("   aldwin"), "the brand always renders, on the margin: {width} -> {row:?}");
+        assert!(row.starts_with("   Aldwin"), "the brand always renders, on the margin: {width} -> {row:?}");
 
         // A version is shown whole or not at all — never a prefix of one.
         if let Some(at) = row.find('v') {
@@ -2002,9 +2228,9 @@ fn the_top_bar_groups_never_collide_and_never_clip_silently() {
 }
 
 /// The status line has the identity bar's shape and had the same defect one
-/// row down. It reserved the `^c to exit` hint's exact width, so the hint
+/// row down. It reserved the `^c exit` hint's exact width, so the hint
 /// itself never clipped — but the activity group still filled to the seam,
-/// and at 52 columns the row read `0 messages^c to exit`, one fact running
+/// and at 52 columns the row read `0 messages^c exit`, one fact running
 /// straight into the next.
 ///
 /// Found by screenshotting the *top* bar at the widths its own collision
@@ -2021,18 +2247,19 @@ fn the_status_line_keeps_a_gap_before_its_key_hint() {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let y = find_row(&buffer, "^c to");
+        let y = find_row(&buffer, "^c ");
         let row: String = (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
 
-        let at = row.find("^c to").expect("the hint");
-        assert!(row[at..].starts_with("^c to exit"), "the hint is never clipped: {width} -> {row:?}");
+        // Key then verb, no `to` — the reference's hint shape in every footer.
+        let at = row.find("^c ").expect("the hint");
+        assert!(row[at..].starts_with("^c exit"), "the hint is never clipped: {width} -> {row:?}");
         let left_end = row[..at].trim_end().chars().count();
         let gap = row[..at].chars().count() - left_end;
         assert!(gap >= GROUP_GAP, "only {gap} cells before the hint at {width}: {row:?}");
         assert!(row.chars().count() <= width as usize, "{width} -> {row:?}");
         // The activity group leads the row and is never dropped whole — the
         // one thing this line exists to say.
-        assert!(row.trim_start().starts_with("idle"), "{width} -> {row:?}");
+        assert!(row.trim_start().starts_with("●  idle"), "{width} -> {row:?}");
     }
 }
 

@@ -29,11 +29,11 @@ use crate::picker::Stage;
 /// are one control wearing two questions.
 ///
 /// Note what is *not* here: a `recess` band above the options. `HANDOFF.md`'s
-/// prose asks for "one row of the recessed tone, blank row" and `5a`'s own
-/// rendered frame has a single blank `<div>` and no `--t-recess` anywhere —
-/// settled in `crates/review/baseline.json` as
-/// `5a-recess-in-the-prose-but-not-in-the-frame`, where the app follows the
-/// frame. The permission panel always did; these two did not, because they
+/// prose asks for "one row of the recessed tone, blank row" and the
+/// permission frame (`3a`, and `5a` before it) has a single blank `<div>`
+/// and no recess anywhere — one instance of
+/// `readme-and-sync-record-describe-frames-that-no-longer-exist` in
+/// `crates/review/baseline.json`, where the app follows the frame. The permission panel always did; these two did not, because they
 /// were written from the prose. A stage 5 judge caught it on the session
 /// list and it was true of the model picker too.
 ///
@@ -100,11 +100,11 @@ pub(super) fn panel_lines(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     // picker from the provider one — and a modal that takes the whole
     // bottom band has to say how to leave it.
     let back = match picker.stage {
-        Stage::Provider => "to close",
-        Stage::Model => "to go back",
+        Stage::Provider => "close",
+        Stage::Model => "back",
     };
     let hints = key_hints(
-        &[("↑↓", "to move"), (&format!("1-{}", rows.len()), "to pick"), ("⏎", "to confirm"), ("esc", back)],
+        &[("↑↓", "move"), (&format!("1-{}", rows.len()), "pick"), ("⏎", "confirm"), ("esc", back)],
         ctx,
     );
     lines.push(Row::card(pal.bar_bottom).split(hints, Vec::new(), ctx));
@@ -131,7 +131,7 @@ fn resume_lines(app: &App, ctx: Ctx) -> Vec<Line<'static>> {
     lines.extend(option_rows(&rows, picker.selected(), ctx));
     lines.push(card.blank(ctx));
     let hints = key_hints(
-        &[("↑↓", "to move"), (&format!("1-{}", rows.len()), "to pick"), ("⏎", "to confirm"), ("esc", "to close")],
+        &[("↑↓", "move"), (&format!("1-{}", rows.len()), "pick"), ("⏎", "confirm"), ("esc", "close")],
         ctx,
     );
     lines.push(Row::card(pal.bar_bottom).split(hints, Vec::new(), ctx));

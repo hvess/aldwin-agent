@@ -8,52 +8,52 @@
   "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
   "contradictions": [
     {
-      "id": "closed-glyph-table-vs-the-designs-own-copy",
-      "design_says": "HANDOFF.md:232-241 closes the glyph table at `▌ ● ◐ ○ ✔ ▶ █ + -`, and IMPORT.md restates it as closed.",
-      "design_also_says": "The same document mandates `·` as the top bar's within-group separator (:142, :254-255), `→` on first run's `more` row (:336), `⏎` and `↑↓` in two footers (:280, :341), and presupposes `…` for clipping.",
-      "app_follows": "The copy. A frame cannot draw the screens the design specifies without these five marks, so the table is the half that is wrong.",
-      "glyphs": "·…⏎↑↓←→"
+      "id": "permission-frame-predates-adr-0004",
+      "design_says": "`Aldwin Agent TUI.dc.html` frame `3a` draws four options — `Allow once` / `Allow cargo test for this session` / `Always allow cargo * in this project` / `Deny and tell the agent why` — under the sentence `Aldwin wants to run a shell command.`, with the tool name `bash` right-flush on the title row, a `1-4 pick` hint and `saved to .aldwin/permissions.toml`. Its grid is `bar-top / 1fr / panel-permission (18) / bar-bottom (5)`: the panel sits *above* a bottom band reading `answer above to continue`.",
+      "design_also_says": "The same project's top-level README.md, corrected upstream on 2026-09-20 (see `.claude/design/IMPORT.md`): eight rows, allow and deny mirrored across once / session / project / everywhere; a grant is a program and a class (`cargo writes`), not a command pattern (`cargo *`); `There is no shell to run a command in`; the title's right-flush fact is the *program*; `Deny and tell the agent why` is gone because nothing collects a reason; and the footer names no file, because the old one `named the wrong file … and was true of three rows out of eight`. The README also records as an open question that eight rows do not fit the 18-row panel. The repaint redrew `3a` from a base older than that correction and resolved the open question by reverting to four rows.",
+      "app_follows": "ADR 0004, which the README describes and the frame does not. This is not a judgement call between two readings of a design: `No arbitrary commands` and `Default-deny` are non-negotiable constraints in CLAUDE.md, and the four-row list is the UI of the model ADR 0004 deleted — a `cargo *` row would be a control for a grant the engine cannot store. The app takes `3a`'s *tones* in full (title `text`, program `quiet`, `$` `quiet`, numbers `label`, footer keys `body`) and none of its copy. It also keeps the panel as the bottom band rather than stacking it on one: `3a`'s 18 + 5 rows close only because there are four options. Retire when `3a` is redrawn with eight rows — which is also when the panel-height question gets a real answer.",
+      "glyphs": ""
+    },
+    {
+      "id": "access-scale-is-four-points-in-the-frame-and-three-in-the-readme",
+      "design_says": "Frame `1c` draws four access rows — `ask` / `read` / `write` / `all`, the last reading `everything runs · nothing asks` — and `1d`'s `access` fact is a bare tier word. Its open-step prose promises `/access changes it later`.",
+      "design_also_says": "The top-level README's first-run section reads `ask · read · write` — `Three points, not four` — because `full access had no distinct meaning to offer: editing a file always shows a diff and waits, under every rung, so no point on this scale can mean everything runs`. This entry used to say the four-point scale survived only in the bound copy's Turn 14 prose and that a re-sync would bring it forward. The re-sync came (2026-09-21) and went the other way: the repaint redrew the frame with four.",
+      "app_follows": "The README and ADR 0004 §3, which puts `edit` outside the permissions model. Three rungs, and the `access` fact reads the standing rung followed by `edits always ask`, the one thing no rung changes. `crates/tui/src/ui/first_run.rs`'s `no_access_row_claims_edits_run_unasked` fails on the string `nothing asks`, so the frame's fourth row cannot ship by accident. `/access` is dropped from the prose because no such command exists. Retire when `1c` is redrawn with three rows.",
+      "glyphs": ""
+    },
+    {
+      "id": "readme-and-sync-record-describe-frames-that-no-longer-exist",
+      "design_says": "The lantern-gold repaint replaced the token layer (`palette.css`, `semantic.css`: warm greys, one gold, four status hues, a two-hue syntax ramp, an `up-n`/`down-n` ground ladder) and collapsed three frame files into one `Aldwin Agent TUI.dc.html` with eleven frames numbered `1a`–`3c`.",
+      "design_also_says": "Neither prose document moved. README.md still opens `Five states are designed`, ids them `4a`/`5a`–`5d`, names `Agent TUI v2.dc.html` and its Light twin as the files, carries the single-hue OKLCH colour tables and a glyph table closed at `▌ ● ◐ ○ ✔ ▶ █ + -`, and writes the brand `mjolnir`. The bound copy's SYNC.md — the change record — ends at Turn 15 and has no entry for the repaint at all. Three entries that used to stand here were each one instance of this (`5a`'s recess in the prose but not the frame; screen prose naming ramp rungs the token layer does not expose; a glyph table that omitted marks its own copy mandated) and are folded in.",
+      "app_follows": "The frame and the tokens, per CLAUDE.md's first design rule. `.claude/design/HANDOFF.md` keeps the README's text with `>` annotations, and its `### Glyphs` table is *measured from the frame* rather than mirrored, because `crates/review`'s generator parses that table into `tokens.rs`. Retire when upstream rewrites README.md against the new frames and SYNC.md gains the repaint's entry.",
+      "glyphs": ""
+    },
+    {
+      "id": "frame-names-files-a-command-and-keys-the-product-does-not-have",
+      "design_says": "Frames `1a`–`1d` right-flush `config → ~/.aldwin/config.toml`; `3a` says `saved to .aldwin/permissions.toml`; `1c` and `2d` both name a `/access` command; `2a` hints `esc stop` and `2c` hints `esc clear`.",
+      "design_also_says": "The README states the answers land in `permissions.yaml` — `the project's .mjolnir/ … ~/.mjolnir/` — and lists the keyboard model as `esc closes an overlay or interrupts a run`, with nothing that clears a draft.",
+      "app_follows": "What exists. Config is YAML and is two files, so the footer reads `config → ~/.aldwin/`; there is no `/access`; a turn is cancelled with `^c`, which is what the status row says; and Esc is unbound in the composer, so `esc clear` is not drawn — a footer must not name a key that does something else, and a hint is not where a binding that destroys typed input gets introduced. Retire per item as each is either built or redrawn.",
+      "glyphs": ""
+    },
+    {
+      "id": "inline-diff-gutter-prose-against-its-own-markup",
+      "design_says": "README.md's session section — the inline diff carries `a 5-cell right-aligned line number`, which reads as the number ending at cell 7 when measured from the 3-cell margin.",
+      "design_also_says": "The frame's own markup (`2a`, and `2b`'s code block) is `flex: 0 0 var(--gutter-line-no-inline); text-align: right; padding-right: var(--cell-w)` — a 5-cell field holding a 4-cell number and one cell of separation, so the number right-aligns to cell 6 and cell 7 is the separation. It was `45px` / `9px` before the frames moved onto tokens; the geometry is unchanged.",
+      "app_follows": "The markup. This is the single most re-raised finding in the project's history — judges have reported it across four separate runs, each reading the prose and none reading the 45px. Kept here so the fifth does not.",
+      "glyphs": ""
     },
     {
       "id": "no-table-component-adr-0002",
-      "design_says": "HANDOFF.md:232-241's closed glyph table contains no box-drawing characters, and Turn 13's rule is that nothing inside a frame is stroked.",
+      "design_says": "The glyph table contains no box-drawing characters, and nothing inside a frame is stroked.",
       "design_also_says": "The design system has no table component at all, and a one-dimensional ground ladder cannot express a two-dimensional grid of cell boundaries.",
       "app_follows": "ADR 0002 — a markdown table in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, scoped to that one construct. This entry is retired when the design system gains a table component.",
       "glyphs": "┌┬┐├┼┤└┴┘─│"
     },
     {
-      "id": "5a-recess-in-the-prose-but-not-in-the-frame",
-      "design_says": "HANDOFF.md:275 — the permission panel's command block is 'a recessed field on --t-recess'; HANDOFF.md:277 — between the key/value table and the options, 'One row of the recessed tone, blank row'.",
-      "design_also_says": "5a's own rendered frame uses --t-recess nowhere. The command field is --t-ground, and between the last fact row and the first option there is a single <div style=\"height:var(--row)\"></div> and nothing else. Measured off `Agent TUI v2.dc.html`, 2026-09-19; the measurement is restated at crates/tui/src/ui/decision.rs:545-553.",
-      "app_follows": "The frame, per CLAUDE.md's first design rule — measure the handoff HTML; reading it is not enough. Two independent stage 5 judges raised both halves as the top findings of the same run, which is what this entry exists to stop the next one doing. Note the light-theme consequence is real and is the design's own: --t-ground inside a --t-bar panel steps *up* in light, so the design's markup puts the lightest rung in the ladder on a panel two rungs below it. Fixing that is an upstream decision about which surface a quoted payload takes, and this entry retires when it is made.",
-      "glyphs": ""
-    },
-    {
-      "id": "inline-diff-gutter-prose-against-its-own-markup",
-      "design_says": "HANDOFF.md:262 — the inline diff carries 'a 5-cell right-aligned line number', which reads as the number ending at cell 7 when measured from the 3-cell margin.",
-      "design_also_says": "The frame's own markup is `flex: 0 0 45px; text-align: right; padding-right: 9px` — a 5-cell field holding a 4-cell number and one cell of separation, so the number right-aligns to cell 6 and cell 7 is the separation. Restated at crates/tui/src/ui/diff.rs:209-212.",
-      "app_follows": "The markup. This is the single most re-raised finding in the project's history — judges have reported it across four separate runs, each reading the prose and none reading the 45px. Kept here so the fifth does not.",
-      "glyphs": ""
-    },
-    {
-      "id": "screen-prose-names-ramp-rungs-the-token-layer-does-not-expose",
-      "design_says": "HANDOFF.md's screen sections name raw ramp rungs: :274 puts the permission panel's sentence in 'neutral-300', :279 the option number in 'accent-300 on the selected row and neutral-600 on the rest', and :309 an unselected option row's mark in 'neutral-800'.",
-      "design_also_says": "The same document's own token table says agent prose is `--t-body` #e3dfeb = neutral-200 (HANDOFF.md:88), and semantic.css exposes no --tui-* role resolving to neutral-600 at all — palette.css:45 defines the step, nothing points at it. The screen prose predates the token layer the rest of the system was rebuilt onto. The :309 case is the sharpest of the three: neutral-800 is #474251, which is exactly --tui-bar — the panel's own ground — so the prose puts an invisible mark on the surface it is drawn against. The app draws --tui-mark-idle, the role semantic.css actually names for one. Added 2026-09-20 after two stage 5 judges re-derived it independently from the same line.",
-      "app_follows": "The token layer, because it is the only one it can draw through. Two stage 5 judges reached opposite conclusions on the same frames from the same prose — one called the mapping correct 'through HANDOFF's superseded Nocturne table', the other called it a major deviation — which is the signature of a reference that says two things. What this wants upstream is the screen prose rewritten in semantic roles like the rest of the handoff.",
-      "glyphs": ""
-    },
-    {
-      "id": "access-fact-scale-in-the-bound-copys-turn-14-prose",
-      "design_says": "The bound copy's Turn 14 prose (`14c`/`14d`, carried into HANDOFF.md as a `>` annotation) offers a four-point access scale — `ask` / `read` / `write` / `all` — and says the empty state's third fact is `access`, value \"the tier\".",
-      "design_also_says": "The top-level README's own `5d` section now reads `ask · read · write`, three points, corrected upstream on 2026-09-20 with the rest of the ADR 0004 copy (see `.claude/design/IMPORT.md`). `all` was dropped because no point on the scale can mean everything runs: ADR 0004 §3 puts `edit` outside the permissions model, so a diff is shown and waited on at every rung.",
-      "app_follows": "The corrected README: the `access` fact reads the standing rung — `ask` / `read` / `write`, or `not set` when neither file states one — followed by `edits always ask`, the one fact no rung changes. This is a *narrowing* of the entry that stood here before, whose retirement condition was the permissions rework and is now met: the app no longer prints three per-tool `read:`/`shell:`/`edit:` states, and the rung it prints instead is exactly what `permissions.yaml` stores, so the fact can no longer drift from the file. What survives is only the bound copy's Turn 14 prose, which a re-sync should bring forward; delete this entry then.",
-      "glyphs": ""
-    },
-    {
-      "id": "wordmark-letters-are-the-old-name",
-      "design_says": "HANDOFF.md:440-442 — the brand mark is `  M J O L N I R  `, a 17-cell reverse-video field, and both `.dc.html` frames render those seven letters.",
-      "design_also_says": "The same note states the rule as the padding — TWO spaces at each end, letters one space apart — from which the 17 is derived, not stated independently.",
-      "app_follows": "The rule. The project was renamed Mjolnir -> Aldwin (2026-09-21); six letters with the same pad make a 15-cell field. This entry retires when the upstream design system is rebranded and the frames are re-synced.",
+      "id": "token-layer-leftovers-from-the-repaint",
+      "design_says": "`palette.css` pairs `--color-info` with `→` (`/* → */`). `cells.css` still declares `--wordmark-h`, and `1d`'s caption says `The mark identifies a frame with no transcript to identify it`. `semantic.css` names `--tui-context` for `unchanged lines in a diff`.",
+      "design_also_says": "`semantic.css` pairs `--tui-info` with `·` (`/* · the info line's pointer */`), and `2d` draws `·`. No frame draws a wordmark and nothing applies `--wordmark-h`, against `cells.css`'s own rule — `If you add a token here and nothing applies it, delete it instead`. `3c` draws its unchanged rows in `--tui-quiet`, and no frame reads `--tui-context` at all; nor `--tui-value`, `--tui-accent-text`, `--tui-gauge-fill-hot` or `--tui-scrim`.",
+      "app_follows": "`·` for the info pointer, as the frame draws it. No wordmark: the reverse-video row is gone from first run and the empty state, which retires the entry that stood here about its letters spelling the old name. `context` for an unchanged row of the *inline* diff, which is the role's stated purpose and which no frame contradicts — `3c` is the review pane, and it is not built. This is a bug list for the design system, not a set of choices: each clause retires when upstream deletes or applies the token.",
       "glyphs": ""
     }
   ]

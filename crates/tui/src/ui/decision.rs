@@ -331,7 +331,7 @@ fn fact_row(label: &str, value: &str, ctx: Ctx) -> Vec<Line<'static>> {
 }
 
 /// `CommandBlock.jsx`: a `ground`-coloured field, *inset* from the card's
-/// own edges, with the command prefixed by an accent `$`.
+/// own edges, with the command prefixed by a quiet `$`.
 ///
 /// The inset is the whole point of the component and it was missing: the
 /// reference wraps the field in the card's `padding: 0 27px` and gives the
@@ -346,11 +346,13 @@ fn command_block(target: &str, shell: bool, padding: Padding, ctx: Ctx) -> Vec<L
     let row = Row::card(pal.ground).inset(MARGIN_X, pal.bar).pad(COMMAND_BLOCK_PAD);
     let mut spans = Vec::with_capacity(2);
     if shell {
-        // accent-400 — `--tui-mark` — per `5a`: "`$` in accent-400 then the
-        // command in primary text". It drew `speaker_you` (accent-300), one
-        // rung off, which is the sort of thing only a per-cell measurement
-        // finds.
-        spans.push(Span::styled("$ ", Style::default().fg(pal.mark)));
+        // `--tui-quiet`, then the command in primary text (`3a`). It was the
+        // gold mark until the repaint, and it is the clearest case of why
+        // that changed: a `$` marks nothing. It is not open, selected or
+        // running — it is punctuation saying "this is a command line" — and
+        // gold on it competed with the selected option six rows below for
+        // the one thing in the panel the eye is meant to find.
+        spans.push(Span::styled("$ ", Style::default().fg(pal.quiet)));
     }
     spans.push(Span::styled(target.to_string(), Style::default().fg(pal.text)));
 
@@ -404,37 +406,42 @@ const COMMAND_BLOCK_PAD: usize = 2;
 ///   top of the ground ladder, one step above the panel rather than an
 ///   accent laid over it, which leaves the selection band the only accent
 ///   fill in the frame besides the gauge.
-/// * The badge was `hunk_header`, the gauge-fill accent step. On the
-///   lighter title field that measured 2.2:1; the `you` step clears 3.8:1,
-///   and the system moved the right-flush fact there for exactly that
-///   reason.
+/// * The title is primary **text**, and the right-flush fact **quiet**
+///   (`3a`: `permission` / `bash`; `3b`: `commands` / `2 of 22`). Both were
+///   accent steps under the single-hue system — `accent_text` and the `you`
+///   step — which the lantern-gold repaint ended: gold is "spent on one
+///   thing per band", and in a panel that one thing is the selected row. A
+///   gold title over a gold band two rows down spent it twice.
 ///
 /// No rule along the panel's top edge either — the step off the transcript
 /// is the whole boundary (see `super::draw`).
 pub(super) fn band(title: &str, badge: &str, ctx: Ctx) -> Line<'static> {
     Row::card(ctx.pal.panel_title).split(
-        vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.accent_text))],
-        vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.speaker_you))],
+        vec![Span::styled(title.to_string(), Style::default().fg(ctx.pal.text))],
+        vec![Span::styled(badge.to_string(), Style::default().fg(ctx.pal.quiet))],
         ctx,
     )
 }
 
-/// "↑↓ to move   1-N to pick   ⏎ to confirm" — `KeyHints.jsx`'s
-/// key-coloured/verb-muted pair convention. Replaces the per-row shortcut
+/// "↑↓ move   1-N pick   ⏎ confirm" — key then verb, with no `to` between
+/// them, which is how the reference writes every hint in every footer. Replaces the per-row shortcut
 /// column the panel used to need, per the design system's revision log on
 /// the permission screen: "the keys that were on the rows moved into the
 /// footer."
 pub(super) fn footer_hint(option_count: usize, ctx: Ctx) -> Vec<Span<'static>> {
-    key_hints(&[("↑↓", "to move"), (&format!("1-{option_count}"), "to pick"), ("⏎", "to confirm")], ctx)
+    key_hints(&[("↑↓", "move"), (&format!("1-{option_count}"), "pick"), ("⏎", "confirm")], ctx)
 }
 
-/// `KeyHints.jsx`'s pair convention itself: the key in the accent mark
-/// colour, its verb muted, pairs parted by the `--group-gap` the bars use.
-/// Shared so a second panel cannot invent a second spelling of the same
-/// footer.
+/// The pair convention itself: the key in `body`, its verb in `quiet`, pairs
+/// parted by the `--group-gap` the bars use. Shared so a second panel cannot
+/// invent a second spelling of the same footer.
+///
+/// The key was the gold mark colour until the repaint. No footer in the
+/// reference carries gold now: a row of four gold keys under a gold
+/// selection band was the accent spent five times in one panel.
 pub(super) fn key_hints(pairs: &[(&str, &str)], ctx: Ctx) -> Vec<Span<'static>> {
     use super::grid::GROUP_GAP;
-    let key = Style::default().fg(ctx.pal.mark);
+    let key = Style::default().fg(ctx.pal.body);
     let verb = Style::default().fg(ctx.pal.quiet);
     let mut spans = Vec::new();
     for (i, (k, v)) in pairs.iter().enumerate() {
@@ -472,11 +479,11 @@ pub(super) struct OptionRow {
 
 /// The numbered, keyboard-navigable list of choices — one row per
 /// `DecisionOption` — matching `OptionRow.jsx`'s selection convention: the
-/// accent `▌` mark plus the `band` field together (never the mark alone),
-/// the number in `accent_text` on the selected row and `label` otherwise.
+/// gold `▌` mark plus the `band` field together (never the mark alone). The
+/// number is `label` on every row, selected or not (`3a`).
 ///
-/// Each row also carries the option's `detail` — `accent_text` on the
-/// selected row and dim elsewhere — in a column aligned
+/// Each row also carries the option's `detail` — `quiet` on every row, as
+/// `3b` draws a command's description — in a column aligned
 /// across the whole list — what choosing this option concretely does
 /// ("saved to .aldwin/permissions.yaml"). The column is dropped wholesale
 /// (never per-row, which would leave the list visibly ragged) on a frame
@@ -510,8 +517,11 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
             let is_selected = i == selected;
             let bg = if is_selected { pal.band } else { pal.bar };
             let mark_fg = if is_selected { pal.mark } else { pal.mark_idle };
-            let number_fg = if is_selected { pal.accent_text } else { pal.label };
-            let label_fg = if is_selected { pal.text } else { pal.body };
+            // Selection is the band, the mark and the label stepping up to
+            // primary text — and nothing else on the row moves. The number
+            // and the quiet spans hold their tone across it (`3a`, `1a`).
+            let number_fg = pal.label;
+            let label_fg = if is_selected { pal.accent_text } else { pal.body };
             // Flush to the frame's left edge — the one row type in the
             // system that skips `MARGIN_X` ("Four option rows, flush to the
             // frame's left edge like the command rows in 5c"). The exact
@@ -531,12 +541,14 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
             // here — taking it as the pair to copy put the quoted rule three
             // rungs under its sentence instead of one.
             //
-            // The selected row is the exception, and for the reason the
-            // detail column already had to move off `dim`: on the `band`
-            // field it measures 2.62:1. `accent_text` is the step there.
+            // The selected row is *not* an exception any more. It was: on
+            // the old violet band `quiet` measured 2.62:1 and had to step up
+            // to `accent_text`. On the gold tint it holds 6.42:1 dark and
+            // 7.45:1 light, so the quoted rule stays one step under its
+            // sentence on every row, which is what "one step quieter" says.
             match &opt.pattern {
                 Some(at) => {
-                    let quiet_fg = if is_selected { pal.accent_text } else { pal.quiet };
+                    let quiet_fg = pal.quiet;
                     let (head, tail) = (&opt.label[..at.start], &opt.label[at.end..]);
                     // The pattern is the only part of the sentence that can
                     // be arbitrarily long — a grant over a 200-character
@@ -558,17 +570,14 @@ pub(super) fn option_rows(options: &[OptionRow], selected: usize, ctx: Ctx) -> V
                 None => spans.push(Span::styled(opt.label.clone(), Style::default().fg(label_fg).bg(bg))),
             }
             if show_details {
-                // `accent_text` on the selected row, `dim` elsewhere — Turn
-                // 14 is explicit that "the selected row's purpose text is
-                // `--t-accent-text`, not `--t-quiet`", and the reason is
-                // measurable rather than stylistic: `dim` on the `band`
-                // field is **2.62:1**, under the 3.3:1 the palette says dim
-                // holds, so the detail of the row the developer is actually
-                // on was the least legible text in the panel. The same role
-                // on the same band is 5.32:1. Light theme was already over
-                // the line at 4.64:1, which is why this reads as a dark-only
-                // defect and was missed: the usual failure is the other way.
-                let detail_fg = if is_selected { pal.accent_text } else { pal.dim };
+                // `quiet` on every row. This column has had three tones:
+                // `dim` everywhere, then `accent_text` on the selected row
+                // because `dim` on the violet band was 2.62:1. The reference
+                // now draws a description `--tui-quiet` whether or not its
+                // row is selected (`3b`), and on the gold tint that holds
+                // 6.42:1 — the contrast problem went with the band that
+                // caused it.
+                let detail_fg = pal.quiet;
                 let pad = label_width - opt.label.width() + DETAIL_GAP;
                 spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
                 spans.push(Span::styled(opt.detail.clone(), Style::default().fg(detail_fg).bg(bg)));

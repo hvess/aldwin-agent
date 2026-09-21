@@ -1,8 +1,22 @@
-//! The design system's first-run screens — `14a`, `14b`, `14c`.
+//! The design system's first-run screens — `1a`, `1b`, `1c`.
 //!
-//! Three bands, like every other screen: a 3-row top bar, the body, and a
-//! 3-row footer (`--bar-keys-h`). The body is the wordmark, the positioning
-//! line, three blank rows (`--section-gap-h`), and then the step spine.
+//! Three bands, like every other screen: a 3-row top bar, the body, and the
+//! 5-row bottom band (`--bar-bottom-h`). The body is one blank row, the
+//! positioning line, three blank rows (`--section-gap-h`), and then the step
+//! spine.
+//!
+//! The bottom band is the *same* band the session has, which it was not
+//! before. This screen used to end in a 3-row `--bar-keys-h` footer of its
+//! own; the lantern-gold repaint deleted that token and `cells.css` now says
+//! of `--bar-bottom-h`: "blank, prompt or keys, blank, status, blank — every
+//! frame". So the keys take the row a prompt would, and a status row under
+//! them says `○  waiting` — which is true, and is what makes first run read
+//! as the app's own opening state rather than as an installer in front of it.
+//!
+//! There is no wordmark. It was a reverse-video row above the positioning
+//! line until the same repaint cut it: the brand is the plain `Aldwin` in
+//! the top bar, and gold is "never on a fill larger than the wordmark" now
+//! describes a fill this screen no longer draws.
 //!
 //! # The spine
 //!
@@ -19,7 +33,7 @@
 //!
 //! | State | Glyph | Name | Content | Rows |
 //! | --- | --- | --- | --- | --- |
-//! | settled | `●` `step_done` | `label` | its answer, in `text` | 1 |
+//! | settled | `●` `done` | `label` | its answer, in `text` | 1 |
 //! | open | `▌` `mark` | `speaker_you` | its purpose, then its list | 2 + list |
 //! | pending | `○` `mark_idle` | `dim` | what it will ask, in `dim` | 1 |
 //!
@@ -46,12 +60,20 @@ use crate::palette::Palette;
 
 /// Rows the top bar and the footer take. The body gets the rest.
 const TOP_BAR_ROWS: u16 = 3;
-const FOOTER_ROWS: u16 = 3;
+const FOOTER_ROWS: u16 = 5;
 
 /// Where the harness's answers land. Stated plainly rather than implied,
 /// per the design system's Content Fundamentals. A directory, not a single
 /// file, because the answers land in two files inside it.
+///
+/// The reference writes `config → ~/.aldwin/config.toml`. There is no such
+/// file — the answers are `provider.yaml` and `permissions.yaml` — so the
+/// directory is what is true. See `baseline.json`'s
+/// `frame-names-files-and-a-command-the-product-does-not-have`.
 const CONFIG_LOCATION: &str = "config → ~/.aldwin/";
+
+/// The top bar's right group before any model is chosen.
+const NO_MODEL: &str = "no model";
 
 /// The `more` row's own name and purpose. It is not a provider, so it is
 /// not in the catalogue the caller hands in.
@@ -99,17 +121,22 @@ pub(crate) fn draw(frame: &mut Frame, state: &FirstRun, pal: &Palette) {
     draw_top_bar(frame, top, pal);
     let ctx = Ctx::new(pal, body.width);
     frame.render_widget(Paragraph::new(Text::from(body_lines(state, ctx))), body);
-    draw_footer(frame, footer, ctx);
+    draw_footer(frame, footer, state, ctx);
 }
 
 /// The same 3-row identity band every screen opens with, on `bar`: the
-/// plain word `aldwin`, the working directory starting on the body column,
-/// and the version flush to the right margin — what the reference's own `5d`
-/// top bar carries.
+/// plain word `Aldwin`, the working directory starting on the body column,
+/// and `no model` flush to the right margin.
 ///
-/// The wordmark below is a different thing and deliberately not repeated
-/// here ("It is not in the top bar"), and the bar carries no `▌` either —
-/// "the name is the brand, and a pip there indicated nothing".
+/// The right group is the session bar's own — `model · gauge · cost` — in
+/// its unanswered state, which is how the reference draws it (`1a`–`1c`:
+/// `no model · ██████████ 0% · $0.00`, every span `--tui-dim`). Aldwin
+/// tracks neither a context gauge nor a cost, so it draws the one fact of
+/// the three it actually has. The version used to sit here; no frame in the
+/// reference carries one any more, and `aldwin --version` is where it lives.
+///
+/// The bar carries no `▌` — "the name is the brand, and a pip there
+/// indicated nothing".
 fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
     let Some(row) = area.height.checked_sub(2).map(|_| Rect { y: area.y + 1, height: 1, ..area }) else { return };
@@ -117,16 +144,13 @@ fn draw_top_bar(frame: &mut Frame, area: Rect, pal: &Palette) {
     // Composed by `chrome::identity_bar_row`, which the session bar also
     // uses — this comment used to say the two "must not disagree" while both
     // laid their groups out by hand, and they had drifted. The right group
-    // here is the version alone; it is dropped whole on a frame too narrow
-    // to hold it beside a readable path, never clipped into something that
-    // still reads as a version number.
+    // is dropped whole on a frame too narrow to hold it beside a readable
+    // path, never clipped into half a fact.
     let cwd = crate::app::current_dir_display().unwrap_or_default();
-    let version = format!("v{}", crate::version::VERSION);
-    let right = vec![vec![Span::styled(version, Style::default().fg(pal.dim).bg(pal.bar))], Vec::new()];
-    // `quiet`, the same rung the session bar gives the identical string —
-    // this screen rendered it `dim`, so one component had two tones across
-    // two screens. The version beside it stays `dim`: there the step down is
-    // deliberate, because the version is the quieter fact of the two.
+    let right = vec![vec![Span::styled(NO_MODEL, Style::default().fg(pal.dim).bg(pal.bar))], Vec::new()];
+    // `quiet` for the path, the same rung the session bar gives the
+    // identical string. `no model` beside it is `dim`: an absence is the
+    // quieter fact of the two.
     let line = super::chrome::identity_bar_row(area.width as usize, &cwd, pal.quiet, right, pal);
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(pal.bar)), row);
 }
@@ -205,7 +229,9 @@ fn step_options(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
 }
 
 fn body_lines(state: &FirstRun, ctx: Ctx) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::default(), wordmark(ctx), Line::default(), positioning_line(ctx)];
+    // One blank row, then the positioning line — the reference's body band
+    // is `padding-top: var(--row)` and its first child is the sentence.
+    let mut lines = vec![Line::default(), positioning_line(ctx)];
     lines.extend(section_gap(ctx));
 
     // Every step this run asks is drawn, in order, whatever state it is in
@@ -232,7 +258,7 @@ fn step_rows(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
         StepState::Settled => {
             (
                 "●",
-                pal.step_done,
+                pal.done,
                 pal.label,
                 pal.text,
                 step_answer(state, step).unwrap_or_default(),
@@ -262,29 +288,6 @@ fn step_rows(state: &FirstRun, step: Step, ctx: Ctx) -> Vec<Line<'static>> {
         rows.extend(step_options(state, step, ctx));
     }
     rows
-}
-
-/// `  A L D W I N  ` in reverse video — the accent as the ground, the desk
-/// as the ink, letters one space apart, the whole run padded by **two**
-/// spaces at each end — a 15-cell field for a six-letter name. One row,
-/// never a block: a
-/// multi-row block-character wordmark was built and cut because "at 15px it
-/// dominated a frame whose whole argument is that nothing shouts".
-///
-/// The pad was one space until Turn 14, on the strength of a reading of the
-/// frame rather than a measurement of it; both `.dc.html` files carry two.
-/// The rule is the pad, not the total: the reference frames spell the
-/// pre-rebrand seven-letter name and so measure 17 cells — see
-/// `baseline.json`'s `wordmark-letters-are-the-old-name` contradiction.
-///
-/// This is one of exactly two places the accent is allowed to be a filled
-/// field; the selection band is the other.
-pub(super) fn wordmark(ctx: Ctx) -> Line<'static> {
-    let letters: String = "ALDWIN".chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
-    Line::from(vec![
-        Span::raw(" ".repeat(MARGIN_X)),
-        Span::styled(format!("  {letters}  "), Style::default().fg(ctx.pal.reverse_ink).bg(ctx.pal.reverse_bg)),
-    ])
 }
 
 /// Elided rather than left to be clipped by the frame's edge. On a narrow
@@ -382,8 +385,13 @@ fn row(opt: &Opt, width: usize, room: usize, ctx: Ctx) -> Line<'static> {
     let Opt { name, purpose, selected, trailing } = *opt;
     let pal = ctx.pal;
     let quiet_name = trailing.is_some() && !selected;
+    // The selected row's *purpose* stays `quiet`, exactly as on an idle row
+    // (`1a`: `anthropic` inherits `--tui-text`, its purpose is `--tui-quiet`
+    // on the band). Selection is the band and the mark; lifting the purpose
+    // as well made the selected row the only one whose two columns read at
+    // one weight, which flattened the very distinction the list is built on.
     let (mark_fg, bg, name_fg, purpose_fg) = if selected {
-        (pal.mark, pal.band, pal.text, pal.accent_text)
+        (pal.mark, pal.band, pal.accent_text, pal.quiet)
     } else if quiet_name {
         (pal.mark_idle, pal.ground, pal.label, pal.dim)
     } else {
@@ -432,49 +440,69 @@ fn row(opt: &Opt, width: usize, room: usize, ctx: Ctx) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Three rows — blank, keys, blank — on the composer's own step, with the
-/// keys left and where the answers land flush right.
-fn draw_footer(frame: &mut Frame, area: Rect, ctx: Ctx) {
+/// The bottom band: blank, keys, blank, status, blank — `--bar-bottom-h`,
+/// the same five rows every frame ends in (see this module's doc comment).
+///
+/// Keys left on the row a prompt would take; under them `○  waiting` left
+/// and where the answers land flush right. **Nothing here is gold.** The
+/// hint keys were `--tui-mark` until the repaint; the reference now draws
+/// every key in every footer in `--tui-body`, because gold is "spent on one
+/// thing per band" and in this band there is nothing open to spend it on —
+/// the open step is up in the body, and already has it.
+fn draw_footer(frame: &mut Frame, area: Rect, state: &FirstRun, ctx: Ctx) {
     let pal = ctx.pal;
-    frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), area);
-    let Some(row) = area.height.checked_sub(2).map(|_| Rect { y: area.y + 1, height: 1, ..area }) else { return };
+    let on_band = |fg| Style::default().fg(fg).bg(pal.bar_bottom);
+    let field = Style::default().bg(pal.bar_bottom);
+    frame.render_widget(Block::new().style(field), area);
+    // Rows 1 and 3 of the five. A frame too short to hold the whole band
+    // keeps the keys and loses the status row, in that order: the keys are
+    // what a footer is for.
+    let row_at = |n: u16| (area.height > n).then(|| Rect { y: area.y + n, height: 1, ..area });
+    let width = area.width as usize;
 
-    let key = |k: &str, verb: &str| {
-        vec![
-            Span::styled(k.to_string(), Style::default().fg(pal.mark).bg(pal.bar_bottom)),
-            Span::styled(format!(" {verb}"), Style::default().fg(pal.quiet).bg(pal.bar_bottom)),
-        ]
-    };
     // Two hints, as the reference carries. `←` reopens the previous
     // question and stays bound, but is not named here — the frame shows two
     // groups and a third would be one wider than the design's footer. It is
     // in the same position `Esc` has always been: real, and undocumented on
     // screen.
-    let mut left = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
-    for (i, (k, verb)) in [("⏎", "continue"), ("↑↓", "choose")].into_iter().enumerate() {
-        if i > 0 {
-            left.push(Span::styled(" ".repeat(GROUP_GAP), Style::default().bg(pal.bar_bottom)));
+    //
+    // The last step's `⏎` says what it does. On every other step it moves
+    // on; on the last one it *starts the session*, and the reference
+    // changes the verb to say so (`1c`).
+    let confirm = if state.index + 1 < state.steps.len() { "continue" } else { "start session" };
+    if let Some(row) = row_at(1) {
+        let mut keys = vec![Span::styled(" ".repeat(MARGIN_X), field)];
+        for (i, (k, verb)) in [("⏎", confirm), ("↑↓", "choose")].into_iter().enumerate() {
+            if i > 0 {
+                keys.push(Span::styled(" ".repeat(GROUP_GAP), field));
+            }
+            keys.push(Span::styled(k.to_string(), on_band(pal.body)));
+            keys.push(Span::styled(format!(" {verb}"), on_band(pal.quiet)));
         }
-        left.extend(key(k, verb));
+        frame.render_widget(Paragraph::new(Line::from(keys)).style(field), row);
     }
+
+    let Some(row) = row_at(3) else { return };
+    let mut status = vec![
+        Span::styled(" ".repeat(MARGIN_X), field),
+        Span::styled("○", on_band(pal.glyph_pending)),
+        Span::styled("  waiting", on_band(pal.quiet)),
+    ];
     // The config location is a path, so it goes whole or not at all — the
-    // same rule the identity bar applies to the version. It used to be
-    // pushed on regardless, which at 44 columns ran the key hints straight
-    // into it and then clipped the path itself: `↑↓ chooseconfig → ~/.mjol`.
-    // The key hints are what a footer is for, so they are what survives.
-    let width = area.width as usize;
-    let used: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    // same rule the identity bar applies to its right group. It used to be
+    // pushed on regardless, which at 44 columns ran the text beside it
+    // straight into it and then clipped the path itself.
+    let used: usize = status.iter().map(|s| s.content.chars().count()).sum();
     let config = if width.saturating_sub(used).saturating_sub(MARGIN_X) >= CONFIG_LOCATION.chars().count() + GROUP_GAP {
         CONFIG_LOCATION
     } else {
         ""
     };
     let gap = width.saturating_sub(used).saturating_sub(config.chars().count()).saturating_sub(MARGIN_X);
-    left.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar_bottom)));
-    left.push(Span::styled(config.to_string(), Style::default().fg(pal.dim).bg(pal.bar_bottom)));
-    left.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom)));
-
-    frame.render_widget(Paragraph::new(Line::from(left)).style(Style::default().bg(pal.bar_bottom)), row);
+    status.push(Span::styled(" ".repeat(gap), field));
+    status.push(Span::styled(config.to_string(), on_band(pal.dim)));
+    status.push(Span::styled(" ".repeat(MARGIN_X), field));
+    frame.render_widget(Paragraph::new(Line::from(status)).style(field), row);
 }
 
 /// A one-row band of `break_`, used nowhere on this screen yet but kept
@@ -531,9 +559,14 @@ mod tests {
 
     /// Every row that is a *step's own* line: a glyph on the 3-cell margin.
     /// Option rows hang on cell 29 and so are never picked up here, and the
-    /// wordmark and positioning line carry no glyph.
+    /// positioning line carries no glyph.
+    ///
+    /// Body band only. The bottom band's status row is `○  waiting` with its
+    /// glyph on the same margin — deliberately, it is the same column — so a
+    /// search of the whole frame counts it as a fourth step.
     fn spine_rows(buffer: &ratatui::buffer::Buffer) -> Vec<u16> {
-        (0..36u16).filter(|y| row_text(buffer, *y).chars().nth(MARGIN_X).is_some_and(|c| "●▌○".contains(c))).collect()
+        let body = TOP_BAR_ROWS..36 - FOOTER_ROWS;
+        body.filter(|y| row_text(buffer, *y).chars().nth(MARGIN_X).is_some_and(|c| "●▌○".contains(c))).collect()
     }
 
     /// The row a given step's own line is on. Matched on the step name
@@ -554,25 +587,29 @@ mod tests {
         buffer[(MARGIN_X as u16, step_row(buffer, name))].symbol().to_string()
     }
 
-    /// The wordmark is one row of reverse video — the accent as the ground,
-    /// the desk as the ink — and never a block. It is the one place besides
-    /// the selection band where the accent is a filled field.
+    /// There is no wordmark, and gold is not a fill anywhere on this screen
+    /// but the one selected row. The reverse-video `A L D W I N` row led this
+    /// screen until the lantern-gold repaint cut it; this is the assertion
+    /// that fails if it comes back, from either direction — as letters, or as
+    /// a gold field with something else written on it.
     #[test]
-    fn the_wordmark_is_one_reverse_video_row() {
+    fn there_is_no_wordmark_and_the_body_opens_on_the_positioning_line() {
         let buffer = render(&FirstRun::default(), 120, 36);
-        let out = text(&buffer);
-        assert!(out.contains("  A L D W I N  "), "letters one space apart, padded by two at each end: {out:?}");
+        assert!(!text(&buffer).contains("A L D W I N"), "the letter-spaced wordmark is gone");
+        for y in 0..36u16 {
+            let gold = (0..120).filter(|x| buffer[(*x, y)].bg == DARK.reverse_bg).count();
+            assert_eq!(gold, 0, "row {y} carries a gold fill; the only fill on this screen is the selection band");
+        }
 
-        let row = find_row(&buffer, "A L D W I N");
-        let cell = &buffer[(MARGIN_X as u16 + 1, row)];
-        assert_eq!(cell.bg, DARK.reverse_bg, "the accent is the ground");
-        assert_eq!(cell.fg, DARK.reverse_ink, "and the desk colour is the ink");
+        // `padding-top: var(--row)`, then the sentence: one blank row under
+        // the top bar and the positioning line directly after it.
+        let line = find_row(&buffer, "The leverage of a model");
+        assert_eq!(line, TOP_BAR_ROWS + 1, "one blank row, then the positioning line");
+        assert_eq!(col_of(&buffer, line, "The leverage"), MARGIN_X, "on the margin, not the body column");
+        assert_eq!(buffer[(MARGIN_X as u16, line)].fg, DARK.dim);
 
-        let filled = (0..120).filter(|x| buffer[(*x, row)].bg == DARK.reverse_bg).count();
-        assert_eq!(filled, 15, "a 15-cell field: two spaces, 11 cells of letters, two spaces");
-
-        let below = (0..120).filter(|x| buffer[(*x, row + 1)].bg == DARK.reverse_bg).count();
-        assert_eq!(below, 0, "one row, never a block — the row under it carries no reverse video");
+        // Then `--section-gap-h`, three blank rows, and the first step.
+        assert_eq!(spine_rows(&buffer)[0], line + 4, "three blank rows part the line from the spine");
     }
 
     /// All three steps are on screen from the first frame, in order. That is
@@ -652,9 +689,6 @@ mod tests {
             STEP_CONTENT_COL + 3 + OPTION_LABEL_COL,
             "the purpose starts past the 16-cell name field"
         );
-
-        let mark = find_row(&buffer, "A L D W I N");
-        assert_eq!(col_of(&buffer, mark, "A L D W I N"), MARGIN_X + 2, "the wordmark's own two-space pad sits inside the margin");
     }
 
     /// A step row puts nothing between its glyph and its name: the glyph is
@@ -663,9 +697,9 @@ mod tests {
     /// `step n/m` used to sit, and the counter is what Turn 14 removed —
     /// so this is the assertion that would fail if it came back.
     ///
-    /// Scoped to the spine deliberately. The wordmark and the positioning
-    /// line both start on the margin and run straight through cell 13; they
-    /// are not label-column content, they are full-width rows.
+    /// Scoped to the spine deliberately. The positioning line starts on the
+    /// margin and runs straight through cell 13; it is not label-column
+    /// content, it is a full-width row.
     #[test]
     fn a_step_row_carries_nothing_between_its_glyph_and_its_name() {
         for index in 0..3 {
@@ -700,14 +734,16 @@ mod tests {
         assert!(row_text(&buffer, banded[0]).contains("reads and writes run"), "the chosen tier is banded");
     }
 
-    /// A settled step's `●` uses `step_done`, which is a different role from
-    /// the `glyph_done` a finished tool call uses — see `Palette::step_done`.
+    /// A settled step's `●` is `done` — the same neutral a finished tool call
+    /// takes, and never the gold mark. See `Palette::done` for why this is
+    /// one role where there were briefly two.
     #[test]
-    fn a_settled_steps_glyph_uses_the_step_done_role() {
+    fn a_settled_steps_glyph_uses_the_done_role() {
         let state = FirstRun { index: 1, ..Default::default() };
         let buffer = render(&state, 120, 36);
         let row = step_row(&buffer, "provider");
-        assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.step_done);
+        assert_eq!(buffer[(MARGIN_X as u16, row)].fg, DARK.done);
+        assert_ne!(DARK.done, DARK.mark, "settled is not gold; gold is what is open");
     }
 
     /// Each open step states what it is for, and only names a command that
@@ -840,7 +876,7 @@ mod tests {
             let buffer = render(&FirstRun::default(), width, 36);
             let row: String = (0..width).map(|x| buffer[(x, 1)].symbol().to_string()).collect();
 
-            assert!(row.starts_with("   aldwin"), "the brand always renders: {width} -> {row:?}");
+            assert!(row.starts_with("   Aldwin"), "the brand always renders: {width} -> {row:?}");
             if let Some(at) = row.find('v') {
                 assert!(row[at..].starts_with(&version), "a partial version reads as a real one: {width} -> {row:?}");
                 let left_end = row[..at].trim_end().chars().count();
@@ -868,14 +904,25 @@ mod tests {
             let buffer = render(&FirstRun::default(), width, 36);
             let read = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect() };
 
-            let footer = read(36 - FOOTER_ROWS + 1);
-            assert!(footer.contains("⏎ continue"), "the keys always survive: {width} -> {footer:?}");
-            if let Some(at) = footer.find("config →") {
-                assert!(footer[at..].trim_end().ends_with("~/.aldwin/"), "a clipped path reads as a path: {width} -> {footer:?}");
-                let left_end = footer[..at].trim_end().chars().count();
-                assert!(footer[..at].chars().count() - left_end >= GROUP_GAP, "groups too close at {width}: {footer:?}");
+            let keys = read(36 - FOOTER_ROWS + 1);
+            assert!(keys.contains("⏎ continue"), "the keys always survive: {width} -> {keys:?}");
+            assert!(keys.chars().count() <= width as usize, "{width} -> {keys:?}");
+
+            // The config location rides the *status* row now, two rows under
+            // the keys. Asserted to be present at the design's own width, so
+            // this block cannot go quiet the way it did when the path moved
+            // rows and the `if let` below simply stopped matching.
+            let status = read(36 - FOOTER_ROWS + 3);
+            assert!(status.trim_start().starts_with("○  waiting"), "the status always survives: {width} -> {status:?}");
+            if width >= 80 {
+                assert!(status.contains("config →"), "there is room for the path at {width}: {status:?}");
             }
-            assert!(footer.chars().count() <= width as usize, "{width} -> {footer:?}");
+            if let Some(at) = status.find("config →") {
+                assert!(status[at..].trim_end().ends_with("~/.aldwin/"), "a clipped path reads as a path: {width} -> {status:?}");
+                let left_end = status[..at].trim_end().chars().count();
+                assert!(status[..at].chars().count() - left_end >= GROUP_GAP, "groups too close at {width}: {status:?}");
+            }
+            assert!(status.chars().count() <= width as usize, "{width} -> {status:?}");
 
             let line = read(find_row(&buffer, "The leverage"));
             let full = "The leverage of a model, without handing over the keys.";
@@ -892,6 +939,68 @@ mod tests {
         assert!(out.contains("↑↓ choose"), "{out:?}");
         assert!(!out.contains("← back"), "the reference's footer carries two hints; `←` stays bound but unnamed: {out:?}");
         assert!(out.contains("config → ~/.aldwin/"), "where state lives is stated plainly: {out:?}");
+    }
+
+    /// The bottom band is the session's own five rows — blank, keys, blank,
+    /// status, blank — on `bar_bottom`, not a 3-row footer of this screen's
+    /// own. `cells.css`: "blank, prompt or keys, blank, status, blank —
+    /// every frame".
+    #[test]
+    fn the_bottom_band_is_the_same_five_rows_every_frame_ends_in() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        assert_eq!(FOOTER_ROWS, 5, "--bar-bottom-h");
+        for y in 36 - FOOTER_ROWS..36 {
+            assert_eq!(buffer[(60, y)].bg, DARK.bar_bottom, "row {y} is on the bottom band's ground");
+        }
+        assert_eq!(buffer[(60, 36 - FOOTER_ROWS - 1)].bg, DARK.ground, "and the row above it is the body");
+
+        let read = |y: u16| row_text(&buffer, y);
+        let base = 36 - FOOTER_ROWS;
+        for blank in [base, base + 2, base + 4] {
+            assert!(read(blank).trim().is_empty(), "row {blank} is blank: {:?}", read(blank));
+        }
+        assert!(read(base + 1).contains("⏎ continue"), "keys on the row a prompt would take");
+        assert!(read(base + 3).contains("○  waiting"), "status two rows under them");
+    }
+
+    /// Nothing in the bottom band is gold. The hint keys were `--tui-mark`
+    /// until the repaint; gold is "spent on one thing per band" and the open
+    /// step, up in the body, is what this screen spends it on.
+    #[test]
+    fn no_key_in_the_bottom_band_is_gold() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        for y in 36 - FOOTER_ROWS..36 {
+            for x in 0..120u16 {
+                let cell = &buffer[(x, y)];
+                assert!(cell.symbol().trim().is_empty() || cell.fg != DARK.mark, "({x},{y}) {:?} is gold", cell.symbol());
+            }
+        }
+        let keys = 36 - FOOTER_ROWS + 1;
+        assert_eq!(buffer[(MARGIN_X as u16, keys)].fg, DARK.body, "a key is `body`");
+        assert_eq!(buffer[(MARGIN_X as u16 + 2, keys)].fg, DARK.quiet, "its verb is `quiet`");
+        assert_eq!(buffer[(MARGIN_X as u16, keys + 2)].fg, DARK.glyph_pending, "the waiting `○` is the pending tone");
+    }
+
+    /// `⏎` says what it does. On the last step it starts the session, and
+    /// the reference changes the verb to say so (`1c`).
+    #[test]
+    fn the_last_steps_enter_key_says_it_starts_the_session() {
+        let first = text(&render(&FirstRun::default(), 120, 36));
+        assert!(first.contains("⏎ continue") && !first.contains("start session"), "{first:?}");
+        let last = text(&render(&FirstRun { index: 2, ..Default::default() }, 120, 36));
+        assert!(last.contains("⏎ start session") && !last.contains("⏎ continue"), "{last:?}");
+    }
+
+    /// A selected row is the band and the mark. Its purpose stays `quiet`,
+    /// exactly as on an idle row — see `row`.
+    #[test]
+    fn a_selected_rows_purpose_stays_quiet() {
+        let buffer = render(&FirstRun::default(), 120, 36);
+        let y = find_row(&buffer, "alpha models");
+        let at = col_of(&buffer, y, "alpha models") as u16;
+        assert_eq!(buffer[(at, y)].bg, DARK.band, "this is the selected row");
+        assert_eq!(buffer[(at, y)].fg, DARK.quiet, "and its purpose is not lifted with it");
+        assert_eq!(buffer[(STEP_CONTENT_COL as u16 + 3, y)].fg, DARK.accent_text, "the name is");
     }
 
     /// No tier may promise that edits run without asking — the one claim

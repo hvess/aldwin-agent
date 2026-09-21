@@ -217,9 +217,9 @@ fn app_owned_rows(scene_name: &str, height: u16) -> Vec<u16> {
 ///
 /// Stronger than its neighbour below, which only asserts the colour is not
 /// the terminal's own default. This asserts *membership*: the value is one
-/// of the forty-two roles `tokens.rs` carries, or one of those dimmed
-/// toward a ground, which is what the app does to a transcript behind an
-/// open panel.
+/// of the roles `tokens.rs` carries, and nothing else — including behind an
+/// open panel, where the transcript is recoloured to the scrim roles rather
+/// than blended toward a ground.
 ///
 /// `tokens.rs` is generated from `.claude/design/tokens/`, so this is
 /// conformance to the design rather than to a copy of it. The check used to
@@ -229,18 +229,13 @@ fn app_owned_rows(scene_name: &str, height: u16) -> Vec<u16> {
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {
-        let palette = aldwin_tui::__design_palette(theme);
-        // The dimmed transcript behind an open panel: every ink the app has,
-        // composited over every ground it has. Enumerated rather than
-        // solved for — the blend is a known function of two known sets.
-        let mut allowed: Vec<ratatui::style::Color> = palette.to_vec();
-        for ink in palette {
-            for ground in palette {
-                allowed.push(aldwin_tui::__design_fade(*ink, *ground));
-            }
-        }
-        allowed.sort_by_key(|c| format!("{c:?}"));
-        allowed.dedup();
+        // The palette and nothing else. This list used to be widened by
+        // every ink composited over every ground — 48 x 48 blends — because
+        // the transcript behind an open panel was faded with alpha, and a
+        // blend is not a token. The design now recolours that transcript to
+        // the `--tui-scrim-*` roles instead, so a dimmed cell is held to
+        // exactly the standard an undimmed one is.
+        let allowed: Vec<ratatui::style::Color> = aldwin_tui::__design_palette(theme).to_vec();
 
         for scene_name in SCENES {
             for (width, height) in SIZES {
@@ -260,8 +255,7 @@ fn every_cell_carries_a_colour_from_the_design_system() {
                             }
                             assert!(
                                 allowed.contains(&colour),
-                                "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {which} {colour:?} is not a design token, \
-                                 nor a token dimmed toward a ground"
+                                "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {which} {colour:?} is not a design token"
                             );
                         }
                     }
@@ -666,6 +660,10 @@ fn no_frame_leaves_a_bordered_box_unclosed() {
 /// (`tokens/cells.css`). Restated here on purpose: a test that imported
 /// them from the code under test could only ever agree with it.
 const MARGIN: usize = 3;
+/// The top bar's brand, as the reference writes it: capitalised, because it
+/// is a proper noun and not a label. Restated here rather than imported so
+/// this file keeps asserting against the design, not against the app.
+const BRAND: &str = "Aldwin";
 const LABEL_COL: usize = 8;
 const LABEL_GUTTER: usize = 2;
 const BODY_COL: usize = MARGIN + LABEL_COL + LABEL_GUTTER; // cell 13
@@ -731,16 +729,15 @@ fn every_scene_respects_the_three_cell_margins() {
 /// This one was wrong in every scene until it was measured. The bar used
 /// `--group-gap`'s six cells between the name and the directory, which put
 /// the directory on cell 16 — a position no token in `cells.css` names.
-/// Six cells part two *unrelated* groups (`5b`'s `review changes` / `3
-/// files`, the footer's key hints); the reference's own `4a`, `5a`, `5c`
-/// and `5d` bars all put the cwd on the body column, three cells after the
-/// seven-letter name they were drawn with. The body column is the fixed
-/// half: the six-letter name this ships under pads by four, and `brand_pad`
-/// derives that from `BRAND` so the two can never be stated twice. The
-/// prose in `HANDOFF.md` says the
-/// six-cell gap "survives only between the brand and everything else",
-/// which is the stale statement — the frame is the authority on positions,
-/// per this project's own "measure the handoff HTML" rule.
+///
+/// The reference no longer leaves this to be measured. Its old frames spaced
+/// the directory off the name with literal spaces, so the body column had to
+/// be inferred by counting them; `Aldwin Agent TUI.dc.html` writes the brand
+/// as `flex: 0 0 var(--label-col)` and the directory's group as
+/// `padding-left: var(--label-gutter)` — the identical pair a transcript
+/// turn uses for its speaker and its content. So the top bar is the label
+/// column and the body column *by construction*, and `brand_pad` deriving
+/// its pad from `BRAND`'s width is the same statement made in cells.
 #[test]
 fn the_identity_bar_puts_the_working_directory_on_the_body_column() {
     let mut seen = 0;
@@ -748,10 +745,10 @@ fn the_identity_bar_puts_the_working_directory_on_the_body_column() {
         // Row 1 of the 3-row top bar is the content row in every scene.
         let row: String = (0..buffer.area.width).map(|x| buffer[(x, 1)].symbol()).collect();
         let Some(rest) = row.strip_prefix(&" ".repeat(MARGIN)) else { return };
-        let Some(after_brand) = rest.strip_prefix("aldwin") else { return };
+        let Some(after_brand) = rest.strip_prefix(BRAND) else { return };
         // Only scenes whose bar actually carries a directory beside the name.
         if after_brand.trim_start().starts_with(['~', '/']) {
-            let start = MARGIN + "aldwin".chars().count() + (after_brand.len() - after_brand.trim_start().len());
+            let start = MARGIN + BRAND.chars().count() + (after_brand.len() - after_brand.trim_start().len());
             assert_eq!(start, BODY_COL, "{theme:?}/{name}: the cwd starts on cell {start}, not the body column\n{row}");
             seen += 1;
         }

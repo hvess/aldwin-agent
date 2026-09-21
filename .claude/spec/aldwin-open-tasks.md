@@ -3,7 +3,7 @@
 Work that is known, understood and not done. Each entry says what was seen, where the evidence is, and what would close it.
 
 **Status:** active — a ledger, not a spec. Nothing here blocks anything else.
-**Scope:** everything outstanding as of 2026-09-20. Entries 1–15 are gone:
+**Scope:** everything outstanding as of 2026-09-21. Entries 1–15 are gone:
 they belonged to the screenshot harness and its conformance catalogue, both
 deleted when the review loop replaced them — see
 `.claude/spec/aldwin-review.md`'s Progress entry. New numbering starts at 1.
@@ -17,50 +17,97 @@ contradicts) and the entry says so before it goes.
 ## Design
 
 1. **The design reference contradicts itself, and the app compensates.**
-   `crates/review/baseline.json` carries two entries: the closed glyph table
-   against the design's own copy, and the absent table component ADR 0002
-   works around. Both are bugs in `.claude/design/`, not in the app. Closing
-   them means fixing the design upstream and re-syncing — read the
-   `design-sync` skill first — after which the entries are deleted.
+   `crates/review/baseline.json` carries seven entries. Five are the design
+   against itself; **two are the design against an ADR this project has
+   already shipped**, which is a different thing and the reason to read them
+   before touching anything visual:
+   `permission-frame-predates-adr-0004` (frame `3a` draws the four-option
+   `cargo *` list ADR 0004 deleted) and
+   `access-scale-is-four-points-in-the-frame-and-three-in-the-readme` (frame
+   `1c` restores an `all` rung reading "nothing asks", which ADR 0004 §3 makes
+   impossible). Neither is a gap in the app. Closing them means fixing the
+   design upstream and re-syncing — read the `design-sync` skill first — after
+   which the entries are deleted.
 
-2a. **The design system upstream is still named Mjolnir, and its frames
-   still spell that wordmark.** The project was renamed Mjolnir → Aldwin on
-   2026-09-21; `.claude/design/` keeps the old name wherever it is an
-   *address* — the project title on `claude.ai/design`, the bound copy's
-   `_ds/mjolnir-design-system-4ea574fb-…/` path, `window.MjolnirDesignSystem_4ea574`
-   — because renaming those locally would only stop `design-sync` finding
-   anything. The consequence that reaches the app is the wordmark: the
-   frames render seven letters in a 17-cell field, the app renders six in
-   15, and `baseline.json`'s `wordmark-letters-are-the-old-name` records the
-   split. Closing it means renaming the project upstream and re-syncing,
-   after which that contradiction entry is deleted and the addresses here
-   are updated in the same pass.
+   The 2026-09-21 repaint retired three older entries outright and shrank the
+   glyph exception list from 18 marks to 11 (ADR 0002's box-drawing set alone),
+   because the marks the old table omitted are simply in the new frames.
 
-2. **The design system ships no reference frames.** `.claude/design/` carries
-   prose and tokens; the rendered `.dc.html` frames the design was drawn as
-   are not imported. Without them, nothing mechanical can check whether a
-   band is in the *right place* — stage 3 checks tokens and cells, and
-   everything positional falls to stage 5's judgement.
+2a. **The design system upstream is still named Mjolnir.** The project was
+   renamed Mjolnir → Aldwin on 2026-09-21; `.claude/design/` keeps the old
+   name wherever it is an *address* — the project title on `claude.ai/design`,
+   the bound copy's `_ds/mjolnir-design-system-4ea574fb-…/` path,
+   `window.MjolnirDesignSystem_4ea574` — because renaming those locally would
+   only stop `design-sync` finding anything. The frames themselves are
+   rebranded: they write `Aldwin` in the top bar and `aldwin` as the speaker
+   label, and the wordmark that used to spell the old name is gone from the
+   design altogether, which retired the `wordmark-letters-are-the-old-name`
+   contradiction. What is left is addresses, and closing it means renaming the
+   project upstream and updating them here in the same pass.
 
-   Feasible here and needs nothing installed: there is no Chromium and no
-   snap, but `firefox --headless --screenshot <abs path>
-   --window-size=1080,720 file://<abs path>` writes the file. What is owed is
-   the fetch, which is a deliberate `DesignSync` call, and a decision about
-   what to do with them — a cell-for-cell diff is wrong, because the design's
-   frames hold different content; landmark positions are the comparable part.
+2. **~~The design system ships no reference frames.~~ Done, 2026-09-21.**
+   `Aldwin Agent TUI.dc.html` was fetched and rendered during the repaint
+   import. The method is in `.claude/design/IMPORT.md`: extract one frame by
+   `id`, wrap it in the local `tokens/*.css` plus stubs for the four web-only
+   tokens (`--font-mono`, `--font-ui`, `--radius-frame`, `--shadow-lg`), and
+   `firefox --headless --screenshot <abs> --window-size=1080,720 file://<abs>`.
+   JetBrains Mono is installed, so the 9px advance is faithful and the render
+   is measurable.
 
-21. **A panel dims the ink behind it but not the ground.** `ui/mod.rs:296`'s
-    `fade_area` composites `cell.fg` against `cell.bg` and leaves `cell.bg`
-    alone, so an overlay panel recedes the *text* behind it and none of the
-    bands. `HANDOFF.md:280` and `:353` say "the transcript behind dims to
-    ~35%", which is the whole surface. Shared by the permission panel and both
-    pickers, so it is not any one screen's defect — but it is most visible
-    where a panel opens over the resting screen, since the wordmark's
-    `--tui-reverse-bg` then stays the brightest field in the frame, above the
-    panel that is supposed to be the one live surface. Raised by a stage 5
-    judge on the session list, 2026-09-20; reachable identically through bare
-    `/model`. Fixing it means fading `cell.bg` toward the ground in the same
-    pass, and deciding what that does to the wordmark specifically.
+   It earned its keep immediately: reading `3a` suggested a tone change, and
+   *rendering* it showed the frame had regressed to the pre-ADR-0004 permission
+   model. The frames are not committed — they are large, and re-fetching is one
+   `DesignSync` call.
+
+   What is still owed is the automatic half: nothing compares a rendered design
+   frame to a rendered app frame on a schedule. A cell-for-cell diff remains
+   wrong (the frames hold different content); landmark positions are the
+   comparable part, and the frames being token-authored now makes those
+   readable from the markup without rendering at all.
+
+21. **~~A panel dims the ink behind it but not the ground.~~ Moot,
+    2026-09-21.** `fade_area` is deleted. The design replaced the whole
+    treatment — "a recolour, never alpha" — so a scrimmed transcript is now
+    ink remapped to the three `--tui-scrim-*` roles with the bands left alone,
+    which is what the reference draws in `3a` and `3b`. The half of this entry
+    that read as a defect (the wordmark staying the brightest field in the
+    frame, above the panel meant to be the one live surface) went with the
+    wordmark.
+
+22. **Two designed screens have no implementation at all.** The repaint's
+    frame file draws eleven screens; the app builds nine of them. The two
+    missing are not regressions — they were never built — but the design now
+    specifies them in full, so they are known, understood and undone:
+
+    - **`3b` commands** — typing `/` lifts an 11-row panel off the composer:
+      a title row carrying the filter and an `n of m` count, a 48-cell list
+      (`--pane-commands-w`) on `--tui-recess`, and an explain pane beside it
+      on `--tui-bar` showing the highlighted command's prose and two gauge
+      rows. The app has slash commands (`cli::slash`) and a panel control
+      that already draws this shape (`ui::picker`, `ui::decision`), so this
+      is mostly wiring a third list into an existing one.
+    - **`3c` review** — the only screen that takes the whole frame: a
+      33-cell file pane (`--pane-files-w`) on `--tui-recess`, a hunk pane
+      beside it, per-hunk `✓`/`▌`/`○` state, a `1 of 3 accepted` gauge, and a
+      footer offering only the keys that apply. It needs state nothing
+      tracks yet — a file list with per-hunk accept/reject — which is why
+      this is the larger of the two by a wide margin.
+
+    Both are drawn in `Aldwin Agent TUI.dc.html`; render them per entry 2
+    before starting. Note `3c`'s diff rows use the **6-cell** gutter
+    (`--gutter-line-no`, against the inline diff's 5) and hang their trailing
+    note on `--diff-code-col` — the app's `diff.rs` is built around the
+    inline geometry and would need both.
+
+23. **The top bar draws two facts where the design draws four.** Every frame
+    right-flushes `model · gauge · cost`; the app draws the model and the
+    build version. A context gauge needs token accounting the session does
+    not keep (`UsageStats` exists on a core event but nothing accumulates it
+    into `StatusInfo`) and a cost needs per-model pricing, so neither is
+    fabricated — `chrome::draw_top_bar` says so in place. The gauge is the
+    nearer of the two: the roles are already carried (`gauge_fill`,
+    `gauge_fill_hot` at 80%, `gauge_track`) and `1d` shows the empty state,
+    so what is owed is the accumulation, not the drawing.
 
 ## Review loop
 

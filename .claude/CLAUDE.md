@@ -39,32 +39,49 @@ call. Re-sync only when you need something the local copy doesn't carry.
 
 Two things about reading the handoff, each learned the hard way:
 
-1. **Measure the handoff HTML; reading it is not enough.** Neither the token
-   CSS nor the component prose states cell positions. They exist only as
-   pixel values in the HTML's inline styles, and have to be divided by the
-   cell size in `cells.css` (9×20px; the frame is 120×36 cells) to become
-   grid coordinates. A design pass that skipped this step produced a layout
+1. **Measure the handoff HTML; reading it is not enough.** The prose does not
+   state cell positions and has repeatedly been wrong about them. In the
+   current frame they are token references (`var(--label-col)`,
+   `var(--row)`), so measuring is a lookup in `cells.css`; in the frames
+   before it they were raw pixels needing division by the 9×20px cell (the
+   frame is 120×36). A design pass that skipped this step produced a layout
    that was wrong in every column while matching every colour exactly.
 2. **Render it before trusting your reading of it.** Headless Chromium
    works, but under snap confinement it silently no-ops writes outside
    `/root` — copy the input there and write screenshots there too, or you
    get a reported success and no file.
 
-The glyph vocabulary is fixed and closed: `▌ ● ◐ ○ ✔ ▶ █ + -`. If a mark is
-needed and it is not in that table, do not draw one — `─` and the box-
-drawing set are *not* in it. **One exception, ADR 0002:** a markdown table
-in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`. It is scoped to
-that one construct and is not a licence for a second stroked surface. The
-Content Fundamentals hold too: third-person "The agent", lowercase labels,
-sentence-case prose.
+The glyph vocabulary is fixed and closed. **Do not quote it here** — it is
+generated into `tokens::MARKS` from `HANDOFF.md`'s table and a copy in this
+file would go stale, which it did: it read `▌ ● ◐ ○ ✔ ▶ █ + -` for a day
+after the repaint made the prompt `▸` and a pass `✓`. If a mark is needed and
+it is not in that table, do not draw one. **One exception, ADR 0002:** a
+markdown table in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`,
+scoped to that one construct and not a licence for a second stroked surface;
+it is the only thing left in `MARKS_BY_EXCEPTION`.
+
+Four of those marks are **statuses, and a status hue is spent nowhere else**:
+`✓` ok, `✗` failed, `!` warned, `·` the info pointer. A diff sign is a status
+too, which is why added shares the ok sage and removed the err rose. The one
+brand colour — lantern gold — is spent on one thing per band: what is *open*,
+selected, running, or being typed into. A settled `●` is a neutral. Reaching
+for gold to mean "finished" is the habit this replaced.
+
+The Content Fundamentals hold too: third-person "The agent", lowercase
+labels, sentence-case prose. The one capitalised word is the brand `Aldwin`
+in the top bar, which is a proper noun and not a label — the same word is the
+speaker label `aldwin` two rows below it.
 
 Two rules that now govern every layout decision (Turn 13):
 
 - **Nothing inside a frame is stroked.** Every boundary is a step on the
-  seven-rung ground ladder (`--color-ground-0…6`). No `Block::bordered()`,
-  no rule rows, no underline attributes — a band is a rect with its own
-  `Style::bg`. The rule governs boundaries between *regions*; a markdown
-  table's are between *cells*, which is why ADR 0002 carves it out.
+  seven-rung ground ladder — `--color-ground-0` is the frame ground and the
+  rungs run `up-1…3` / `down-1…3` from it. No `Block::bordered()`, no rule
+  rows, no underline attributes — a band is a rect with its own `Style::bg`.
+  The rule governs boundaries between *regions*; a markdown table's are
+  between *cells*, which is why ADR 0002 carves it out. The steps are narrow
+  on purpose (the tightest is 1.014:1), so "this looks low-contrast, nudge
+  it" is undoing a decision rather than fixing an oversight.
 - **The grid is 3-cell margin, 8-cell label column, 2-cell gutter**, so
   body text lands on cell 13. There is deliberately no `--body-col` token;
   derive it, never restate it.
@@ -86,6 +103,13 @@ fourteen entries and became the problem it was built to solve.
 `.claude/spec/aldwin-tui.md`'s Progress entries record what was measured
 and what it corrected; read the 2026-09-06 entry before touching layout in
 `crates/tui/src/ui/`.
+
+**Where the design disagrees with an ADR, the ADR wins and the disagreement
+is recorded.** The 2026-09-21 repaint redrew the permission frame from a base
+predating ADR 0004 — four options over a `cargo *` pattern, a "shell command"
+sentence — and restored a fourth access rung reading "nothing asks". Neither
+shipped; both are in `baseline.json`. A frame is authority on *tone and
+position*, not on a permission model.
 
 ## Decision records
 

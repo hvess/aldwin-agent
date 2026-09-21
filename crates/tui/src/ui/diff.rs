@@ -131,10 +131,17 @@ fn hunk_offsets(text: &str) -> Option<(usize, usize)> {
     Some((old, new))
 }
 
-/// `+84` / `+11 -2` — a parsed diff's own stat, in the diff colours, for a
+/// `+84` / `+11 −2` — a parsed diff's own stat, in the diff colours, for a
 /// tool line's right-flush summary slot. The reference shows exactly this
-/// beside a `write`/`edit` row (`Turn.jsx`), and omits the side that is
-/// zero rather than printing `-0`.
+/// beside a `write`/`edit` row (`2a`), and omits the side that is zero
+/// rather than printing `−0`.
+///
+/// The removed count is written with U+2212 MINUS SIGN, not the hyphen a
+/// diff *row* opens with, and the reference is consistent about the
+/// difference across all four places it draws a stat. They are different
+/// things: `- ` at the head of a row is the unified-diff sign, a piece of
+/// syntax; `−2` is a number. The minus is also the width of the `+` beside
+/// it, where a hyphen is visibly shorter, so the pair reads as a pair.
 pub(super) fn stat_spans(body: &[DiffLine], ctx: Ctx) -> Vec<Span<'static>> {
     let added = body.iter().filter(|l| l.kind == Kind::Added).count();
     let removed = body.iter().filter(|l| l.kind == Kind::Removed).count();
@@ -146,7 +153,7 @@ pub(super) fn stat_spans(body: &[DiffLine], ctx: Ctx) -> Vec<Span<'static>> {
         if !spans.is_empty() {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled(format!("-{removed}"), Style::default().fg(ctx.pal.del)));
+        spans.push(Span::styled(format!("\u{2212}{removed}"), Style::default().fg(ctx.pal.del)));
     }
     spans
 }
@@ -233,14 +240,13 @@ pub(super) const CODE_COLUMN: usize = GUTTER + SIGN;
 /// number, the side the developer is about to be looking at.
 fn gutter(old_no: Option<usize>, new_no: Option<usize>, bg: ratatui::style::Color, ctx: Ctx) -> Span<'static> {
     let n = new_no.or(old_no).map(|n| n.to_string()).unwrap_or_default();
-    // `label`, not `dim`. The handoff names the role and then says why it
-    // is that one: "a 5-cell right-aligned line number in `--t-label` …
-    // the neutral label step holds 3.5:1 for the gutter". At `dim` it
-    // measured the same value as `--tui-context`, which is what a context
-    // row's code is painted in — so on an unchanged row the number and the
-    // code it numbers were the identical colour and the gutter stopped
-    // reading as a gutter.
-    Span::styled(format!("{n:>width$} ", width = GUTTER - 1), Style::default().fg(ctx.pal.label).bg(bg))
+    // `quiet` (`2a`: `color:var(--tui-quiet); text-align:right`). It has
+    // been `dim`, which was the same value as a context row's code and so
+    // stopped the gutter reading as a gutter, and then `label`. `quiet` is
+    // one rung above a context row's `--tui-context` and holds 6.99:1 on an
+    // added row's fill, so the number stays distinct from the code it
+    // numbers on every kind of row.
+    Span::styled(format!("{n:>width$} ", width = GUTTER - 1), Style::default().fg(ctx.pal.quiet).bg(bg))
 }
 
 /// Renders one diff line, prefixed with its old/new line-number gutter.
@@ -284,8 +290,15 @@ fn render_line(line: &DiffLine, row: Row, ctx: Ctx) -> Vec<Line<'static>> {
         return row.with_fill(pal.diff_box).build(spans, ctx);
     }
     let (marker, sign_fg, code_fg, bg) = match line.kind {
-        Kind::Added => ("+ ", pal.add_code, pal.add_code, pal.add_row),
-        Kind::Removed => ("- ", pal.del_code, pal.del_code, pal.del_row),
+        // Sign and code are two tones: the sign is the *status* (`add` is
+        // the ok sage, `del` the err rose), the code beside it the lighter
+        // `-code` step. They were one tone here until the repaint, because
+        // on the old recessed field the mid-lightness sign green measured
+        // 2.7:1 in light. On the opaque row fills it is 4.58:1 at worst, so
+        // the inline diff takes the same three-role split the reference
+        // draws in `2a` and `3c` alike.
+        Kind::Added => ("+ ", pal.add, pal.add_code, pal.add_row),
+        Kind::Removed => ("- ", pal.del, pal.del_code, pal.del_row),
         Kind::Context | Kind::Hunk => ("  ", pal.diff_box, pal.context, pal.diff_box),
     };
     let spans = vec![
@@ -335,7 +348,9 @@ pub(super) fn boxed(body: &[DiffLine], budget: Budget, row: Row, ctx: Ctx) -> Ve
     // empty gutter beside it is what says it is not a line of the file, so
     // a decoration on both ends was saying it a second time in a glyph the
     // system does not have.
-    let marker = |text: String| row.build(vec![Span::styled(format!("{}{text}", " ".repeat(CODE_COLUMN)), Style::default().fg(ctx.pal.dim).bg(row.fill()))], ctx);
+    // `quiet`, as `2a` draws `  81 more lines`: it stands in for code, so
+    // it takes the gutter's tone rather than dropping to metadata.
+    let marker = |text: String| row.build(vec![Span::styled(format!("{}{text}", " ".repeat(CODE_COLUMN)), Style::default().fg(ctx.pal.quiet).bg(row.fill()))], ctx);
 
     let mut rows: Vec<Line<'static>> = Vec::new();
     for item in &shown {

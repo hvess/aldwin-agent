@@ -185,16 +185,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let total = app.total_lines();
     app.scroll.set_viewport_height(log_inner.height as usize, total);
     let mut visible = app.transcript_slice(app.scroll.offset, log_inner.height as usize);
-    // Bottom-anchored, like `14d`'s body band and the welcome hero that
-    // already pads itself to sit on the composer: a conversation shorter
-    // than the band hangs off its *bottom* edge, not its top. Drawn from
-    // the top, the first few turns of a session sat glued under the
-    // identity bar with the gap below them — and then, the moment the
-    // transcript outgrew the band, jumped down to rest on the composer
-    // instead. Nothing is added to the row count: these blank rows are
-    // layout, not transcript, and `ScrollState` must keep measuring the
+    // Bottom-anchored, like `2a`'s body band (`justify-content: flex-end`):
+    // a conversation shorter than the band hangs off its *bottom* edge, not
+    // its top. Drawn from the top, the first few turns of a session sat
+    // glued under the identity bar with the gap below them — and then, the
+    // moment the transcript outgrew the band, jumped down to rest on the
+    // composer instead. Nothing is added to the row count: these blank rows
+    // are layout, not transcript, and `ScrollState` must keep measuring the
     // conversation rather than the space around it.
-    if let Some(pad) = (log_inner.height as usize).checked_sub(visible.len()).filter(|&p| p > 0) {
+    //
+    // The empty state is the exception, and it is the reference's: `1d`'s
+    // body band is a plain column, so its two facts sit under the top bar
+    // (see `transcript::hero_lines`). The two bands differ because they are
+    // answering different questions — a transcript grows toward where the
+    // next turn is typed; a resting screen has nothing growing in it.
+    let anchored_to_bottom = !app.log.is_empty();
+    if let Some(pad) = (log_inner.height as usize).checked_sub(visible.len()).filter(|&p| p > 0 && anchored_to_bottom) {
         let mut anchored = vec![ratatui::text::Line::default(); pad];
         anchored.append(&mut visible);
         visible = anchored;
@@ -203,16 +209,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     transcript::draw_log(frame, log_area, log_inner, log_block, visible);
 
     if pending {
-        // The transcript recedes while a decision is open — the reference
-        // puts the whole conversation column at `opacity:.45` in both of
-        // its panel scenes, so the panel reads as the one live surface
-        // rather than as another card competing with the history above it.
+        // The transcript recedes while a decision is open, so the panel
+        // reads as the one live surface rather than as another card
+        // competing with the history above it. The reference (`3a`, `3b`)
+        // does this by *recolouring* the conversation to the three
+        // `--tui-scrim-*` roles — "a recolour, never alpha" — where it used
+        // to set `opacity:.45` on the column.
+        //
         // Applied as a post-pass over the already-drawn cells rather than
-        // by threading a second faded palette through every render arm: the
-        // effect is uniform over the region by definition, so compositing
-        // it once here can't drift from the panel's own colours the way a
-        // parallel palette would.
-        fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
+        // by threading a second palette through every render arm: the
+        // effect is uniform over the region by definition, so doing it once
+        // here can't drift from the transcript's own colours the way a
+        // parallel set of builders would.
+        scrim_area(frame, log_area, pal);
         // No edge row above the panel. The design system's permission
         // screen is explicit that "the tonal step off the transcript is the
         // whole boundary — there is no rule along its top edge", so the
@@ -222,7 +231,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else if picking {
         // Same treatment as a pending decision, for the same reason: the
         // panel is the one live surface while it is open.
-        fade_area(frame, log_area, palette::PANEL_TRANSCRIPT_OPACITY);
+        scrim_area(frame, log_area, pal);
         decision::draw_panel(frame, bottom_area, picker_lines, pal);
     } else if let Some(composer) = &composer {
         // blank / composer / blank / status / blank — the reference's own
@@ -230,7 +239,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         // rule above it: the step *is* the boundary, so all five rows are
         // painted `bar_bottom` and the first is simply blank.
         frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), bottom_area);
-        let [_pad_top, composer_area, _pad_mid, status_area, _pad_bottom] = Layout::vertical([
+        let [notice_area, composer_area, _pad_mid, status_area, _pad_bottom] = Layout::vertical([
             Constraint::Length(1),
             // The same height the band above was sized from — one
             // `Composer`, so the two cannot disagree.
@@ -240,6 +249,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),
         ])
         .areas(bottom_area);
+        // The band's first row is blank — unless the last turn failed, in
+        // which case it carries the notice (`2d`). It takes the blank's row
+        // rather than adding one, so the band is five rows either way and
+        // nothing above it moves when a turn fails.
+        chrome::draw_notice(frame, notice_area, app);
         chrome::draw_input(frame, composer_area, &mut *app, composer);
         chrome::draw_status_line(frame, status_area, app);
     }
@@ -280,20 +294,24 @@ fn pad_rows(area: Rect, n: u16) -> Rect {
     Rect { y: area.y + n, height: area.height - taken, ..area }
 }
 
-/// Composites every already-drawn cell in `area` toward its own background
-/// at `alpha`, the way CSS `opacity` would. Each cell fades toward *its
-/// own* `bg`, not one shared ground, so a cell sitting on a card or a diff
-/// band recedes against that surface rather than against the frame behind
-/// it. Backgrounds themselves are left alone: they are the surfaces being
-/// faded onto, and dissolving them too would erase the card edges the fade
-/// is supposed to preserve.
-fn fade_area(frame: &mut Frame, area: Rect, alpha: f32) {
+/// Recolours every already-drawn cell in `area` to the dimmed-transcript
+/// roles — see [`palette::Palette::scrimmed`] for which ink goes where.
+///
+/// Foregrounds only. A cell's background is the surface it sits on, and the
+/// reference leaves those alone: a turn break behind an open panel is still
+/// a turn break. Blank cells are skipped because a foreground nothing draws
+/// with is not a colour on screen, and recolouring it would only make the
+/// buffer harder to read in a failing test.
+fn scrim_area(frame: &mut Frame, area: Rect, pal: &palette::Palette) {
     let buf = frame.buffer_mut();
     let area = area.intersection(buf.area);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buf[(x, y)];
-            cell.fg = palette::fade(cell.fg, cell.bg, alpha);
+            if cell.symbol().trim().is_empty() {
+                continue;
+            }
+            cell.fg = pal.scrimmed(cell.fg);
         }
     }
 }

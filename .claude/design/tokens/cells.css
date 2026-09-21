@@ -73,8 +73,8 @@
   --break-h:calc(var(--cell-h) * 1);            /* turn / section break band */
   --wordmark-h:calc(var(--cell-h) * 1);
   --bar-top-h:calc(var(--cell-h) * 3);
-  --bar-keys-h:calc(var(--cell-h) * 3);         /* blank, key row, blank */
-  --bar-bottom-h:calc(var(--cell-h) * 5);       /* blank, prompt, blank, status, blank */
+  --bar-title-h:calc(var(--cell-h) * 1);        /* review's title row under the bar */
+  --bar-bottom-h:calc(var(--cell-h) * 5);       /* blank, prompt or keys, blank, status, blank — every frame */
   --section-gap-h:calc(var(--cell-h) * 3);      /* between first-run sections */
   --panel-commands-h:calc(var(--cell-h) * 11);
   --panel-permission-h:calc(var(--cell-h) * 18);

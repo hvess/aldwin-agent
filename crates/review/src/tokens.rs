@@ -14,9 +14,13 @@
 //! **Three roles are deliberately not carried.** `--tui-add-bg` and
 //! `--tui-del-bg` are `rgba()` tints for a browser; a terminal cell has one
 //! opaque background, and the design ships `--tui-add-row` / `--tui-del-row`
-//! beside them as the solid fills for exactly this reason. `--tui-line` is
-//! marked legacy in `semantic.css` itself. A role that is neither carried nor
-//! on that list is an error, not a silent omission — see [`generate`].
+//! beside them as the solid fills for exactly this reason. `--tui-border` is
+//! scoped by `semantic.css` itself to "the one quiet border, outside frames":
+//! a terminal has no outside, and nothing inside a frame is stroked, so
+//! carrying it would put a stroke colour within reach of code that must never
+//! draw one. (`--tui-line`, which held this slot, was deleted upstream in the
+//! lantern-gold repaint.) A role that is neither carried nor on that list is
+//! an error, not a silent omission — see [`generate`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Error, ErrorKind, Result};
@@ -26,7 +30,7 @@ use std::path::Path;
 const UNCARRIED: [(&str, &str); 3] = [
     ("add-bg", "an rgba tint; a cell background is opaque, and --tui-add-row is the design's solid fill for it"),
     ("del-bg", "an rgba tint; --tui-del-row is the design's solid fill for it"),
-    ("line", "marked legacy in semantic.css"),
+    ("border", "scoped to outside the frame by semantic.css; a terminal has no outside and nothing inside a frame is stroked"),
 ];
 
 /// Where the generated file lands, relative to the workspace root.

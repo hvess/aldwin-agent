@@ -10,6 +10,115 @@ byte-identical, and no path was added or removed in either project. The
 design-system project's `updatedAt` did not move; see the note below on why that
 is expected.
 
+## The lantern-gold repaint — 2026-09-21, and the frames became one file
+
+The largest import since the directory was created, and the first where
+**every colour in the app changed**. Read from `25845063-…` with `DesignSync`
+after `/design-login`.
+
+### What arrived
+
+The design system is no longer one hue. It was 300° carrying everything —
+neutrals at low chroma, the accent at full — and it is now **near-neutral warm
+grey with one brand colour, lantern gold `#e9c46a`**, four status hues and two
+syntax hues. The coherence argument inverted with it: the old system held
+together because everything shared a hue, this one because almost nothing does,
+so the gold is the only thing in a resting frame the eye reads as colour.
+
+- **`tokens/palette.css`** — replaced whole. The ground ladder is renamed as
+  well as re-valued: `--color-ground-0` is the frame ground and the rungs run
+  `up-1…3` / `down-1…3` from it, where they were `--color-ground-0…6` numbered
+  from the desk up. Both themes now run the *same way round* — a raised band is
+  lighter than the ground in light as well as dark — with one exception the
+  file states in place: light's `panel-title` is "the one raised band darker
+  than ground, because it is a title".
+- **`tokens/semantic.css`** — replaced whole; 51 roles per scope, up from 45.
+  New: `--tui-ok|err|warn|info`, the four status roles, each paired with its
+  glyph in a comment; `--tui-scrim-text|quiet|mark`; `--tui-done`;
+  `--tui-gauge-fill-hot`; `--tui-border`. Gone: `--tui-line`, `--tui-step-done`,
+  `--tui-glyph-done` (now `--tui-done`), and two of the five syntax roles —
+  `--tui-syn-type` and `--tui-syn-number`, because "types, numbers and every
+  other identifier are the code tone".
+- **`tokens/cells.css`** — two tokens changed and nothing else: `--bar-keys-h`
+  deleted, `--bar-title-h` added. The grid is untouched, which is worth stating
+  plainly because everything else moved: 3-cell margin, 8-cell label column,
+  2-cell gutter, body text on cell 13.
+- **`Aldwin Agent TUI.dc.html`** — one file where there were three. Eleven
+  frames renumbered `1a`–`1d` (first run, empty state), `2a`–`2d` (session,
+  inline code, multi-line draft, failed step), `3a`–`3c` (permission, commands,
+  review). The theme is a toggle on `<body>`, so the light frames are gone as
+  separate files. `Agent TUI v2.dc.html` and its Light twin survive only under
+  `uploads/`, as the original upload.
+
+**The frames are authored in tokens now.** Every position is
+`var(--label-col)`, `var(--row)`, `var(--step-content-col)`; the only `px` left
+inside a frame is a 1-cell `padding-right: var(--cell-w)`. CLAUDE.md's rule 1 —
+measure the HTML, because positions exist only as pixels in it — describes the
+*old* frames. The rule still earns its place as a check, but the measurement it
+asks for is now a token lookup. Rule 2 (render it before trusting your reading)
+earned its place again: the render is what showed `3a` had regressed.
+
+### The glyph vocabulary changed, and `HANDOFF.md`'s table is now measured
+
+`▶` became `▸` (the prompt) and `✔` became `✓` (a pass). Four status marks are
+new — `✓` ok, `✗` failed, `!` warned, `·` the info pointer — each with one hue
+and drawn with nothing else. Also new in the frames: `−` U+2212 for a removed
+*count* (`+11 −2`, a number, where `-` at the head of a row is diff syntax),
+`…` for elided rows, `→` for a row that opens a longer list.
+
+This directory's `HANDOFF.md` mirrors upstream's `README.md` verbatim by
+convention. **Its `### Glyphs` table is now the one exception**, marked with a
+`>` note saying so, because `crates/review`'s token generator parses that table
+into `tokens.rs` — mirroring a stale table would have generated a vocabulary
+the design no longer draws. Every row of it was counted out of the frame's
+markup.
+
+The upside is real: `MARKS_BY_EXCEPTION` fell from 18 glyphs to 11. The five
+marks the old table omitted while the design's own copy mandated them
+(`· … → ⏎ ↑↓`) are simply in the frame now, which retired that contradiction
+outright. What is left is ADR 0002's box-drawing set alone.
+
+### The prose did not move, and that is most of the new contradiction list
+
+Upstream's `README.md` and the bound copy's `SYNC.md` were **not touched by the
+repaint**. The README still opens "Five states are designed", ids them
+`4a`/`5a`–`5d`, carries the OKLCH colour tables and the old glyph table, and
+writes the brand `mjolnir`. `SYNC.md` ends at Turn 15 with no entry for any of
+this. `crates/review/baseline.json` went from seven contradictions to seven,
+but they are almost entirely different ones — three old entries folded into
+`readme-and-sync-record-describe-frames-that-no-longer-exist`, and
+`wordmark-letters-are-the-old-name` retired because the wordmark is gone.
+
+**Two are the design contradicting a decision this project has already
+shipped**, and both are recorded rather than followed:
+
+- `permission-frame-predates-adr-0004` — `3a` draws four options over a
+  `cargo *` pattern, a "shell command" sentence, a `Deny and tell the agent
+  why` row and a `.toml` footer. That is the UI of the model ADR 0004 deleted,
+  and the README's own corrected copy (pushed from here on 2026-09-20)
+  describes the eight-row list instead. The frame was redrawn from a base older
+  than that correction. The app takes `3a`'s tones in full and none of its copy.
+- `access-scale-is-four-points-in-the-frame-and-three-in-the-readme` — `1c`
+  restores the `all` row reading "everything runs · nothing asks". No rung can
+  mean that: ADR 0004 §3 puts `edit` outside the permissions model, so a diff is
+  shown and waited on at every rung. `no_access_row_claims_edits_run_unasked`
+  fails on that string, so it cannot ship by accident.
+
+### Applied to the working tree
+
+`tokens.rs` regenerated (48 roles per theme, up from 42). `palette.rs` rewritten
+around the new role set and its ladder tests re-pinned. The alpha-composited
+transcript fade is **gone** — the design says "a recolour, never alpha", so
+`Palette::scrimmed` maps ink to the three `--tui-scrim-*` roles and
+`ui::scrim_area` applies it; the colour-conformance test consequently dropped
+its 48×48 table of blended allowances and now holds every cell, dimmed or not,
+to being exactly a token. `highlight.rs` cut to three roles. First run lost its
+wordmark and its 3-row footer (now the standard 5-row band with a status row);
+the empty state lost its wordmark and its `in` row and is top-anchored; errors,
+notices and cancellations became glyph-led status rows; code blocks gained a
+caption and a gutter; inline code gained the quoted-code ground; the composer
+gained a line count. Snapshot re-recorded deliberately.
+
 ## ADR 0004 push — 2026-09-20, the permission copy corrected upstream
 
 **The first push in this direction for a reason other than a re-sync**, and
@@ -229,10 +338,13 @@ design-system one as the token authority. That is now backwards; see the
 | `tokens/palette.css` | `_ds/mjolnir-design-system-4ea574fb-…/tokens/palette.css` |
 | `tokens/semantic.css` | `_ds/mjolnir-design-system-4ea574fb-…/tokens/semantic.css` |
 
-All five are verbatim copies **except** `HANDOFF.md`, which carries two added
-block-quote notes (on the grid table and on first run) marking sections that
-Turn 13 superseded. Those two notes are annotations by the importing session,
-not upstream text. Everything else in that file is as fetched.
+All five are verbatim copies **except** `HANDOFF.md`, which carries added
+block-quote notes (on the grid table, on first run, and on the top bar's gap)
+marking sections a later turn superseded, and whose `### Glyphs` table was
+**rewritten from measurements** in the 2026-09-21 repaint — see that section
+above for why that one had to stop being a mirror. Those notes are annotations
+by the importing session, not upstream text. Everything else in that file is as
+fetched, which by now means: largely describing frames that no longer exist.
 
 ### Not imported
 

@@ -1,63 +1,60 @@
-/* Semantic roles for a terminal cell grid. Every frame reads these, never the
-   ramp steps directly, so the light theme is one class on the frame.
+/* Semantic roles for the cell grid. Every frame reads these and nothing else;
+   the light theme is `.tui-light` on the frame or on <body>.
 
-   Since Turn 13 the ground roles do the work that rules used to do: a band is
-   distinguished from its neighbour by its step on the ground ladder, not by a
-   line between them. Pick the role that says what the band IS. */
+   A band is told from its neighbour by its step on the ground ladder, never by
+   a line. Gold is spent on one thing per band: the open step's ▌, the selected
+   row's band and ▌, the prompt ▸ and caret, a running spinner, and the `you`
+   speaker label. */
 :root{
-  --tui-ground:var(--color-ground-3);
-  --tui-bar:var(--color-ground-5);
-  --tui-bar-bottom:var(--color-ground-4);   /* composer + status */
-  --tui-recess:var(--color-ground-1);       /* a field sunk below the ground */
-  --tui-break:var(--color-ground-2);        /* the one-row turn/section break */
-  --tui-panel-title:var(--color-ground-6);  /* an overlay panel's title row */
-  --tui-scrim:var(--color-ground-0);
-  --tui-line:var(--color-neutral-800);      /* legacy — see note in README */
+  --tui-desk:var(--color-ground-down-3);          /* outside the window */
+  --tui-ground:var(--color-ground-0);             /* the frame ground */
+  --tui-bar:var(--color-ground-up-2);             /* top bar and overlay panels */
+  --tui-bar-bottom:var(--color-ground-up-1);      /* the five-row bottom band */
+  --tui-recess:var(--color-ground-down-2);        /* a field the user reads from */
+  --tui-break:var(--color-ground-down-1);         /* the one-row turn break */
+  --tui-panel-title:var(--color-ground-up-3);     /* a panel's or review's title row */
+  --tui-scrim:var(--color-ground-down-3);         /* the dimmed layer behind an overlay */
+  --tui-scrim-text:var(--color-neutral-500);      /* prose and paths in a dimmed transcript: a recolour, never alpha */
+  --tui-scrim-quiet:var(--color-neutral-700);     /* tool names and facts in a dimmed transcript */
+  --tui-scrim-mark:var(--color-neutral-700);      /* glyphs and speaker labels in a dimmed transcript */
+  --tui-border:var(--color-neutral-800);          /* the one quiet border, outside frames */
 
-  --tui-text:var(--color-neutral-100);
-  --tui-body:var(--color-neutral-200);
-  --tui-code:var(--color-neutral-150);
-  --tui-quiet:var(--color-neutral-300);
-  --tui-value:var(--color-neutral-300);
-  --tui-label:var(--color-neutral-400);
-  --tui-dim:var(--color-neutral-500);
-  --tui-context:var(--color-neutral-500);
+  --tui-text:var(--color-neutral-100);      /* paths that change, the current row, the draft */
+  --tui-body:var(--color-neutral-200);      /* prose */
+  --tui-code:var(--color-neutral-150);      /* code, in prose and in blocks */
+  --tui-quiet:var(--color-neutral-300);     /* tool names, stdout, an option's purpose */
+  --tui-value:var(--color-neutral-300);     /* a right-flush value */
+  --tui-label:var(--color-neutral-400);     /* the 8-cell label column */
+  --tui-dim:var(--color-neutral-500);       /* metadata, timestamps, config paths */
+  --tui-context:var(--color-neutral-500);   /* unchanged lines in a diff */
 
-  --tui-mark:var(--color-accent-400);
-  --tui-mark-idle:var(--color-neutral-700);
-  --tui-band:var(--color-band-dark);
-  --tui-accent-text:var(--color-accent-200);
-  --tui-speaker-you:var(--color-accent-300);
-  --tui-speaker-agent:var(--color-neutral-300);
-  --tui-gauge-fill:var(--color-accent-500);
-  --tui-gauge-track:var(--color-neutral-750);
-  --tui-glyph-done:var(--color-accent-700);
-  --tui-glyph-running:var(--color-accent-400);
-  --tui-glyph-pending:var(--color-neutral-700);
-  /* A settled first-run step's `●`. The same step as --tui-glyph-done here,
-     but a separate role: on a light ground a finished tool call recedes
-     *above* the accent while a settled step stays *below* it, so the two
-     part company in .tui-light and must not be spelled as one token. */
-  --tui-step-done:var(--color-accent-700);
-  --tui-hunk-header:var(--color-accent-500);
+  --tui-mark:var(--color-gold-text);              /* the active ▌, ▸ and caret */
+  --tui-mark-idle:var(--color-neutral-700);       /* ▌ on a selectable row not selected */
+  --tui-band:var(--color-band-dark);              /* the selected row's fill */
+  --tui-accent-text:var(--color-neutral-100);     /* text on the selected row */
+  --tui-speaker-you:var(--color-gold-text);       /* the `you` label */
+  --tui-speaker-agent:var(--color-neutral-300);   /* the `aldwin` label */
+  --tui-gauge-fill:var(--color-neutral-300);      /* context gauge under 80% */
+  --tui-gauge-fill-hot:var(--color-gold-text);    /* context gauge at 80% and above */
+  --tui-gauge-track:var(--color-neutral-700);     /* the gauge's unfilled cells */
+  --tui-done:var(--color-neutral-400);            /* a settled ● — readable, below the mark */
+  --tui-glyph-running:var(--color-gold-text);     /* the spinner */
+  --tui-glyph-pending:var(--color-neutral-700);   /* ○ */
+  --tui-hunk-header:var(--color-neutral-500);     /* the @@ row */
 
-  /* Syntax. Five roles; everything else in a code block is --tui-code and a
-     comment is --tui-dim. See the ramp's own note in palette.css. */
+  --tui-warn:var(--color-warn);   /* ! */
+  --tui-err:var(--color-err);     /* ✗ */
+  --tui-info:var(--color-info);   /* · the info line's pointer */
+  --tui-ok:var(--color-ok);       /* ✓ */
+
   --tui-syn-keyword:var(--color-syntax-keyword);
   --tui-syn-call:var(--color-syntax-call);
-  --tui-syn-type:var(--color-syntax-type);
-  --tui-syn-string:var(--color-syntax-string);
-  --tui-syn-number:var(--color-syntax-number);
+  --tui-syn-string:var(--color-neutral-300);
 
-  /* Reverse video: accent as the ground, the desk as the ink. Used by the
-     wordmark and by the id chips in documentation around a frame. */
-  --tui-reverse-bg:var(--color-accent-400);
-  --tui-reverse-ink:var(--color-ground-0);
+  --tui-reverse-bg:var(--color-gold);       /* the gold fill: id chips in documentation */
+  --tui-reverse-ink:var(--color-on-gold);   /* ink on that fill */
 
-  /* The quoted-code ground: inline code spans in prose, the inline transcript
-     diff, and a fenced code block all sit on this one surface. A block does
-     NOT use --tui-recess; see the README's note. */
-  --tui-diff-box:var(--color-diff-ground);
+  --tui-diff-box:var(--color-diff-ground);  /* quoted code: spans, blocks, the inline diff */
   --tui-add:var(--color-diff-add);
   --tui-add-bg:var(--color-diff-add-bg);
   --tui-add-row:var(--color-diff-add-row);
@@ -68,42 +65,20 @@
   --tui-del-code:var(--color-diff-del-code);
 }
 
-/* Light theme: same roles, same hue, ramps flipped.
-
-   Turn 15 rebuilt it. Two changes, both structural:
-
-   1. It reads from ramps now. Turn 14 left this scope carrying thirty hex
-      literals, on the argument that the light accents had outgrown the shared
-      accent ramp. True, but the answer was a light ramp, not literals here —
-      `--color-ground-light-*`, `--color-ink-light-*`,
-      `--color-accent-light-*`, `--color-neutral-light-*` and
-      `--color-diff-light-*` now hold every value, so this file states roles
-      and the palette states colour, the same way `:root` does.
-
-   2. It is shallower. The old theme ran #0e0c12 ink on a #faf7ff ground with
-      a #a39fac desk, a 19:1 span that read as harsh beside the dark theme's.
-      Ink now tops out at #241f2b and the desk lifts to #cfcad9; the seven
-      ground rungs sit inside 10% of each other, and hierarchy is carried by
-      the step between rungs rather than by the distance to the ends. The
-      ladder stays monotonic — every band sinks below the frame ground, in
-      ramp order, and nothing inside a frame is stroked, so those steps are
-      the only thing separating one band from the next.
-
-   The two done-glyph roles still part company here, for the reason recorded
-   below. Source of the values: the `--t-*` block of
-   `Agent TUI v2 Light.dc.html`, which is where they were authored. The frames
-   state their palette inline and do not read this file, so this scope is the
-   thing that can silently disagree with them — re-measure against that block,
-   not against this prose. */
+/* Light theme: the same roles on the light ramps. */
 .tui-light{
+  --tui-desk:var(--color-ground-light-down-3);
   --tui-ground:var(--color-ground-light-0);
-  --tui-bar:var(--color-ground-light-2);
-  --tui-bar-bottom:var(--color-ground-light-1);
-  --tui-recess:var(--color-ground-light-4);
-  --tui-break:var(--color-ground-light-3);
-  --tui-panel-title:var(--color-ground-light-5);
-  --tui-scrim:var(--color-ground-light-6);
-  --tui-line:var(--color-neutral-light-400);
+  --tui-bar:var(--color-ground-light-up-2);
+  --tui-bar-bottom:var(--color-ground-light-up-1);
+  --tui-recess:var(--color-ground-light-down-2);
+  --tui-break:var(--color-ground-light-down-1);
+  --tui-panel-title:var(--color-ground-light-up-3);
+  --tui-scrim:var(--color-ground-light-down-3);
+  --tui-scrim-text:var(--color-ink-light-5);
+  --tui-scrim-quiet:var(--color-neutral-light-500);
+  --tui-scrim-mark:var(--color-neutral-light-500);
+  --tui-border:var(--color-ground-light-up-3);
 
   --tui-text:var(--color-ink-light-0);
   --tui-body:var(--color-ink-light-2);
@@ -114,32 +89,31 @@
   --tui-dim:var(--color-ink-light-5);
   --tui-context:var(--color-ink-light-5);
 
-  --tui-mark:var(--color-accent-light-500);
+  --tui-mark:var(--color-gold-text-light);
   --tui-mark-idle:var(--color-neutral-light-500);
   --tui-band:var(--color-band-light);
-  --tui-accent-text:var(--color-accent-light-800);
-  --tui-speaker-you:var(--color-accent-light-700);
+  --tui-accent-text:var(--color-ink-light-0);
+  --tui-speaker-you:var(--color-gold-text-light);
   --tui-speaker-agent:var(--color-ink-light-3);
-  --tui-gauge-fill:var(--color-accent-light-400);
-  --tui-gauge-track:var(--color-neutral-light-400);
-  /* The two done-glyph roles part company here. A finished tool call recedes
-     by going LIGHTER than the accent mark; a settled first-run step recedes
-     by going darker than it, because it sits beside an answer that has to
-     stay readable. In the dark theme both are accent-700. */
-  --tui-glyph-done:var(--color-accent-light-300);
-  --tui-glyph-running:var(--color-accent-light-500);
+  --tui-gauge-fill:var(--color-ink-light-5);
+  --tui-gauge-fill-hot:var(--color-gold-text-light);
+  --tui-gauge-track:var(--color-neutral-light-300);
+  --tui-done:var(--color-ink-light-4);
+  --tui-glyph-running:var(--color-gold-text-light);
   --tui-glyph-pending:var(--color-neutral-light-500);
-  --tui-step-done:var(--color-accent-light-600);
-  --tui-hunk-header:var(--color-accent-light-400);
+  --tui-hunk-header:var(--color-ink-light-5);
+
+  --tui-warn:var(--color-warn-light);
+  --tui-err:var(--color-err-light);
+  --tui-info:var(--color-info-light);
+  --tui-ok:var(--color-ok-light);
 
   --tui-syn-keyword:var(--color-syntax-light-keyword);
   --tui-syn-call:var(--color-syntax-light-call);
-  --tui-syn-type:var(--color-syntax-light-type);
-  --tui-syn-string:var(--color-syntax-light-string);
-  --tui-syn-number:var(--color-syntax-light-number);
+  --tui-syn-string:var(--color-ink-light-3);
 
-  --tui-reverse-bg:var(--color-accent-light-800);
-  --tui-reverse-ink:var(--color-ground-light-0);
+  --tui-reverse-bg:var(--color-gold);
+  --tui-reverse-ink:var(--color-on-gold-light);
 
   --tui-diff-box:var(--color-diff-light-ground);
   --tui-add:var(--color-diff-light-add);

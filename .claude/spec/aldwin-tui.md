@@ -2,14 +2,66 @@
 
 ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
 
-**Status:** active — one known gap here, plus one open upstream defect: the
-design system's `.tui-light` `--tui-reverse-bg` disagrees with its own frame,
-so the light wordmark renders a rung too dark. See the 2026-09-07 audit entry;
-do not "fix" it in `palette.rs`. (The 2026-09-03 colour-transport gap is closed
-by the 2026-09-06 entry; the syntax ramp by the 2026-09-07 Turn 15 entry.)
+**Status:** active. Two upstream defects are open and both are *the design
+contradicting a shipped ADR*, not gaps here — see `baseline.json`'s
+`permission-frame-predates-adr-0004` and
+`access-scale-is-four-points-in-the-frame-and-three-in-the-readme`. Do not
+"fix" either in this crate. (The light-wordmark defect that stood here is
+retired: the 2026-09-21 repaint removed the wordmark. The 2026-09-03
+colour-transport gap is closed by the 2026-09-06 entry; the syntax ramp by
+the 2026-09-07 Turn 15 entry and then re-cut by the repaint.)
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-19
+**Last Updated:** 2026-09-21
+
+**Progress (2026-09-21, the lantern-gold repaint):** The design system was
+replaced, not adjusted — warm greys under one brand colour where it was a
+single 300° hue — and the eleven frames were renumbered into one file. Read
+`.claude/design/IMPORT.md`'s entry of this date before touching anything
+visual here; it is the record of what arrived and what was deliberately not
+followed.
+
+What this crate did, beyond taking new values:
+
+- **`--tui-step-done` and `--tui-glyph-done` collapsed into `--tui-done`.**
+  The two existed because on the old violet light ground a settled step and a
+  finished tool call had to recede from the mark in *opposite* directions.
+  With a neutral `●` and a gold mark there is nothing to recede from. The
+  paired test went with them; `a_settled_glyph_is_a_neutral_and_never_the_mark`
+  replaces it, and asserts the thing that is now load-bearing — gold means
+  open, never finished.
+- **The transcript no longer fades behind a panel, it recolours.**
+  `semantic.css`: "a recolour, never alpha". `palette::fade` and
+  `PANEL_TRANSCRIPT_OPACITY` are deleted and `Palette::scrimmed` maps ink to
+  the three `--tui-scrim-*` roles. This *strengthened* stage 4: the colour
+  conformance test used to allow every ink composited over every ground — 48
+  × 48 blended values — and now allows the palette and nothing else, so a
+  dimmed cell is held to exactly the standard an undimmed one is.
+  `scrimmed` maps by colour, which is sound only while `scrim_quiet` and
+  `scrim_mark` are one value; `the_two_quiet_scrim_roles_coincide` fails with
+  an explanation if the design ever parts them.
+- **The syntax ramp went five roles to three.** `syn_type` and `syn_number`
+  are gone — a type or a number is now simply `code`, which is what the
+  design says — and the rule behind it is worth keeping: no status hue may
+  appear inside a code block. The old ramp broke that on its face, because
+  its string colour *was* the diff green.
+- **Four status hues arrived, each with its glyph**, and three states that
+  used to be prose became rows: an error is `✗`, a notice `·`, a cancelled
+  turn `!`. The last is a distinction the app did not draw before — stopped
+  is not failed — and `Outcome` draws the same line for a refused call.
+- **Two frames the app had are now different screens.** First run lost its
+  wordmark and its 3-row footer for the standard 5-row band (`cells.css`:
+  "blank, prompt or keys, blank, status, blank — every frame"); the empty
+  state lost its wordmark and its `in` row (the top bar already carries the
+  directory) and is **top**-anchored, where it was bottom-anchored. Only the
+  conversation hangs off the composer now, which is `2a` against `1d`.
+
+Three things the reference draws that are deliberately **not** drawn, each
+because it would state something untrue rather than because it was hard:
+`config → …/config.toml` (config is YAML, and two files), `esc stop` and
+`esc clear` (Esc is unbound in the composer; `^c` cancels), and `/access`
+(no such command). Recorded as
+`frame-names-files-a-command-and-keys-the-product-does-not-have`.
 
 **Progress (2026-09-19, ADR 0003 — the permission option row is a sentence):**
 The decision panel's option list was `5c`'s name + detail pair on `5a`'s

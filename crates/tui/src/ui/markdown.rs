@@ -206,7 +206,7 @@ fn parse_delimiter(line: &str, columns: usize) -> Option<Vec<Align>> {
 /// **This is the design system's one stroked component, and the exception is
 /// deliberate** — see `.claude/adr/0002-markdown-tables-are-drawn.md`. Turn
 /// 13's rule ("nothing inside a frame is stroked; every boundary is a step
-/// on the ground ladder") and the closed glyph table (`▌ ● ◐ ○ ✔ ▶ █ + -`)
+/// on the ground ladder") and the closed glyph table (`tokens::MARKS`, none of it box-drawing)
 /// still hold everywhere else in this crate, and a boundary that separates
 /// one *region* from another — a turn break, a markdown `---`, a panel from
 /// its bar — is still a band. What a table needs is different in kind: a
@@ -351,7 +351,7 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
         // A markdown thematic break is a separator, and separators are
         // bands: one row of `break_`, the same treatment a turn break gets.
         // It used to be a 20-cell run of `─`, which is not in the design
-        // system's glyph vocabulary at all (`▌ ● ◐ ○ ✔ ▶ █ + -`) — and
+        // system's glyph vocabulary at all (`tokens::MARKS`) — and
         // that vocabulary is closed: "if a mark is needed and it is not in
         // that table, do not draw one."
         return band_row(pal.break_, ctx);
@@ -415,7 +415,21 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(ctx.pal.code)));
+                // The code tone *on the quoted-code ground* (`2b`:
+                // `background:var(--tui-diff-box);color:var(--tui-code)`).
+                // The ground is what does the work. `code` and the `body`
+                // prose around it are one rung apart — enough to tell two
+                // blocks from each other, not enough to pick one word out
+                // of a sentence — so a span that only changed its ink read
+                // as prose. On the raised ground it "reads as quoted rather
+                // than emphasised", and it is the same ground a fenced
+                // block and the inline diff take, so all three sizes of
+                // quoted code are visibly one thing.
+                //
+                // Exactly the span's own cells: no padding cell either
+                // side. The reference adds none, and a padded span would
+                // shift every word after it off the column it wraps to.
+                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(ctx.pal.code).bg(ctx.pal.diff_box)));
                 rest = &stripped[end + 1..];
                 continue;
             }

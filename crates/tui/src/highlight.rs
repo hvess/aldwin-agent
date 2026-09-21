@@ -11,20 +11,24 @@
 //! chose — every other cell reads a `--tui-*` role, and a code block read
 //! base16.
 //!
-//! The design system closed that at its Turn 15 by defining five syntax
-//! roles ([`Palette::syn_keyword`] and its four siblings) and two rules
-//! about them: no syntax role may outrank the accent mark, and there are
-//! exactly five — everything else in a block stays [`Palette::code`] and a
-//! comment drops to [`Palette::dim`].
+//! The design system closed that at its Turn 15 by defining syntax roles of
+//! its own, and the lantern-gold repaint (2026-09-21) cut them from five to
+//! **two hues**: iris for keywords ([`Palette::syn_keyword`]), sky for call
+//! names ([`Palette::syn_call`]). `palette.css` says where the rest went —
+//! "Strings are the quiet neutral; types, numbers and every other identifier
+//! are the code tone; comments are metadata" — and gives the rule that
+//! bounds the ramp: **no status hue appears inside a code block**, so code
+//! "can never be mistaken for an error or a diff". The five-role ramp broke
+//! that on its face: its string colour *was* the diff green.
 //!
 //! So syntect is kept for what it is good at, parsing, and the theme is
 //! *built* from the palette rather than loaded ([`theme`]). A `Theme` is
 //! only a default style plus a list of scope-selector → style rules, which
-//! is exactly the mapping the five roles need; building it means the scope
+//! is exactly the mapping the roles need; building it means the scope
 //! matcher, the caching highlighter and the specificity scoring all still
 //! come from syntect, while no colour can enter a frame that
 //! `palette.rs` did not put there. Pinned by
-//! `every_highlighted_colour_is_one_of_the_seven_roles`.
+//! `every_highlighted_colour_is_one_of_the_five_roles`.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -45,7 +49,7 @@ fn syntax_set() -> &'static SyntaxSet {
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-/// Scope selectors for the five syntax roles, plus the two deliberate
+/// Scope selectors for the three syntax roles, plus the two deliberate
 /// *demotions*. Read as a table of "which token kinds are a category".
 ///
 /// Resolution is syntect's, not ours: when several selectors match a scope
@@ -61,16 +65,22 @@ fn syntax_set() -> &'static SyntaxSet {
 ///   `u32` are *both* `storage.type.rust`; the grammar does not distinguish
 ///   them, so no selector can. Colouring the pair as keywords is what every
 ///   editor does and what the alternative — colouring `let` as a type —
-///   plainly is not. Named types still land in [`Palette::syn_type`],
-///   because they come through `entity.name.*` and `support.type`.
+///   plainly is not. *Named* types — `entity.name.*`, `support.type` — have
+///   no row here at all and so fall through to [`Palette::code`], which is
+///   the design's rule for them. A primitive is the one type that still
+///   takes a colour, and it takes it as a keyword, not as a type.
 /// * **A macro name is a call.** `format!` is `support.macro`, which is a
 ///   name being invoked; `syn_call` is "the name in a call or definition",
 ///   so it belongs there rather than in the fallthrough.
 /// * **Nothing needs to say `punctuation`.** Punctuation carries no scope
-///   the five selectors match, so it falls through to [`Palette::code`] on
+///   the selectors match, so it falls through to [`Palette::code`] on
 ///   its own. The only punctuation that needed naming is the operator kind
 ///   the grammars file under `keyword`.
-const SYNTAX_SCOPES: [(&str, Role); 7] = [
+/// * **A type and a number are absent on purpose**, not by oversight. They
+///   were rows here until the repaint; deleting the row is how a token kind
+///   is returned to the code tone, since the theme's default foreground is
+///   [`Palette::code`].
+const SYNTAX_SCOPES: [(&str, Role); 5] = [
     ("keyword, storage, constant.language, variable.language", Role::Keyword),
     // Demotion: an operator is punctuation the grammars happen to file
     // under `keyword`. The design system's rule is that punctuation is not
@@ -80,14 +90,8 @@ const SYNTAX_SCOPES: [(&str, Role); 7] = [
         "entity.name.function, entity.name.macro, support.function, support.macro, variable.function",
         Role::Call,
     ),
-    (
-        "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.trait, \
-         entity.name.union, entity.name.namespace, support.type, support.class",
-        Role::Type,
-    ),
     ("string", Role::String),
-    ("constant.numeric", Role::Number),
-    // Demotion: a comment is not one of the five, and drops below body text
+    // Demotion: a comment is not a category, and drops below body text
     // rather than taking a colour of its own.
     ("comment", Role::Comment),
 ];
@@ -99,9 +103,7 @@ const SYNTAX_SCOPES: [(&str, Role); 7] = [
 enum Role {
     Keyword,
     Call,
-    Type,
     String,
-    Number,
     Code,
     Comment,
 }
@@ -111,9 +113,7 @@ impl Role {
         match self {
             Role::Keyword => pal.syn_keyword,
             Role::Call => pal.syn_call,
-            Role::Type => pal.syn_type,
             Role::String => pal.syn_string,
-            Role::Number => pal.syn_number,
             Role::Code => pal.code,
             Role::Comment => pal.dim,
         }
@@ -125,7 +125,7 @@ impl Role {
 ///
 /// Everything a fenced block can be is here: a default foreground of
 /// [`Palette::code`] for the majority of a block that is not one of the
-/// five categories, and one rule per row of [`SYNTAX_SCOPES`]. No
+/// three categories, and one rule per row of [`SYNTAX_SCOPES`]. No
 /// background (`ui.rs` paints the block's surface) and no font style, since
 /// the design system carries hierarchy in colour and position and asks for
 /// bold nowhere.
@@ -309,12 +309,13 @@ mod tests {
     /// `render_snapshot.rs`'s `every_painted_cell_uses_a_palette_colour_never_the_terminals_own`
     /// only rules out `Color::Reset`, and an arbitrary `Rgb` passes it.
     ///
-    /// Seven colours are reachable and no eighth is: the five syntax roles,
+    /// Five colours are reachable and no sixth is: the three syntax roles,
     /// `code` for everything that is not a category, and `dim` for a
-    /// comment. Asserted across several languages so a grammar emitting an
+    /// comment. None of the five is a status hue, which is the design's
+    /// other rule for a code block and is asserted alongside. Asserted across several languages so a grammar emitting an
     /// unexpected scope shows up here rather than on screen.
     #[test]
-    fn every_highlighted_colour_is_one_of_the_seven_roles() {
+    fn every_highlighted_colour_is_one_of_the_five_roles() {
         let samples = [
             (
                 "rust",
@@ -332,22 +333,23 @@ mod tests {
         ];
         for theme in [Theme::Dark, Theme::Light] {
             let pal = theme.palette();
-            let allowed =
-                [pal.syn_keyword, pal.syn_call, pal.syn_type, pal.syn_string, pal.syn_number, pal.code, pal.dim];
+            let allowed = [pal.syn_keyword, pal.syn_call, pal.syn_string, pal.code, pal.dim];
+            let statuses = [pal.ok, pal.err, pal.warn, pal.add, pal.del];
             for (lang, body) in samples {
                 for span in highlight_lines(lang, body, theme).iter().flatten() {
                     let fg = span.style.fg.expect("every highlighted span carries a foreground");
                     assert!(allowed.contains(&fg), "{lang} in {theme:?}: {:?} painted {fg:?}, not a palette role", span.content);
+                    assert!(!statuses.contains(&fg), "{lang} in {theme:?}: {:?} carries a status hue", span.content);
                 }
             }
         }
     }
 
-    /// The five roles are a mapping, not a decoration: the tokens a reader
+    /// The roles are a mapping, not a decoration: the tokens a reader
     /// picks a block apart by have to actually land on them. Pinned per
     /// role, because a scope-selector edit that silently stops matching
     /// leaves the block still rendering — just flat, in `code`, which
-    /// `every_highlighted_colour_is_one_of_the_seven_roles` would happily
+    /// `every_highlighted_colour_is_one_of_the_five_roles` would happily
     /// accept.
     #[test]
     fn each_syntax_role_claims_the_tokens_it_names() {
@@ -367,8 +369,8 @@ mod tests {
         assert_eq!(colour_of("fn"), pal.syn_keyword, "a keyword");
         assert_eq!(colour_of("let"), pal.syn_keyword, "storage.type is a keyword — see SYNTAX_SCOPES");
         assert_eq!(colour_of("go"), pal.syn_call, "a definition's name");
-        assert_eq!(colour_of("String"), pal.syn_type, "a named type");
-        assert_eq!(colour_of("12"), pal.syn_number, "a numeric literal");
+        assert_eq!(colour_of("String"), pal.code, "a named type stays in the code tone");
+        assert_eq!(colour_of("12"), pal.code, "so does a numeric literal");
         assert_eq!(colour_of("="), pal.code, "an operator is punctuation, not a category");
         assert_eq!(colour_of("s"), pal.code, "an identifier is not a category");
         assert!(

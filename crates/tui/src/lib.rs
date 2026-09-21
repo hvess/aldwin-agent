@@ -105,14 +105,6 @@ pub fn __design_glyphs() -> (&'static [char], &'static [char]) {
     (&tokens::MARKS, &tokens::MARKS_BY_EXCEPTION)
 }
 
-/// One colour composited over another at the opacity the app dims a
-/// transcript behind an open panel, so a conformance test can enumerate the
-/// dimmed values rather than trying to solve for them.
-#[doc(hidden)]
-pub fn __design_fade(fg: ratatui::style::Color, onto: ratatui::style::Color) -> ratatui::style::Color {
-    palette::fade(fg, onto, palette::PANEL_TRANSCRIPT_OPACITY)
-}
-
 /// The permission panel's stated band height, from `cells.css`.
 #[doc(hidden)]
 pub fn __design_panel_rows() -> usize {

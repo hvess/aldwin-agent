@@ -16,10 +16,18 @@ use crate::draft;
 use crate::palette::Palette;
 use crate::log::LogEntry;
 
-/// The harness name, and nothing else — "the name is the brand, and a pip
+/// The product's name, and nothing else — "the name is the brand, and a pip
 /// there indicated nothing". Written once because two screens draw this bar:
 /// the session's and first run's.
-pub(super) const BRAND: &str = "aldwin";
+///
+/// Capitalised, which is the one place a left-hand word in this system is.
+/// Every *label* in the 8-cell column is lowercase (`you`, `provider`,
+/// `files`) and the Content Fundamentals ask for that; this is not a label
+/// but a proper noun, and the reference writes it `Aldwin` in all eleven
+/// frames while writing the same word `aldwin` as the speaker label two
+/// rows below. Six letters, so it sits inside `--label-col` with two cells
+/// to spare and the directory still lands on the body column.
+pub(super) const BRAND: &str = "Aldwin";
 
 /// Cells between the brand and whatever follows it in the identity bar, so
 /// that what follows lands on the body column. Derived from `BRAND`'s own
@@ -35,8 +43,8 @@ pub(super) fn brand_pad() -> usize {
 /// tick (not a dedicated timer) reads as continuous motion.
 const SPINNER_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
-/// `▶` plus two spaces — the reference's own composer row is
-/// `<span>▶</span><span>  </span>`, putting the draft's first character in
+/// `▸` plus two spaces — the reference's own composer row is
+/// `<span>▸</span><span>  </span>`, putting the draft's first character in
 /// cell 6 (the grid's 3-cell `MARGIN_X`, the glyph, then the two).
 ///
 /// It is a *gutter*, not a one-off prefix: the glyph marks the first row
@@ -83,7 +91,7 @@ impl Composer {
     pub(super) fn new(input: &str, frame_width: u16) -> Self {
         // The frame less the grid's two margins, the prompt gutter every
         // row reserves, and **one cell for the caret**. The caret is drawn
-        // (`14d`: the composer is `▶  ▌`, both `--t-mark`), so it occupies
+        // (`14d`: the composer is `▸  ▌`, both `--t-mark`), so it occupies
         // a cell of this column like any glyph — and the one place that
         // binds is a row filled to its last cell, where a caret appended
         // after the final character would fall outside the composer's rect
@@ -306,17 +314,22 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // the LLM doing right now" is the single most useful thing this line
     // can say, so it shouldn't be buried after the model name/turn counter.
     let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
-    // `dim`, not `label`, for every word in this row — `14d` puts both the
-    // status fact and the key hint in `--t-dim`, and the hint below already
-    // was, so the left group alone was a rung loud and idle chrome outranked
-    // the agent's own quiet labels. The two exceptions are deliberate and
-    // both come from the reference: the activity *glyph* is the accent
-    // (`4a`'s `◐  working   41s`), and a running tool's name stays `value`
-    // because it is the one live datum here rather than a standing label.
+    // Two tones, and the reference is consistent about which is which
+    // across all eleven frames. The *activity* — the glyph's word — is
+    // `--tui-quiet` (`◐  working`, `●  idle`, `○  waiting`); standing
+    // metadata beside it is `--tui-dim`, the tone the reference gives
+    // `config → ~/.aldwin/config.toml` on the same row. A running tool's
+    // name stays `value` because it is the one live datum here.
+    //
+    // Every state leads with a glyph now, idle included. The row used to
+    // open with a bare `idle`, which put the first word of this row one
+    // column left of where it sits in every other state and made the band
+    // twitch sideways each time a turn ended.
     let ink = || Style::default().fg(pal.dim);
-    let running = |text: String| {
-        vec![Span::styled(format!("{spinner} "), Style::default().fg(pal.glyph_running)), Span::styled(text, ink())]
+    let activity = |glyph: &str, fg, text: String| {
+        vec![Span::styled(format!("{glyph}  "), Style::default().fg(fg)), Span::styled(text, Style::default().fg(pal.quiet))]
     };
+    let running = |text: String| activity(spinner, pal.glyph_running, text);
     // Two groups, and the rhythm says which is which. Activity (with the
     // tools it is running) is what is happening *now*; the model, the turn
     // and the message count are standing facts about the session. Unrelated
@@ -333,7 +346,7 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.turn_active || app.awaiting_turn {
         running(activity_label(app).to_string())
     } else {
-        vec![Span::styled("idle", ink())]
+        activity("●", pal.done, "idle".into())
     };
 
     if !s.running_tools.is_empty() {
@@ -353,6 +366,18 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
             }
             spans.push(Span::styled(running_tool_name(tool).to_string(), Style::default().fg(pal.value)));
         }
+    }
+
+    // A draft that already spans lines names the key that adds one (`2c`:
+    // `●  idle      ⇧⏎ newline`). Only then: it is a hint about the mode
+    // the composer is in, and on a one-line draft the row is better spent
+    // on the session's facts. Shift+Enter is the one of Aldwin's three
+    // newline bindings a developer reaches for — see `App::handle_key` for
+    // why Alt+Enter and Ctrl+J exist beside it.
+    if app.input.contains('\n') {
+        spans.push(Span::styled(" ".repeat(GROUP_GAP), ink()));
+        spans.push(Span::styled("⇧⏎", Style::default().fg(pal.body)));
+        spans.push(Span::styled(" newline", Style::default().fg(pal.quiet)));
     }
 
     // `--group-gap` parts the activity group from the session group.
@@ -384,7 +409,29 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // cancels a turn or exits an idle session. Must read the same "is
     // anything running" state `App::cancel_or_quit` acts on, or the hint
     // promises one thing and the key does the other.
-    let hint = if app.turn_active || app.awaiting_turn { "^c to cancel" } else { "^c to exit" };
+    //
+    // Key then verb, no `to` between them: the reference writes every hint
+    // in every footer as `esc stop`, `⏎ send`, `^d close`. The key is
+    // `--tui-body` and the verb `--tui-quiet`, so a footer scans as a column
+    // of keys rather than as a sentence.
+    //
+    // The hint tracks what a key does *now*, which is how the reference
+    // uses the slot (`2a` `esc stop` while working, `2b` `⏎ send` over a
+    // draft). With a draft waiting, that is `⏎ send`; with nothing to send,
+    // it is how to leave.
+    //
+    // Two of the reference's hints are deliberately **not** drawn, because
+    // Aldwin does not bind them and a footer must not name a key that does
+    // something else: `esc stop` (a turn is cancelled with `^c`) and `2c`'s
+    // `esc clear` (nothing clears a draft on one keypress, and a hint is not
+    // the place to introduce a binding that destroys typed input).
+    let working = app.turn_active || app.awaiting_turn;
+    let (hint_key, hint_verb) = match (working, app.input.is_empty()) {
+        (true, _) => ("^c", " cancel"),
+        (false, false) => ("⏎", " send"),
+        (false, true) => ("^c", " exit"),
+    };
+    let hint_width = hint_key.width() + hint_verb.width();
 
     // Composed as one line, for the reason the identity bar above is: two
     // rects sized independently cannot keep a gap between them. This row
@@ -398,17 +445,62 @@ pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
     // number, a shortened `tools: rea…` is still true, and this row's whole
     // job is to say what is happening right now.
     let width = area.width as usize;
-    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(hint.width());
+    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(hint_width);
     let mut line = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
     let spans = truncate_spans(spans, budget);
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     line.extend(spans);
-    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(hint.width());
+    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(hint_width);
     line.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar_bottom)));
-    line.push(Span::styled(hint, Style::default().fg(pal.dim).bg(pal.bar_bottom)));
+    line.push(Span::styled(hint_key, Style::default().fg(pal.body).bg(pal.bar_bottom)));
+    line.push(Span::styled(hint_verb, Style::default().fg(pal.quiet).bg(pal.bar_bottom)));
     line.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom)));
 
     frame.render_widget(Paragraph::new(Line::from(line)).style(Style::default().bg(pal.bar_bottom)), area);
+}
+
+/// The notice row: `✗  turn failed · <why> · output above`, on the bottom
+/// band's first row, for as long as the failure is the last thing that
+/// happened (`2d`).
+///
+/// A failed turn already leaves a `✗` row in the transcript, and that row
+/// scrolls. This one does not: it sits against the composer, where the
+/// developer is about to type, and says the thing they need before they
+/// type it — the last turn did not finish. It clears itself, because it is
+/// derived rather than stored: the moment anything is appended to the log
+/// the failure is no longer the last entry, and the row is blank again.
+///
+/// The status is the err hue and the rest is `quiet`, the split the
+/// reference draws: only the *state* takes the status colour, and the
+/// detail after it is ordinary supporting text. The reason is elided rather
+/// than wrapped — this is one row by construction — and says where the rest
+/// of it is.
+pub(super) fn draw_notice(frame: &mut Frame, area: Rect, app: &App) {
+    use crate::log::TurnEndReasonKind;
+    let pal = app.theme.palette();
+    let why = match app.log.last() {
+        Some(LogEntry::Error { message }) => message,
+        Some(LogEntry::TurnEnded { reason: TurnEndReasonKind::Error(message) }) => message,
+        _ => return,
+    };
+    let on_band = |fg| Style::default().fg(fg).bg(pal.bar_bottom);
+    const STATUS: &str = "turn failed";
+    const WHERE: &str = " · output above";
+    // The first line only: a provider error can carry a body, and a newline
+    // in a one-row band would be drawn as a gap.
+    let why = why.lines().next().unwrap_or_default();
+    let room = (area.width as usize).saturating_sub(MARGIN_X * 2).saturating_sub(3 + STATUS.width() + 3 + WHERE.width());
+    let mut spans = vec![
+        Span::styled(" ".repeat(MARGIN_X), on_band(pal.quiet)),
+        Span::styled("✗  ", on_band(pal.err)),
+        Span::styled(STATUS, on_band(pal.err)),
+    ];
+    if room > 0 && !why.is_empty() {
+        spans.push(Span::styled(" · ", on_band(pal.quiet)));
+        spans.push(Span::styled(elide(why, room), on_band(pal.quiet)));
+        spans.push(Span::styled(WHERE, on_band(pal.quiet)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar_bottom)), area);
 }
 
 /// Every word `cli::slash::intercept` actually dispatches on, `/`-prefixed
@@ -462,7 +554,7 @@ pub(super) fn highlight_command_tokens(line: &str, ctx: Ctx) -> Line<'static> {
 /// against a real screenshot that the left accent bar it used to carry read
 /// as stray decoration, not something the input needed. `bar_bottom` is its
 /// field; `Composer.jsx` has no surface of its own beyond `BottomBar.jsx`'s
-/// raised ground, and the prompt `▶` and caret carry the accent instead.
+/// raised ground, and the prompt `▸` and caret carry the accent instead.
 pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer) {
     let pal = app.theme.palette();
     let ctx = Ctx::new(pal, area.width);
@@ -472,7 +564,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     let block = Block::new().style(Style::default().bg(pal.bar_bottom)).padding(Padding::horizontal(MARGIN_X as u16));
     let inner = block.inner(area);
     let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
-    let prompt = || Span::styled("▶  ", Style::default().fg(pal.mark));
+    let prompt = || Span::styled("▸  ", Style::default().fg(pal.mark));
     let gutter = || Span::styled("   ", Style::default().bg(pal.bar_bottom));
 
     // Dim placeholder text when the draft is empty — an empty filled box
@@ -491,7 +583,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // composer and the brightest mark in the frame in dark.
     //
     // The caret is now drawn, which is what `14d` specifies in the first
-    // place: the empty composer is `▶  ▌`, both `--t-mark`. Nothing calls
+    // place: the empty composer is `▸  ▌`, both `--t-mark`. Nothing calls
     // `set_cursor_position` any more, so the terminal's own cursor stays
     // hidden (`run::draw` hides it across every paint) exactly as it
     // already did on the first-run screen.
@@ -532,9 +624,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     // Live counterpart to the dim styling of an already-submitted slash
     // command in the log — without this, a command only reads as "directed
     // at the harness, not the model" after Enter, not while it's being
-    // typed. The `▶` marks the draft's first row; every other row gets the
+    // typed. The `▸` marks the draft's first row; every other row gets the
     // same three cells as blank gutter, so the text keeps one left edge.
-    let lines: Vec<Line> = (top..(top + height).min(layout.row_count()))
+    let mut lines: Vec<Line> = (top..(top + height).min(layout.row_count()))
         .map(|i| {
             let text = layout.row_text(i);
             let mut line = if i == cursor_row { caret_row(&text, cursor_col, ctx) } else { highlight_command_tokens(&text, ctx) };
@@ -542,6 +634,26 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
             line
         })
         .collect();
+
+    // `4 lines`, flush right on the band's top row, once the draft has more
+    // than one (`2c`). The band grows a row per line, so its height already
+    // says the draft is long; what it cannot say is *how* long once the
+    // draft outgrows `COMPOSER_MAX_ROWS` and starts scrolling under it, and
+    // that is when the number earns its cell.
+    //
+    // Whole or not at all, like every other right-flush fact in the frame:
+    // a top row whose text reaches the count's column keeps its text.
+    if layout.row_count() > 1 {
+        if let Some(first) = lines.first_mut() {
+            let count = format!("{} lines", layout.row_count());
+            let used: usize = first.spans.iter().map(|s| s.content.width()).sum();
+            let room = (inner.width as usize).saturating_sub(used);
+            if room >= GROUP_GAP + count.width() {
+                first.spans.push(Span::styled(" ".repeat(room - count.width()), Style::default().bg(pal.bar_bottom)));
+                first.spans.push(Span::styled(count, Style::default().fg(pal.dim).bg(pal.bar_bottom)));
+            }
+        }
+    }
     // No `Wrap`: `layout` already broke the draft into rows that fit this
     // column, so there is nothing left for a wrapper to do — and a second
     // wrapper here is exactly what put the caret and the text on different

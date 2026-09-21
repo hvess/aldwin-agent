@@ -1,5 +1,5 @@
 //! Themeable color palette for `ui.rs` — ported from the Aldwin Design
-//! System (`claude.ai/design`, synced 2026-09-07 from the bound copy in the
+//! System (`claude.ai/design`, synced 2026-09-21 from the bound copy in the
 //! "Design system tokens discussion" project, which is the current one —
 //! see `.claude/design/IMPORT.md`) rather than hand-picked. Field names
 //! mirror the design
@@ -19,71 +19,78 @@
 //! (`/theme`, see `App::apply_event`'s `ThemeChanged` arm) since `App::theme`
 //! is a plain field and `ui::draw` reads it fresh every frame.
 //!
-//! Colors here are the design system's resolved hex values
-//! (`tokens/palette.css`, `tokens/semantic.css`, and the project's own
-//! `readme.md` token table) — a terminal needs explicit RGB, so this reads
-//! the same values a browser would resolve from the CSS custom properties.
+//! # What the system is now
+//!
+//! Near-neutral warm grey for grounds and ink, **one** brand colour —
+//! lantern gold, `#e9c46a` — four status hues, and two syntax hues. It
+//! replaced the single-hue (300°) OKLCH system on 2026-09-21; every value
+//! changed, and so did the argument. That system got its coherence from
+//! everything sharing a hue. This one gets it from almost nothing having
+//! one: the greys carry "only a hint of warmth and no brown", so the gold is
+//! the only thing in a resting frame the eye reads as a colour at all.
+//!
+//! Three rules follow, and each is the design's own sentence:
+//!
+//! * **Gold is spent on one thing per band.** The open step's `▌`, the
+//!   selected row's band and `▌`, the prompt `▸` and caret, a running
+//!   spinner, the `you` label — "and never on a fill larger than the
+//!   wordmark". A finished `●` is *not* gold: [`Palette::done`] is a
+//!   neutral, "readable, below the mark". Under the old system that glyph
+//!   was an accent step, so this is the rule most likely to be undone by
+//!   habit.
+//! * **A status hue appears only when something is a status**, each paired
+//!   with its glyph — [`Palette::ok`] `✓`, [`Palette::err`] `✗`,
+//!   [`Palette::warn`] `!`, [`Palette::info`] `·` — "and nothing else in a
+//!   frame borrows them". A diff sign is a status, which is why `add` and
+//!   `ok` are one sage and `del` and `err` one rose.
+//! * **No status hue appears inside a code block.** See
+//!   [`Palette::syn_keyword`].
 //!
 //! # The ground ladder carries every boundary
 //!
-//! Nothing inside a frame is stroked any more. The design system's Turn 13
-//! rebuild removed every rule, pane divider and box outline and made a
-//! band's *tone* the thing that separates it from its neighbour, so the
-//! seven `--color-ground-0…6` steps are load-bearing structure rather than
-//! decoration. `palette.css` states the consequence directly: "Changing a
-//! step's lightness removes a boundary."
+//! Nothing inside a frame is stroked, so a band's *tone* is the only thing
+//! separating it from its neighbour and the seven ground steps are
+//! load-bearing structure rather than decoration.
 //!
-//! The seven roles that read those steps are [`Palette::scrim`],
+//! The ladder is named from the frame ground outward: `--color-ground-0` is
+//! the ground, `up-1…3` step toward the raised bands, `down-1…3` toward the
+//! sunk ones. Darkest to lightest, the roles read [`Palette::scrim`],
 //! [`Palette::recess`], [`Palette::break_`], [`Palette::ground`],
-//! [`Palette::bar_bottom`], [`Palette::bar`] and [`Palette::panel_title`].
-//! **The two themes do not order them the same way**, which is the thing to
-//! know before changing one. In [`DARK`] that list *is* the ladder, darkest
-//! to lightest — it reads as `--color-ground-0…6` in order. In [`LIGHT`]
-//! the ground is the lightest surface and every other band sinks below it,
-//! so the ladder is a different sequence entirely: `ground`, `bar_bottom`,
-//! `bar`, `break_`, `recess`, `panel_title`, `scrim` — the order of
-//! `--color-ground-light-0…6`, which Turn 15 renumbered strictly by
-//! lightness. A reading of the light theme as "the dark list reversed" is
-//! wrong and was the shape of two of the defects Turn 14 fixed.
+//! [`Palette::bar_bottom`], [`Palette::bar`], [`Palette::panel_title`].
 //!
-//! That is also why the previous local contrast deviation is gone. Eleven
-//! fields here used to sit ahead of the tokens, hand-nudged for WCAG
-//! headroom because the hand-tuned palette kept failing at the dim steps.
-//! The upstream ramps are now *generated* — one hue (300°), lightness
-//! climbing in even OKLCH steps, chroma falling as lightness rises — which
-//! is the systematic fix that deviation was standing in for. Both ladders
-//! are strictly monotonic with seven distinct rungs, and the light one's
-//! narrowest rung (1.037:1, bar to break) is still wider than the dark
-//! one's (1.011:1, scrim to recess); `dim` holds 5.14:1 on the light
-//! theme's recessed field, the darkest band inside a frame and the binding
-//! one there. Every value below is the token's own, so this file and the
-//! token layer agree again.
+//! **Both themes now run the same way round**, which they did not before:
+//! a raised band is *lighter* than the ground in light as well as in dark,
+//! where the previous light theme sank every band below a near-white page.
+//! The single exception is light's [`Palette::panel_title`], which
+//! `palette.css` calls "the one raised band darker than ground, because it
+//! is a title" — it sits between `break_` and `recess` there. So the light
+//! ladder is the dark one with exactly one rung moved, and a reading of it
+//! as "the dark list reversed" is wrong in six places rather than one.
 //!
-//! Turn 15 made that light ladder *shallower* on purpose. Nothing in the
-//! previous one failed a contrast floor; it read as harsh beside the dark
-//! theme anyway, because it spanned 19:1 from ink to ground where the dark
-//! theme separates bands by a step and lets the ends stay soft. The light
-//! rungs now sit within 10% of each other and hierarchy is carried by the
-//! step between them rather than by the distance to the ends — so a "this
-//! looks low-contrast, nudge it" edit here is undoing a decision, not
-//! fixing an oversight.
+//! The steps are narrow on purpose — the dark ladder's tightest pair is
+//! 1.014:1, scrim to recess — and hierarchy is carried by the step between
+//! rungs rather than by the distance to the ends. A "this looks
+//! low-contrast, nudge it" edit here is undoing a decision, not fixing an
+//! oversight; and it cannot be made here anyway, because this file's values
+//! are generated.
 //!
-//! There is deliberately no `line` field. `--tui-line` still exists
-//! upstream but is marked legacy there and scoped to "annotation around a
-//! frame"; its last consumer here was the transcript scrollbar, which the
-//! design lists under "Deliberately absent" and which has now been removed.
-//! `cells.css` states the rule this follows: "If a token here is not applied
-//! through a `var()` somewhere, delete it rather than document it."
+//! There is deliberately no `border` field. `--tui-border` exists upstream
+//! but `semantic.css` scopes it to "the one quiet border, outside frames",
+//! and a terminal has no outside. The generator lists it as uncarried so a
+//! stroke colour is never within reach of code that must not draw one.
 //!
-//! # Why there is no alpha blending here any more
+//! # Why there is no alpha blending here at all
 //!
-//! A diff row's fill used to be a CSS `rgba(...)` tint that had to be
-//! pre-blended by hand over `diff_box`, since ratatui's `Color` has no
-//! runtime alpha. The system now ships a *resolved solid* for exactly this
-//! case — `--tui-add-row` / `--tui-del-row` alongside the `-bg` tints — so
-//! the row fills below are the tokens' own opaque hexes and no arithmetic
-//! stands between the source and this file. The `-bg` rgba tints have no
-//! terminal rendering and are deliberately not carried.
+//! Two things used to be composited by hand because ratatui's `Color` has no
+//! runtime alpha, and the design has since resolved both into opaque roles:
+//!
+//! * A diff row's fill was an `rgba()` tint pre-blended over `diff_box`. It
+//!   is now `--tui-add-row` / `--tui-del-row`, the tokens' own solid hexes.
+//!   The `-bg` tints have no terminal rendering and are not carried.
+//! * The transcript behind an open panel was faded at `opacity:.45`. It is
+//!   now recoloured to [`Palette::scrim_text`], [`Palette::scrim_quiet`] and
+//!   [`Palette::scrim_mark`] — `semantic.css`: "a recolour, never alpha". See
+//!   [`Palette::scrimmed`].
 
 use ratatui::style::Color;
 
@@ -101,31 +108,6 @@ use ratatui::style::Color;
 /// no reason to keep doing it by hand.
 pub(crate) use crate::tokens::{DARK, LIGHT};
 
-// What the light half of that generated file is, and why it looks the way
-// it does — kept because it is history the generator cannot carry:
-//
-// The design system's `.tui-light` scope — same roles, same hue, ramps
-// flipped; selection band darker than the page, not lighter (per the
-// source's own note: "on a light ground the selection band must be darker
-// than the page, not lighter").
-//
-// Turn 15 regenerated every value here for the second time. The change is
-// *depth*, not hue: the theme now spans `#241f2b` ink to a `#f7f5fa`
-// ground where Turn 14 ran `#0e0c12` to `#faf7ff` with a `#a39fac` desk,
-// and the seven ground rungs sit inside 10% of each other. See this
-// module's doc comment for why that shallowness is the decision rather
-// than an oversight.
-//
-// The light values also stopped being literals upstream. Turn 14 wrote
-// thirty hexes into `.tui-light` on the argument that the light accents
-// had outgrown `--color-accent-900`; Turn 15 replaced that with light
-// ramps of their own — `--color-ground-light-*`, `--color-ink-light-*`,
-// `--color-accent-light-*`, `--color-neutral-light-*` and
-// `--color-diff-light-*` — so every field below can name its rung the way
-// the [`DARK`] fields do.
-//
-// Both palettes are generated now; see the re-export above.
-
 /// One themeable surface, matching the design system's `--tui-*` roles
 /// one-to-one (see this module's doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,37 +119,50 @@ pub(crate) struct Palette {
     pub theme: Theme,
     /// `--tui-ground` — the frame background every panel ultimately sits on.
     pub ground: Color,
-    /// `--tui-bar` — chrome surfaces: the top bar and the decision panel
-    /// body.
+    /// `--tui-bar` — chrome surfaces: the top bar and an overlay panel's
+    /// body. Two steps above the ground.
     pub bar: Color,
-    /// `--tui-bar-bottom` — the bottom bar (composer + status line), one
-    /// step *above* the ground in the dark theme.
+    /// `--tui-bar-bottom` — the bottom band (composer + status line), one
+    /// step above the ground in both themes.
     pub bar_bottom: Color,
-    /// `--tui-recess` — a field sunk below the frame ground: the inline
-    /// diff, the permission command block, the review file pane, and the
-    /// one-row separator above the permission options.
+    /// `--tui-recess` — "a field the user reads from", sunk two steps below
+    /// the ground: the review file pane and the command list.
+    ///
+    /// Quoted code is *not* here. Spans, blocks and the inline diff all sit
+    /// on [`Palette::diff_box`], which is a raised tone — the design moved
+    /// them off the recess because "the recess swallows the ramp".
     pub recess: Color,
-    /// `--tui-break` — the one-row band that separates transcript turns and
-    /// first-run steps. This *replaces* the flat rule glyph: the design
-    /// system's Turn 13 rebuild settled separators as "a full row of a
-    /// different ground, never a rule", and notes that in a terminal that is
-    /// "a single `Style::bg` on a one-row rect, so nothing here needs
-    /// approximating".
+    /// `--tui-break` — the one-row band that separates transcript turns,
+    /// one step *below* the ground: "the one row that sinks below the
+    /// transcript". A full row of a different ground, never a rule — in a
+    /// terminal that is a single `Style::bg` on a one-row rect, so nothing
+    /// here needs approximating.
     ///
     /// Named with a trailing underscore only because `break` is a Rust
     /// keyword; it mirrors `--tui-break` one-to-one like every other field.
     pub break_: Color,
-    /// `--tui-panel-title` — an overlay panel's title row, the top of the
-    /// ground ladder. A *lift*, not a well: the design system moved this
-    /// off the accent field (which read as a filled accent band and broke
-    /// the "accent is a mark, never a field" rule) and then off the
-    /// recessed tone (which made a header the darkest strip in the frame).
+    /// `--tui-panel-title` — an overlay panel's or review's title row. A
+    /// *lift*, not a well. The top of the dark ladder; in light it is the
+    /// one raised band darker than the ground — see this module's doc
+    /// comment.
     pub panel_title: Color,
-    /// `--tui-scrim` — the desk outside the terminal window. Unused by a
-    /// real terminal, which has no outside, but carried so the palette
-    /// stays one-to-one with the token layer and the snapshot fixtures can
-    /// render a framed scene.
+    /// `--tui-desk` — outside the terminal window. Unused by a real
+    /// terminal, which has no outside, but carried so the palette stays
+    /// one-to-one with the token layer and the snapshot fixtures can render
+    /// a framed scene.
+    pub desk: Color,
+    /// `--tui-scrim` — "the dimmed layer behind an overlay". The same rung
+    /// as [`Palette::desk`] today, and a separate role because the two mean
+    /// different things: one is where the window is not, the other is what
+    /// a transcript sinks toward while a panel holds the floor.
     pub scrim: Color,
+    /// `--tui-scrim-text` — prose and paths in a dimmed transcript. See
+    /// [`Palette::scrimmed`].
+    pub scrim_text: Color,
+    /// `--tui-scrim-quiet` — tool names and facts in a dimmed transcript.
+    pub scrim_quiet: Color,
+    /// `--tui-scrim-mark` — glyphs and speaker labels in a dimmed transcript.
+    pub scrim_mark: Color,
     /// `--tui-text` — primary text: paths that change, the current row,
     /// the composer draft, the "you" turn's content.
     pub text: Color,
@@ -175,104 +170,104 @@ pub(crate) struct Palette {
     pub body: Color,
     /// `--tui-code` — code text (fenced blocks, inline `` `code` ``).
     pub code: Color,
-    /// `--tui-context` — a running tool's stdout.
+    /// `--tui-context` — unchanged lines in a diff.
     pub context: Color,
-    /// `--tui-value` — right-flush facts and permission "off" values.
+    /// `--tui-value` — a right-flush value.
     pub value: Color,
-    /// `--tui-label` — muted labels: tool names, `in`/`writes`/`network`,
-    /// the label column when not the active row.
+    /// `--tui-label` — the 8-cell label column: `in`/`writes`/`network`,
+    /// `provider`/`access`, a code block's language caption.
     pub label: Color,
-    /// `--tui-dim` — the dimmest metadata tier: timestamps, tool result
+    /// `--tui-dim` — metadata, timestamps, config paths, right-flush result
     /// summaries.
     pub dim: Color,
-    /// `--tui-quiet` — quieter than `dim`, used for key-hint verbs and
-    /// unmatched permission-pattern text.
+    /// `--tui-quiet` — tool names, stdout, an option's purpose, a key hint's
+    /// verb. One step *brighter* than [`Palette::label`]: the name reads as
+    /// "quieter than prose", not "quieter than everything".
     pub quiet: Color,
-    /// `--tui-mark` — the accent `▌`/`▶`/caret: session identity is *not*
-    /// marked with this per the design system's revision log ("the top bar
-    /// carries no accent mark... a pip there indicated nothing") — reserved
-    /// for selection, the caret, and the composer prompt.
+    /// `--tui-mark` — the gold `▌`, `▸` and caret. Session identity is *not*
+    /// marked with this — the top bar carries no mark — so it is reserved
+    /// for the open step, the selected row, the prompt and the caret.
     pub mark: Color,
-    /// `--tui-mark-idle` — an unselected row's `▌`.
+    /// `--tui-mark-idle` — `▌` on a selectable row that is not selected.
     pub mark_idle: Color,
-    /// `--tui-band` — the selection band, always paired with `mark` (never
-    /// one without the other — see the design system's States section).
+    /// `--tui-band` — the selected row's fill, a gold tint. Always paired
+    /// with `mark`, never one without the other.
     pub band: Color,
-    /// `--tui-accent-text` — accent-toned text: a panel title, a filtered
-    /// command's highlighted name.
+    /// `--tui-accent-text` — text on the selected row. Primary ink, not
+    /// gold: the band and the mark carry the selection, and gold text on a
+    /// gold tint would spend the accent twice in one row.
     pub accent_text: Color,
     /// `--tui-speaker-you` — the `you` turn label.
     pub speaker_you: Color,
-    /// `--tui-speaker-agent` — the `harness` turn label.
+    /// `--tui-speaker-agent` — the `aldwin` turn label.
     pub speaker_agent: Color,
+    /// `--tui-gauge-fill` — the context gauge under 80%. A neutral: a gauge
+    /// that is merely filling is not news.
     pub gauge_fill: Color,
+    /// `--tui-gauge-fill-hot` — the context gauge at 80% and above, where
+    /// it turns gold because it has become the thing to look at.
+    pub gauge_fill_hot: Color,
     pub gauge_track: Color,
-    /// `--tui-glyph-done` — a finished tool call (`●`).
-    pub glyph_done: Color,
-    /// `--tui-glyph-running` — a running tool call / spinner (`◐◓◑◒`).
+    /// `--tui-done` — a settled `●`: a finished tool call, an answered
+    /// first-run step, the idle status. "Readable, below the mark."
+    ///
+    /// One role where there used to be two. `glyph_done` and `step_done`
+    /// existed separately because on the old light ground they had to recede
+    /// from a violet mark in opposite directions; with a neutral `●` and a
+    /// gold mark there is nothing to recede from, and the split went with
+    /// the hue that needed it.
+    pub done: Color,
+    /// `--tui-glyph-running` — the spinner (`◐◓◑◒`).
     pub glyph_running: Color,
-    /// `--tui-glyph-pending` — a pending hunk/step (`○`).
+    /// `--tui-glyph-pending` — `○`: a step still to come, a hunk not yet
+    /// reached, the waiting status.
     pub glyph_pending: Color,
-    /// `--tui-step-done` — a *settled first-run step's* `●`, which is not the
-    /// same role as [`Palette::glyph_done`] even though the two carry the
-    /// same value in [`DARK`].
-    ///
-    /// They part company in [`LIGHT`], and the reason is worth keeping: both
-    /// glyphs have to recede from the accent mark, but they recede in
-    /// opposite directions. A finished tool call sits in a dense run of tool
-    /// rows and falls back by going *lighter* than the mark
-    /// (`--color-accent-light-300`, `#7a58ae`); a settled step sits alone
-    /// beside the answer it produced, which has to stay readable, so it
-    /// falls back by going *darker* (`--color-accent-light-600`, `#5f3aa0`).
-    /// Spelling both as one field would force one of the two to be wrong.
-    ///
-    /// Turn 15 is where the values finally match that sentence. Turn 14 put
-    /// both glyphs *above* the mark — `step_done` was `#6941a1` against a
-    /// `#4b1f7e` mark — so "recedes by going darker" was prose the palette
-    /// contradicted. The mark is now `#6b3fb0` and `step_done` sits a rung
-    /// below it.
-    pub step_done: Color,
+    /// `--tui-hunk-header` — the `@@` row. Metadata grey now; it was an
+    /// accent step, and a hunk header is not a mark.
     pub hunk_header: Color,
-    /// `--tui-syn-keyword` — a keyword, a storage modifier, a language
-    /// constant.
+    /// `--tui-ok` — `✓`. The same sage as [`Palette::add`]: a diff sign is a
+    /// status.
+    pub ok: Color,
+    /// `--tui-err` — `✗`. The same rose as [`Palette::del`].
+    pub err: Color,
+    /// `--tui-warn` — `!`, a call that was denied.
+    pub warn: Color,
+    /// `--tui-info` — `·`, the info line's pointer. The only place the sky
+    /// hue appears outside a code block.
+    pub info: Color,
+    /// `--tui-syn-keyword` — iris: a keyword, a storage modifier, `self`.
     ///
-    /// These five `syn_*` roles are the one place the system carries more
-    /// than one hue on purpose: keyword keeps the system's own 300°, string
-    /// *is* the diff green so a literal and an added line agree, and the
-    /// other three take 265°, 195° and 75°. Two rules keep that from
-    /// becoming a second theme, and both are the design system's:
+    /// The syntax ramp is **two hues and no more** — iris here and sky on
+    /// [`Palette::syn_call`]. It was five. `palette.css` states what
+    /// happened to the rest: "Strings are the quiet neutral; types, numbers
+    /// and every other identifier are the code tone; comments are metadata."
+    /// So [`Palette::syn_string`] is a role with no hue of its own, and a
+    /// type or a number is simply [`Palette::code`].
     ///
-    /// * **No syntax role may outrank the accent mark.** They sit at one
-    ///   lightness per theme, at the palette's own chroma. A keyword is a
-    ///   colour a line carries, not a mark the eye is meant to jump to.
-    /// * **Five roles, no more.** Everything else a highlighter would happily
-    ///   colour — identifiers, parameters, operators, punctuation, macros
-    ///   that are not call names — stays [`Palette::code`], and a comment
-    ///   drops to [`Palette::dim`]. An identifier is not a category.
+    /// The rule that bounds it: **no status hue appears inside a code
+    /// block**, "so rose and ember never appear inside a code block and code
+    /// can never be mistaken for an error or a diff". The old ramp broke
+    /// exactly that — its string role *was* the diff green.
     ///
     /// `highlight.rs` builds a syntect theme from these rather than loading
     /// one, so a fenced block cannot introduce a colour the system never
-    /// chose; `every_highlighted_colour_is_one_of_the_seven_roles` pins it.
+    /// chose; `every_highlighted_colour_is_one_of_the_five_roles` pins it.
     pub syn_keyword: Color,
-    /// `--tui-syn-call` — the *name* in a call or definition, not the call
-    /// expression around it. See [`Palette::syn_keyword`] for the rules.
+    /// `--tui-syn-call` — sky: the *name* in a call or definition, not the
+    /// call expression around it. See [`Palette::syn_keyword`].
     pub syn_call: Color,
-    /// `--tui-syn-type` — a named type, class, struct, enum or trait. See
-    /// [`Palette::syn_keyword`].
-    pub syn_type: Color,
     /// `--tui-syn-string` — a string literal, and whatever a syntax nests
-    /// inside one (escapes, interpolation placeholders), so a quoted run
-    /// reads as one thing. See [`Palette::syn_keyword`].
+    /// inside one, in the quiet neutral. See [`Palette::syn_keyword`].
     pub syn_string: Color,
-    /// `--tui-syn-number` — a numeric literal. See [`Palette::syn_keyword`].
-    pub syn_number: Color,
-    /// `--tui-reverse-bg` / `--tui-reverse-ink` — reverse video, the accent
-    /// as ground with the desk as ink. The design system uses this for the
-    /// wordmark; it is the one place the accent is allowed to be a filled
-    /// field.
+    /// `--tui-reverse-bg` / `--tui-reverse-ink` — the gold fill and the ink
+    /// on it. `semantic.css` scopes this to "id chips in documentation";
+    /// nothing inside a frame uses it since the wordmark was cut, and it is
+    /// carried only so the palette stays one-to-one with the token layer.
     pub reverse_bg: Color,
     pub reverse_ink: Color,
-    /// `--tui-diff-box` — the surface a quoted diff renders on.
+    /// `--tui-diff-box` — the surface quoted code sits on: inline spans,
+    /// fenced blocks, the inline transcript diff. The same rung as
+    /// [`Palette::bar`], so quoted code reads as lifted rather than sunk.
     pub diff_box: Color,
     pub add: Color,
     /// `--tui-add-row` — the resolved solid fill of an added row. Not the
@@ -286,7 +281,33 @@ pub(crate) struct Palette {
     pub del_code: Color,
 }
 
-
+impl Palette {
+    /// What `fg` becomes in a transcript that has sunk behind an open panel.
+    ///
+    /// `semantic.css` is explicit that this is "a recolour, never alpha", and
+    /// gives three destinations: prose and paths, tool names and facts,
+    /// glyphs and labels. Ink that carries *content* — prose, a path, code —
+    /// keeps the brighter [`Palette::scrim_text`]; everything else recedes to
+    /// [`Palette::scrim_mark`].
+    ///
+    /// `scrim_quiet` and `scrim_mark` are one value in both themes, which is
+    /// what makes a lookup by colour sound here: several live roles share a
+    /// hex (`quiet`, `value` and `speaker_agent` are all neutral-300), and if
+    /// the two quiet destinations ever part company this has to start asking
+    /// what a cell *is* rather than what colour it carries. The test
+    /// `the_two_quiet_scrim_roles_coincide` exists to say so out loud when
+    /// that day comes.
+    pub(crate) fn scrimmed(&self, fg: Color) -> Color {
+        let content = [self.text, self.body, self.code, self.accent_text, self.add_code, self.del_code];
+        match fg {
+            Color::Rgb(..) if content.contains(&fg) => self.scrim_text,
+            Color::Rgb(..) => self.scrim_mark,
+            // `Color::Reset` and the indexed colours are whatever the
+            // terminal itself paints; there is no role to move them to.
+            other => other,
+        }
+    }
+}
 
 /// Which fixed `Palette` a session renders with — selected once at startup
 /// (`Theme::from_config`, `App::theme`), switchable live via `/theme`; see
@@ -320,29 +341,6 @@ impl Theme {
             _ => Theme::Dark,
         }
     }
-}
-
-/// How much of its own color the transcript keeps while a decision panel is
-/// open — the reference's `opacity:.45` on the conversation column in both
-/// panel scenes (`5a` and `5c`) of `Agent TUI v2.dc.html`. A terminal cell
-/// has no alpha channel, so the effect is composited here instead (see
-/// `fade`): the same arithmetic the browser does, done ahead of time.
-///
-/// Was `.35` until Turn 14 raised it. The dimmed transcript is the only
-/// thing behind a panel and it has to stay readable enough to be worth
-/// leaving on screen.
-pub(crate) const PANEL_TRANSCRIPT_OPACITY: f32 = 0.45;
-
-/// `fg` composited over `onto` at `alpha` — CSS `opacity` for a medium with
-/// no alpha channel. Only `Color::Rgb` blends; anything else (notably
-/// `Color::Reset`, which is whatever the terminal itself paints and so has
-/// no value to mix) is returned untouched rather than guessed at.
-pub(crate) fn fade(fg: Color, onto: Color, alpha: f32) -> Color {
-    let (Color::Rgb(fr, fg_, fb), Color::Rgb(br, bg_, bb)) = (fg, onto) else {
-        return fg;
-    };
-    let mix = |f: u8, b: u8| (f as f32 * alpha + b as f32 * (1.0 - alpha)).round() as u8;
-    Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
 }
 
 #[cfg(test)]
@@ -398,54 +396,92 @@ mod tests {
     /// is a defect no rendering test catches: the frame still draws, it just
     /// stops having an edge where it needs one.
     ///
-    /// The two orders differ, and that is the point of testing both. The
-    /// dark ladder is `--color-ground-0…6` climbing; the light one is
-    /// `--color-ground-light-0…6` sinking from the frame ground, which is
-    /// *not* the dark list reversed — `break_` is the fourth rung there and
-    /// the second here. Reading it as if it were is what put `bar` above
-    /// `bar_bottom` and `break_` above `ground` in the light theme before
-    /// Turn 14.
+    /// Both ladders climb, darkest first. They are the same list with one
+    /// rung moved: light's `panel_title` is "the one raised band darker than
+    /// ground, because it is a title" and sits between `recess` and `break_`
+    /// instead of at the top. Everything else holds its place, which is the
+    /// change from the previous light theme — that one sank every band
+    /// below a near-white page and so ran the opposite way to dark.
     #[test]
     fn both_ground_ladders_are_strictly_ordered_and_have_no_repeated_rung() {
         let dark = [DARK.scrim, DARK.recess, DARK.break_, DARK.ground, DARK.bar_bottom, DARK.bar, DARK.panel_title];
         let light =
-            [LIGHT.ground, LIGHT.bar_bottom, LIGHT.bar, LIGHT.break_, LIGHT.recess, LIGHT.panel_title, LIGHT.scrim];
+            [LIGHT.scrim, LIGHT.recess, LIGHT.panel_title, LIGHT.break_, LIGHT.ground, LIGHT.bar_bottom, LIGHT.bar];
 
-        for pair in dark.windows(2) {
-            assert!(luma(pair[0]) < luma(pair[1]), "the dark ladder climbs: {:?} then {:?}", pair[0], pair[1]);
-        }
-        for pair in light.windows(2) {
-            assert!(luma(pair[0]) > luma(pair[1]), "the light ladder sinks from the ground: {:?} then {:?}", pair[0], pair[1]);
+        for (name, ladder) in [("dark", dark), ("light", light)] {
+            for pair in ladder.windows(2) {
+                assert!(luma(pair[0]) < luma(pair[1]), "the {name} ladder climbs: {:?} then {:?}", pair[0], pair[1]);
+            }
         }
         // Seven distinct rungs needs no separate assertion: a strict
         // ordering by luma already rules out two bands sharing a tone.
     }
 
-    /// The light theme's chrome bands must sit the same way round as the
-    /// dark theme's: the top bar is a step *further* from the transcript
-    /// ground than the composer is. They were inverted in light until Turn
-    /// 14, so the two themes disagreed about which bar was which.
+    /// The chrome bands sit the same way round in both themes: both rise
+    /// off the ground, the top bar a step further than the composer. Pinned
+    /// because the previous light theme had them *sinking*, and the one
+    /// before that had them the wrong way round entirely — this pair has
+    /// been inverted twice, so it is worth a test that reads as a sentence.
     #[test]
     fn the_top_bar_is_further_from_the_ground_than_the_composer_in_both_themes() {
-        assert!(luma(DARK.bar) > luma(DARK.bar_bottom), "dark: both rise, the top bar higher");
-        assert!(luma(LIGHT.bar) < luma(LIGHT.bar_bottom), "light: both sink, the top bar lower");
+        for (name, pal) in [("dark", DARK), ("light", LIGHT)] {
+            assert!(luma(pal.bar_bottom) > luma(pal.ground), "{name}: the composer rises off the ground");
+            assert!(luma(pal.bar) > luma(pal.bar_bottom), "{name}: the top bar rises further");
+        }
     }
 
-    /// `step_done` and `glyph_done` are one value in the dark theme and two
-    /// in the light one, on purpose — see [`Palette::step_done`]. Pinned
-    /// because the light pair looks like a copy-paste slip and the dark pair
-    /// looks like a redundant field; each guards the other from being
-    /// "tidied" away.
-    ///
-    /// The light assertion is that the two straddle the mark: the tool glyph
-    /// recedes above it, the settled step below it. Turn 14 had both above,
-    /// which agreed with neither the design system's prose nor its intent;
-    /// Turn 15's `--color-accent-light-*` ramp put them where the prose says.
+    /// A settled `●` is a neutral, not an accent step — "readable, below the
+    /// mark". Under the single-hue system it was accent-700, so the habit to
+    /// guard against is reaching for the brand colour to mean "finished".
+    /// Gold is spent on what is *open*.
     #[test]
-    fn the_two_done_glyph_roles_coincide_in_dark_and_straddle_the_mark_in_light() {
-        assert_eq!(DARK.step_done, DARK.glyph_done, "both are accent-700 in the dark theme");
-        assert_ne!(LIGHT.step_done, LIGHT.glyph_done, "they recede in opposite directions on a light ground");
-        assert!(luma(LIGHT.glyph_done) > luma(LIGHT.mark), "a finished tool call recedes by going lighter than the mark");
-        assert!(luma(LIGHT.step_done) < luma(LIGHT.mark), "a settled step recedes by going darker than the mark");
+    fn a_settled_glyph_is_a_neutral_and_never_the_mark() {
+        for (name, pal) in [("dark", DARK), ("light", LIGHT)] {
+            assert_ne!(pal.done, pal.mark, "{name}: done is not gold");
+            assert_eq!(pal.done, pal.label, "{name}: done is the label neutral");
+            assert_eq!(pal.glyph_running, pal.mark, "{name}: what is running *is* gold");
+        }
+    }
+
+    /// A diff sign is a status, so the pairs share a hue — and a code block
+    /// may carry neither. See [`Palette::syn_keyword`].
+    #[test]
+    fn diff_signs_are_statuses_and_no_status_hue_is_a_syntax_role() {
+        for (name, pal) in [("dark", DARK), ("light", LIGHT)] {
+            assert_eq!(pal.add, pal.ok, "{name}: added is the ok sage");
+            assert_eq!(pal.del, pal.err, "{name}: removed is the err rose");
+            for syn in [pal.syn_keyword, pal.syn_call, pal.syn_string] {
+                for (status, what) in [(pal.ok, "ok"), (pal.err, "err"), (pal.warn, "warn")] {
+                    assert_ne!(syn, status, "{name}: a syntax role carries the {what} hue");
+                }
+            }
+        }
+    }
+
+    /// [`Palette::scrimmed`] looks a cell up by colour, which is sound only
+    /// while the two quiet destinations are one value. If the design ever
+    /// parts them, this fails and says what has to change.
+    #[test]
+    fn the_two_quiet_scrim_roles_coincide() {
+        for (name, pal) in [("dark", DARK), ("light", LIGHT)] {
+            assert_eq!(
+                pal.scrim_quiet, pal.scrim_mark,
+                "{name}: scrimmed() maps by colour and cannot tell a tool name from a glyph; \
+                 give it the cell's role before letting these differ"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scrimmed_transcript_keeps_content_brighter_than_everything_else() {
+        for pal in [DARK, LIGHT] {
+            for content in [pal.text, pal.body, pal.code] {
+                assert_eq!(pal.scrimmed(content), pal.scrim_text);
+            }
+            for other in [pal.quiet, pal.dim, pal.mark, pal.done, pal.speaker_you, pal.add, pal.err] {
+                assert_eq!(pal.scrimmed(other), pal.scrim_mark);
+            }
+            assert_eq!(pal.scrimmed(Color::Reset), Color::Reset, "the terminal's own colour has no role to move to");
+        }
     }
 }

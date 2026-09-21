@@ -240,16 +240,39 @@ Rule for both themes: the accent is a **mark or a line, never a filled field**. 
 
 ### Glyphs
 
+> **Measured 2026-09-21 from `Aldwin Agent TUI.dc.html` — this table is not
+> upstream's.** The top-level `README.md` this file mirrors was not touched by
+> the lantern-gold repaint: it still closes the table at `▌ ● ◐ ○ ✔ ▶ █ + -`
+> and still describes five `4a`/`5a` screens that no longer exist. The frame
+> is the authority (`CLAUDE.md`, design rule 1), and `crates/review`'s token
+> generator parses *this* table into `tokens.rs`, so a verbatim copy here
+> would generate a vocabulary the design no longer draws. Every row below was
+> counted out of the frame's markup; the roles are `semantic.css`'s own
+> comments. Replace this block with upstream's table when it has one.
+>
+> What moved: the prompt is `▸` where it was `▶`; a pass is `✓` where it was
+> `✔`; and four status marks are new, each paired with one hue and drawn with
+> nothing else — `✓` ok, `✗` failed, `!` warned, `·` the info pointer. The
+> five marks the old table omitted while the copy mandated them (`· … → ⏎ ↑↓`)
+> are now simply in the frame, which retires that contradiction.
+
 | Glyph | Meaning |
 | --- | --- |
-| `▌` | accent mark: selected row, caret. Never in a top bar or a title row. |
-| `●` | tool call finished (accent-700) |
-| `◐` | tool call / process running (accent) |
-| `○` | pending (neutral-700) |
-| `✔` | hunk accepted (diff green) |
-| `▶` | composer prompt |
+| `▌` | the gold mark: the open step, the selected row, the caret. Idle on a selectable row that is not selected. Also a gauge's sub-cell remainder. Never in a top bar or a title row. |
+| `▸` | composer prompt (`--tui-mark`) |
+| `●` | settled: a finished tool call, an answered first-run step, the idle status (`--tui-done`) |
+| `◐` | running: a tool call in flight, the working status (`--tui-mark`) |
+| `○` | pending: a step still to come, a hunk not yet reached, the waiting status (`--tui-glyph-pending`) |
+| `✓` | ok: a passing test, an accepted hunk (`--tui-ok`) |
+| `✗` | failed: a failed tool call, a failing test, the notice row (`--tui-err`) |
+| `!` | warned: a call that was denied (`--tui-warn`) |
+| `·` | the info line's pointer (`--tui-info`), and the separator between two facts in one group (`--tui-dim`) |
 | `█` | gauge fill / track segment (context bar, progress) |
 | `+` `-` | diff signs, in the diff colors |
+| `−` | the removed count in a diff stat — `+11 −2` — which is a number, not a sign |
+| `…` | rows elided from a quoted block |
+| `→` | a row that opens a longer list; `config → path` |
+| `⏎` `↑` `↓` `⇧` | key legends in a footer |
 
 Content inside a frame is separated by **a full row of a different ground**, never by a rule. The turn break and the step separators in first run are one 1-row band of the composer's tone running edge to edge; panes are parted by each carrying its own tone. In a terminal that is a single `Style::bg` on a one-row rect, so nothing here needs approximating. (Nocturne's fading-rule signature, the `--rule-fade` tokens, and the flat-rule treatment that replaced them are all unused by these screens.)
 

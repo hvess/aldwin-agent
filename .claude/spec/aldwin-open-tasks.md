@@ -3,7 +3,7 @@
 Work that is known, understood and not done. Each entry says what was seen, where the evidence is, and what would close it.
 
 **Status:** active — a ledger, not a spec. Nothing here blocks anything else.
-**Scope:** everything outstanding as of 2026-09-21. Entries 1–15 are gone:
+**Scope:** everything outstanding as of 2026-09-21 (entries 24–26 added that day, with 14 half-closed and 15 closed). Entries 1–15 are gone:
 they belonged to the screenshot harness and its conformance catalogue, both
 deleted when the review loop replaced them — see
 `.claude/spec/aldwin-review.md`'s Progress entry. New numbering starts at 1.
@@ -211,6 +211,14 @@ contradicts) and the entry says so before it goes.
     same re-sync).
 
 14. **A refused read is reported as a refusal, not as a named write.**
+    *Half closed 2026-09-21 (ADR 0007 §8): the **false positive** half is
+    gone.* `ReadRefused` used to be raised on any non-zero exit under a read
+    declaration, so `grep`'s "nothing matched" (exit 1, silent) asked the
+    developer to allow a write that had never been attempted — and in the
+    observed session that is what taught the model to stop declaring reads
+    at all. It now needs evidence: a permission/read-only message on stderr,
+    or death by signal. What remains is the original entry, below.
+
     `sandbox` returns `ToolError::ReadRefused` when a read-declared call fails
     under the read-only ruleset, and the prompt says the call could not
     complete — it does not say *it tried to write `.git/config`*. The kernel
@@ -222,13 +230,18 @@ contradicts) and the entry says so before it goes.
     for an unrelated reason offers to re-run as a write, which then fails
     again with its own error in view.
 
-15. **Reads can only be enforced on Linux.** `sandbox::availability` reports
-    `Unavailable` everywhere else, and `ReadOnly::build` refuses, so a
-    read-declared call is refused rather than run unconfined — correct, and
-    a worse product on macOS and Windows. macOS has an equivalent primitive
-    worth wiring up; Windows effectively does not, and there a `read` rung
-    cannot honestly be offered at all. The fallback is currently the same in
-    both cases and should probably differ.
+15. ~~**Reads can only be enforced on Linux.**~~ **Done 2026-09-21** (ADR
+    0007 §6–§7). Two separate defects were hiding here. The smaller: macOS
+    now enforces, via Seatbelt through `sandbox-exec` — see `sandbox/macos.rs`
+    for why it confines by rewriting the command line rather than acting in
+    the forked child. The larger, and the one that was actually costing
+    sessions: `ReadOnly::build` refusing produced a **flat error**, not the
+    question ADR 0004 §4 specifies ("where a `read` grant cannot be honoured,
+    every call asks"). On macOS that meant every read-declared call failed, so
+    the model declared `read` twice, saw both fail, and spent the next 69
+    calls declaring `ls`, `grep` and `cat` as writes. `SandboxUnavailable` now
+    routes to the same prompt as `ReadRefused`. Windows still cannot offer the
+    rung and now says so in those words.
 
 16. **Landlock's network control covers TCP only.** UDP and unix sockets are
     outside it, so a read-declared call cannot open a TCP connection but could
@@ -245,6 +258,48 @@ contradicts) and the entry says so before it goes.
     row. Pinned by `a_long_permission_prompt_wraps_in_the_panel_instead_of_
     being_clipped`. If it bites in use, the fix is a scrollable command block
     rather than a taller panel, which the design's band height forbids.
+
+24. **Thinking is carried but never drawn.** ADR 0006 puts extended-thinking
+    blocks in the transcript and on the wire; the TUI renders none of it —
+    `replay` drops the records and `ThinkingDelta` only keeps the existing
+    indicator alive. That is deliberate rather than unfinished: a treatment
+    for reasoning text is a design decision, the design system specifies
+    none, and CLAUDE.md forbids inventing one locally. Closing it means a
+    frame upstream (the `--tui-scrim-*` roles are the obvious candidate,
+    since a scrimmed transcript is already ink remapped to them), a re-sync,
+    and then a `LogEntry` variant. Until then a developer can see *that* the
+    agent thought, never what it thought — which is a real gap in a harness
+    whose product is understanding.
+
+25. **The macOS sandbox backend has never run on macOS.** `sandbox/macos.rs`
+    is ordinary Rust — a generated SBPL profile and a command-line rewrite,
+    no FFI — so it compiles on every platform and its unit tests run
+    everywhere (they assert rule order, which is last-match-wins and the easy
+    thing to get backwards, and that an unquotable path is skipped rather than
+    truncating the profile). None of that exercises `sandbox-exec` itself.
+    One macOS-specific trap is already handled on reasoning alone and is the
+    first thing to confirm: Seatbelt matches resolved paths, so the `/tmp` and
+    `$TMPDIR` exemptions are emitted in canonical form as well.
+    What is owed is the Linux backend's own test shape run on a Mac: a
+    read-declared call that tries to write, asserting nothing landed. The
+    failure mode meanwhile is benign — a profile that will not load makes
+    `build` fail, which is entry 15's question, not an unconfined run.
+
+26. **`bash -c` is still a hole in argument containment.** ADR 0007 §2
+    contains path-like *arguments*, which is sound for every program whose
+    argv means what it looks like. A path inside a string — `bash -c 'cd
+    /elsewhere && …'` — is one argument that neither starts with `/` nor
+    climbs, and is invisible to the check. (A value glued to a short flag,
+    `-C/elsewhere`, *was* a second hole of the same kind; that one is closed.)
+    A smaller asterisk of the same family: an absolute argument whose first
+    component does not exist is taken for a pattern, not a path, so
+    `mkdir -p /brand-new-top-level/x` is not refused — it needs write access
+    to `/` to do anything. Granting a shell was already
+    granting arbitrary execution (ADR 0004 §1), so this widens nothing that
+    was previously closed; it is recorded because the *claim* now reads "every
+    tool honours the workspace" and this is the asterisk. The real close is
+    ADR 0004 §1's deferred work — pipelines as structured stages, each a
+    program with its own grant — which removes the reason to grant a shell.
 
 ## References
 

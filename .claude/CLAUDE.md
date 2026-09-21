@@ -142,6 +142,32 @@ a decision they cover.
   decision rather than a memory one; the fourth is that there is no
   `--resume` flag, so the zero-arg Decision stands.
 
+- **0006 — Thinking is carried, not dropped.** Reverses `aldwin-llm.md`'s
+  "thinking content is dropped at the parse site". The whole block crosses the
+  boundary with its signature, `ContentBlock` and `LogRecord` gain variants for
+  it (a persisted-format change), and blocks go back in the order they arrived —
+  which the provider requires when that turn calls a tool. Carried is
+  unconditional, *sent* is not: unsigned blocks and thinking-only turns are
+  dropped at the Anthropic wire, and a cache breakpoint never lands on one. Fixes a turn
+  that spent 14,096 tokens and rendered nothing. The TUI still does not draw
+  it; that is open-tasks entry 24, not this ADR.
+
+- **0007 — Reach is a workspace, and every tool honours it.** Amends 0004 §4
+  and §5. `run` never called `paths.rs`, so §5's "no tool is pointed outside
+  your project by us" was true of three tools and false of the one that
+  executes programs — observed as `edit` refusing a sibling directory while
+  `run` deleted two checkouts in it. One `Workspace`, a declared root list,
+  `cwd` on `run`, output kept on timeout, reads enforced on macOS via Seatbelt,
+  and §4's "every call asks" fallback finally built as written.
+
+- **0008 — Discussion-first is about intent, not grammar.** Amends the
+  non-negotiable above and `prompt::BASE`. "You act only on explicit
+  instruction" made grammatical mood the trigger; the agent answered a stated
+  constraint with the same two-option menu twice, produced nothing at all for a
+  turn phrased as "what I am thinking is…", and argued the developer out of
+  work it had just tested. Also states, because nothing did, that tool results
+  are shown to the model and not to the developer.
+
 - **0004 — A permission is a declared class, an enforced sandbox, and a lock.**
   Supersedes 0001 entirely and amends 0003's option list. There is no arbitrary
   command: a program runs only if a grant names it, and argv is executed
@@ -157,6 +183,7 @@ a decision they cover.
 - Default-deny permissions: no tool may act without an explicit grant. No "obviously safe" carve-out.
 - Edit is never allowlistable: friction on Edit is structural, not a setting.
 - No arbitrary commands: argv is executed directly, never through a shell, and a program runs only if a grant names it (ADR 0004).
-- A read-declared call is enforced, not trusted: it runs where writing is impossible.
-- Discussion-first: resting state is conversation. Action only on explicit developer signal.
+- A read-declared call is enforced, not trusted: it runs where writing is impossible. Where it cannot be enforced, **every call asks** — it is never a flat error and never run unconfined (ADR 0004 §4, built in ADR 0007 §6).
+- **Every tool honours the workspace boundary, `run` included** (ADR 0007). Reach is `roots[0]` plus whatever the project `permissions.yaml` declares; three tools out of four enforcing it is the bug that ADR records.
+- Discussion-first: resting state is conversation. Action follows the developer's **intent**, not their grammatical mood — a stated constraint is an instruction, an agreed plan is carried out whole (ADR 0008). The structural protection is the diff gate and the permission model, never the phrasing rule.
 - No Anthropic wire types past `LlmClient`: audit at the trait boundary, not after.

@@ -91,13 +91,31 @@ cmd_build() {
     if command -v rustup >/dev/null 2>&1; then
         rustup target add "$target" >/dev/null
     else
-        local pinned actual
+        # The version *number* is not the compiler. A distro rebuild reports
+        # the pinned number and is a different binary: Arch's `rust
+        # 1:1.98.1-1` says `1.98.1` against a pin of `1.98.1`, and the
+        # archive it produced differed from the published one — while this
+        # guard, comparing those two strings, stayed quiet and printed
+        # "pinned 1.98.1, building with 1.98.1" as though that settled it.
+        # A channel name carries no commit hash to compare against, so
+        # without rustup this cannot be *verified* either way; say that
+        # instead of implying agreement, and print the commit hash so it can
+        # be compared against the one a release was built with by hand.
+        local pinned actual commit
         pinned="$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain.toml)"
         actual="$(rustc --version | cut -d' ' -f2)"
+        # No `exit` in this awk, unlike the two that read files above: it
+        # would close the pipe while `rustc -vV` was still writing, and
+        # `pipefail` turns that SIGPIPE into a failed build. There is one
+        # commit-hash line, so reading to the end costs nothing.
+        commit="$(rustc -vV | awk '/^commit-hash/ { print $2 }')"
         echo "warning: rustup is not installed, so rust-toolchain.toml is not in effect." >&2
-        echo "         pinned $pinned, building with $actual." >&2
+        echo "         pinned $pinned, building with $actual (commit ${commit:-unknown})." >&2
         if [ "$pinned" != "$actual" ]; then
             echo "         these differ — this build will NOT reproduce the published hashes." >&2
+        else
+            echo "         a matching number is not a matching compiler, so this build may still" >&2
+            echo "         not reproduce them. Install rustup to build through the pin." >&2
         fi
     fi
 

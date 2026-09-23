@@ -26,13 +26,11 @@ enum Intercepted {
     Quit,
 }
 
-/// Single source of truth for `/help`'s listing — kept in sync with the
-/// `match` in `intercept` below by hand; this few entries does not earn a
-/// data-driven dispatch table.
-const HELP_TEXT: &str = "commands: /help (this list), /clear (clear conversation context), /exit (end the session), \
-     /model (pick from the provider and model lists), /model [provider/]model (set it directly), \
-     /reload-config (reload config files from disk), /resume (pick a past session to continue), \
-     /theme light|dark (switch color theme)";
+/// What `/help` says. The `/` menu lists the four commands the developer
+/// chose (`aldwin_tui::COMMANDS`); the rest are reachable by typing them
+/// and are named here so they are not secret.
+const HELP_TEXT: &str = "Commands: /resume (pick up an earlier conversation), /model (change the model, or /model [provider/]model), \
+     /quit (leave Aldwin), /clear (start a fresh conversation). Also: /theme light|dark, /reload-config, /help.";
 
 /// What `/clear` and `/resume` say while a turn runs — see
 /// `History::turn_in_flight`.
@@ -153,7 +151,9 @@ async fn intercept(
             }
             Intercepted::Forward(Command::ClearHistory)
         }
-        ("exit", None) => Intercepted::Quit,
+        // `/quit` is the menu's word; `/exit` the one the interceptor has
+        // always known. Both leave.
+        ("exit", None) | ("quit", None) => Intercepted::Quit,
         // Bare `/theme` and `/model` report where the developer stands; an
         // argument changes it.
         ("theme", arg) => {
@@ -173,7 +173,7 @@ async fn intercept(
             None => Intercepted::Handled,
         },
         _ => {
-            let _ = events.send(Event::Notice { message: format!("unknown slash command: /{rest} (try /help)") }).await;
+            let _ = events.send(Event::Notice { message: format!("There is no /{rest} command. Type / for the list.") }).await;
             Intercepted::Handled
         }
     }
@@ -191,10 +191,8 @@ async fn intercept(
 /// its acknowledgement (`Event::HistoryLoaded`) is what the TUI redraws
 /// from.
 ///
-/// What is deliberately *not* restored: permission grants. They are
-/// session-scoped and a resumed session re-asks, per ADR 0004 — "the
-/// developer already approved this" would rebuild a persistent allowlist
-/// through the back door.
+/// What is deliberately *not* restored: anything staged. A resumed session
+/// starts with an empty changeset; the review it left open is gone.
 async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events: &mpsc::Sender<Event>) -> Option<Command> {
     let Some(history) = history else {
         let _ = events.send(Event::Notice { message: "history is off for this session; there is nothing to resume".into() }).await;
@@ -286,8 +284,8 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
     }
 }
 
-/// `/model [provider/]model` — the command first run's `provider` step
-/// promises. It picks both halves of "where the model runs, and which one",
+/// `/model [provider/]model` — the one way a session gets or changes its
+/// model. It picks both halves of "where the model runs, and which one",
 /// which is why it is one command rather than two: a model id is meaningless
 /// without the provider whose catalogue it comes from, and picking a provider
 /// with no model would leave `provider.yaml` incomplete.
@@ -347,21 +345,22 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // `base_url` and `extended_thinking_budget` fall back to global (see
     // `aldwin_llm::resolve`), so building from the project file alone would
     // hand the session a client the next start would not reproduce.
+    // Nothing configured is a state the session can be in now (ADR 0009
+    // §6): the answer then lands in the global file, since there is no
+    // other default for every other directory to inherit.
     let global = config.global_provider();
     let (scope, current) = match config.project_provider() {
-        Some(project) => (aldwin_config::Scope::Project, project),
-        None => match &global {
-            Ok(global) => (aldwin_config::Scope::Global, global.clone()),
-            Err(e) => {
-                let _ = events.send(Event::Notice { message: format!("no provider is configured: {e}") }).await;
-                return;
-            }
-        },
+        Some(project) => (aldwin_config::Scope::Project, Some(project)),
+        None => (aldwin_config::Scope::Global, global.as_ref().ok().cloned()),
     };
-    let known = aldwin_llm::identify(&current);
+    let known = current.as_ref().and_then(|c| aldwin_llm::identify(c));
 
     let Some(arg) = arg.filter(|a| !a.is_empty()) else {
-        let _ = events.send(Event::Notice { message: describe(&current, known) }).await;
+        let message = match &current {
+            Some(current) => describe(current, known),
+            None => format!("No provider is configured yet. Pick one with /model provider/model (providers: {}).", aldwin_llm::provider_ids().join(", ")),
+        };
+        let _ = events.send(Event::Notice { message }).await;
         return;
     };
 
@@ -377,11 +376,11 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
             // `/model anthropic` on `anthropic/claude-opus-5` would quietly
             // drop you back to the catalogue's default.
             let model = match tail {
-                "" if known.map(|c| c.id) == Some(p.id) => Some(current.model.as_str()),
+                "" if known.map(|c| c.id) == Some(p.id) => current.as_ref().map(|c| c.model.as_str()),
                 "" => None,
                 model => Some(model),
             };
-            catalogue_provider_config(p, model, Some(&current))
+            catalogue_provider_config(p, model, current.as_ref())
         }
         None if arg.contains('/') => {
             let ids = aldwin_llm::provider_ids().join(", ");
@@ -389,7 +388,15 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
             let _ = events.send(Event::Notice { message }).await;
             return;
         }
-        None => aldwin_config::ProviderConfig { version: aldwin_config::PROVIDER_VERSION, model: arg.to_string(), ..current.clone() },
+        None => match &current {
+            Some(current) => aldwin_config::ProviderConfig { version: aldwin_config::PROVIDER_VERSION, model: arg.to_string(), ..current.clone() },
+            None => {
+                let ids = aldwin_llm::provider_ids().join(", ");
+                let message = format!("no provider is configured, so a bare model id has nowhere to go; say which provider runs it: /model provider/{arg} (providers: {ids})");
+                let _ = events.send(Event::Notice { message }).await;
+                return;
+            }
+        },
     };
 
     let now = qualified(&next, aldwin_llm::identify(&next));
@@ -401,12 +408,12 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // something else is exactly the "says the model is already selected when
     // it isn't" this command was fixed for once already. When they disagree
     // this falls through and swaps, which is what the developer asked for.
-    if next == current && now == session.model {
+    if current.as_ref() == Some(&next) && now == session.model {
         // Never a dead end. Naming the provider you are already on is the
         // most likely way to reach this branch, and it is what a developer
         // types when they are reaching for a list of models — so the notice
         // says where the list is rather than stopping at "already on".
-        let message = format!("already on {} · /model with no argument opens the list", qualified(&current, known));
+        let message = format!("already on {now} · /model with no argument opens the list");
         let _ = events.send(Event::Notice { message }).await;
         return;
     }
@@ -434,14 +441,16 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
         Ok(()) => format!("now on {now} · saved to {where_}"),
         // The swap already happened, so the session really is on the new
         // model — it is only the next start that will not be.
-        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", qualified(&current, aldwin_llm::identify(&current))),
+        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", current.as_ref().map_or_else(|| "nothing".to_string(), |c| qualified(c, aldwin_llm::identify(c)))),
     };
     let _ = events.send(Event::Notice { message }).await;
     session.model = now;
     // The bare model id, not the qualified name: it is what the session
     // started with in `StatusInfo::model_name`, and the picker matches the
     // provider half against catalogue ids separately.
-    let changed = Event::ModelChanged { provider: aldwin_llm::identify(&next).map(|p| p.id.to_string()), model: next.model.clone() };
+    let identified = aldwin_llm::identify(&next);
+    let context_window = identified.and_then(|p| p.models.iter().find(|m| m.id == next.model)).map(|m| m.context);
+    let changed = Event::ModelChanged { provider: identified.map(|p| p.id.to_string()), model: next.model.clone(), context_window };
     let _ = events.send(changed).await;
 }
 
@@ -456,8 +465,8 @@ fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
     aldwin_llm::provider(&name.trim().to_ascii_lowercase())
 }
 
-/// The `provider.yaml` that naming catalogue row `provider` writes — by first
-/// run's provider step and by `/model` alike: everything but the model comes
+/// The `provider.yaml` that naming catalogue row `provider` writes — by the
+/// provider question and by `/model` alike: everything but the model comes
 /// straight off the row, and the model is that provider's own default when
 /// none was given.
 ///
@@ -479,7 +488,7 @@ fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
 ///   different key, so there the catalogue's variable is the right one.
 ///
 /// Carrying both is also what makes an unchanged answer compare equal to
-/// what is on disk, so confirming first run's lists writes nothing at all.
+/// what is on disk, so confirming the current row writes nothing at all.
 pub(crate) fn catalogue_provider_config(
     provider: &aldwin_llm::Provider,
     model:    Option<&str>,
@@ -528,15 +537,11 @@ fn describe(current: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::
 
 async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc::Sender<Event>) {
     match config.reload_all() {
-        // No PermissionsEngine re-instantiation needed: Engine holds this
-        // same (Arc-backed) Config handle, so reload_all()'s in-place
-        // mutation is visible on Engine's very next check_tool call —
-        // nothing to swap, and nothing to have swapped stale (see the
-        // spec's Pitfall on this). PermissionsChanged just tells the TUI to
-        // refresh its status-bar summary against what's already current.
+        // No `Locks` re-instantiation needed: it holds this same
+        // (Arc-backed) Config handle, so reload_all()'s in-place mutation
+        // is visible on its very next check.
         Ok(()) => {
-            let _ = events.send(Event::Notice { message: "config reloaded".into() }).await;
-            let _ = events.send(Event::PermissionsChanged { payload: serde_json::Value::Null }).await;
+            let _ = events.send(Event::Notice { message: "Config reloaded.".into() }).await;
             // The permissions header promises an edit to the file is picked
             // up here. `roots:` was the one key for which that was not true.
             if let Some(message) = session.after_reload.as_ref().and_then(|hook| hook()) {
@@ -858,8 +863,10 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_resume() {
-        assert!(HELP_TEXT.contains("/resume"), "a command the developer cannot discover is not a command");
+    fn help_lists_the_four_menu_commands() {
+        for command in ["/resume", "/model", "/quit", "/clear"] {
+            assert!(HELP_TEXT.contains(command), "{command} missing from help");
+        }
     }
 
     #[tokio::test]
@@ -875,9 +882,9 @@ mod tests {
     async fn non_submit_commands_pass_through_unchanged() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let cmd = Command::PromptResponse { call_id: "call-1".into(), payload: serde_json::Value::Null };
+        let cmd = Command::Answer { call_id: "call-1".into(), answer: aldwin_core::Answer::Chose { index: 0 } };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
-        assert!(matches!(result, Intercepted::Forward(Command::PromptResponse { .. })));
+        assert!(matches!(result, Intercepted::Forward(Command::Answer { .. })));
     }
 
     #[tokio::test]
@@ -901,7 +908,7 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => {
-                for command in ["/help", "/clear", "/exit", "/model", "/reload-config", "/theme"] {
+                for command in ["/help", "/clear", "/quit", "/model", "/reload-config", "/theme"] {
                     assert!(message.contains(command), "help text missing {command}: {message}");
                 }
             }
@@ -928,27 +935,23 @@ mod tests {
         );
     }
 
+    /// The menu says `/quit`; the interceptor always said `/exit`. Both leave.
     #[tokio::test]
-    async fn quit_is_not_recognised_only_exit_is() {
+    async fn quit_and_exit_both_leave() {
         let (_project, _global, cfg) = config();
-        let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), None, &tx).await;
-        assert!(matches!(result, Intercepted::Handled), "/quit must not be a recognised command");
-        match rx.recv().await {
-            Some(Event::Notice { message }) => assert!(message.contains("/quit")),
-            other => panic!("expected a Notice, got {other:?}"),
-        }
+        let (tx, _rx) = mpsc::channel(8);
+        assert!(matches!(intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), None, &tx).await, Intercepted::Quit));
     }
 
     #[tokio::test]
-    async fn reload_config_success_emits_notice_and_permissions_changed() {
+    async fn reload_config_success_emits_a_notice() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit { text: "/reload-config".into() };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
-        assert!(matches!(rx.recv().await, Some(Event::PermissionsChanged { .. })));
+        assert!(rx.try_recv().is_err(), "nothing else to say");
     }
 
     #[tokio::test]
@@ -976,7 +979,6 @@ mod tests {
             Some(Event::Notice { message }) => assert!(message.contains(&bad_path.display().to_string()), "message was: {message}"),
             other => panic!("expected a Notice, got {other:?}"),
         }
-        // No PermissionsChanged on failure — nothing changed.
         assert!(rx.try_recv().is_err());
     }
 
@@ -1145,9 +1147,10 @@ mod tests {
         assert_eq!(built[0].kind, aldwin_config::ProviderKind::Anthropic);
 
         match rx.recv().await {
-            Some(Event::ModelChanged { provider, model }) => {
-                assert_eq!(model, "claude-opus-5", "the bars show the bare model id, as they did at startup");
-                assert_eq!(provider.as_deref(), Some("anthropic"), "the picker opens on the row it belongs to");
+            Some(Event::ModelChanged { provider, model, context_window }) => {
+                assert_eq!(model, "claude-opus-5", "the card shows the bare model id, as it did at startup");
+                assert_eq!(provider.as_deref(), Some("anthropic"), "the question opens on the row it belongs to");
+                assert_eq!(context_window, Some(1_000_000), "the context bar needs the window");
             }
             other => panic!("expected ModelChanged, got {other:?}"),
         }
@@ -1177,7 +1180,7 @@ mod tests {
     /// provider's catalogue default is the fallback for the case the model
     /// step could not be asked at all, not the normal path.
     #[test]
-    fn first_run_writes_the_model_that_was_chosen() {
+    fn a_provider_row_writes_the_model_that_was_chosen() {
         let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
         let chosen = catalogue_provider_config(anthropic, Some("claude-opus-5"), None);
         assert_eq!(chosen.model, "claude-opus-5");
@@ -1223,7 +1226,7 @@ mod tests {
 
     /// The picker answers with `provider/model`, so the qualified form on the
     /// provider already configured is the common path — and it must keep the
-    /// developer's own key variable exactly as first run does, not restore
+    /// developer's own key variable exactly as the provider question does, not restore
     /// the catalogue's and fail the swap on a variable that is not exported.
     #[tokio::test]
     async fn a_chosen_key_variable_survives_a_qualified_model_change_on_the_same_provider() {
@@ -1486,12 +1489,22 @@ mod tests {
         assert!(!message.contains("model: lumo/"), "a local endpoint must not be labelled with someone else's name: {message}");
     }
 
+    /// ADR 0009 §6: a session can start with nothing configured, and `/model
+    /// provider/model` is how it gets a model — written globally, since
+    /// there is no other default for every other directory to inherit.
     #[tokio::test]
-    async fn model_with_no_provider_configured_says_so_rather_than_panicking() {
+    async fn with_nothing_configured_a_qualified_model_configures_the_global_file() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
-        assert!(notice(&mut rx).await.contains("no provider is configured"));
+        assert!(notice(&mut rx).await.contains("no provider is configured"), "a bare model id has nowhere to go");
+        assert!(cfg.global_provider().is_err());
+
+        let (mut session, seen) = recording_session();
+        intercept(Command::Submit { text: "/model anthropic/claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
+        assert!(notice(&mut rx).await.contains("now on anthropic/claude-opus-5"));
+        assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
+        assert_eq!(seen.lock().unwrap().len(), 1, "the client is built on it");
     }
 
     #[tokio::test]

@@ -1,0 +1,25 @@
+:root {
+  /* the grid: 1ch wide, one row tall */
+  --row: 24px;
+  --margin-x: 3ch;                   /* field, footer, plan steps */
+  --body-x: 5ch;                     /* prose: margin + mark column */
+  --mark-col: 2ch;                   /* prompt, status glyph, selection edge */
+  --group-gap: 5ch;                  /* between footer groups */
+  --fact-col: 10ch;                  /* launch card label */
+  --detail-col: 9ch;                 /* Read / Searched verbs */
+  --command-col: 12ch;
+  --number-col: 3ch;                 /* question option numbers */
+  --tree-w: 28ch;                    /* review file tree */
+  --pane-gap: 4ch;
+  --gutter-ln: 5ch;                  /* diff line numbers */
+  --sign-col: 2ch;
+  /* window */
+  --fw: 880px;                       /* window width */
+  --body-h: 672px;                   /* conversation body min height (28 rows) */
+  --review-h: 696px;                 /* review body min height (29 rows) */
+  --win-radius: 10px;
+  --chrome-h: 38px;
+  --chrome-pad: 14px;
+  --dot-size: 12px;
+  --dot-gap: 8px;
+}

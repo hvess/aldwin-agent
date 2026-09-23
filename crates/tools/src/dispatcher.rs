@@ -1,161 +1,133 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use aldwin_core::{DispatchContext, ToolCall, ToolDefinition, ToolResult};
-use aldwin_permissions::{Class, Engine, Outcome, PromptPayload, PromptResponse};
+use aldwin_core::{DispatchContext, Event, ReviewComment, ReviewDecision, ReviewOutcome, ToolCall, ToolDefinition, ToolResult};
+use aldwin_permissions::{Locks, Outcome};
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 
 use crate::error::ToolError;
-use crate::registry::{PermissionRequest, Registry};
+use crate::registry::{Registry, ToolSource};
+use crate::staging::Staging;
 
-/// Implements core's `ToolDispatcher`. Owns the dispatch flow of ADR 0004:
-/// resolve name -> tool, ask the tool what it wants to do, weigh that against
-/// the permission engine, run it, and — if a read declaration turned out to
-/// be wrong — come back to the developer with the one question that is worth
-/// asking at that point.
+/// Implements core's `ToolDispatcher`. Owns the dispatch flow of ADR 0009:
+/// resolve name -> tool, refuse a locked program, run it — and, at the two
+/// moments a staged changeset would otherwise be observed without one, open
+/// the review.
 ///
-/// `edit_class: true` tools skip the permission path entirely: editing is
-/// outside the model, and its approval gate lives inside the tool's own
-/// future (see `gate.rs`).
+/// There is no prompt in this flow. A read declaration is held to its word
+/// by the sandbox; a wrong one comes back to the model as an error it can
+/// re-declare from, not to the developer as a question.
 pub struct Dispatcher {
-    registry:    Registry,
-    permissions: Arc<Engine>,
-    /// Serialises the prompt-and-record half of `check` across the tool
-    /// calls of a step, which `aldwin-core`'s `dispatch_tools` drives
-    /// concurrently (`future::join_all`) — see `check`'s own doc comment for
-    /// the bug that makes this necessary. Held only while a prompt is
-    /// genuinely outstanding, so calls the engine can already answer never
-    /// touch it.
-    prompt_gate: tokio::sync::Mutex<()>,
-}
-
-/// Whether a call may proceed, and how.
-enum Verdict {
-    Run,
-    Refused(ToolError),
+    registry: Registry,
+    locks:    Arc<Locks>,
+    staging:  Arc<Staging>,
+    /// Serialises the review across the concurrent calls of a step and the
+    /// turn's end, so one changeset is never reviewed twice at once.
+    review:   tokio::sync::Mutex<()>,
+    /// Where a read cannot be enforced, the call runs unconfined and the
+    /// developer is told so — once. Said at the first such call rather than
+    /// at startup, so a session that never runs anything never hears it.
+    said_unconfined: AtomicBool,
+    /// Where the one-time notice goes. `None` in tests that build a
+    /// dispatcher without a session.
+    notices: Option<mpsc::Sender<Event>>,
 }
 
 impl Dispatcher {
-    pub fn new(registry: Registry, permissions: Arc<Engine>) -> Self {
-        Self { registry, permissions, prompt_gate: tokio::sync::Mutex::new(()) }
+    pub fn new(registry: Registry, locks: Arc<Locks>, staging: Arc<Staging>) -> Self {
+        Self { registry, locks, staging, review: tokio::sync::Mutex::new(()), said_unconfined: AtomicBool::new(false), notices: None }
     }
 
-    /// Weighs one call against the engine, prompting if it has to.
-    ///
-    /// The check happens twice on the prompt path, either side of
-    /// `prompt_gate`, and that is the whole point: a step's tool calls are
-    /// dispatched concurrently, so with one shared check every call in the
-    /// step reached the engine before the developer had answered anything,
-    /// and each one independently got "ask" back. Answering the first prompt
-    /// with a grant that plainly covered the rest changed nothing for them,
-    /// because their outcome was already decided — the developer was asked
-    /// again for every queued call the answer had just covered. That is the
-    /// reported "permissions don't appear to count properly when commands are
-    /// queued".
-    ///
-    /// Taking the gate before prompting makes the queued calls wait, and
-    /// re-checking after acquiring it is what lets the grant the developer
-    /// just made actually apply.
-    async fn check(&self, request: &PermissionRequest, call_id: &str, ctx: &DispatchContext) -> Verdict {
-        match self.permissions.check(&request.program, request.class, &request.argv) {
-            Outcome::Allow => return Verdict::Run,
-            Outcome::Locked { scope, .. } => {
-                return Verdict::Refused(ToolError::Locked {
-                    program:        request.program.clone(),
-                    where_it_lives: scope.where_it_lives(),
-                })
-            }
-            Outcome::Ask(_) => {}
-        }
-
-        let _gate = self.prompt_gate.lock().await;
-        let payload = match self.permissions.check(&request.program, request.class, &request.argv) {
-            Outcome::Allow => return Verdict::Run,
-            Outcome::Locked { scope, .. } => {
-                return Verdict::Refused(ToolError::Locked {
-                    program:        request.program.clone(),
-                    where_it_lives: scope.where_it_lives(),
-                })
-            }
-            Outcome::Ask(payload) => payload,
-        };
-
-        self.ask(payload, request.program.clone(), request.class, call_id, ctx).await
+    /// Where the dispatcher's own notices — today only the unconfined-run
+    /// warning — reach the developer.
+    pub fn with_notices(mut self, notices: mpsc::Sender<Event>) -> Self {
+        self.notices = Some(notices);
+        self
     }
 
-    /// Draws one prompt and records the answer. `class` is what the answer
-    /// gets written against — the class of the call that raised it, which is
-    /// what the eight rows qualify themselves by.
-    async fn ask(
-        &self,
-        payload: PromptPayload,
-        program: String,
-        class:   Class,
-        call_id: &str,
-        ctx:     &DispatchContext,
-    ) -> Verdict {
-        let value = serde_json::to_value(&payload).expect("PromptPayload always serialises");
-        let response_value = ctx.request_prompt(call_id.to_string(), value).await;
+    /// Whether any of a step's calls would see the disk. `run` executes a
+    /// program over the real tree; an MCP tool runs in its own process. The
+    /// other built-ins read through the staging overlay, or nothing at all.
+    fn observes_disk(&self, calls: &[ToolCall]) -> bool {
+        calls.iter().any(|call| {
+            call.name == "run"
+                || self.registry.get(&call.name).is_some_and(|t| matches!(t.descriptor().source, ToolSource::Mcp { .. }))
+        })
+    }
 
-        let choice = match serde_json::from_value::<PromptResponse>(response_value) {
-            Ok(PromptResponse::Tool { choice } | PromptResponse::WriteAttempt { choice }) => choice,
-            // The tool path never raises an Edit or ContextFile prompt, so a
-            // well-behaved caller cannot produce this; a malformed answer
-            // still must not panic.
-            Ok(PromptResponse::ContextFile { .. }) | Err(_) => {
-                return Verdict::Refused(ToolError::MalformedPromptResponse)
-            }
-        };
-
-        if let Err(e) = self.permissions.record(&program, class, choice) {
-            return Verdict::Refused(e.into());
+    /// Opens the review over what is staged and acts on the decision.
+    async fn review(&self, ctx: &DispatchContext) -> Reviewed {
+        let _one_at_a_time = self.review.lock().await;
+        if self.staging.is_empty() {
+            return Reviewed::Proceed;
         }
-        if choice.is_allow() {
-            Verdict::Run
-        } else {
-            Verdict::Refused(ToolError::Denied)
+        let changeset = self.staging.changeset();
+        match ctx.review(changeset).await {
+            Some(ReviewDecision::Approve) => {
+                let written = self.staging.write_all().await;
+                for (path, why) in &written.skipped {
+                    let _ = ctx.review_closed(ReviewOutcome::Discarded { files: vec![path.clone()] }).await;
+                    self.say(format!("{path} was not written: {why}")).await;
+                }
+                ctx.review_closed(ReviewOutcome::Saved { files: written.files, comments_resolved: written.comments_resolved }).await;
+                Reviewed::Proceed
+            }
+            Some(ReviewDecision::Comment { comments }) => {
+                self.staging.note_comments(comments.len());
+                ctx.review_closed(ReviewOutcome::Commented { comments: comments.len() }).await;
+                Reviewed::Reason(render_comments(&comments))
+            }
+            // Said in the developer's voice: at the end of a turn this text
+            // *is* the next turn's message, and the TUI echoes it as theirs
+            // (`Event::FollowUp`) — the discard is something they did.
+            Some(ReviewDecision::Discard) => {
+                let files = self.staging.discard();
+                ctx.review_closed(ReviewOutcome::Discarded { files }).await;
+                Reviewed::Reason("I discarded the staged changes; nothing was written. Do not stage the same edits again unless I ask.".into())
+            }
+            None => Reviewed::Gone,
         }
     }
 
-    /// The second half of ADR 0004 §4. A call declared a read has come back
-    /// refused, which means the sandbox stopped it — or could not be built —
-    /// and **nothing landed**. The developer is asked whether to allow it as
-    /// a write; a yes re-runs it unconfined, which is safe precisely because
-    /// the first attempt could not have half-finished.
-    ///
-    /// The engine is consulted first, under the prompt gate, because a deny
-    /// is a lock (§7): a prompt drawn over a locked program's writes would
-    /// offer the allow the lock exists to withhold. `standing_grant_answers`
-    /// says whether an existing write grant settles it without asking — see
-    /// the two call sites for why they differ.
-    ///
-    /// `None` means run it as a write.
-    async fn offer_as_write(
-        &self,
-        program: &str,
-        args:    &[String],
-        call:    &ToolCall,
-        ctx:     &DispatchContext,
-        standing_grant_answers: bool,
-    ) -> Option<ToolResult> {
-        let _gate = self.prompt_gate.lock().await;
-        match self.permissions.check(program, Class::Write, args) {
-            Outcome::Locked { scope, .. } => {
-                let locked = ToolError::Locked { program: program.to_string(), where_it_lives: scope.where_it_lives() };
-                return Some(error_result(&call.id, locked));
-            }
-            Outcome::Allow if standing_grant_answers => return None,
-            Outcome::Allow | Outcome::Ask(_) => {}
-        }
-
-        let payload = PromptPayload::WriteAttempt {
-            program: program.to_string(),
-            argv:    args.to_vec(),
-        };
-        match self.ask(payload, program.to_string(), Class::Write, &call.id, ctx).await {
-            Verdict::Run => None,
-            Verdict::Refused(e) => Some(error_result(&call.id, e)),
+    async fn say(&self, message: String) {
+        if let Some(notices) = &self.notices {
+            let _ = notices.send(Event::Notice { message }).await;
         }
     }
+}
+
+/// How a review ended, from the model's side.
+enum Reviewed {
+    /// Written, or nothing was staged: the model may go on.
+    Proceed,
+    /// A message for the model — the developer's comments, or that they
+    /// discarded the changes — meaning the work is not done.
+    Reason(String),
+    /// Nobody answered: the session is ending under the review. Nothing was
+    /// written and the staging area keeps what it had. A *cancel* never
+    /// lands here — the agent drops the review future instead
+    /// (`Agent::await_or_cancel`) — so this is shutdown, and the two hooks
+    /// treat it differently: a step's calls must not run, and a turn must
+    /// not start a next one.
+    Gone,
+}
+
+/// The developer's comments as one message to the model: where, then what.
+fn render_comments(comments: &[ReviewComment]) -> String {
+    comments
+        .iter()
+        .map(|c| {
+            // A comment with no path is what the developer typed into the
+            // review's field — about the change as a whole, not a line.
+            if c.path.is_empty() {
+                return c.text.clone();
+            }
+            let lines = if c.lines.0 == c.lines.1 { format!("line {}", c.lines.0) } else { format!("lines {}–{}", c.lines.0, c.lines.1) };
+            format!("On {}, {lines}:\n{}", c.path, c.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[async_trait]
@@ -164,51 +136,66 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         let Some(tool) = self.registry.get(&call.name) else {
             return error_result(&call.id, ToolError::UnknownTool { name: call.name });
         };
-        if tool.descriptor().edit_class {
-            return finish(&call.id, tool.call(&call.id, call.input, ctx).await);
-        }
 
-        let request = match tool.permission(&call.input) {
-            Ok(request) => request,
+        match tool.permission(&call.input) {
+            Ok(None) => {}
+            Ok(Some(request)) => {
+                if let Outcome::Locked { scope, .. } = self.locks.check(&request.program, request.class) {
+                    return error_result(&call.id, ToolError::Locked { program: request.program, where_it_lives: scope.where_it_lives() });
+                }
+            }
             Err(e) => return error_result(&call.id, e),
-        };
-        if let Verdict::Refused(e) = self.check(&request, &call.id, ctx).await {
-            return error_result(&call.id, e);
         }
 
-        let (program, args, standing_grant_answers) = match tool.call(&call.id, call.input.clone(), ctx).await {
-            // A read declaration that did not survive contact with the
-            // sandbox. Rare, and worth a question every time — even over a
-            // standing write grant, since the call said it would not write.
-            Err(ToolError::ReadRefused { program, args }) => (program, args, false),
-            // There is no enforcement primitive on this platform, so the read
-            // declaration cannot be honoured — which ADR 0004 §4 answers with
-            // "every call asks", not with an error. As a flat error it taught
-            // the model, in two calls, to declare `ls` and `grep` as writes
-            // (ADR 0007 §6). Nothing ran: the sandbox refused to be built.
-            //
-            // This happens on *every* read-declared call where there is no
-            // sandbox, so once the developer has allowed this program's
-            // writes at any tier the answer stands. Asking unconditionally
-            // made "always allow" a no-op.
-            Err(ToolError::SandboxUnavailable { program, args, .. }) => (program, args, true),
-            other => return finish(&call.id, other),
-        };
-
-        if let Some(refusal) = self.offer_as_write(&program, &args, &call, ctx, standing_grant_answers).await {
-            return refusal;
+        match tool.call(&call.id, call.input.clone(), ctx).await {
+            // There is no enforcement primitive on this platform, so the
+            // read declaration cannot be honoured. ADR 0009 §3: the call runs
+            // unconfined and the developer is told once. Nothing has run yet
+            // — the sandbox refused to be built — so this is a first run,
+            // not a retry.
+            Err(ToolError::SandboxUnavailable { source, .. }) => {
+                if !self.said_unconfined.swap(true, Ordering::SeqCst) {
+                    self.say(format!("Runs are not sandboxed on this system ({source}); a call declared a read runs with the tree writable."))
+                        .await;
+                }
+                finish(&call.id, tool.call(&call.id, as_write(call.input), ctx).await)
+            }
+            other => finish(&call.id, other),
         }
-        finish(&call.id, tool.call(&call.id, as_write(call.input), ctx).await)
     }
 
     fn definitions(&self) -> Vec<ToolDefinition> {
         self.registry.definitions()
     }
+
+    /// A staged changeset is reviewed before any call that would see the
+    /// disk without it — a test run over unapproved edits would otherwise
+    /// need the edits written first, which is the one thing that must not
+    /// happen without the review.
+    async fn before_step(&self, calls: &[ToolCall], ctx: &DispatchContext) -> Option<String> {
+        if self.staging.is_empty() || !self.observes_disk(calls) {
+            return None;
+        }
+        match self.review(ctx).await {
+            Reviewed::Proceed => None,
+            Reviewed::Reason(text) => Some(text),
+            Reviewed::Gone => Some("the review was not answered; nothing was written and nothing ran".into()),
+        }
+    }
+
+    /// The model has stopped. Whatever is staged is reviewed now, and a
+    /// comment starts the next turn.
+    async fn turn_ending(&self, ctx: &DispatchContext) -> Option<String> {
+        match self.review(ctx).await {
+            Reviewed::Proceed | Reviewed::Gone => None,
+            Reviewed::Reason(text) => Some(text),
+        }
+    }
 }
 
-/// Re-declares a call as a write, for the re-run after the developer allowed
-/// it. The tool re-parses its own input, so the class has to change in the
-/// input rather than beside it.
+/// Re-declares a call as a write, for the unconfined run on a platform with
+/// no sandbox. The tool re-parses its own input, so the class has to change
+/// in the input rather than beside it.
 fn as_write(mut input: serde_json::Value) -> serde_json::Value {
     if let Some(map) = input.as_object_mut() {
         map.insert("class".to_string(), serde_json::Value::String("write".into()));
@@ -230,27 +217,19 @@ fn error_result(call_id: &str, err: ToolError) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::{Tool, ToolDescriptor, ToolSource};
+    use crate::registry::{PermissionRequest, Tool, ToolDescriptor};
     use crate::test_support::dispatch_context;
-    use aldwin_config::Config;
-    use aldwin_core::{Event, ToolDispatcher as _};
-    use aldwin_permissions::{Choice, GrantEntry, GrantList};
-    use async_trait::async_trait;
+    use aldwin_config::{Config, GrantEntry, GrantList, Scope};
+    use aldwin_core::{ChangedFile, Changeset, PendingReply, ToolDispatcher as _};
+    use aldwin_permissions::Class;
     use serde_json::{json, Value};
 
     /// A stand-in for `run`: it takes a program and a declared class the same
-    /// way, and can be told to fail its first read-declared attempt, which is
-    /// what the sandbox does to a call that tried to write.
+    /// way, and can be told its sandbox is missing.
     struct FakeRun {
-        descriptor:   ToolDescriptor,
-        /// Number of `call`s that have happened, so a test can see the re-run.
-        calls:        std::sync::atomic::AtomicUsize,
-        /// When set, a `read`-declared call comes back as `ReadRefused`.
-        refuses_read: bool,
-        /// When set, a `read`-declared call comes back as
-        /// `SandboxUnavailable` — what `run` returns on a platform with no
-        /// enforcement primitive.
-        no_sandbox:   bool,
+        descriptor: ToolDescriptor,
+        calls:      std::sync::atomic::AtomicUsize,
+        no_sandbox: bool,
     }
 
     #[async_trait]
@@ -258,412 +237,273 @@ mod tests {
         fn descriptor(&self) -> &ToolDescriptor {
             &self.descriptor
         }
-
-        fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
-            Ok(PermissionRequest {
+        fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
+            Ok(Some(PermissionRequest {
                 program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
                 class:   match input.get("class").and_then(Value::as_str) {
                     Some("write") => Class::Write,
                     _ => Class::Read,
                 },
                 argv: Vec::new(),
-            })
+            }))
         }
-
-        async fn call(&self, _id: &str, input: Value, _gate: &dyn crate::gate::ApprovalGate) -> Result<String, ToolError> {
+        async fn call(&self, _id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let declared = input.get("class").and_then(Value::as_str).unwrap_or("read");
             if self.no_sandbox && declared == "read" {
                 return Err(ToolError::SandboxUnavailable {
-                    program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    program: "x".into(),
                     args:    Vec::new(),
                     source:  std::io::Error::new(std::io::ErrorKind::Unsupported, "no enforcement here"),
-                });
-            }
-            if self.refuses_read && declared == "read" {
-                return Err(ToolError::ReadRefused {
-                    program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
-                    args:    Vec::new(),
                 });
             }
             Ok(format!("ran as {declared}"))
         }
     }
 
-    fn fake_run(name: &str, edit_class: bool, refuses_read: bool) -> Arc<FakeRun> {
+    fn fake_run(name: &str, no_sandbox: bool) -> Arc<FakeRun> {
         Arc::new(FakeRun {
-            descriptor:   ToolDescriptor {
-                name:         name.into(),
-                description:  "fake".into(),
-                input_schema: json!({}),
-                edit_class,
-                source:       ToolSource::Builtin,
-            },
-            calls:        std::sync::atomic::AtomicUsize::new(0),
-            refuses_read,
-            no_sandbox:   false,
+            descriptor: ToolDescriptor { name: name.into(), description: "fake".into(), input_schema: json!({}), source: ToolSource::Builtin },
+            calls:      std::sync::atomic::AtomicUsize::new(0),
+            no_sandbox,
         })
     }
 
-    fn fake_run_without_a_sandbox(name: &str) -> Arc<FakeRun> {
-        Arc::new(FakeRun {
-            descriptor:   ToolDescriptor {
-                name:         name.into(),
-                description:  "fake".into(),
-                input_schema: json!({}),
-                edit_class:   false,
-                source:       ToolSource::Builtin,
-            },
-            calls:        std::sync::atomic::AtomicUsize::new(0),
-            refuses_read: false,
-            no_sandbox:   true,
-        })
-    }
-
-    fn engine() -> (tempfile::TempDir, Arc<Engine>) {
+    fn locks() -> (tempfile::TempDir, Arc<Locks>) {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::open_at(dir.path(), dir.path().join("global")).unwrap();
-        (dir, Arc::new(Engine::new(config)))
+        (dir, Arc::new(Locks::new(config)))
     }
 
     fn call_of(program: &str, class: &str) -> ToolCall {
         ToolCall { id: "c1".into(), name: "run".into(), input: json!({"program": program, "class": class}) }
     }
 
-    /// Answers the next prompt with `choice`, asserting on the payload.
-    async fn answer(
-        events:  &mut tokio::sync::mpsc::Receiver<Event>,
-        pending: &aldwin_core::PendingMap,
-        choice:  Choice,
-    ) -> PromptPayload {
-        let Some(Event::PromptRequested { call_id, payload }) = events.recv().await else {
-            panic!("expected a prompt");
-        };
-        let payload: PromptPayload = serde_json::from_value(payload).unwrap();
-        let response = match payload {
-            PromptPayload::WriteAttempt { .. } => PromptResponse::WriteAttempt { choice },
-            _ => PromptResponse::Tool { choice },
-        };
-        let Some(aldwin_core::PendingReply::Prompt(tx)) = pending.lock().unwrap().remove(&call_id) else {
-            panic!("expected a pending Prompt entry for {call_id}");
-        };
-        tx.send(serde_json::to_value(response).unwrap()).unwrap();
-        payload
+    fn dispatcher(registry: Registry, locks: Arc<Locks>) -> (Dispatcher, Arc<Staging>) {
+        let staging = Arc::new(Staging::new());
+        (Dispatcher::new(registry, locks, staging.clone()), staging)
     }
 
     #[tokio::test]
     async fn unknown_tool_returns_a_structured_error() {
-        let (_d, permissions) = engine();
-        let dispatcher = Dispatcher::new(Registry::new(), permissions);
+        let (_d, locks) = locks();
+        let (dispatcher, _) = dispatcher(Registry::new(), locks);
         let (ctx, _e, _p) = dispatch_context();
-
-        let result = dispatcher
-            .dispatch(ToolCall { id: "c1".into(), name: "nope".into(), input: json!({}) }, &ctx)
-            .await;
+        let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "nope".into(), input: json!({}) }, &ctx).await;
         assert!(result.is_error);
         assert!(result.content.contains("no such tool"));
     }
 
+    /// ADR 0009 §1: nothing is granted and nothing asks. A fresh project
+    /// runs what it is asked to.
     #[tokio::test]
-    async fn a_granted_program_runs_without_prompting() {
+    async fn a_call_runs_without_a_grant_and_without_a_prompt() {
         let mut registry = Registry::new();
-        registry.register(fake_run("run", false, false)).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("git", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, _e, _p) = dispatch_context();
-
-        let result = dispatcher.dispatch(call_of("git", "read"), &ctx).await;
-        assert!(!result.is_error, "{}", result.content);
-    }
-
-    /// A read grant is not a write grant, even for the same program — the
-    /// distinction the old model could not express at all.
-    #[tokio::test]
-    async fn a_read_grant_does_not_cover_the_same_programs_writes() {
-        let mut registry = Registry::new();
-        registry.register(fake_run("run", false, false)).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("git", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("git", "write"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
-        let (result, payload) = tokio::join!(call, resolve);
-
-        assert!(matches!(payload, PromptPayload::Tool { declared: Class::Write, .. }), "{payload:?}");
-        assert!(result.is_error);
-    }
-
-    /// A lock is refused outright, with no prompt at all — because there is
-    /// no answer at a prompt that could lift it. The message names the file.
-    #[tokio::test]
-    async fn a_locked_program_is_refused_without_drawing_a_prompt() {
-        let mut registry = Registry::new();
-        registry.register(fake_run("run", false, false)).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("curl", Class::Write, Choice::NeverAllow).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
+        registry.register(fake_run("run", false)).unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, _) = dispatcher(registry, locks);
         let (ctx, mut events, _p) = dispatch_context();
 
-        let result = dispatcher.dispatch(call_of("curl", "write"), &ctx).await;
-        assert!(result.is_error);
-        assert!(result.content.contains("permissions.yaml"), "must say where the rule lives: {}", result.content);
-        assert!(events.try_recv().is_err(), "a lock must not offer a way to say yes");
-    }
-
-    #[tokio::test]
-    async fn an_answer_at_the_prompt_is_what_persists() {
-        let mut registry = Registry::new();
-        registry.register(fake_run("run", false, false)).unwrap();
-        let (_d, permissions) = engine();
-        let dispatcher = Dispatcher::new(registry, permissions.clone());
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("cargo", "write"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::AllowProject);
-        let (result, _) = tokio::join!(call, resolve);
-
-        assert!(!result.is_error, "{}", result.content);
-        let grants = permissions.effective_view().grants;
-        assert!(
-            grants.iter().any(|g| g.list == GrantList::Allow
-                && g.entry == GrantEntry::classed("cargo", Class::Write)),
-            "{grants:?}"
-        );
-    }
-
-    /// ADR 0004 §4, end to end through the dispatcher: the read declaration
-    /// is refused by the sandbox, the developer is asked, and a yes re-runs
-    /// the same call as a write.
-    #[tokio::test]
-    async fn a_refused_read_becomes_a_question_and_then_a_re_run() {
-        let tool = fake_run("run", false, true);
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("rm", "read"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::AllowOnce);
-        let (result, payload) = tokio::join!(call, resolve);
-
-        assert!(
-            matches!(payload, PromptPayload::WriteAttempt { ref program, .. } if program == "rm"),
-            "the second prompt must be the write question: {payload:?}"
-        );
-        assert!(!result.is_error, "{}", result.content);
-        assert_eq!(result.content, "ran as write", "the re-run must be declared honestly");
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then re-run");
-    }
-
-    /// ADR 0004 §4, as built by ADR 0007 §6: where a read cannot be
-    /// enforced, **every call asks**. This was a flat error. On macOS that
-    /// failed every read-declared call, and in the session that surfaced it
-    /// the model declared `read` twice, saw both fail, and declared the next
-    /// 69 calls `write` — `ls` and `grep` among them.
-    #[tokio::test]
-    async fn a_read_that_cannot_be_enforced_becomes_a_question_not_an_error() {
-        let tool = fake_run_without_a_sandbox("run");
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("ls", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("ls", "read"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::AllowOnce);
-        let (result, payload) = tokio::join!(call, resolve);
-
-        assert!(
-            matches!(payload, PromptPayload::WriteAttempt { ref program, .. } if program == "ls"),
-            "an unenforceable read must raise the write question: {payload:?}"
-        );
-        assert!(!result.is_error, "the model must not be handed an error for this: {}", result.content);
-        assert_eq!(result.content, "ran as write");
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then re-run");
-    }
-
-    /// Audit: the question was asked unconditionally, so on a platform with
-    /// no sandbox "allow ls writes for this session" changed nothing and the
-    /// very next `ls` asked again.
-    #[tokio::test]
-    async fn an_unenforceable_read_is_not_asked_about_once_writes_are_allowed() {
-        let tool = fake_run_without_a_sandbox("run");
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("ls", Class::Write, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, _pending) = dispatch_context();
-
-        let result = dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
-
+        let result = dispatcher.dispatch(call_of("git", "write"), &ctx).await;
         assert!(!result.is_error, "{}", result.content);
         assert_eq!(result.content, "ran as write");
-        assert!(
-            !matches!(events.try_recv(), Ok(Event::PromptRequested { .. })),
-            "a standing grant must not be asked about again"
-        );
+        assert!(events.try_recv().is_err(), "nothing was asked");
     }
 
+    /// A lock is refused outright, and the message names the file.
     #[tokio::test]
-    async fn an_unenforceable_read_the_developer_declines_does_not_run_unconfined() {
-        let tool = fake_run_without_a_sandbox("run");
+    async fn a_locked_program_is_refused_and_the_refusal_names_the_file() {
+        let mut registry = Registry::new();
+        registry.register(fake_run("run", false)).unwrap();
+        let (_d, locks) = locks();
+        locks.config_for_tests().add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
+        let (dispatcher, _) = dispatcher(registry, locks);
+        let (ctx, mut events, _p) = dispatch_context();
+
+        let result = dispatcher.dispatch(call_of("curl", "read"), &ctx).await;
+        assert!(result.is_error);
+        assert!(result.content.contains("permissions.yaml"), "{}", result.content);
+        assert!(events.try_recv().is_err(), "a lock offers no way to say yes");
+    }
+
+    /// ADR 0009 §3: where a read cannot be enforced the call runs unconfined
+    /// and the developer hears about it once, not every time.
+    #[tokio::test]
+    async fn an_unenforceable_read_runs_unconfined_and_says_so_once() {
+        let tool = fake_run("run", true);
         let mut registry = Registry::new();
         registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("ls", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("ls", "read"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
-        let (result, _) = tokio::join!(call, resolve);
-
-        assert!(result.is_error);
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a no means it never runs unconfined");
-    }
-
-    /// A deny is a lock (ADR 0004 §7). The write question used to be drawn
-    /// without consulting the engine, so a refused read of a program whose
-    /// writes were denied offered — and on a yes, ran — the write the lock
-    /// withheld.
-    #[tokio::test]
-    async fn a_refused_read_of_a_program_whose_writes_are_locked_is_not_offered_as_a_write() {
-        let tool = fake_run("run", false, true);
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
-        permissions.record("rm", Class::Write, Choice::DenySession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, _pending) = dispatch_context();
-
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), dispatcher.dispatch(call_of("rm", "read"), &ctx))
-            .await
-            .expect("a lock is refused outright, not left waiting on a prompt");
-
-        assert!(result.is_error);
-        assert!(result.content.contains("denied by a rule"), "{}", result.content);
-        assert!(events.try_recv().is_err(), "a lock must not offer a way to say yes");
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "no re-run past a lock");
-    }
-
-    /// The other half of `an_unenforceable_read_is_not_asked_about_once_writes_are_allowed`,
-    /// and the reason `offer_as_write` takes a flag rather than one rule for
-    /// both callers. A *refused* read is rare and is evidence the call's own
-    /// declaration was wrong, so it is worth a question every time — a
-    /// standing write grant must not answer it silently.
-    #[tokio::test]
-    async fn a_refused_read_is_still_asked_about_over_a_standing_write_grant() {
-        let tool = fake_run("run", false, true);
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
-        permissions.record("rm", Class::Write, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("rm", "read"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
-        let (result, payload) = tokio::join!(call, resolve);
-
-        assert!(
-            matches!(payload, PromptPayload::WriteAttempt { ref program, .. } if program == "rm"),
-            "the write question must still be drawn: {payload:?}"
-        );
-        assert!(result.is_error);
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a no still means no re-run");
-    }
-
-    #[tokio::test]
-    async fn a_refused_read_that_the_developer_declines_does_not_re_run() {
-        let tool = fake_run("run", false, true);
-        let mut registry = Registry::new();
-        registry.register(tool.clone()).unwrap();
-        let (_d, permissions) = engine();
-        permissions.record("rm", Class::Read, Choice::AllowSession).unwrap();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let call = dispatcher.dispatch(call_of("rm", "read"), &ctx);
-        let resolve = answer(&mut events, &pending, Choice::DenyOnce);
-        let (result, _) = tokio::join!(call, resolve);
-
-        assert!(result.is_error);
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "no re-run without a yes");
-    }
-
-    /// The reported bug: "permissions don't appear to count properly when
-    /// commands are queued." Both calls of a step are dispatched
-    /// concurrently, so both used to reach the engine before the developer
-    /// had answered anything and both were told to ask — the grant made in
-    /// answer to the first could not affect the second, whose outcome was
-    /// already fixed. Now the second waits on `prompt_gate` and re-checks.
-    #[tokio::test]
-    async fn a_grant_answered_for_one_queued_call_covers_the_others() {
-        let mut registry = Registry::new();
-        registry.register(fake_run("run", false, false)).unwrap();
-        let (_d, permissions) = engine();
-        let dispatcher = Dispatcher::new(registry, permissions);
-        let (ctx, mut events, pending) = dispatch_context();
-
-        let first = dispatcher.dispatch(
-            ToolCall { id: "c1".into(), name: "run".into(), input: json!({"program": "git", "class": "read"}) },
-            &ctx,
-        );
-        let second = dispatcher.dispatch(
-            ToolCall { id: "c2".into(), name: "run".into(), input: json!({"program": "git", "class": "read"}) },
-            &ctx,
-        );
-        let resolve = answer(&mut events, &pending, Choice::AllowSession);
-
-        // Bounded, because the pre-fix failure mode is not a wrong answer but
-        // a hang: the second call raised its own prompt, and with only one
-        // answer sent, `join!` would wait on it forever.
-        let joined = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::join!(first, second, resolve)
-        });
-        let (first, second, _) = joined
-            .await
-            .expect("the queued call must resolve from the grant already made, not wait on a second prompt");
-
-        assert!(!first.is_error, "{}", first.content);
-        assert!(!second.is_error, "{}", second.content);
-        assert!(events.try_recv().is_err(), "the queued call must not raise a second prompt");
-    }
-
-    #[tokio::test]
-    async fn an_edit_class_tool_never_reaches_the_permission_path() {
-        let mut registry = Registry::new();
-        registry.register(fake_run("edit", true, false)).unwrap();
-        let (_d, permissions) = engine();
-
-        let dispatcher = Dispatcher::new(registry, permissions);
+        let (_d, locks) = locks();
+        let (tx, mut notices) = mpsc::channel(8);
+        let (dispatcher, _) = dispatcher(registry, locks);
+        let dispatcher = dispatcher.with_notices(tx);
         let (ctx, _e, _p) = dispatch_context();
 
-        // Nothing is granted and nothing will answer a prompt. If the
-        // dispatcher ran the permission path for this tool, this would hang
-        // awaiting an answer that never comes.
-        let result = dispatcher
-            .dispatch(ToolCall { id: "c1".into(), name: "edit".into(), input: json!({"program": "edit", "class": "read"}) }, &ctx)
-            .await;
+        let first = dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
+        assert_eq!(first.content, "ran as write");
+        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then the unconfined run");
+        assert!(matches!(notices.try_recv(), Ok(Event::Notice { message }) if message.contains("not sandboxed")));
+
+        dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
+        assert!(notices.try_recv().is_err(), "said once");
+    }
+
+    /// A tool outside the lock never consults it — nothing to check, and a
+    /// deny on its name would be meaningless.
+    #[tokio::test]
+    async fn a_tool_outside_the_lock_runs_even_when_its_name_is_denied() {
+        struct Outside(ToolDescriptor);
+        #[async_trait]
+        impl Tool for Outside {
+            fn descriptor(&self) -> &ToolDescriptor { &self.0 }
+            fn permission(&self, _: &Value) -> Result<Option<PermissionRequest>, ToolError> { Ok(None) }
+            async fn call(&self, _: &str, _: Value, _: &DispatchContext) -> Result<String, ToolError> { Ok("ran".into()) }
+        }
+        let mut registry = Registry::new();
+        registry.register(Arc::new(Outside(ToolDescriptor { name: "plan".into(), description: String::new(), input_schema: json!({}), source: ToolSource::Builtin }))).unwrap();
+        let (_d, locks) = locks();
+        locks.config_for_tests().add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("plan")).unwrap();
+        let (dispatcher, _) = dispatcher(registry, locks);
+        let (ctx, _e, _p) = dispatch_context();
+        let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "plan".into(), input: json!({}) }, &ctx).await;
         assert!(!result.is_error);
+    }
+
+    // ── The review ────────────────────────────────────────────────────────
+
+    async fn stage(staging: &Staging, dir: &tempfile::TempDir, name: &str, after: &str) {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "before\n").unwrap();
+        staging.edit(path, name, |_| Ok(after.into())).await.unwrap();
+    }
+
+    /// Answers the next review with `decision`, returning the changeset shown.
+    async fn decide(events: &mut mpsc::Receiver<Event>, pending: &aldwin_core::PendingMap, decision: ReviewDecision) -> Changeset {
+        let Some(Event::ReviewRequested { review_id, changeset }) = events.recv().await else { panic!("expected a review") };
+        let Some(PendingReply::Review(tx)) = pending.lock().unwrap().remove(&review_id) else { panic!("no pending review") };
+        tx.send(decision).unwrap();
+        changeset
+    }
+
+    #[tokio::test]
+    async fn nothing_staged_means_no_review_at_either_moment() {
+        let (_d, locks) = locks();
+        let (dispatcher, _) = dispatcher(Registry::new(), locks);
+        let (ctx, mut events, _p) = dispatch_context();
+        assert_eq!(dispatcher.before_step(&[call_of("cargo", "write")], &ctx).await, None);
+        assert_eq!(dispatcher.turn_ending(&ctx).await, None);
+        assert!(events.try_recv().is_err());
+    }
+
+    /// A read does not observe the disk — it reads through the overlay — so
+    /// a step of reads opens no review even with edits staged.
+    #[tokio::test]
+    async fn a_step_that_does_not_observe_the_disk_is_not_reviewed_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, staging) = dispatcher(Registry::new(), locks);
+        stage(&staging, &dir, "f.rs", "after\n").await;
+        let (ctx, mut events, _p) = dispatch_context();
+        let reads = [ToolCall { id: "c1".into(), name: "read".into(), input: json!({}) }];
+        assert_eq!(dispatcher.before_step(&reads, &ctx).await, None);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_run_over_staged_edits_is_reviewed_first_and_an_approve_writes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, staging) = dispatcher(Registry::new(), locks);
+        stage(&staging, &dir, "f.rs", "after\n").await;
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let calls = [call_of("cargo", "write")];
+        let step = dispatcher.before_step(&calls, &ctx);
+        let (outcome, shown) = tokio::join!(step, decide(&mut events, &pending, ReviewDecision::Approve));
+
+        assert_eq!(outcome, None, "approved: the run may proceed");
+        assert_eq!(shown.files, vec![ChangedFile { path: "f.rs".into(), before: Some("before\n".into()), after: "after\n".into() }]);
+        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "after\n");
+        assert!(staging.is_empty());
+        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files, comments_resolved: 0 } }) if files == vec!["f.rs".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn comments_come_back_as_the_reason_the_step_did_not_run_and_the_changes_stay_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, staging) = dispatcher(Registry::new(), locks);
+        stage(&staging, &dir, "f.rs", "after\n").await;
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let comments = vec![ReviewComment { path: "f.rs".into(), lines: (1, 2), text: "Use config".into() }];
+        let calls = [call_of("cargo", "write")];
+        let step = dispatcher.before_step(&calls, &ctx);
+        let (outcome, _) = tokio::join!(step, decide(&mut events, &pending, ReviewDecision::Comment { comments }));
+
+        assert_eq!(outcome.as_deref(), Some("On f.rs, lines 1–2:\nUse config"));
+        assert!(!staging.is_empty(), "the changeset waits for the next review");
+        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
+        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Commented { comments: 1 } })));
+
+        // The next approve reports the comment resolved.
+        let (ctx, mut events, pending) = dispatch_context();
+        let ending = dispatcher.turn_ending(&ctx);
+        let (outcome, _) = tokio::join!(ending, decide(&mut events, &pending, ReviewDecision::Approve));
+        assert_eq!(outcome, None);
+        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Saved { comments_resolved: 1, .. } })));
+    }
+
+    #[tokio::test]
+    async fn a_discard_drops_the_changes_and_tells_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, staging) = dispatcher(Registry::new(), locks);
+        stage(&staging, &dir, "f.rs", "after\n").await;
+        let (ctx, mut events, pending) = dispatch_context();
+
+        let ending = dispatcher.turn_ending(&ctx);
+        let (outcome, _) = tokio::join!(ending, decide(&mut events, &pending, ReviewDecision::Discard));
+
+        assert!(outcome.unwrap().contains("discarded"));
+        assert!(staging.is_empty());
+        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
+        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Discarded { files } }) if files == vec!["f.rs".to_string()]));
+    }
+
+    /// Nobody answers the review — the session is ending under it. A step's
+    /// calls must not run; a turn must not start a next one; and what was
+    /// staged stays staged, unwritten.
+    #[tokio::test]
+    async fn an_unanswered_review_runs_nothing_and_starts_no_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_d, locks) = locks();
+        let (dispatcher, staging) = dispatcher(Registry::new(), locks);
+        stage(&staging, &dir, "f.rs", "after\n").await;
+
+        async fn walk_away(events: &mut mpsc::Receiver<Event>, pending: &aldwin_core::PendingMap) {
+            let Some(Event::ReviewRequested { review_id, .. }) = events.recv().await else { panic!("expected a review") };
+            drop(pending.lock().unwrap().remove(&review_id));
+        }
+
+        let (ctx, mut events, pending) = dispatch_context();
+        let calls = [call_of("cargo", "write")];
+        let (outcome, _) = tokio::join!(dispatcher.before_step(&calls, &ctx), walk_away(&mut events, &pending));
+        assert!(outcome.is_some(), "the step's calls are answered, not run");
+
+        let (ctx, mut events, pending) = dispatch_context();
+        let (outcome, _) = tokio::join!(dispatcher.turn_ending(&ctx), walk_away(&mut events, &pending));
+        assert_eq!(outcome, None, "no next turn");
+
+        assert!(!staging.is_empty());
+        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
+    }
+
+    #[test]
+    fn comments_render_where_then_what_and_a_general_one_as_itself() {
+        let one = vec![ReviewComment { path: "a.rs".into(), lines: (4, 4), text: "x".into() }];
+        assert_eq!(render_comments(&one), "On a.rs, line 4:\nx");
+        let general = vec![ReviewComment { path: String::new(), lines: (0, 0), text: "and rename it".into() }];
+        assert_eq!(render_comments(&general), "and rename it");
     }
 }

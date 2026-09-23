@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
 use crate::error::ToolError;
-use crate::gate::ApprovalGate;
+use aldwin_core::DispatchContext;
 use crate::paths::Workspace;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 use crate::sandbox;
@@ -78,9 +78,11 @@ impl RunTool {
                               Declare `class`: \"read\" if the call only observes, \"write\" if it may \
                               change anything. A call declared \"read\" is executed with the project \
                               read-only and the network unreachable, so an inaccurate declaration \
-                              fails rather than causing damage. Declare reads as reads: \"write\" is \
-                              not the safe default, it is a broader grant and it costs the developer \
-                              a prompt they did not need to see. \
+                              fails rather than causing damage — and comes back telling you to \
+                              declare it \"write\" and run it again. Declare reads as reads: it is what \
+                              lets a mistake cost a retry rather than a tree. \
+                              Any edits you have staged this turn are reviewed by the developer \
+                              before a run, since the run would see the files as they are on disk. \
                               `cwd` sets the working directory for this one call; it persists no \
                               further than the call, so pass it every time rather than expecting an \
                               earlier one to stick."
@@ -102,7 +104,6 @@ impl RunTool {
                     },
                     "required": ["program", "class"],
                 }),
-                edit_class: false,
                 source:     ToolSource::Builtin,
             },
             workspace,
@@ -218,12 +219,12 @@ impl Tool for RunTool {
         &self.descriptor
     }
 
-    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
+    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
         let args = parse(input)?;
-        Ok(PermissionRequest { program: args.program, class: args.class, argv: args.args })
+        Ok(Some(PermissionRequest { program: args.program, class: args.class, argv: args.args }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
+    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
         let args = parse(&input)?;
 
         // Containment first, before anything is spawned. The working
@@ -257,11 +258,10 @@ impl Tool for RunTool {
 
 /// Runs the call, confining it when it was declared a read.
 ///
-/// The [`ToolError::ReadRefused`] arm is the one that matters: it is not an
-/// error so much as a question for the developer, and the dispatcher turns it
-/// into one. Nothing landed when it is returned — that is the property the
-/// sandbox exists to provide, and it is what makes re-running after a yes
-/// safe rather than a gamble on how far the first attempt got.
+/// The [`ToolError::ReadRefused`] arm is the one that matters: nothing
+/// landed when it is returned — that is the property the sandbox exists to
+/// provide — and the model is told so and told to re-declare, which is safe
+/// precisely because the first attempt could not have half-finished.
 async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<String, ToolError> {
     let confine = args.class == Class::Read;
 
@@ -374,8 +374,8 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     // A read declaration only *fails* when the sandbox refused it — not
     // whenever the program exits non-zero. Conflating the two reported
     // `grep`'s "nothing matched" (exit 1, no stderr) as a refused read and
-    // asked the developer to re-run a write that was never attempted, which
-    // taught the model to stop declaring reads at all. A denial reaches the
+    // told the model a write had been attempted that never was, which
+    // taught it to stop declaring reads at all. A denial reaches the
     // child as an ordinary permission error, so it is the *evidence on
     // stderr* — or death by signal — that distinguishes them. A denial this
     // misses is bounded: it falls through as an ordinary failed command with
@@ -599,7 +599,7 @@ mod tests {
         let (_d, tool) = tool();
         let request = tool
             .permission(&json!({"program": "git", "args": ["status", "--short"], "class": "read"}))
-            .unwrap();
+            .unwrap().unwrap();
 
         assert_eq!(request.program, "git");
         assert_eq!(request.class, Class::Read);

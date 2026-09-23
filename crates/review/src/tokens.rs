@@ -1,40 +1,73 @@
 //! Stage 3 — the design tokens, generated rather than transcribed.
 //!
-//! `crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css`
-//! and committed. The stage passes when regenerating produces no diff, which
+//! `crates/tui/src/tokens.rs` is emitted from `.claude/design/` and
+//! committed. The stage passes when regenerating produces no diff, which
 //! makes drift between the app's palette and the design system impossible by
 //! construction rather than detectable after the fact.
 //!
-//! Two levels of indirection are resolved, the same two the design system
-//! itself uses: `semantic.css` maps a role to a ramp step
-//! (`--tui-text: var(--color-neutral-100)`) and `palette.css` maps that step
-//! to a value. The light theme is the same role map over a different set of
-//! steps.
+//! Four sources, each read for the one thing only it states:
 //!
-//! **Three roles are deliberately not carried.** `--tui-add-bg` and
-//! `--tui-del-bg` are `rgba()` tints for a browser; a terminal cell has one
-//! opaque background, and the design ships `--tui-add-row` / `--tui-del-row`
-//! beside them as the solid fills for exactly this reason. `--tui-border` is
-//! scoped by `semantic.css` itself to "the one quiet border, outside frames":
-//! a terminal has no outside, and nothing inside a frame is stroked, so
-//! carrying it would put a stroke colour within reach of code that must never
-//! draw one. (`--tui-line`, which held this slot, was deleted upstream in the
-//! lantern-gold repaint.) A role that is neither carried nor on that list is
-//! an error, not a silent omission — see [`generate`].
+//! * `tokens/colors.css` — every colour role, as an `oklch()` literal (the
+//!   light theme mixes in six hexes). There is no ramp indirection to resolve
+//!   any more; the generator converts OKLCH to sRGB itself.
+//! * `tokens/layout.css` — the grid, in `ch` and `px`.
+//! * `guidelines/glyphs.html` — the closed glyph table. The README carries
+//!   the same fourteen marks as a prose sentence; the card is the one
+//!   machine-readable copy.
+//! * `frames/Aldwin Agent TUI.dc.html` — the brand mark and the context
+//!   bar's ramp. Both are `color-mix()` expressions that exist nowhere else,
+//!   and the mark's 108 cells are the shape of the letter itself.
+//!
+//! **Ten roles are deliberately not carried.** `--chrome` and `--dot` paint
+//! the mock's macOS title bar, which a terminal does not draw. `--syn` and
+//! `--call` are "reserved, not applied in any current frame" — carrying them
+//! would put a hue within reach of code the design says must not use it yet.
+//! The six `--canvas-*` roles are the documentation page around the frames.
+//! A role that is neither carried nor on that list is an error, not a silent
+//! omission — see [`generate`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Error, ErrorKind, Result};
 use std::path::Path;
 
-/// Roles the terminal cannot express, with the reason it cannot.
-const UNCARRIED: [(&str, &str); 3] = [
-    ("add-bg", "an rgba tint; a cell background is opaque, and --tui-add-row is the design's solid fill for it"),
-    ("del-bg", "an rgba tint; --tui-del-row is the design's solid fill for it"),
-    ("border", "scoped to outside the frame by semantic.css; a terminal has no outside and nothing inside a frame is stroked"),
+/// Roles the terminal does not draw, with the reason.
+const UNCARRIED: [(&str, &str); 10] = [
+    ("chrome", "the mock's macOS title bar; a terminal's title bar is the terminal's"),
+    ("dot", "the title bar's traffic lights; same"),
+    ("syn", "reserved by colors.css: \"not applied in current frames\""),
+    ("call", "reserved by colors.css: \"not applied in current frames\""),
+    ("canvas", "the documentation page around the frames"),
+    ("canvas-ink", "same"),
+    ("canvas-body", "same"),
+    ("canvas-caption", "same"),
+    ("canvas-badge", "same"),
+    ("canvas-link-hover", "same"),
+];
+
+/// The grid tokens the app consumes, and the constant each becomes. Only
+/// these are emitted: `layout.css` also declares the mock's window measures
+/// (`--fw`, `--chrome-h`, the body heights), and a constant nothing reads
+/// would be this file asserting a layout rule rather than carrying a value.
+const GRID: [(&str, &str); 12] = [
+    ("margin-x", "MARGIN_X"),
+    ("body-x", "BODY_X"),
+    ("mark-col", "MARK_COL"),
+    ("group-gap", "GROUP_GAP"),
+    ("fact-col", "FACT_COL"),
+    ("detail-col", "DETAIL_COL"),
+    ("command-col", "COMMAND_COL"),
+    ("number-col", "NUMBER_COL"),
+    ("tree-w", "TREE_W"),
+    ("pane-gap", "PANE_GAP"),
+    ("gutter-ln", "GUTTER_LN"),
+    ("sign-col", "SIGN_COL"),
 ];
 
 /// Where the generated file lands, relative to the workspace root.
 pub const OUTPUT: &str = "crates/tui/src/tokens.rs";
+
+/// The frame, relative to the design directory.
+pub const FRAME: &str = "frames/Aldwin Agent TUI.dc.html";
 
 /// The imported design system. Everything the loop knows about the design is
 /// read from here and from nowhere else.
@@ -46,73 +79,155 @@ pub fn output_path(root: &Path) -> std::path::PathBuf {
     root.join(OUTPUT)
 }
 
+/// One theme's resolved colour roles, by token name.
+type Roles = BTreeMap<String, Rgb>;
+
 /// Emit the file. Returns its full text.
 pub fn generate(design_dir: &Path) -> Result<String> {
-    let palette = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/palette.css"))?);
-    let semantic = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/semantic.css"))?);
-    let cells = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/cells.css"))?);
+    let colors = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/colors.css"))?);
+    let layout = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/layout.css"))?);
+    let glyph_card = std::fs::read_to_string(design_dir.join("guidelines/glyphs.html"))?;
+    let frame = std::fs::read_to_string(design_dir.join(FRAME))?;
 
-    let steps = hex_literals(&palette);
-    let dark_roles = roles(scope(&semantic, ":root"));
-    let light_roles = roles(scope(&semantic, ".tui-light"));
+    let dark_raw = declarations(scope(&colors, ":root"));
+    let light_raw = declarations(scope(&colors, ".tui-light"));
 
-    // Every role the dark scope declares is a role the app must carry, unless
-    // it is on the uncarried list. A role added upstream that nothing here
-    // knows about is the case this check exists for: it would otherwise
-    // regenerate cleanly and the app would simply not have the colour.
     let uncarried = |role: &str| UNCARRIED.iter().any(|(name, _)| *name == role);
-    let unknown: Vec<&str> = dark_roles
-        .iter()
-        .filter(|(role, step)| !uncarried(role) && !steps.contains_key(*step))
-        .map(|(role, _)| role.as_str())
-        .collect();
-    if !unknown.is_empty() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("roles whose palette step is not a hex literal and which are not on the uncarried list: {unknown:?}"),
-        ));
-    }
+    let carried: Vec<&String> = dark_raw.keys().filter(|role| !uncarried(role)).collect();
 
-    let resolve = |scope_roles: &BTreeMap<String, String>, role: &str| -> Option<(u8, u8, u8)> {
-        steps.get(scope_roles.get(role)?).copied()
+    // Every carried role must parse to a colour in the dark scope; the light
+    // scope overrides most and inherits the rest, which is the design's own
+    // arrangement rather than a fallback.
+    let resolve_scope = |raw: &BTreeMap<String, String>, fallback: Option<&Roles>| -> Result<Roles> {
+        let mut out = Roles::new();
+        for role in &carried {
+            let value = raw.get(*role).and_then(|v| parse_color(v)).or_else(|| fallback?.get(*role).copied());
+            match value {
+                Some(rgb) => {
+                    out.insert((*role).clone(), rgb);
+                }
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        format!("--{role} resolves to no colour this generator can read (oklch() or #hex)"),
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    };
+    let dark = resolve_scope(&dark_raw, None)?;
+    let light = resolve_scope(&light_raw, Some(&dark))?;
+
+    // The mark and the gauge mix two roles in OKLCH; the mix has to happen on
+    // the unrounded values, so the source roles are re-read as OKLCH here.
+    let oklch_of = |raw: &BTreeMap<String, String>, fallback: &BTreeMap<String, String>, role: &str| -> Result<Oklch> {
+        raw.get(role)
+            .or_else(|| fallback.get(role))
+            .and_then(|v| parse_oklch_or_hex(v))
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("--{role} is needed for a color-mix and does not parse")))
     };
 
-    let carried: Vec<&String> = dark_roles.keys().filter(|role| !uncarried(role)).collect();
+    let mark = mark_cells(&frame)?;
+    check_gauge_against_frame(&frame)?;
 
     let mut out = header();
 
-    for (name, theme, scope_roles) in [("DARK", "Dark", &dark_roles), ("LIGHT", "Light", &light_roles)] {
-        // The light scope overrides most roles and inherits the rest, so a
-        // role it does not declare resolves against the dark map. That is the
-        // design system's own arrangement, not a fallback.
-        let values = carried
-            .iter()
-            .map(|role| {
-                resolve(scope_roles, role).or_else(|| resolve(&dark_roles, role)).ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidData, format!("--tui-{role} resolves to no value in either scope"))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+    for (name, theme, roles, raw) in [("DARK", "Dark", &dark, &dark_raw), ("LIGHT", "Light", &light, &light_raw)] {
+        let fill = oklch_of(raw, &dark_raw, "fill")?;
+        let win = oklch_of(raw, &dark_raw, "win")?;
+        let track = oklch_of(raw, &dark_raw, "track")?;
 
         out.push_str(&format!("pub(crate) const {name}: Palette = Palette {{\n    theme: Theme::{theme},\n"));
-        for (role, rgb) in carried.iter().zip(&values) {
-            out.push_str(&format!("    {}: Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}),\n", field(role), rgb.0, rgb.1, rgb.2));
+        for (role, rgb) in roles {
+            out.push_str(&format!("    {}: {},\n", field(role), rgb.literal()));
         }
         out.push_str("};\n\n");
 
-        // Every value of that palette as a flat list, so a conformance test
-        // can ask "is this colour in the design system?" without naming
-        // forty-two fields — and without going stale when the design gains a
-        // forty-third.
-        out.push_str(&format!("pub(crate) const {name}_VALUES: [Color; {}] = [\n", carried.len()));
-        for (role, rgb) in carried.iter().zip(&values) {
-            out.push_str(&format!("    Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x}), // --tui-{role}\n", rgb.0, rgb.1, rgb.2));
+        // The mark: each cell's top and bottom half, as `--fill` mixed over
+        // `--win`. An empty cell is the ground twice, so a renderer can paint
+        // every cell the same way.
+        let mut mark_colors: Vec<Rgb> = Vec::new();
+        out.push_str(&format!(
+            "/// The brand mark for this theme: `[row][col]` of (upper half, lower half).\n\
+             pub(crate) const MARK_{name}: [[(Color, Color); MARK_COLS]; MARK_ROWS] = [\n"
+        ));
+        for row in &mark {
+            out.push_str("    [");
+            for cell in row {
+                let top = cell.top.map_or(win, |p| mix_oklch(fill, win, p));
+                let bottom = cell.bottom.map_or(win, |p| mix_oklch(fill, win, p));
+                let (top, bottom) = (top.to_rgb(), bottom.to_rgb());
+                mark_colors.push(top);
+                mark_colors.push(bottom);
+                out.push_str(&format!("({}, {}), ", top.literal(), bottom.literal()));
+            }
+            out.push_str("],\n");
+        }
+        out.push_str("];\n\n");
+
+        // The gauge: one row per filled count, each row the ten segments left
+        // to right — the filled run ramping to `--fill` at the leading edge,
+        // then `--track`. `ContextBar.jsx`'s own arithmetic, resolved.
+        let mut ramp_colors: Vec<Rgb> = Vec::new();
+        out.push_str(&format!(
+            "/// The context bar, `[filled][segment]`: for `n` filled segments the run ramps\n\
+             /// `--fill` over `--track` in steps of `60/n` percent to full at the leading\n\
+             /// edge; the rest are `--track`. Index with `gauge_filled(percent)`.\n\
+             pub(crate) const GAUGE_{name}: [[Color; GAUGE_SEGMENTS]; GAUGE_SEGMENTS + 1] = [\n"
+        ));
+        for n in 0..=GAUGE_SEGMENTS {
+            out.push_str("    [");
+            for i in 0..GAUGE_SEGMENTS {
+                let rgb = match gauge_mix(n, i) {
+                    Some(p) => mix_oklch_f(fill, track, p).to_rgb(),
+                    None => track.to_rgb(),
+                };
+                ramp_colors.push(rgb);
+                out.push_str(&format!("{}, ", rgb.literal()));
+            }
+            out.push_str("],\n");
+        }
+        out.push_str("];\n\n");
+
+        // Every colour of that theme as a flat list, so a conformance test
+        // can ask "is this colour in the design system?" without naming the
+        // fields — and without going stale when the design gains one.
+        let mut values: Vec<(String, Rgb)> = roles.iter().map(|(role, rgb)| (format!("--{role}"), *rgb)).collect();
+        let mut seen: BTreeSet<(u8, u8, u8)> = values.iter().map(|(_, c)| (c.0, c.1, c.2)).collect();
+        for rgb in &ramp_colors {
+            if seen.insert((rgb.0, rgb.1, rgb.2)) {
+                values.push(("the context bar, --fill mixed over --track".into(), *rgb));
+            }
+        }
+        for rgb in &mark_colors {
+            if seen.insert((rgb.0, rgb.1, rgb.2)) {
+                values.push(("the mark, --fill mixed over --win".into(), *rgb));
+            }
+        }
+        out.push_str(&format!("pub(crate) const {name}_VALUES: [Color; {}] = [\n", values.len()));
+        for (what, rgb) in &values {
+            out.push_str(&format!("    {}, // {what}\n", rgb.literal()));
         }
         out.push_str("];\n\n");
     }
 
-    out.push_str(&grid(&cells)?);
-    out.push_str(&glyphs(&std::fs::read_to_string(design_dir.join("HANDOFF.md"))?)?);
+    out.push_str(&format!(
+        "// ---- The brand mark's shape, from the frame ------------------------\n\
+         //\n\
+         // 18 × 6 half-block cells. An open A: the frame draws each cell as a\n\
+         // `linear-gradient(top 50%, bottom 50%)`, which in a terminal is `▀` with\n\
+         // an independent foreground and background.\n\n\
+         pub(crate) const MARK_COLS: usize = {};\n\
+         pub(crate) const MARK_ROWS: usize = {};\n\
+         /// The glyph every mark cell is drawn with: upper half foreground, lower half background.\n\
+         pub(crate) const MARK_CELL: char = '▀';\n\n",
+        mark[0].len(),
+        mark.len()
+    ));
+
+    out.push_str(&grid(&layout)?);
+    out.push_str(&glyphs(&glyph_card, &frame)?);
     Ok(out)
 }
 
@@ -120,12 +235,13 @@ fn header() -> String {
     format!(
         "//! The design system, in Rust. **Generated — do not edit.**\n\
          //!\n\
-         //! Emitted by `aldwin-review tokens --write` from\n\
-         //! `.claude/design/tokens/`. The review loop's stage 3 regenerates\n\
-         //! this file and fails if the result differs, so the app's palette\n\
-         //! and the imported design cannot drift apart.\n\
+         //! Emitted by `aldwin-review tokens --write` from `.claude/design/`:\n\
+         //! `tokens/colors.css`, `tokens/layout.css`, `guidelines/glyphs.html` and\n\
+         //! the frame. The review loop's stage 3 regenerates this file and fails if\n\
+         //! the result differs, so the app's palette and the imported design cannot\n\
+         //! drift apart.\n\
          //!\n\
-         //! Roles the terminal cannot express are listed in\n\
+         //! Roles the terminal does not draw are listed in\n\
          //! `crates/review/src/tokens.rs` with the reason; there are {}.\n\n\
          use ratatui::style::Color;\n\n\
          use crate::palette::Palette;\n\
@@ -134,74 +250,75 @@ fn header() -> String {
     )
 }
 
-/// The grid, from `cells.css`. Cell counts, not pixels: `--cell-w` and
-/// `--cell-h` are one cell each by definition.
-fn grid(cells: &str) -> Result<String> {
-    let resolved = cell_tokens(cells);
+/// The grid, from `layout.css`. `1ch` is a cell and `--row: 24px` is a row.
+fn grid(layout: &str) -> Result<String> {
+    let resolved = layout_tokens(layout);
     let mut out = String::from(
-        "// ---- The grid, from tokens/cells.css --------------------------------\n\
+        "// ---- The grid, from tokens/layout.css -------------------------------\n\
          //\n\
-         // Cell counts. Body text lands at MARGIN_X + LABEL_COL_WIDTH +\n\
-         // LABEL_GUTTER as a consequence of the three, which is why cells.css\n\
-         // declares no --body-col and nothing here restates one.\n\
-         //\n\
-         // Only tokens the app consumes are emitted. cells.css declares more\n\
-         // — panel and bar heights among them — and generating a constant\n\
-         // nothing reads would be this file asserting a layout rule rather\n\
-         // than carrying a value. Whether the app *should* consume one of\n\
-         // them is stage 5's question, not stage 3's.\n\n",
+         // Cell counts. `--body-x` is the one derived value the design states\n\
+         // outright (\"prose: margin + mark column\"), and it is emitted as the\n\
+         // design states it rather than re-derived here, so a disagreement between\n\
+         // the two would surface as a stage-3 diff rather than hide in a sum.\n\n",
     );
-    for (token, name) in [
-        ("margin-x", "MARGIN_X"),
-        ("label-col", "LABEL_COL_WIDTH"),
-        ("label-gutter", "LABEL_GUTTER"),
-        ("group-gap", "GROUP_GAP"),
-        ("option-label-col", "OPTION_LABEL_COL"),
-        ("step-mark-col", "STEP_MARK_COL"),
-        ("step-content-col", "STEP_CONTENT_COL"),
-        ("gutter-line-no-inline", "GUTTER_LINE_NO_INLINE"),
-        ("diff-sign-col", "DIFF_SIGN_COL"),
-        ("panel-permission-h", "PANEL_PERMISSION_H"),
-    ] {
+    for (token, name) in GRID {
         let value = resolved
             .get(token)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("cells.css declares no --{token}")))?;
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("layout.css declares no --{token} in ch")))?;
         out.push_str(&format!("pub(crate) const {name}: usize = {value};\n"));
     }
+    out.push_str(&format!(
+        "/// The context bar's segments — ten `━` in every frame.\n\
+         pub(crate) const GAUGE_SEGMENTS: usize = {GAUGE_SEGMENTS};\n\
+         /// How many of them a percentage fills: `ContextBar.jsx`'s `round(percent / 10)`, clamped.\n\
+         pub(crate) fn gauge_filled(percent: u8) -> usize {{\n    \
+             ((f64::from(percent) / 10.0).round() as usize).min(GAUGE_SEGMENTS)\n\
+         }}\n"
+    ));
     Ok(out)
+}
+
+/// The context bar's ten segments.
+const GAUGE_SEGMENTS: usize = 10;
+
+/// `ContextBar.jsx`: with `n` segments filled, segment `i` (left to right) is
+/// `--fill` at `100 - (n - 1 - i) * 60 / n` percent over `--track`; a segment
+/// past the run is `--track` (`None`).
+fn gauge_mix(n: usize, i: usize) -> Option<f64> {
+    if n == 0 || i >= n {
+        return None;
+    }
+    let step = 60.0 / n as f64;
+    Some(100.0 - (n - 1 - i) as f64 * step)
 }
 
 /// The closed glyph table, and the glyphs a recorded design contradiction
 /// licenses on top of it.
 ///
-/// Two sources, deliberately kept apart in the output. `MARKS` is the
-/// design's own table, parsed from `HANDOFF.md`'s Glyphs section. Anything in
-/// `MARKS_BY_EXCEPTION` is there because the design contradicts itself and
-/// `crates/review/baseline.json` records where — the `·` its own copy
-/// mandates but its table omits, ADR 0002's box-drawing set. Every one of
-/// those is a bug upstream, and the entry leaves the baseline when the design
-/// is fixed.
+/// `MARKS` has two sources and both are the design's own: the fourteen marks
+/// `guidelines/glyphs.html` lists, and every non-ASCII character the frame
+/// draws inside a window — `↑↓` in a footer, `⌄` on an open disclosure, the
+/// `−` of a removed count, the punctuation prose carries. The mark's `▀` is
+/// added last: the frame draws that cell as CSS, not as a character, so it
+/// is the one glyph the app needs that no text in the design contains.
 ///
-/// Generating both is what lets the conformance test live in `crates/tui`
-/// and read no files at all.
-fn glyphs(handoff: &str) -> Result<String> {
+/// `MARKS_BY_EXCEPTION` is there because the design contradicts itself and
+/// `crates/review/baseline.json` records where.
+fn glyphs(card: &str, frame: &str) -> Result<String> {
     let mut marks = BTreeSet::new();
-    let start = handoff
-        .find("### Glyphs")
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "HANDOFF.md has no `### Glyphs` section"))?;
-    for line in handoff[start..].lines().skip(1) {
-        if line.starts_with("##") {
-            break;
-        }
-        let Some(cell) = line.strip_prefix("| ") else { continue };
-        let Some((first, _)) = cell.split_once('|') else { continue };
-        for chunk in first.split('`').skip(1).step_by(2) {
-            marks.extend(chunk.chars());
-        }
+    // Each entry of the card is `…width:3ch">X</span>`; the glyph is what
+    // sits between the closing bracket and the closing tag.
+    for chunk in card.split("width:3ch\">").skip(1) {
+        let Some(end) = chunk.find("</span>") else { continue };
+        marks.extend(chunk[..end].chars().filter(|c| !c.is_whitespace()));
     }
     if marks.is_empty() {
-        return Err(Error::new(ErrorKind::InvalidData, "HANDOFF.md's Glyphs section parsed to nothing"));
+        return Err(Error::new(ErrorKind::InvalidData, "guidelines/glyphs.html lists no glyphs"));
     }
+    for window in frame_windows(frame) {
+        marks.extend(text_of(&window).chars().filter(|c| !c.is_ascii()));
+    }
+    marks.insert('▀');
 
     let baseline = crate::Baseline::load()?;
     let mut excepted: BTreeSet<char> = BTreeSet::new();
@@ -214,7 +331,8 @@ fn glyphs(handoff: &str) -> Result<String> {
     Ok(format!(
         "\n// ---- Glyphs ---------------------------------------------------------\n\
          //\n\
-         // The design system's closed table, from HANDOFF.md's Glyphs section.\n\
+         // The design's closed table: guidelines/glyphs.html, plus every character\n\
+         // the frame draws inside a window, plus the mark's half block.\n\
          pub(crate) const MARKS: [char; {}] = [{}];\n\
          \n\
          // Glyphs a recorded design contradiction licenses on top of it. Each is\n\
@@ -229,11 +347,202 @@ fn glyphs(handoff: &str) -> Result<String> {
     ))
 }
 
-/// `--tui-bar-bottom` -> `bar_bottom`, and `break` -> `break_` because it is
-/// a Rust keyword.
-fn field(role: &str) -> String {
-    let name = role.replace('-', "_");
-    if name == "break" { "break_".into() } else { name }
+// ---- The frame --------------------------------------------------------------
+
+/// One cell of the mark: the percentage of `--fill` mixed over `--win` in
+/// each half, or `None` for the ground.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MarkCell {
+    top:    Option<u8>,
+    bottom: Option<u8>,
+}
+
+/// The mark's cells, `[row][col]`, from the launch frame.
+///
+/// The frame draws each row as a flex `div` of 1ch spans. A filled span's
+/// background is `linear-gradient(<top> 50%, <bottom> 50%)` where each half is
+/// `transparent` or `color-mix(in oklch, var(--fill) N%, var(--win))`.
+fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
+    let launch = frame_windows(frame)
+        .into_iter()
+        .find(|w| w.contains("data-screen-label=\"A launch\""))
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "the frame has no `A launch` window"))?;
+
+    let mut rows: Vec<Vec<MarkCell>> = Vec::new();
+    for row_html in launch.split("<div style=\"display:flex;height:24px\">").skip(1) {
+        let row_html = row_html.split("</div>").next().unwrap_or("");
+        let mut row = Vec::new();
+        for span in row_html.split("<span style=\"width:1ch;height:24px").skip(1) {
+            let style = span.split('"').next().unwrap_or("");
+            let cell = match style.find("linear-gradient(") {
+                None => MarkCell { top: None, bottom: None },
+                Some(at) => {
+                    let inner = &style[at + "linear-gradient(".len()..];
+                    let (top, bottom) = split_gradient(inner)
+                        .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("unreadable mark cell: {style}")))?;
+                    MarkCell { top: mix_percent(top), bottom: mix_percent(bottom) }
+                }
+            };
+            row.push(cell);
+        }
+        if !row.is_empty() {
+            rows.push(row);
+        }
+    }
+    if rows.is_empty() {
+        return Err(Error::new(ErrorKind::InvalidData, "the launch frame has no mark rows"));
+    }
+    let width = rows[0].len();
+    if rows.iter().any(|r| r.len() != width) {
+        return Err(Error::new(ErrorKind::InvalidData, "the mark's rows are not all the same width"));
+    }
+    Ok(rows)
+}
+
+/// `<top> 50%, <bottom> 50%)…` → (`<top>`, `<bottom>`), each without its stop.
+/// The halves may themselves contain commas (inside `color-mix(...)`), so the
+/// split is on the ` 50%, ` between them rather than on a comma.
+fn split_gradient(inner: &str) -> Option<(&str, &str)> {
+    let (top, rest) = inner.split_once(" 50%, ")?;
+    let bottom = rest.split(" 50%)").next()?;
+    Some((top.trim(), bottom.trim()))
+}
+
+/// `color-mix(in oklch, var(--fill) 45%, var(--win))` → `Some(45)`;
+/// `transparent` → `None`.
+fn mix_percent(half: &str) -> Option<u8> {
+    let rest = half.strip_prefix("color-mix(in oklch, var(--fill) ")?;
+    rest.split('%').next()?.trim().parse().ok()
+}
+
+/// Every context bar the frame draws, as (filled percentages left to right,
+/// empty segment count, the percentage shown) — one per window.
+fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
+    let mut out = Vec::new();
+    for window in frame_windows(frame) {
+        let Some(at) = window.find("Context ") else { continue };
+        let bar = &window[at..];
+        let filled: Vec<f64> = bar
+            .split("color-mix(in oklch, var(--fill) ")
+            .skip(1)
+            .filter_map(|chunk| {
+                let (pct, rest) = chunk.split_once('%')?;
+                rest.trim_start().starts_with(", var(--track)").then(|| pct.trim().parse().ok())?
+            })
+            .collect();
+        let empty = bar
+            .split("color:var(--track)\">")
+            .nth(1)
+            .and_then(|rest| rest.split('<').next())
+            .map_or(0, |run| run.chars().filter(|&c| c == '━').count());
+        let shown = bar.split("</span> ").find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok()).unwrap_or(0);
+        out.push((filled, empty, shown));
+    }
+    out
+}
+
+/// The generator's gauge arithmetic is `ContextBar.jsx`'s, and the frame is
+/// where the design's own rendering of it can be read back. Every bar in the
+/// frame has to match what the formula gives for the percentage it shows —
+/// a formula that drifted from the frame would otherwise generate cleanly.
+fn check_gauge_against_frame(frame: &str) -> Result<()> {
+    let gauges = frame_gauges(frame);
+    if gauges.is_empty() {
+        return Err(Error::new(ErrorKind::InvalidData, "the frame draws no context bar"));
+    }
+    for (filled, empty, shown) in gauges {
+        let n = ((f64::from(shown) / 10.0).round() as usize).min(GAUGE_SEGMENTS);
+        let wanted: Vec<f64> = (0..n).filter_map(|i| gauge_mix(n, i)).collect();
+        let close = filled.len() == wanted.len() && filled.iter().zip(&wanted).all(|(a, b)| (a - b).abs() < 0.01);
+        if !close || empty != GAUGE_SEGMENTS - n {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("the frame's {shown}% context bar is {filled:?} + {empty} empty; ContextBar.jsx's rule gives {wanted:?} + {}", GAUGE_SEGMENTS - n),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every window in the frame — the balanced `<div … data-screen-label="…">`
+/// subtree — so the canvas captions around them are never read as design.
+fn frame_windows(frame: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = frame[from..].find("data-screen-label=\"") {
+        let attr_at = from + rel;
+        // Back up to the `<div` that carries the attribute.
+        let Some(open) = frame[..attr_at].rfind("<div") else { break };
+        let end = balanced_div_end(frame, open).unwrap_or(frame.len());
+        out.push(frame[open..end].to_string());
+        from = end.max(attr_at + 1);
+    }
+    out
+}
+
+/// The index just past the `</div>` that closes the `<div` at `start`.
+fn balanced_div_end(html: &str, start: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut at = start;
+    loop {
+        let open = html[at..].find("<div");
+        let close = html[at..].find("</div>");
+        match (open, close) {
+            (Some(o), Some(c)) if o < c => {
+                depth += 1;
+                at += o + 4;
+            }
+            (_, Some(c)) => {
+                depth -= 1;
+                at += c + 6;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            (Some(o), None) => {
+                depth += 1;
+                at += o + 4;
+            }
+            (None, None) => return None,
+        }
+    }
+}
+
+/// The rendered text of an HTML fragment: tags removed, entities decoded.
+fn text_of(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+// ---- CSS ------------------------------------------------------------------
+
+/// `--name: value;` pairs of one scope.
+fn declarations(css: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for line in css.lines() {
+        let Some(rest) = line.trim().strip_prefix("--") else { continue };
+        let Some((name, value)) = rest.split_once(':') else { continue };
+        map.insert(name.trim().to_string(), value.trim().trim_end_matches(';').trim().to_string());
+    }
+    map
+}
+
+fn scope<'a>(css: &'a str, selector: &str) -> &'a str {
+    let Some(start) = css.find(&format!("{selector} {{")).or_else(|| css.find(&format!("{selector}{{"))) else { return "" };
+    let body = &css[start..];
+    match body.find('}') {
+        Some(end) => &body[..end],
+        None => body,
+    }
 }
 
 fn strip_comments(css: &str) -> String {
@@ -250,95 +559,137 @@ fn strip_comments(css: &str) -> String {
     out
 }
 
-fn hex_literals(css: &str) -> BTreeMap<String, (u8, u8, u8)> {
-    let mut map = BTreeMap::new();
-    for line in css.lines() {
-        let Some(rest) = line.trim().strip_prefix("--") else { continue };
-        let Some((name, value)) = rest.split_once(':') else { continue };
-        if let Some(rgb) = hex(value.trim().trim_end_matches(';').trim()) {
-            map.insert(name.trim().to_string(), rgb);
-        }
-    }
-    map
+/// `--tui-add-code` would have been `add_code`; the tokens are now flat
+/// (`--addcode`, `--label2`) and the field names mirror them exactly.
+fn field(role: &str) -> String {
+    role.replace('-', "_")
 }
 
-fn roles(css: &str) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    for line in css.lines() {
-        let Some(rest) = line.trim().strip_prefix("--tui-") else { continue };
-        let Some((name, value)) = rest.split_once(':') else { continue };
-        let value = value.trim().trim_end_matches(';').trim();
-        if let Some(step) = value.strip_prefix("var(--").and_then(|v| v.split(')').next()) {
-            map.insert(name.trim().to_string(), step.to_string());
-        }
-    }
-    map
-}
-
-fn scope<'a>(css: &'a str, selector: &str) -> &'a str {
-    let Some(start) = css.find(&format!("{selector}{{")) else { return "" };
-    let body = &css[start..];
-    match body.find('}') {
-        Some(end) => &body[..end],
-        None => body,
-    }
-}
-
-fn hex(value: &str) -> Option<(u8, u8, u8)> {
-    let v = value.strip_prefix('#')?;
-    if v.len() != 6 {
-        return None;
-    }
-    Some((
-        u8::from_str_radix(&v[0..2], 16).ok()?,
-        u8::from_str_radix(&v[2..4], 16).ok()?,
-        u8::from_str_radix(&v[4..6], 16).ok()?,
-    ))
-}
-
-/// `cells.css` resolved to cell counts. The file is primitives plus `calc()`,
-/// with a comment forbidding a derived value from being restated as a
-/// literal, so resolving it is substitution to a fixed point rather than a
-/// parser.
-fn cell_tokens(css: &str) -> BTreeMap<String, u16> {
-    let mut raw: Vec<(String, String)> = Vec::new();
-    for line in css.lines() {
-        let Some(rest) = line.trim().strip_prefix("--") else { continue };
-        let Some((name, value)) = rest.split_once(':') else { continue };
-        raw.push((name.trim().to_string(), value.trim().trim_end_matches(';').trim().to_string()));
-    }
-    let mut out = BTreeMap::from([("cell-w".to_string(), 1u16), ("cell-h".to_string(), 1)]);
-    for _ in 0..raw.len() + 1 {
-        let mut progressed = false;
-        for (name, value) in &raw {
-            if out.contains_key(name) {
-                continue;
-            }
-            if let Some(n) = eval(value, &out) {
-                out.insert(name.clone(), n);
-                progressed = true;
-            }
-        }
-        if !progressed {
-            break;
+/// `layout.css` in cells: a `Nch` value is `N` cells. `px` values are the
+/// mock's window measures and are not cells, so they are left out — asking
+/// for one is an error rather than a wrong number.
+fn layout_tokens(css: &str) -> BTreeMap<String, u16> {
+    let mut out = BTreeMap::new();
+    for (name, value) in declarations(css) {
+        if let Some(n) = value.strip_suffix("ch").and_then(|v| v.trim().parse::<u16>().ok()) {
+            out.insert(name, n);
         }
     }
     out
 }
 
-fn eval(value: &str, known: &BTreeMap<String, u16>) -> Option<u16> {
-    let body = value.strip_prefix("calc(").and_then(|v| v.strip_suffix(')')).unwrap_or(value).trim();
-    if let Some((left, right)) = body.split_once('*') {
-        return eval(left.trim(), known)?.checked_mul(right.trim().parse().ok()?);
+// ---- Colour -----------------------------------------------------------------
+
+/// An sRGB colour, 8 bits a channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Rgb(u8, u8, u8);
+
+impl Rgb {
+    fn literal(self) -> String {
+        format!("Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x})", self.0, self.1, self.2)
     }
-    if body.contains('+') {
-        return body.split('+').try_fold(0u16, |total, term| total.checked_add(eval(term.trim(), known)?));
-    }
-    if let Some(name) = body.strip_prefix("var(--").and_then(|v| v.strip_suffix(')')) {
-        return known.get(name.trim()).copied();
-    }
-    body.parse::<u16>().ok()
 }
+
+/// A colour in OKLCH: lightness 0–1, chroma, hue in degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Oklch {
+    l: f64,
+    c: f64,
+    h: f64,
+}
+
+impl Oklch {
+    fn to_rgb(self) -> Rgb {
+        let (a, b) = (self.c * self.h.to_radians().cos(), self.c * self.h.to_radians().sin());
+        oklab_to_rgb(self.l, a, b)
+    }
+}
+
+/// `oklch(0.64 0.2 255)` or `#1e8a3c` → sRGB.
+fn parse_color(value: &str) -> Option<Rgb> {
+    if let Some(hex) = parse_hex(value) {
+        return Some(hex);
+    }
+    parse_oklch(value).map(Oklch::to_rgb)
+}
+
+/// The same, but kept in OKLCH for mixing. A hex is lifted into OKLCH.
+fn parse_oklch_or_hex(value: &str) -> Option<Oklch> {
+    parse_oklch(value).or_else(|| parse_hex(value).map(rgb_to_oklch))
+}
+
+fn parse_oklch(value: &str) -> Option<Oklch> {
+    let inner = value.strip_prefix("oklch(")?.strip_suffix(')')?;
+    let mut parts = inner.split_whitespace();
+    let l = parts.next()?.parse().ok()?;
+    let c = parts.next()?.parse().ok()?;
+    let h = parts.next()?.parse().ok()?;
+    Some(Oklch { l, c, h })
+}
+
+fn parse_hex(value: &str) -> Option<Rgb> {
+    let v = value.strip_prefix('#')?;
+    if v.len() != 6 {
+        return None;
+    }
+    Some(Rgb(u8::from_str_radix(&v[0..2], 16).ok()?, u8::from_str_radix(&v[2..4], 16).ok()?, u8::from_str_radix(&v[4..6], 16).ok()?))
+}
+
+/// Björn Ottosson's OKLab → linear sRGB, then the sRGB transfer curve.
+fn oklab_to_rgb(l: f64, a: f64, b: f64) -> Rgb {
+    let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
+    let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
+    let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;
+    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+    let r = 4.076_741_662_1 * l3 - 3.307_711_591_3 * m3 + 0.230_969_929_2 * s3;
+    let g = -1.268_438_004_6 * l3 + 2.609_757_401_1 * m3 - 0.341_319_396_5 * s3;
+    let bl = -0.004_196_086_3 * l3 - 0.703_418_614_7 * m3 + 1.707_614_701_0 * s3;
+    Rgb(encode(r), encode(g), encode(bl))
+}
+
+fn encode(linear: f64) -> u8 {
+    let c = linear.clamp(0.0, 1.0);
+    let v = if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    (v * 255.0).round() as u8
+}
+
+fn decode(channel: u8) -> f64 {
+    let c = f64::from(channel) / 255.0;
+    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+fn rgb_to_oklch(rgb: Rgb) -> Oklch {
+    let (r, g, b) = (decode(rgb.0), decode(rgb.1), decode(rgb.2));
+    let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
+    let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
+    let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
+    let lab_l = 0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s;
+    let lab_a = 1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s;
+    let lab_b = 0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s;
+    let c = (lab_a * lab_a + lab_b * lab_b).sqrt();
+    let h = lab_b.atan2(lab_a).to_degrees().rem_euclid(360.0);
+    Oklch { l: lab_l, c, h }
+}
+
+/// CSS `color-mix(in oklch, a p%, b)`: lightness and chroma interpolate
+/// linearly, hue along the shorter arc. Neither role this is used on is
+/// achromatic, so the powerless-hue rule never applies.
+fn mix_oklch(a: Oklch, b: Oklch, percent: u8) -> Oklch {
+    mix_oklch_f(a, b, f64::from(percent))
+}
+
+fn mix_oklch_f(a: Oklch, b: Oklch, percent: f64) -> Oklch {
+    let p = percent / 100.0;
+    let mut dh = b.h - a.h;
+    if dh > 180.0 {
+        dh -= 360.0;
+    } else if dh < -180.0 {
+        dh += 360.0;
+    }
+    Oklch { l: a.l * p + b.l * (1.0 - p), c: a.c * p + b.c * (1.0 - p), h: (a.h + dh * (1.0 - p)).rem_euclid(360.0) }
+}
+
+// ---- The stage --------------------------------------------------------------
 
 /// The stage itself: regenerate, and report the first line that differs.
 pub fn check(root: &Path, design_dir: &Path) -> Result<std::result::Result<usize, String>> {
@@ -368,44 +719,103 @@ mod tests {
     #[test]
     fn every_role_the_design_declares_is_carried_or_explained() {
         let text = generate(&design_dir()).expect("tokens generate");
-        let semantic = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/semantic.css")).unwrap());
-        for role in roles(scope(&semantic, ":root")).keys() {
+        let colors = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/colors.css")).unwrap());
+        for role in declarations(scope(&colors, ":root")).keys() {
             let carried = text.contains(&format!("    {}: Color::Rgb", field(role)));
             let excused = UNCARRIED.iter().any(|(name, _)| name == role);
-            assert!(carried || excused, "--tui-{role} is neither generated nor on the uncarried list");
+            assert!(carried || excused, "--{role} is neither generated nor on the uncarried list");
         }
     }
 
-    /// The resolver handles every shape `cells.css` uses, including tokens
-    /// the app does not consume and so does not emit — a `calc()` this could
-    /// not evaluate would surface as a missing constant rather than as a
-    /// wrong one, so it is worth asserting separately from the output.
+    /// The light scope declares fewer roles than the dark one (`--onfill`
+    /// is inherited), and every carried role still resolves.
     #[test]
-    fn the_resolver_handles_every_calc_in_the_file() {
-        let css = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/cells.css")).unwrap());
-        let resolved = cell_tokens(&css);
-        for (token, value) in [("margin-x", 3), ("step-content-col", 29), ("panel-permission-h", 18), ("pane-commands-w", 48)] {
-            assert_eq!(resolved.get(token), Some(&value), "--{token} should resolve to {value}");
-        }
-    }
-
-    /// The derived grid values that reach the app: one is a sum of two
-    /// tokens and one a sum of three, one of which is itself a sum.
-    #[test]
-    fn the_grid_resolves_through_calc() {
+    fn the_light_theme_inherits_what_it_does_not_redeclare() {
         let text = generate(&design_dir()).expect("tokens generate");
-        for (name, value) in [
-            ("MARGIN_X", 3),
-            ("LABEL_COL_WIDTH", 8),
-            ("LABEL_GUTTER", 2),
-            ("GROUP_GAP", 6),
-            ("STEP_MARK_COL", 10),
-            ("STEP_CONTENT_COL", 29),
-        ] {
-            assert!(
-                text.contains(&format!("pub(crate) const {name}: usize = {value};")),
-                "{name} should resolve to {value}"
-            );
+        let light = text.split("pub(crate) const LIGHT: Palette").nth(1).expect("a LIGHT palette");
+        assert!(light.contains("    onfill: Color::Rgb"), "--onfill must reach the light palette by inheritance");
+    }
+
+    /// A white and a black, and the round trip through OKLCH.
+    #[test]
+    fn oklch_conversion_hits_the_ends_of_the_scale() {
+        assert_eq!(parse_color("oklch(0.99 0 0)"), Some(Rgb(252, 252, 252)));
+        assert_eq!(parse_color("oklch(0 0 0)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("oklch(1 0 0)"), Some(Rgb(255, 255, 255)));
+        for hex in ["#1e8a3c", "#d84040", "#f1d2cf", "#183020"] {
+            let rgb = parse_hex(hex).unwrap();
+            let back = rgb_to_oklch(rgb).to_rgb();
+            let close = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= 1;
+            assert!(close(rgb.0, back.0) && close(rgb.1, back.1) && close(rgb.2, back.2), "{hex} → {back:?}");
+        }
+    }
+
+    /// The accent, checked against the value Firefox rendered the frame with
+    /// (measured off the screenshot's `›`): a bright, saturated blue.
+    #[test]
+    fn the_accent_is_a_blue() {
+        let Rgb(r, g, b) = parse_color("oklch(0.64 0.2 255)").unwrap();
+        assert!(b > 200 && r < 80 && g > 100 && g < 160, "expected a blue, got ({r}, {g}, {b})");
+    }
+
+    /// `color-mix` at 100% is the first colour and at 0% the second.
+    #[test]
+    fn a_mix_at_the_ends_is_one_of_its_inputs() {
+        let fill = parse_oklch("oklch(0.53 0.2 258)").unwrap();
+        let win = parse_oklch("oklch(0.19 0.006 260)").unwrap();
+        assert_eq!(mix_oklch(fill, win, 100).to_rgb(), fill.to_rgb());
+        assert_eq!(mix_oklch(fill, win, 0).to_rgb(), win.to_rgb());
+        let mid = mix_oklch(fill, win, 50);
+        assert!((mid.l - 0.36).abs() < 0.001, "lightness interpolates linearly: {mid:?}");
+    }
+
+    /// The mark as the frame draws it: six rows of eighteen, an open A whose
+    /// two legs meet at the top and part at the bottom, ramping brighter
+    /// downward (40 % at the apex, 100 % at the feet).
+    #[test]
+    fn the_mark_is_an_open_a() {
+        let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
+        let mark = mark_cells(&frame).unwrap();
+        assert_eq!((mark.len(), mark[0].len()), (6, 18));
+        let filled = |row: &Vec<MarkCell>| row.iter().filter(|c| c.top.is_some() || c.bottom.is_some()).count();
+        assert_eq!(mark.iter().map(filled).collect::<Vec<_>>(), vec![6, 8, 6, 6, 8, 8]);
+        assert_eq!(mark[0][6], MarkCell { top: None, bottom: Some(45) }, "the apex starts as a lower half");
+        assert_eq!(mark[5][0], MarkCell { top: None, bottom: Some(100) }, "the foot ends at full fill");
+        assert!(mark[2][7..11].iter().all(|c| c.top.is_none() && c.bottom.is_none()), "the A is open between its legs");
+    }
+
+    /// The two bars the frame draws — four segments at 38–44 % and five at
+    /// 46 % — are what `ContextBar.jsx`'s rule gives, and the check that
+    /// proves it is the one `generate` runs.
+    #[test]
+    fn the_gauge_rule_reproduces_every_bar_in_the_frame() {
+        let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
+        let gauges = frame_gauges(&frame);
+        assert!(gauges.iter().any(|(f, e, s)| f == &[55.0, 70.0, 85.0, 100.0] && *e == 6 && *s == 41), "{gauges:?}");
+        assert!(gauges.iter().any(|(f, e, s)| f == &[52.0, 64.0, 76.0, 88.0, 100.0] && *e == 5 && *s == 46), "{gauges:?}");
+        assert!(gauges.iter().any(|(f, e, s)| f.is_empty() && *e == 10 && *s == 0), "{gauges:?}");
+        check_gauge_against_frame(&frame).expect("the rule matches the frame");
+        assert_eq!(gauge_mix(4, 0), Some(55.0));
+        assert_eq!(gauge_mix(1, 0), Some(100.0));
+        assert_eq!(gauge_mix(0, 0), None);
+    }
+
+    #[test]
+    fn the_grid_is_read_in_cells() {
+        let text = generate(&design_dir()).expect("tokens generate");
+        for (name, value) in [("MARGIN_X", 3), ("BODY_X", 5), ("MARK_COL", 2), ("TREE_W", 28), ("GUTTER_LN", 5)] {
+            assert!(text.contains(&format!("pub(crate) const {name}: usize = {value};")), "{name} should be {value}");
+        }
+    }
+
+    /// The card's fourteen marks and the frame's own characters both reach
+    /// the table; the canvas captions around the frames do not.
+    #[test]
+    fn the_glyph_table_is_the_card_plus_the_frame() {
+        let text = generate(&design_dir()).expect("tokens generate");
+        let marks = text.split("pub(crate) const MARKS: [char; ").nth(1).unwrap().split("];").next().unwrap();
+        for glyph in ['›', '✓', '●', '○', '▎', '◆', '⋯', '━', '↩', '⌃', '⎋', '↺', '/', '?', '↑', '↓', '⌄', '−', '▀'] {
+            assert!(marks.contains(&format!("{glyph:?}")), "{glyph} missing from MARKS");
         }
     }
 }

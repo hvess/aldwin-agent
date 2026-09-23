@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
 /// Builds the opaque additional-context string handed to aldwin-core: the
-/// absolute cwd path, then the full text of each *approved* context file
-/// (in the order given). `approved` is expected to already be the fully
-/// resolved list — see `context_approval::resolve`, which is what actually
-/// enforces "only approved files, never a raw filesystem walk" by going
-/// through the permission engine; this function just formats whatever
-/// list it's handed.
+/// absolute cwd path, then the full text of each context file in the order
+/// given. The caller (`bootstrap::context_files`) decides which files those
+/// are — the two conventional names at the project root, whichever exist;
+/// this function just formats whatever list it's handed.
 ///
 /// Also carries the platform facts and the workspace roots.
 ///

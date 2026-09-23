@@ -3,17 +3,16 @@
 *A tool for thought.*
 
 A terminal coding agent that would rather explain the code than rewrite it
-behind your back. It reads, it reasons, it proposes — and it edits only when
-you say so. Every write shows you a diff first. Every command asks before it
-runs. The point is that **you** finish the session understanding the code,
-not just holding a larger diff than when you started.
-
-![Aldwin answering a question about retry backoff](assets/conversation.png)
+behind your back. You describe a change in plain words; it reads and runs
+what it needs, says what it is doing, and never edits a file directly. Every
+edit opens as a full-window review, and nothing is saved until you approve.
+The point is that **you** finish the session understanding the code, not
+just holding a larger diff than when you started.
 
 Built in Rust on [ratatui](https://ratatui.rs). Works with Anthropic or any
 OpenAI-compatible endpoint.
 
-> **Status:** 0.2.0 and actively developed. Linux is the best-supported
+> **Status:** 0.3.0 and actively developed. Linux is the best-supported
 > platform — see the macOS note under Install.
 
 ## Install
@@ -31,9 +30,8 @@ No Intel Mac build. No Windows — `run` leans on Unix process APIs.
 **macOS caveat worth knowing before you install:** Linux enforces a read-only
 call with Landlock; macOS does it with Seatbelt, through `sandbox-exec`. The
 macOS half is newer and less exercised than the Linux one. If it can't be set
-up — or on a platform with no such primitive at all — Aldwin doesn't quietly
-trust the call: it asks you whether to run it as a write. Safe, correct, and
-chattier.
+up — or on a platform with no such primitive at all — the call runs with the
+tree writable, and Aldwin tells you so once, at the first such call.
 
 ### Verify what you downloaded
 
@@ -56,9 +54,9 @@ For a release published before the project was renamed, swap in the old pair
 labels changed, and `allowed_signers` carries both.
 
 This matters more here than for most downloads. Aldwin's whole pitch is that
-its `edit` tool can't write without your say-so and that a read is enforced
-rather than trusted — none of which survives running a binary that isn't the
-one built from the source you can read.
+nothing reaches your files without a review you approved and that a read is
+enforced rather than trusted — none of which survives running a binary that
+isn't the one built from the source you can read.
 
 ### Build from source
 
@@ -94,10 +92,13 @@ aldwin
 That's the whole CLI. No flags, no subcommands, nothing but `--help` and
 `--version`. Everything else lives in config files.
 
-**First launch** asks where the model runs, which one, and how much access
-this directory gets — then drops you straight into the session. Answers go to
-`~/.aldwin/` (global) and `.aldwin/` (this project), both fully commented,
-both meant to be read and edited.
+**Every launch opens straight to the field**, under a short card of what
+Aldwin is working with: version, project, branch, model. There is no setup.
+With nothing configured the card reads `Model  not set`, and your first
+message is held while two questions ask which provider and which model —
+then it goes. `/model` changes either later. Answers go to `~/.aldwin/`
+(global) and `.aldwin/` (this project), both commented, both meant to be read
+and edited.
 
 Aldwin never stores your API key. `provider.yaml` holds the *name* of an
 environment variable, and reads it at startup. For an OpenAI-compatible
@@ -113,65 +114,56 @@ api_key_env: MISTRAL_API_KEY
 
 (`base_url` is ignored for `provider: anthropic`, which knows its own address.)
 
-If the project has a `CLAUDE.md` or `AGENTS.md`, you're asked once — before
-anything launches — whether it goes in the model's context. Nothing is read
-into context that you didn't approve.
+If the project has a `CLAUDE.md` or `AGENTS.md`, it goes in the model's
+context. Reading is a read.
 
-## Permissions
+## How a change happens
 
-Everything starts denied. The allowlist grows as you hit things, so your
-first session in a new project asks about almost everything and then settles
-down quickly.
+Say what you want. Aldwin leads with a sentence about what it's doing, reads
+and runs what it needs without asking, and shows the plan as three plain
+lines — *Count requests per key*, *Turn away requests over the limit*,
+*Check that it works* — each marked done, running or pending. The work
+behind them collapses to a line (`Read 3 files · Ran 1 program`) that
+`Space` opens into exact paths and counts.
 
-![A permission prompt for git, declared a write, with eight options](assets/permission.png)
-
-**A grant is a program and a class** — `git: read`, `cargo: write`. The class
-belongs to the *call*, not the program, because `git status` and `git push`
-are very different requests to the same binary.
-
-**There is no shell.** A call is a program plus an argument list, executed
-directly. `&&`, `|`, `;` and `$(…)` are just characters, with no power to
-staple a second command onto an approved first one.
-
-**A read is enforced, not believed.** When the agent declares a call a read,
-it runs with your tree read-only and the network unreachable. Declare wrong
-and nothing lands — you get asked whether to allow it as a write instead. A
-mistaken declaration costs a prompt, not a repository. *(Landlock on Linux,
-Seatbelt on macOS; see the note above.)*
+**Reads and runs need no permission.** A `run` is a program plus an argument
+list, executed directly — `&&`, `|`, `;` and `$(…)` are just characters.
+When the agent declares a call a read, it runs with your tree read-only and
+the network unreachable; declare wrong and nothing lands, and the agent is
+told to declare it again as a write. *(Landlock on Linux, Seatbelt on macOS;
+see the note above.)*
 
 **Every tool stays inside your workspace — `run` too.** A path argument that
-points outside the project is refused before the program starts, and the
-refusal says what *is* reachable. Working across sibling checkouts is a line
-in the project's `.aldwin/permissions.yaml`, not a shell workaround:
+points outside the project is refused before the program starts. Working
+across sibling checkouts is a line in the project's
+`.aldwin/permissions.yaml`:
 
 ```yaml
 roots:
   - ../proton-libs
 ```
 
-A root widens where a call may point. It grants nothing: which programs run,
-and at which class, is still asked. The honest asterisk is a shell — a path
-inside `bash -c '…'` is a string nobody parses, which is one more reason
-granting `bash` is a deliberate act.
+**A deny is a lock.** The other thing that file holds. A `deny:` entry —
+`curl`, or `npm: write` — refuses the call outright, the refusal names the
+file, and nothing narrower overrides it. Unlocking is a deliberate edit to
+the file.
 
-**A deny is a lock.** Nothing narrower overrides it — not a session, not a
-turn, not the other config file. A locked call is refused without a prompt,
-because there's no answer that would change it. Unlocking is a deliberate
-edit to the file holding it.
-
-Each scope also has a standing rung — `ask`, `read`, `write` — for anything
-no rule covers, and the narrower file wins.
-
-### Edits are outside all of that
-
-Not a grant, not a rung, not a row on any prompt. Every edit shows a diff and
-waits, under every setting, with no way to switch it off.
-
-![An edit approval showing a two-line diff with approve and deny](assets/edit.png)
+**Every edit is reviewed.** The `edit` tool writes nothing: it stages the
+change, and everything staged in a turn is shown to you as one review — at
+the end of the turn, or before any run that would see it, so tests run on
+approved code. The review takes the whole window: a file tree with reading
+progress, the diff with unchanged code folded away, and your comments riding
+at the end of their lines. `⌃↩` approves once you've read every file, or
+sends your comments back to the agent, which addresses them and stages the
+edits again. `⎋` asks before discarding. Nothing is written until you
+approve, under every setting, with no way to switch it off.
 
 The one gap, stated plainly: this covers Aldwin's own `edit` tool. An MCP
-server's tools are its own code, and Aldwin can't render a diff for a write
-it doesn't understand the shape of.
+server's tools are its own code, and what one of them writes is outside the
+review.
+
+**When the agent needs you**, it asks one question with a short list —
+always a yes, a no, and *Chat about this*. `↑↓` and `↩`, or press the number.
 
 ## Sessions
 
@@ -182,8 +174,7 @@ sessions in this project and picks one back up — into the transcript you see
 
 Nothing crosses between sessions on its own. Resume is something you ask for,
 by name; there's no cross-session memory and nothing gets summarised behind
-your back. A resumed session re-asks for permissions rather than inheriting
-them.
+your back.
 
 Nothing prunes old transcripts yet. They're your files, in a directory you
 own.
@@ -192,18 +183,20 @@ own.
 
 | key | does |
 | --- | --- |
-| `Enter` / `Shift+Enter` | submit / newline (`Ctrl+J` where the terminal can't tell them apart) |
-| `Ctrl+C` | cancel the turn, or exit if nothing is running |
+| `↩` / `⇧↩` | send / newline (`⌃J` where the terminal can't tell them apart) |
+| `⎋` | stop the turn that's running |
+| `⌃C` | stop the turn, or leave if nothing is running |
+| `Space` | show or hide the details of the current turn's work (on an empty field) |
 | `↑` `↓` | move within a multi-line draft, then scroll the transcript |
-| `PgUp` `PgDn` `End` | scroll; `End` returns to the live end when the input is empty |
-| `1`–`9`, `Enter` | pick and confirm in any prompt or picker |
+| `1`–`9`, `↩` | pick and confirm in any question |
+| in the review: `↑↓` move, `⇧↑↓` select, `↩` comment, `⌃↩` approve or send (a bare `↩` with nothing selected or typed does the same, for terminals that cannot tell them apart), `⇥` next file, `⎋` discard, `?` keys | |
 
 The mouse wheel scrolls too — the terminal keeps the mouse, so selecting and
 copying text works the way it does anywhere else.
 
-`/help` lists the commands: `/clear`, `/exit`, `/model`, `/reload-config`,
-`/resume`, `/theme light|dark`. Bare `/model` and `/resume` open a picker
-instead of expecting you to know the answer.
+`/` in an empty field opens the commands: `/resume`, `/model`, `/quit`,
+`/clear`. Also reachable by typing them: `/theme light|dark`,
+`/reload-config`, `/help`.
 
 ## Layout
 
@@ -216,10 +209,10 @@ the crate owning the boundary, impls in the siblings that depend on it.
 | --- | --- |
 | `aldwin-core` | agent loop, conversation log, event/command types, `LlmClient` and `ToolDispatcher` traits |
 | `aldwin-config` | YAML config per domain, project and global scope, refuses to start on a half-deleted one |
-| `aldwin-permissions` | the default-deny engine |
-| `aldwin-tools` | read, edit, run, explain (LSP), the read-enforcing sandbox, MCP bridge |
+| `aldwin-permissions` | the deny lock |
+| `aldwin-tools` | read, edit, run, explain (LSP), plan, ask, the staged changeset, the read-enforcing sandbox, MCP bridge |
 | `aldwin-llm` | Anthropic and OpenAI-compatible clients — reqwest, SSE, retry, prompt caching |
-| `aldwin-tui` | the ratatui frontend |
+| `aldwin-tui` | the ratatui frontend, the review included |
 | `aldwin-cli` | the `aldwin` binary — startup, wiring, slash commands |
 | `aldwin-review` | dev-only: the review loop and screenshot harness |
 

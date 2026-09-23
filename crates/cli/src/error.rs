@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Every one of these happens before the TUI has launched (or, for `Tui`,
+/// Every one of these happens before the TUI has launched (or, for `Io`,
 /// after it has already cleanly torn itself down) — safe to print straight
 /// to stderr. Per aldwin-cli.md's Pitfall, none of these paraphrase the
 /// failing field; they all pass through a lower crate's own `Display`
@@ -20,28 +20,9 @@ pub enum StartupError {
     #[error(transparent)]
     Llm(#[from] aldwin_llm::LlmClientInitError),
 
-    #[error("no provider is configured: {0}")]
-    NoProvider(#[source] aldwin_config::ConfigError),
-
     #[error("terminal I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("could not read the current working directory: {0}")]
     Cwd(#[source] std::io::Error),
-
-    #[error("the first-run screen could not be drawn: {0}")]
-    FirstRun(#[source] std::io::Error),
-
-    /// Failing to persist a first-run answer is fatal rather than a warning:
-    /// the session would otherwise start with an access posture the
-    /// developer chose but the harness never recorded, and would ask again
-    /// on the next start as though nothing had been decided.
-    #[error("could not save the first-run answers: {0}")]
-    FirstRunWrite(#[source] aldwin_config::ConfigError),
-
-    /// First run only ever offers ids it took from the catalogue, so this
-    /// means the two lists have drifted apart in code — not something a
-    /// developer can do wrong.
-    #[error("first run returned the provider {id:?}, which is not in the catalogue")]
-    UnknownProvider { id: String },
 }

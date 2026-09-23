@@ -5,7 +5,7 @@ ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
 **Status:** active — one known gap, see Progress below
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-21
+**Last Updated:** 2026-09-23
 
 **Progress (2026-09-21, ADR 0007 — `run` joins the model the other tools live in):**
 Prompted by a reviewed session transcript, not by a plan. The 2026-09-20 entry
@@ -242,6 +242,47 @@ prompt raised that nothing answers), not a wrong value, and was confirmed to
 fail that way with the fix reverted before being accepted as a regression
 test. Edit's approval gate is untouched — `edit_class` calls never enter
 `check` at all.
+
+**Progress (2026-09-23, ADR 0009 — staging, and two tools that run
+nothing):** The dispatch flow of ADR 0004 — check, prompt, record, run,
+offer-as-write — is gone. What replaced it:
+
+- **`Staging`** (`staging.rs`): the changeset of the current turn. `edit`
+  applies its replacement to the staged content (or the disk, or nothing
+  for a new file with an empty `before`) and returns *staged*; `read`
+  serves staged content for a staged path. `write_all` writes every file
+  at an approve, re-checking each against the `before` it was staged from
+  and skipping — and naming — one that changed on disk. `discard` drops
+  the lot. Comments left at a review are counted so the Saved row can say
+  how many an approve closed.
+- **`Dispatcher`** checks the lock (`Locks::check`), runs the tool, and at
+  two moments opens the review over what is staged: `before_step`, when any
+  call of the step is a `run` or an MCP tool (both see the disk), and
+  `turn_ending`. Approve writes and lets the step proceed; comments are
+  returned as the reason the step did not run (or, at turn end, as the
+  next turn's message); discard drops and says so. `SandboxUnavailable`
+  runs the call unconfined and tells the developer once through the
+  dispatcher's own `Notice` (ADR 0009 §3). `ReadRefused` is an error to the
+  model with the re-declaration in its text.
+- **`Tool::call` takes `&DispatchContext`** — `gate.rs` and `ApprovalGate`
+  are gone — and **`Tool::permission` returns `Option`**: `None` is outside
+  the lock (`edit`, `plan`, `ask`); `Some` is a program and a class the
+  lock may refuse. `ToolDescriptor::edit_class` is gone with the gate.
+- **`plan`** validates one to seven steps of `{text, state}` and announces
+  them with `DispatchContext::plan_updated`. **`ask`** validates a question
+  with one to four answers, appends *Chat about this* if absent, and
+  returns the chosen option's text or what was typed. Neither runs
+  anything.
+- **`diff.rs` is gone**; the TUI computes the review's diff from the
+  changeset's `before`/`after`.
+- **`run`'s description** now tells the model that staged edits are
+  reviewed before a run, and that a refused read is re-declared, not
+  re-asked.
+
+Everything below the Vocabulary describes the crate under ADR 0004 and is
+kept as history where it still explains a decision (the sandbox, `run`'s
+argv model, the MCP bridge, `Workspace`) and superseded where it describes
+prompting.
 
 ## Why
 

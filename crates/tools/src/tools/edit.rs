@@ -1,41 +1,49 @@
+use std::sync::Arc;
+
+use aldwin_core::DispatchContext;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::diff;
 use crate::error::ToolError;
 use crate::paths::Workspace;
-use crate::gate::ApprovalGate;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
-use aldwin_permissions::Class;
+use crate::staging::Staging;
 
-/// Propose a single edit (path, before, after). Always per-call approval —
-/// the gate lives inside this future, not the dispatcher (see
-/// aldwin-tools.md's Decisions). `edit_class: true` means the generic
-/// dispatcher permission check is never even consulted for this tool.
+/// Stage a single edit (path, before, after). Nothing is written here: the
+/// change lands in [`Staging`], and the review — at the end of the turn, or
+/// before any run that would observe it — is what writes it (ADR 0009 §4).
+/// Outside the lock entirely: `permission` returns `None`.
 pub struct EditTool {
-    descriptor:   ToolDescriptor,
-    workspace:    Workspace,
+    descriptor: ToolDescriptor,
+    workspace:  Workspace,
+    staging:    Arc<Staging>,
 }
 
 impl EditTool {
-    pub fn new(workspace: Workspace) -> Self {
+    pub fn new(workspace: Workspace, staging: Arc<Staging>) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name:         "edit".into(),
-                description:  "Replace one exact occurrence of `before` with `after` in a file, after developer approval.".into(),
+                description:  "Stage a change to a file: replace one exact occurrence of `before` with `after`. \
+                               Nothing is written to disk — every edit staged in a turn is shown to the developer \
+                               as one review, and they approve it, discard it, or leave comments on lines. \
+                               To create a new file, give an empty `before`. \
+                               Stage every edit a change needs, then run what checks it; the review opens \
+                               before the run. Read the file first so `before` matches exactly."
+                    .into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "path":   { "type": "string" },
-                        "before": { "type": "string" },
+                        "before": { "type": "string", "description": "Exact text to replace; empty to create the file." },
                         "after":  { "type": "string" },
                     },
                     "required": ["path", "before", "after"],
                 }),
-                edit_class: true,
-                source:     ToolSource::Builtin,
+                source: ToolSource::Builtin,
             },
             workspace,
+            staging,
         }
     }
 }
@@ -63,182 +71,115 @@ impl Tool for EditTool {
         &self.descriptor
     }
 
-    /// Never consulted. `edit_class: true` routes this tool around the
-    /// permission path entirely, which is what ADR 0004 §3 means by editing
-    /// being outside the model — there is no class it could return that any
-    /// grant would match.
-    fn permission(&self, _input: &Value) -> Result<PermissionRequest, ToolError> {
-        Ok(PermissionRequest { program: "edit".into(), class: Class::Edit, argv: Vec::new() })
+    /// Outside the lock: an edit reaches disk only through the review.
+    fn permission(&self, _input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
+        Ok(None)
     }
 
-    async fn call(&self, call_id: &str, input: Value, gate: &dyn ApprovalGate) -> Result<String, ToolError> {
+    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
         let args = edit_args(&input)?;
         let path = self.workspace.resolve(&args.path)?;
+        let rel = args.path.clone();
 
-        let current = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
-
-        let count = current.matches(args.before.as_str()).count();
-        if count != 1 {
-            return Err(ToolError::AmbiguousMatch { path, count });
-        }
-
-        let updated = current.replacen(&args.before, &args.after, 1);
-        let rendered_diff = diff::unified(&args.path, &args.before, &args.after);
-
-        if !gate.request_approval(call_id.to_string(), rendered_diff).await {
-            return Err(ToolError::Denied);
-        }
-
-        // The approval wait is a real yield point, and dispatch runs
-        // multiple tool calls concurrently within a step (see
-        // `Agent::dispatch_tools`) — the file may have changed since
-        // `current` was read, whether from another Edit call on the same
-        // path or an external change. Re-read and compare before writing so
-        // the developer-approved diff can't be silently applied over
-        // content they never actually saw, clobbering whatever changed it
-        // in the interim.
-        let latest = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
-        if latest != current {
-            return Err(ToolError::ConcurrentModification { path });
-        }
-
-        tokio::fs::write(&path, &updated).await.map_err(|source| ToolError::Io { path, source })?;
-        Ok(format!("edited {}", args.path))
+        self.staging
+            .edit(path.clone(), &rel, |current| match current {
+                // A file that does not exist is created — but only when the
+                // call said so with an empty `before`; a non-empty `before`
+                // against a missing file is a mistake about the file.
+                None if args.before.is_empty() => Ok(args.after.clone()),
+                None => Err(ToolError::Io {
+                    path:   path.clone(),
+                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "no such file (give an empty `before` to create it)"),
+                }),
+                Some(current) => {
+                    let count = if args.before.is_empty() { 0 } else { current.matches(args.before.as_str()).count() };
+                    if count != 1 {
+                        return Err(ToolError::AmbiguousMatch { path: path.clone(), count });
+                    }
+                    Ok(current.replacen(&args.before, &args.after, 1))
+                }
+            })
+            .await?;
+        Ok(format!("staged an edit to {rel}; the developer reviews it before it is written"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use crate::test_support::{dispatch_context, ALWAYS_APPROVE, ALWAYS_DENY};
-    use aldwin_core::Event;
+    use crate::test_support::dispatch_context;
     use tempfile::tempdir;
 
-    fn write(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, content).unwrap();
-        path
+    fn tool(dir: &tempfile::TempDir) -> (EditTool, Arc<Staging>) {
+        let staging = Arc::new(Staging::new());
+        (EditTool::new(Workspace::new(dir.path()), staging.clone()), staging)
     }
 
     #[tokio::test]
-    async fn approved_edit_writes_the_replacement() {
+    async fn an_edit_is_staged_and_the_disk_is_untouched() {
         let dir = tempdir().unwrap();
-        write(&dir, "f.rs", "fn a() {}\nfn b() {}\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
+        let path = dir.path().join("f.rs");
+        std::fs::write(&path, "fn a() {}\nfn b() {}\n").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
 
-        let out = tool
-            .call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { println!(\"hi\"); }"}), &ALWAYS_APPROVE)
-            .await
-            .unwrap();
-        assert_eq!(out, "edited f.rs");
+        let out = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { hi(); }"}), &ctx).await.unwrap();
+        assert!(out.starts_with("staged an edit to f.rs"));
 
-        let on_disk = std::fs::read_to_string(dir.path().join("f.rs")).unwrap();
-        assert_eq!(on_disk, "fn a() { println!(\"hi\"); }\nfn b() {}\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\nfn b() {}\n", "nothing is written by the tool");
+        assert_eq!(staging.changeset().files[0].after, "fn a() { hi(); }\nfn b() {}\n");
     }
 
     #[tokio::test]
-    async fn absolute_path_cannot_escape_the_project_root() {
+    async fn absolute_path_cannot_escape_the_workspace() {
         let dir = tempdir().unwrap();
-        let tool = EditTool::new(Workspace::new(dir.path()));
-
-        let err = tool.call("c1", json!({"path": "/etc/passwd", "before": "root", "after": "x"}), &ALWAYS_APPROVE).await.unwrap_err();
+        let (tool, _) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
+        let err = tool.call("c1", json!({"path": "/etc/passwd", "before": "root", "after": "x"}), &ctx).await.unwrap_err();
         assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }));
     }
 
     #[tokio::test]
-    async fn denied_edit_leaves_the_file_untouched() {
+    async fn zero_or_many_matches_is_a_structured_error() {
         let dir = tempdir().unwrap();
-        write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
+        std::fs::write(dir.path().join("f.rs"), "x\nx\n").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
 
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { x(); }"}), &ALWAYS_DENY).await.unwrap_err();
-        assert!(matches!(err, ToolError::Denied));
-
-        let on_disk = std::fs::read_to_string(dir.path().join("f.rs")).unwrap();
-        assert_eq!(on_disk, "fn a() {}\n");
-    }
-
-    #[tokio::test]
-    async fn zero_matches_is_a_structured_error_not_a_prompt() {
-        let dir = tempdir().unwrap();
-        write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
-
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "fn missing() {}", "after": "x"}), &ALWAYS_APPROVE).await.unwrap_err();
+        let err = tool.call("c1", json!({"path": "f.rs", "before": "missing", "after": "y"}), &ctx).await.unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 0, .. }));
-    }
-
-    /// Regression test for the TOCTOU the audit found: an approval-gated
-    /// edit used to write `updated` (computed from `current`, read before
-    /// the approval wait) unconditionally, even if the file had changed on
-    /// disk during that wait. This gate simulates exactly that: the file
-    /// changes underneath the pending approval, then approves — the stale
-    /// diff must be rejected instead of silently overwriting the new
-    /// content.
-    #[tokio::test]
-    async fn file_changed_during_approval_wait_is_rejected_not_silently_overwritten() {
-        struct ChangeFileThenApprove {
-            path: PathBuf,
-        }
-        #[async_trait]
-        impl ApprovalGate for ChangeFileThenApprove {
-            async fn request_approval(&self, _call_id: String, _diff: String) -> bool {
-                std::fs::write(&self.path, "changed-out-from-under-the-approval\n").unwrap();
-                true
-            }
-        }
-
-        let dir = tempdir().unwrap();
-        let path = write(&dir, "f.rs", "fn a() {}\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
-        let gate = ChangeFileThenApprove { path: path.clone() };
-
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { x(); }"}), &gate).await.unwrap_err();
-        assert!(matches!(err, ToolError::ConcurrentModification { .. }));
-
-        let on_disk = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(on_disk, "changed-out-from-under-the-approval\n", "the concurrent change must survive, not get clobbered by the stale edit");
-    }
-
-    #[tokio::test]
-    async fn multiple_matches_is_ambiguous() {
-        let dir = tempdir().unwrap();
-        write(&dir, "f.rs", "x\nx\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
-
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "x", "after": "y"}), &ALWAYS_APPROVE).await.unwrap_err();
+        let err = tool.call("c1", json!({"path": "f.rs", "before": "x", "after": "y"}), &ctx).await.unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 2, .. }));
+        assert!(staging.is_empty(), "a failed edit stages nothing");
     }
 
-    /// Full round trip against the real `DispatchContext`, not the fixed
-    /// fake — proves the tool actually drives `ToolApprovalRequested` /
-    /// resolves via the pending map the way `Agent`'s command loop does.
     #[tokio::test]
-    async fn drives_the_real_approval_round_trip() {
+    async fn an_empty_before_creates_a_file_and_a_full_one_against_nothing_does_not() {
         let dir = tempdir().unwrap();
-        write(&dir, "f.rs", "old\n");
-        let tool = EditTool::new(Workspace::new(dir.path()));
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
 
-        let (ctx, mut events, pending) = dispatch_context();
+        let err = tool.call("c1", json!({"path": "new.rs", "before": "fn", "after": "x"}), &ctx).await.unwrap_err();
+        assert!(matches!(err, ToolError::Io { .. }));
 
-        let call = tool.call("call-1", json!({"path": "f.rs", "before": "old", "after": "new"}), &ctx);
-        let resolve = async {
-            match events.recv().await.unwrap() {
-                Event::ToolApprovalRequested { call_id, diff, .. } => {
-                    assert_eq!(call_id, "call-1");
-                    assert!(diff.contains("-old"));
-                    assert!(diff.contains("+new"));
-                    let Some(aldwin_core::PendingReply::Approval(tx)) = pending.lock().unwrap().remove(&call_id) else {
-                        panic!("expected a pending Approval entry for {call_id}");
-                    };
-                    tx.send(true).unwrap();
-                }
-                other => panic!("unexpected event: {other:?}"),
-            }
-        };
+        tool.call("c2", json!({"path": "new.rs", "before": "", "after": "fn x() {}\n"}), &ctx).await.unwrap();
+        let cs = staging.changeset();
+        assert_eq!(cs.files[0].before, None);
+        assert_eq!(cs.files[0].after, "fn x() {}\n");
+        assert!(!dir.path().join("new.rs").exists());
+    }
 
-        let (result, ()) = tokio::join!(call, resolve);
-        assert_eq!(result.unwrap(), "edited f.rs");
+    /// Two edits to one file in one step: the second sees the first, which
+    /// is what lets a model make several changes to a file in one turn.
+    #[tokio::test]
+    async fn a_second_edit_to_the_same_file_builds_on_the_first() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("f.rs"), "a\nb\n").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
+
+        tool.call("c1", json!({"path": "f.rs", "before": "a", "after": "A"}), &ctx).await.unwrap();
+        tool.call("c2", json!({"path": "f.rs", "before": "b", "after": "B"}), &ctx).await.unwrap();
+        assert_eq!(staging.changeset().files[0].after, "A\nB\n");
     }
 }

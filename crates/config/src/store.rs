@@ -326,7 +326,8 @@ impl Config {
         })
     }
 
-    /// Sets this scope's standing rung — the answer for any call no entry
+    /// Sets this scope's standing rung. Nothing reads it since ADR 0009; kept
+    /// so a test can write a file from the old model. The answer for any call no entry
     /// covers (ADR 0004 §6).
     pub fn set_default_rung(&self, scope: Scope, rung: Rung) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| cfg.default = Some(rung))
@@ -521,10 +522,10 @@ impl Config {
     /// behalf. A provider does not: any file this could write would name a
     /// host, a model and a key variable nobody chose. It used to write
     /// `anthropic` / `claude-sonnet-5`, and because that ran *before* the
-    /// first-run screen's own check (`global_provider().is_err()`), the
+    /// session's own check (`global_provider().is_err()`), the
     /// provider question was never once asked — the seed had already
     /// answered it. Leaving the file absent is what makes "no provider is
-    /// configured" a real state, and it is the state first run exists to
+    /// configured" a real state, and it is the state the launch card's `Model  not set` exists to
     /// resolve.
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
         let dir = &self.inner.global_dir;
@@ -553,7 +554,7 @@ impl Config {
 
         // `provider.yaml` is not required: an existing directory without one
         // is a developer who has not answered the provider question yet (or
-        // who deleted the file to be asked again), which first run handles.
+        // who deleted the file to be asked again), which the provider question handles.
         // The other three are written together at init, so any of them
         // missing really is a half-deleted config directory.
         let required = ["permissions.yaml", "mcp.yaml", "tui.yaml"];
@@ -696,12 +697,10 @@ mod tests {
             assert!(global_dir.join(f).is_file(), "missing {f}");
         }
 
-        // In-memory snapshot reflects what was just written, not stale defaults —
-        // including the annotated file's explicit `default: ask`.
-        assert_eq!(
-            config.global_permissions(),
-            PermissionsConfig { default: Some(Rung::Ask), ..PermissionsConfig::empty() }
-        );
+        // In-memory snapshot reflects what was just written, not stale
+        // defaults. A fresh file states neither a rung nor an allow list —
+        // ADR 0009 reads neither — only an empty deny list.
+        assert_eq!(config.global_permissions(), PermissionsConfig::empty());
 
         // Idempotent: a second call sees everything already there.
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::AlreadyPresent);
@@ -709,7 +708,7 @@ mod tests {
 
     /// A fresh global directory names no provider at all — the one question
     /// init must not answer on the developer's behalf. Seeding one is what
-    /// made first run's provider step unreachable: it ran first, so the
+    /// made the provider question unreachable: it ran first, so the
     /// screen's own "no provider is configured" test was never true, and
     /// every developer silently got the seeded default.
     #[test]
@@ -717,7 +716,7 @@ mod tests {
         let (_project, global, config) = fresh();
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
         assert!(!global.path().join(".aldwin").join("provider.yaml").exists(), "init must not guess a provider");
-        assert!(config.global_provider().is_err(), "which is what first run reads to know the question is unanswered");
+        assert!(config.global_provider().is_err(), "which is what the session reads to know the question is unanswered");
         assert_eq!(
             config.init_global_if_empty().unwrap(),
             InitOutcome::AlreadyPresent,

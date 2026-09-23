@@ -134,6 +134,27 @@ impl Proxy {
         }
     }
 
+    /// Block until the visible state moves, or `timeout` passes without it.
+    ///
+    /// The caret blinks at the design's 1.05s, stepped, so an app at rest
+    /// on a field is quiet for most of a second and then not: `wait_quiet`
+    /// still settles between blinks, but a picture and a grid taken either
+    /// side of the edge disagree at exactly one cell. Waiting for the edge
+    /// first leaves half a period to take both inside. A screen with no
+    /// caret never moves; that case falls through the timeout and costs
+    /// only that.
+    pub fn wait_for_change(&self, timeout: Duration) -> bool {
+        let before = self.idle.load(Ordering::Relaxed);
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.idle.load(Ordering::Relaxed) != before {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
     /// Send bytes as if typed. The harness chooses these, so they test the
     /// app's handling and not foot's key encoding — the one thing this
     /// arrangement cannot vouch for.

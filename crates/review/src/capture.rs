@@ -159,10 +159,26 @@ fn take_frame(
         )));
     }
 
+    // The picture and the grid have to be taken inside one half-period of
+    // the caret's blink (`Proxy::wait_for_change`), and the grid read back
+    // after the shot proves they were: a mismatch means the blink landed
+    // between them, and the shot is retaken on the next edge.
     let path = run_dir.join(format!("{scene_name}-{size}-{theme}.png"));
-    let _ = std::fs::remove_file(&path);
-    comp.exec(&format!("grim {}", shell_quote(&path.display().to_string())))?;
-    wait_for_png(&path)?;
+    let mut grid = None;
+    for _ in 0..3 {
+        let _ = std::fs::remove_file(&path);
+        proxy.wait_for_change(Duration::from_millis(1300));
+        let before = proxy.grid();
+        comp.exec(&format!("grim {}", shell_quote(&path.display().to_string())))?;
+        wait_for_png(&path)?;
+        if proxy.grid().fingerprint() == before.fingerprint() {
+            grid = Some(before);
+            break;
+        }
+    }
+    let Some(grid) = grid else {
+        return Err(Error::other("the screen changed under the camera three shots running — something faster than the caret is animating"));
+    };
 
     let (w, h) = png::size(&path)?;
     if (w, h) != (px_w, px_h) {
@@ -171,7 +187,6 @@ fn take_frame(
 
     // Written before the cross-check, not after: when the two disagree the
     // grid is the evidence for which of them is wrong.
-    let grid = proxy.grid();
     let grid_path = run_dir.join(format!("{scene_name}-{size}-{theme}.txt"));
     std::fs::write(&grid_path, grid.text())?;
 

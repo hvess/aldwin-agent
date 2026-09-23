@@ -1,0 +1,16 @@
+:root {
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --font-ui: system-ui, -apple-system, sans-serif;
+  /* inside a window: one size, one line height */
+  --text-cell: 400 14px/24px var(--font-mono);
+  --weight-regular: 400;
+  --weight-emphasis: 600;            /* titles, questions, "Aldwin" in the launch card */
+  --text-titlebar: 12px;             /* window title, --font-ui */
+  /* canvas around frames */
+  --text-canvas-title: 600 26px/1.25 var(--font-ui);
+  --text-canvas-body: 400 15px/25px var(--font-ui);
+  --text-canvas-frame: 600 16px/1.4 var(--font-ui);
+  --text-canvas-caption: 400 14px/1.4 var(--font-ui);
+  --text-canvas-mono: 500 12px/20px var(--font-mono);
+  --tracking-canvas-title: -.015em;
+}

@@ -16,33 +16,21 @@
 macro_rules! permissions_header {
     () => {
 "\
-# Aldwin permissions — one scope layer. Nothing runs that a rule here, or a
-# prompt you answered, has not allowed.
+# Aldwin permissions — one scope layer. Reads and runs need no permission;
+# every edit is reviewed before it is written; this file is where you lock a
+# program out, and where you widen what the tools may reach.
 #
 # Aldwin reads up to two of these: ~/.aldwin/permissions.yaml (applies in
 # every project) and <project>/.aldwin/permissions.yaml (this project only).
-# Whichever file you are looking at is one of those two, never both. Two more
-# layers never touch disk: session grants, gone when Aldwin exits, and a
-# single turn\'s \"allow once\", gone immediately.
+# Whichever file you are looking at is one of those two, never both.
 #
-#   default:  what runs when no entry below covers the call.
-#               ask    every call asks, every time
-#               read   reads run; writes and edits ask
-#               write  reads and writes run; edits ask
-#
-#             Where this file and the other one disagree, the narrower file
-#             wins outright — a project may be opened up without loosening
-#             every project, or locked down without touching the global file.
-#
-#   allow:    programs that may run, and the class they may run at.
-#   deny:     programs that may not. A deny is a lock: nothing narrower can
-#             override it — not the other file, not a session, not a single
-#             turn. Undoing one is an edit to this file, made deliberately,
-#             outside the moment that wanted it.
+#   deny:     programs that may not run. A deny is a lock: nothing narrower
+#             can override it — not the other file, not the agent, not a
+#             single turn. A locked call is refused outright and the refusal
+#             names this file. Undoing one is an edit here, made
+#             deliberately, outside the moment that wanted it.
 #   roots:    extra directories the tools may be pointed at, beyond this
-#             project. Reach, not a grant: a root says nothing about which
-#             programs run or at which class — those are still asked. A
-#             relative root is read from the project directory.
+#             project. A relative root is read from the project directory.
 #
 #               roots:
 #                 - ../proton-libs
@@ -53,12 +41,8 @@ macro_rules! permissions_header {
 #             is confined to this project, and a path outside it is refused
 #             rather than quietly reached.
 #
-# An entry is a program and a class:
+# A deny entry is a program, optionally qualified by the class of call:
 #
-#   allow:
-#     - git: read      # any git call that reads
-#     - cargo: write   # any cargo call at all — write includes read
-#     - rg             # every class, the widest grant there is
 #   deny:
 #     - curl           # locked entirely
 #     - npm: write     # npm may still read
@@ -67,26 +51,27 @@ macro_rules! permissions_header {
 # `git push` is a write, and they are the same binary. The agent declares a
 # class for each call, and a call it declares a read is executed with your
 # source tree read-only and the network unreachable — so a declaration that
-# was wrong costs you a prompt, not a tree. There is no entry for the whole
-# command line: argv is run directly, never through a shell, so `&&`, `|`
-# and `$(...)` are ordinary characters and cannot chain a second command
-# onto an approved first one.
+# was wrong fails, and the agent is told to declare it again as what it is.
+# There is no entry for the whole command line: argv is run directly, never
+# through a shell, so `&&`, `|` and `$(...)` are ordinary characters and
+# cannot chain a second command onto a first.
 #
-# `edit` is not a class you can write here. Editing a file always shows you
-# the diff and waits, under every setting in this file, with no way to turn
-# it off. An `edit` entry is a load error rather than a rule that quietly
-# does nothing.
+# Editing is not governed here at all. Every edit the agent stages in a turn
+# is shown to you as one review, and nothing is written until you approve it
+# — under every setting in this file, with no way to turn it off.
 #
-# You will rarely hand-edit this: answering a permission prompt writes the
-# rule for you, and these comments stay where they are. If you do edit it
-# while Aldwin is running, /reload-config picks the change up.
+# Two keys from an earlier version of Aldwin — `allow:` and `default:` — are
+# still accepted so an older file loads, but nothing reads them. Aldwin says
+# so once at startup if it finds them; delete them at your leisure.
+#
+# If you edit this while Aldwin is running, /reload-config picks the change up.
 "
     };
 }
 
 pub const PERMISSIONS_HEADER: &str = permissions_header!();
 
-pub const PERMISSIONS: &str = concat!(permissions_header!(), "version: 2\ndefault: ask\nallow: []\ndeny: []\n");
+pub const PERMISSIONS: &str = concat!(permissions_header!(), "version: 2\ndeny: []\n");
 
 pub const PROVIDER_HEADER: &str = "\
 # Aldwin provider settings.
@@ -148,7 +133,7 @@ mod tests {
         // The first-launch file states `ask` outright rather than leaving the
         // field absent: it is a teaching file, and the one rung that grants
         // nothing is the one worth showing a developer written down.
-        assert_eq!(permissions, PermissionsConfig { default: Some(crate::domain::Rung::Ask), ..PermissionsConfig::empty() });
+        assert_eq!(permissions, PermissionsConfig::empty(), "a fresh file states neither a rung nor an allow list (ADR 0009)");
 
         let mcp: McpConfig = serde_yaml_ng::from_str(MCP).unwrap();
         assert_eq!(mcp, McpConfig::empty());

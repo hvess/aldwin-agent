@@ -1,31 +1,27 @@
-//! The permission engine of ADR 0004. Nothing runs that a rule, or an answer
-//! the developer gave, has not allowed.
+//! The lock of ADR 0009. Reads and runs need no grant — the sandbox is what
+//! holds a read declaration to its word, and the review is the one gate on a
+//! change reaching disk — so what is left of the permission model is the
+//! part no answer at a prompt could ever lift: **a deny is a lock**.
 //!
-//! A grant is a **program and a class** — `git: read` — and the class belongs
-//! to the *call*, not the program: `git status` is a read and `git push` is a
-//! write, and they are the same binary. The agent declares a class per call;
-//! this crate does not verify the declaration and deliberately cannot. That is
-//! the sandbox's job at execution time (aldwin-tools), and the division is
-//! the whole design: a policy engine that also judged what a command does
-//! would be guessing, and a wrong guess there runs the command.
+//! A deny names a program and, optionally, a class — `curl`, or `git: write`
+//! — in the project's or the global `permissions.yaml`. A call on a locked
+//! program is refused outright, the refusal names the file, and nothing
+//! narrower can override it. That was ADR 0004 §7, and it is the one clause
+//! of that ADR ADR 0009 keeps whole.
 //!
-//! `Engine` owns precedence — deny as a lock across every scope, then allow,
-//! then the standing rung with the narrower file winning — and the in-memory
-//! session layer. It has no dependency on aldwin-core: `PromptPayload` /
-//! `PromptResponse` are the plain-data shapes that cross core's opaque
-//! `serde_json::Value` boundary.
+//! What this crate no longer holds: allow lists, the standing rung, the
+//! eight-row prompt, the session layer that answers persisted into, and the
+//! context-file prompt. `permissions.yaml` still *parses* `allow:` and
+//! `default:` so a file from the previous model loads, but nothing reads
+//! them — see `aldwin_config::PermissionsConfig`.
 
 mod engine;
 mod error;
-mod prompt;
 
-pub use engine::{
-    EffectiveContextFile, EffectiveGrant, EffectiveView, Engine, GrantScope, Outcome,
-};
+pub use engine::{Locks, LockScope, Outcome};
 pub use error::PermissionError;
-pub use prompt::{Choice, ContextFileTier, PromptPayload, PromptResponse};
 
 // Re-exported so callers reason about one vocabulary: these are persistence
 // shapes because config owns the file format, but they are permission
 // concepts and a caller should not have to know which crate defines them.
-pub use aldwin_config::{Class, GrantEntry, GrantList, Rung};
+pub use aldwin_config::{Class, GrantEntry};

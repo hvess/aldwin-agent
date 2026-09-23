@@ -1,202 +1,88 @@
 # aldwin-permissions
 
-Default-deny permission engine — a grant is a program and a class, a deny is
-a lock, and a read declaration is enforced rather than believed.
+The lock — a `deny:` entry refuses a program outright and nothing narrower
+overrides it — and the reach a `roots:` entry declares. That is all this
+crate holds since ADR 0009.
 
 **Status:** active
-**Scope:** aldwin-permissions crate. Policy engine, entry shape, prompt
-round-trip. Excludes TUI rendering, YAML I/O (config), tool implementations
-and the sandbox (all aldwin-tools).
+**Scope:** aldwin-permissions crate. The deny lock and the compatibility
+read of the keys nothing consults any more. Excludes the sandbox, the
+staging area and the review (all aldwin-tools), YAML I/O (config) and
+rendering (tui).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-21
+**Last Updated:** 2026-09-23
 
-**Progress (2026-09-21, ADR 0007 — reach became a list, and the fallback was
-built):** The engine itself is untouched; two things next to it changed.
-`PermissionsConfig` gained `roots` — extra directories tools may be pointed
-at. It is **reach, not a grant**: it says nothing about which programs run or
-at which class, and both are still asked over a second root. Project scope
-only, never inferred, omitted from the file when empty. And ADR 0004 §4's
-no-enforcement fallback — "every call asks" — is now what happens:
-`SandboxUnavailable` raises the same `WriteAttempt` prompt as a refused read,
-where it used to be a flat error that made the `read` class unusable on any
-platform without a sandbox.
+**Progress (2026-09-23, ADR 0009 — the review is the only gate):** The
+engine of ADR 0004 is gone. Reads and runs need no grant and never ask; the
+sandbox holds a read declaration to its word and a refused read goes back to
+the model as an error; an edit is staged and reviewed whole at the end of
+the turn or before any run that would observe it. What was left of the
+permission model after that is the one clause no answer at a prompt could
+ever have lifted — **a deny is a lock** (ADR 0004 §7) — and this crate is
+now exactly that.
 
-**Progress (2026-09-20, ADR 0004 — the model was reopened from first
-principles):** Everything below is new. The previous model — `kind:pattern`
-grants, a four-tier prompt, a `shell` tool taking one opaque command string —
-is gone, along with ADR 0001 which superseded it and the parts of ADR 0003
-that described the option list. Read
-`.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md`
-first; this spec is its implementation.
+- **`Engine` became `Locks`.** `check(program, class)` answers
+  `Outcome::Allow` or `Outcome::Locked { scope, rule }` and nothing else.
+  There is no session layer, no `record`, no `set_rung`, no
+  `effective_view`, and no `prompt.rs`: `Choice`, `PromptPayload`,
+  `PromptResponse` and `ContextFileTier` are deleted, not moved.
+- **`permissions.yaml` still parses `allow:` and `default:`.** A file the
+  previous first run wrote carries both, and `deny_unknown_fields` would
+  otherwise stop every existing project from starting. `Locks::stale_keys`
+  reports which scope carries one; aldwin-cli says so once at startup. They
+  are never written (`skip_serializing_if`) and never read. A later format
+  version drops them.
+- **Context files are not this crate's business any more.** `CLAUDE.md`
+  and `AGENTS.md` are read into the context because reading is a read;
+  `context_files.yaml` remains a config domain nothing consults.
+- **`roots:` is unchanged** (ADR 0007): reach, not a grant, project scope
+  only, applied by aldwin-cli at startup and on `/reload-config`.
 
-The short version of what moved:
-
-- **`shell` is gone.** `run` takes a program and an argument list and
-  `execve`s it. There is no interpreter, so no grant can be walked past with
-  `&&`.
-- **A grant is `program: class`.** The class belongs to the *call* — `git
-  status` is a read, `git push` is a write — which is what makes a read/write
-  axis sound where ADR 0001 found it unsound.
-- **The agent declares the class; the sandbox enforces it.** A read-declared
-  call runs with the tree read-only and no TCP. A wrong declaration costs a
-  prompt, not a tree.
-- **A deny is a lock.** Nothing narrower overrides it, and a locked call draws
-  no prompt at all — there is no answer that would change it.
-- **Each scope carries a standing rung** (`ask` → `read` → `write`), and the
-  narrower file wins outright.
-- **`edit` left the model entirely.** Not a grant, not a rung, not a row.
-
-Every persisted grant from the old model is meaningless, and a v1
-`permissions.yaml` is moved aside to `permissions.yaml.v1` rather than
-reinterpreted — see aldwin-config's `retire_v1_permissions`.
-
-## Why
-
-Every tool call and context-file ingestion runs through this engine. It owns
-precedence, the standing rung, and the in-memory session layer. Cross-cutting:
-any crate that gates an action calls in rather than reimplementing policy.
-
-One thing it deliberately does **not** own, and the division is the design:
-**it never judges what a command does.** It is handed a declared class and
-weighs it against the rules. Verifying the declaration is the sandbox's job at
-execution time (aldwin-tools). A policy engine that also guessed at a
-command's nature would be making the guess the whole model exists to avoid,
-and a wrong guess there *runs the command*.
-
-## Vocabulary
-
-- **Program:** the grant key. For `run`, the binary (`git`). For a built-in,
-  the tool's own name (`read`, `explain`). For an MCP tool, its namespaced
-  name.
-- **Class:** what a call does — `read`, `write`, or `edit`. A property of the
-  *call*, not the program. `write` covers `read`; nothing covers `edit`.
-- **Entry:** one line of an allow or deny list — a program, optionally
-  qualified by a class. `git: read`, or bare `curl` for every class.
-- **Rung:** a scope's standing answer for any call no entry covers. `ask` →
-  `read` → `write`, widening.
-- **Scope:** turn, session, project, global. Turn and session never touch
-  disk; project and global are `permissions.yaml` files.
-- **Lock:** a deny. It cannot be overridden by anything narrower.
-- **Declaration:** the class the agent states for a call. An input, never a
-  finding.
-
-## Model
-
-- **Default deny.** Every call starts denied. No "obviously safe" carve-out.
-- **Resolution order**, and it is the order because of what each step means:
-  1. `edit` never resolves here — it always asks, and `record` refuses it at
-     every row including the ones that persist nothing.
-  2. **Deny, across every scope.** Checked before anything that could allow,
-     including a narrower scope. That precedence *is* what distinguishes a
-     lock from a pre-answer.
-  3. **Allow, across every scope.** Any allow covering the call suffices;
-     allows do not compete.
-  4. **The standing rung**, narrower file winning outright.
-  5. Otherwise, ask.
-- **Entries outrank the rung, both ways.** A denied program stays denied under
-  `write`; an allowed one runs under `ask`. That falls out of 2 and 3 running
-  before 4.
-- **Deny is asymmetric with allow on class.** An allow of `read` does not
-  cover a write. A deny of `read` *does* cover a write — permitting writing
-  while forbidding reading describes no coherent posture.
-- **A rung of `None` is not `ask`.** A file that states no rung falls through
-  to the wider one; a file that states `ask` overrides it. They behave
-  identically at a check and differ in the panel, which shows "not set"
-  rather than asserting a rung nobody chose.
-- **Eight rows.** Four allow tiers and four deny tiers, mirrored. Rows 2–4 and
-  6–7 are class-qualified; row 8 (`never allow <program>`) is the whole
-  program, everywhere, and is the lock.
-- **Context files** keep the two-tier prompt (project / session), path-keyed,
-  no content hash. Untouched by ADR 0004.
+The spec that described ADR 0004's engine — precedence, the eight-row
+prompt, the standing rung, the session layer — is in git under this file's
+previous revision, and ADR 0004 itself records the model. Neither is needed
+to work on this crate now, which is 100 lines and its tests.
 
 ## Interfaces
 
-- **`check(program, class, argv) -> Outcome`**: `Allow`, `Locked { scope,
-  rule }`, or `Ask(PromptPayload)`. `Locked` and `Ask` are different answers:
-  a locked call draws no prompt.
-- **`record(program, class, choice)`**: writes the row's rule at the row's
-  scope. Refuses `edit`.
-- **`effective_rung()`**, **`set_rung(scope, rung)`**: the standing answer.
-  Not reachable from a prompt — a per-call moment is the wrong place to change
-  the standing rule for everything.
-- **`effective_view()`**: snapshot with per-entry scope attribution, for the
-  panel.
-- **Events**: `PromptRequested`, `PermissionsChanged` — through core's stream.
-- **Commands**: `PromptResponse` — through core's command channel.
+```rust
+pub struct Locks { /* Config */ }
+impl Locks {
+    pub fn new(config: Config) -> Self;
+    pub fn check(&self, program: &str, declared: Class) -> Outcome;
+    pub fn all(&self) -> Vec<(LockScope, GrantEntry)>;
+    pub fn stale_keys(&self) -> Vec<LockScope>;
+}
+pub enum Outcome { Allow, Locked { scope: LockScope, rule: GrantEntry } }
+pub enum LockScope { Project, Global }   // where_it_lives() names the file
+```
+
+`Class` and `GrantEntry` are re-exported from aldwin-config. A deny of class
+`C` blocks every call at or above `C`; a bare program blocks every class.
+The nearest scope's lock is the one named, because it is the one the
+developer can most easily change.
 
 ## Decisions
 
-- **Default-deny is the floor; no carve-out.** A "read is always safe"
-  exception invites "`ls` is always safe" next. Uniformity of friction is
-  structural.
-
-- **A grant is a program and a class, not a command string or a glob.** The
-  old unit could not carry a read/write distinction and could be walked past
-  by a metacharacter. Program-plus-class is what a developer can actually hold
-  in their head, and the sandbox is what bounds it.
-
-- **The declaration is never trusted, and never needs to be.** Enforced, not
-  believed: no veto list, no table of read-safe invocations, no trial run. All
-  three were considered; each puts our judgement in the path of a decision
-  that runs a command.
-
-- **Deny is a lock, not a pre-answer.** A denylist anything can shrug off is
-  not a guarantee. The cost is real — undoing one means editing a file, mid-
-  task — and accepted, because a denylist that a session can override
-  promises more than it delivers.
-
-- **The narrower file wins outright.** Most-restrictive-wins was rejected: it
-  makes a single project impossible to open up without loosening every
-  project, which inverts how anyone works.
-
-- **`edit` is outside the model.** Not a rung, not a grant, not a row. This is
-  what makes the rest safe to coarsen — the one tool whose purpose is
-  modifying the tree cannot be granted at all.
-
-- **Every MCP tool is a write, whatever the server says.** An MCP call runs
-  inside the server's process, where the sandbox cannot hold a declaration to
-  its word. With no enforcement, believing a hint is the trust-the-declaration
-  design ADR 0004 rejected, minus the thing that made it safe. Letting the
-  developer classify one — with the server's claim shown as a claim — is
-  ADR 0004 §4's intent and is not built.
-
-- **No first-run wizard.** First launch writes an annotated, fully-denied
-  file. First run asks one access question and writes it as the project's
-  rung — the same setting a developer can change later, not a preset that
-  expands into grants and vanishes.
+- **Two answers, no third.** "Ask" left with the prompt. A call either runs
+  or is locked, and a locked call's refusal names the file.
+- **Stale keys are reported, not honoured and not rejected.** Honouring
+  `allow:` would be a grant nothing asks for; rejecting the file would
+  strand every project the old model touched.
+- **No session deny.** There is no prompt at which one could be made, and a
+  lock that is not in a file is not a lock the developer can find.
 
 ## Pitfalls
 
-- A "read is always safe" carve-out arriving as ergonomics.
-- The prompt growing a ninth row. Eight is already at the edge of what a
-  developer reads under time pressure; the deny half earns its place only
-  because a lock must be reachable.
-- **Treating the declaration as a finding.** Any code path that lets a
-  declared class decide something the sandbox does not then enforce has
-  reintroduced self-granting. MCP is the live example and is why it is
-  hard-coded to `write`.
-- A deny becoming overridable by a narrower scope "for convenience".
-- The rung being settable from a prompt.
-- An `edit` entry becoming expressible. `Class` deserializes only `read` and
-  `write` precisely so a hand-written `edit:` in YAML is a load error rather
-  than a rule that silently does nothing.
-- The incidental-write allowlist growing. It is the one place our judgement
-  re-enters; `.git/` was kept out of it on purpose (see aldwin-tools).
-- Session grants leaking to disk via a confused "remember this" path.
-
-## Out of Scope
-
-- On-disk schema and file layout — aldwin-config.
-- Prompt rendering and the permissions panel — aldwin-tui.
-- The sandbox, `run`, argument containment — aldwin-tools.
-- Developer classification of MCP tools — ADR 0004 §4, not built.
-- Naming *which* path a refused read reached for — needs syscall
-  interception; the guarantee does not depend on it.
-- Audit log of grant changes — out of V0.
+- Reintroducing an allow list "just for one program" reintroduces the
+  question of who answers when it is missing. The answer under ADR 0009 is
+  the sandbox and the review, and an allow list has no role in either.
+- `Class::Edit` still exists in aldwin-config and still cannot be
+  deserialised. It is not a class a deny can name, and it is not consulted
+  here: an edit reaches the review, never this crate.
 
 ## References
 
-- `.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — the decision this implements.
-- `.claude/adr/0003-the-permission-option-row-is-a-sentence.md` — §1 still governs each row's shape.
-- `.claude/spec/aldwin-tools.md` — `run`, the sandbox, argument containment.
-- `.claude/spec/aldwin.md` — parent; default-deny and friction-as-feature.
+- `.claude/adr/0009-the-review-is-the-only-gate.md` — why this crate is a lock.
+- `.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — §5 and §7, the two clauses that stand.
+- `.claude/adr/0007-reach-is-a-workspace-and-every-tool-honours-it.md` — `roots:`.

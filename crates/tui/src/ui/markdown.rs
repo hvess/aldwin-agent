@@ -216,9 +216,8 @@ fn parse_delimiter(line: &str, columns: usize) -> Option<Vec<Align>> {
 /// alone held the shape only until a cell was empty or a neighbouring
 /// column was narrow, at which point the rows read as ragged prose.
 ///
-/// The rules are `--tui-quiet`, the tier below `dim`: present enough to
-/// carry the structure, quiet enough that the cells stay the thing being
-/// read.
+/// The rules are `label3`, the structural tone: present enough to carry
+/// the shape, quiet enough that the cells stay the thing being read.
 ///
 /// # The one case where the box does not close
 ///
@@ -237,11 +236,11 @@ fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let columns = table.header.len();
 
-    let header: Vec<Cell> = table.header.iter().map(|cell| parse_inline(cell, Style::default().fg(pal.label), ctx)).collect();
+    let header: Vec<Cell> = table.header.iter().map(|cell| parse_inline(cell, Style::default().fg(pal.label).add_modifier(Modifier::BOLD), ctx)).collect();
     let body: Vec<Vec<Cell>> = table
         .rows
         .iter()
-        .map(|row| (0..columns).map(|i| parse_inline(row.get(i).map(String::as_str).unwrap_or(""), Style::default().fg(pal.body), ctx)).collect())
+        .map(|row| (0..columns).map(|i| parse_inline(row.get(i).map(String::as_str).unwrap_or(""), Style::default().fg(pal.label), ctx)).collect())
         .collect();
 
     let widths = column_widths(&header, &body, ctx.width as usize);
@@ -267,7 +266,7 @@ fn rule_line(corners: [char; 3], widths: &[usize], ctx: Ctx) -> Line<'static> {
         rule.extend(std::iter::repeat_n('─', width + 2 * CELL_PAD));
     }
     rule.push(right);
-    Line::from(truncate_spans(vec![Span::styled(rule, Style::default().fg(ctx.pal.quiet))], ctx.width as usize))
+    Line::from(truncate_spans(vec![Span::styled(rule, Style::default().fg(ctx.pal.label3))], ctx.width as usize))
 }
 
 /// Each column as wide as its widest *rendered* cell, then shrunk — widest
@@ -313,7 +312,7 @@ fn column_widths(header: &[Cell], body: &[Vec<Cell>], avail: usize) -> Vec<usize
 /// rows put their corner, and a row one cell short of that would leave the
 /// box visibly unclosed.
 fn row_line(cells: &[Cell], widths: &[usize], aligns: &[Align], ctx: Ctx) -> Line<'static> {
-    let rule = Style::default().fg(ctx.pal.quiet);
+    let rule = Style::default().fg(ctx.pal.label3);
     let pad = |n: usize| Span::raw(" ".repeat(n));
     let mut spans: Vec<Span<'static>> = vec![Span::styled("│", rule)];
 
@@ -339,22 +338,20 @@ fn span_width(spans: &[Span<'static>]) -> usize {
 
 /// Renders one prose line (never a fenced-code line — those are already
 /// pulled out by `split_code_fences`). Styling is modifiers only
-/// (bold/italic/underline/reversed/crossed-out) — aldwin-tui.md reserves
-/// the one accent colour for the approval card and focused input.
+/// (bold/italic/underline/crossed-out): blue means you, so the agent's
+/// prose never takes the accent.
 pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
-    let base = Style::default().fg(pal.body);
+    let base = Style::default().fg(pal.label);
     let trimmed_start = line.trim_start();
     let indent = &line[..line.len() - trimmed_start.len()];
 
     if is_hr(trimmed_start) {
         // A markdown thematic break is a separator, and separators are
-        // bands: one row of `break_`, the same treatment a turn break gets.
-        // It used to be a 20-cell run of `─`, which is not in the design
-        // system's glyph vocabulary at all (`tokens::MARKS`) — and
-        // that vocabulary is closed: "if a mark is needed and it is not in
-        // that table, do not draw one."
-        return band_row(pal.break_, ctx);
+        // bands: one row of `tint`. A run of `─` is not in the design's
+        // glyph vocabulary, and that vocabulary is closed: "if a mark is
+        // needed and it is not in this list, do not draw one."
+        return band_row(pal.tint, ctx);
     }
     if let Some((level, rest)) = parse_heading(trimmed_start) {
         let style = if level <= 2 { base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { base.add_modifier(Modifier::BOLD) };
@@ -362,7 +359,7 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     }
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
-        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(pal.dim))];
+        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(pal.label3))];
         spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC), ctx));
         return Line::from(spans);
     }
@@ -415,21 +412,14 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                // The code tone *on the quoted-code ground* (`2b`:
-                // `background:var(--tui-diff-box);color:var(--tui-code)`).
-                // The ground is what does the work. `code` and the `body`
-                // prose around it are one rung apart — enough to tell two
-                // blocks from each other, not enough to pick one word out
-                // of a sentence — so a span that only changed its ink read
-                // as prose. On the raised ground it "reads as quoted rather
-                // than emphasised", and it is the same ground a fenced
-                // block and the inline diff take, so all three sizes of
-                // quoted code are visibly one thing.
+                // Quoted code on `--tint`, the ground a fenced block takes
+                // too, so both sizes of quoted code are visibly one thing.
+                // The ink stays `label`: the ground is what does the work,
+                // and a span that only changed its ink read as prose.
                 //
                 // Exactly the span's own cells: no padding cell either
-                // side. The reference adds none, and a padded span would
-                // shift every word after it off the column it wraps to.
-                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(ctx.pal.code).bg(ctx.pal.diff_box)));
+                // side, so nothing after it shifts off its column.
+                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(ctx.pal.label).bg(ctx.pal.tint)));
                 rest = &stripped[end + 1..];
                 continue;
             }
@@ -461,7 +451,7 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
                 flush(&mut buf, base, &mut spans);
                 spans.push(Span::styled(label.to_string(), base.add_modifier(Modifier::UNDERLINED)));
                 if !url.is_empty() && url != label {
-                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(ctx.pal.dim)));
+                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(ctx.pal.label3)));
                 }
                 rest = remainder;
                 continue;

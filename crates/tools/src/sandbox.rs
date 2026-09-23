@@ -5,8 +5,8 @@
 //! does — the guess the whole model was reopened to avoid. Instead a call
 //! declared `read` is executed **for real, where writing is impossible**. If
 //! it finishes, it was a read; that is demonstrated rather than predicted. If
-//! the kernel refuses it, nothing landed, and the developer is asked whether
-//! to allow it as a write and run it again.
+//! the kernel refuses it, nothing landed, and the model is told the call was a
+//! write and to declare it so — there is no prompt in between (ADR 0009 §1).
 //!
 //! On Linux the primitive is Landlock: an unprivileged LSM that restricts a
 //! process, and every process it goes on to spawn, to a set of filesystem

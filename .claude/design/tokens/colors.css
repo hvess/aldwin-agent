@@ -1,0 +1,62 @@
+/* Aldwin colour tokens. Dark is the default; .tui-light on <body> or a frame swaps the roles. */
+:root {
+  /* window grounds, lowest to highest */
+  --win: oklch(0.19 0.006 260);      /* conversation ground */
+  --chrome: oklch(0.23 0.006 260);   /* title bar */
+  --tint: oklch(0.225 0.006 260);    /* echoed prompt, file tree, idle selection */
+  --panel: oklch(0.25 0.008 260);    /* question panel */
+  --field: oklch(0.275 0.008 260);   /* input field, current row */
+  --select: oklch(0.31 0.07 258);    /* selection label band */
+  --dot: oklch(0.42 0.006 260);      /* traffic-light dots */
+  --track: oklch(0.36 0.008 260);    /* empty context bar */
+  /* text */
+  --label: oklch(0.93 0.005 260);    /* primary */
+  --label2: oklch(0.64 0.008 260);   /* secondary */
+  --label3: oklch(0.45 0.008 260);   /* tertiary: line numbers, folders, pending */
+  /* accent: blue means you */
+  --accent: oklch(0.64 0.2 255);     /* glyphs, caret prompt, selection edge */
+  --fill: oklch(0.53 0.2 258);       /* filled accent: mark, context bar */
+  --onfill: oklch(0.99 0 0);         /* ink on --fill */
+  --amber: oklch(0.78 0.17 65);      /* running */
+  /* diff */
+  --add: oklch(0.78 0.18 150);
+  --addcode: oklch(0.88 0.04 150);
+  --addrow: oklch(0.26 0.03 150);
+  --del: oklch(0.7 0.2 27);
+  --delcode: oklch(0.85 0.04 25);
+  --delrow: oklch(0.26 0.035 25);
+  /* syntax (reserved, not applied in current frames) */
+  --syn: oklch(0.74 0.16 330);
+  --call: oklch(0.78 0.12 200);
+  /* canvas around frames (documentation only) */
+  --canvas: oklch(0.91 0.004 260);
+  --canvas-ink: oklch(0.3 0.008 260);
+  --canvas-body: oklch(0.38 0.008 260);
+  --canvas-caption: oklch(0.5 0.008 260);
+  --canvas-badge: oklch(0.53 0.2 258);
+  --canvas-link-hover: oklch(0.42 0.16 255);
+}
+.tui-light {
+  --win: oklch(0.975 0.002 260);
+  --chrome: oklch(0.955 0.002 260);
+  --tint: oklch(0.935 0.003 260);
+  --panel: oklch(0.92 0.004 260);
+  --field: oklch(0.905 0.005 260);
+  --select: oklch(0.88 0.07 252);
+  --dot: oklch(0.82 0.004 260);
+  --track: oklch(0.86 0.004 260);
+  --label: oklch(0.3 0.008 260);
+  --label2: oklch(0.52 0.008 260);
+  --label3: oklch(0.66 0.006 260);
+  --accent: oklch(0.58 0.22 255);
+  --fill: oklch(0.58 0.22 255);
+  --amber: oklch(0.7 0.18 60);
+  --add: #1e8a3c;
+  --addcode: #183020;
+  --addrow: #cde1d1;
+  --del: #d84040;
+  --delcode: #402828;
+  --delrow: #f1d2cf;
+  --syn: #903890;
+  --call: #006870;
+}

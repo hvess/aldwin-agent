@@ -56,9 +56,10 @@ seconds, almost all of it `cargo test`. Capture is *not* a stage — it runs
 after them, only to make the pictures stage 5 looks at.
 
 Stage 4 does two jobs and both read `TestBackend` buffers: the snapshot
-baseline, and design conformance — every colour is one of the forty-two roles
-`tokens.rs` carries (or one dimmed toward a ground), every glyph is from the
-closed table, and the app's own copy is third person with no contractions.
+baseline, and design conformance — every colour is one of the nineteen roles
+`tokens.rs` carries (or a mark or gauge mix of two of them), every glyph is
+from the closed table, nothing is stroked, and the two hue rules hold: the
+agent's prose is never blue, nothing outside a diff is red or green.
 
 Two flags: `--no-capture` skips the pictures entirely, which is what you want
 for every pass that is not going to reach stage 5; `--quiet-ms 150` roughly
@@ -126,12 +127,12 @@ Five things the prompt does that matter, each for a measured reason:
 >    already settled. Never report one of these.
 > 3. `.claude/design/tokens/*.css` — the token layer. This is what the app
 >    can actually draw through, so it is the operative statement.
-> 4. `.claude/design/HANDOFF.md`'s **token tables** (the tables of role, hex
->    and ramp step).
-> 5. `.claude/design/HANDOFF.md`'s **screen prose** — the narrative sections
->    describing each screen. This is the oldest layer: written across fifteen
->    turns over a token layer that was rebuilt twice underneath it, and it
->    names ramp rungs that in places no longer resolve to any role.
+> 4. `.claude/design/frames/Aldwin Agent TUI.dc.html` — the ten frames.
+>    Every position in them is a `var(--…)` from `tokens/layout.css`, so a
+>    position is a lookup, not a measurement; the brand mark and the context
+>    bar's ramp exist only here.
+> 5. `.claude/design/README.md` — the design's prose: content fundamentals,
+>    the colour rules, the glyph list. It states rules the frames only show.
 >
 > Read `.claude/design/IMPORT.md` first for context. Read nothing else — not
 > `crates/tui`, not `.claude/spec`.
@@ -150,9 +151,10 @@ Five things the prompt does that matter, each for a measured reason:
 > `.png` only for colour.** Sampling a pixel to find a column is slow and
 > gets you an antialiased edge; the grid is exact.
 >
-> The grid is `tokens/cells.css`: margin 3, label column 8, gutter 2, so body
-> text lands on cell 13 — derive it, there is deliberately no `--body-col`.
-> The capture cell is 8x18px, so cell column N starts at pixel x = 8N.
+> The grid is `tokens/layout.css`: a 3-cell margin, a 2-cell mark column,
+> prose on cell 5 (`--body-x`, declared and equal to the sum). There is no
+> label column. The capture cell is 8x18px, so cell column N starts at
+> pixel x = 8N.
 >
 > **Your entire output is one fenced `json` block and nothing else.** No
 > preamble, no commentary around it. This shape:
@@ -162,9 +164,9 @@ Five things the prompt does that matter, each for a measured reason:
 >       "iteration": 1,
 >       "findings": [
 >         { "severity": "major",
->           "source":   "3 — tokens/cells.css",
->           "design":   "cells.css:32 — --group-gap is 6 cells between groups inside a bar",
->           "frame":    "footer row 36: groups start at cells 3, 16 and 30 — 3 cells apart",
+>           "source":   "3 — tokens/layout.css",
+>           "design":   "layout.css:7 — --group-gap is 5ch between footer groups",
+>           "frame":    "footer row 31: groups start at cells 5, 16 and 26 — 3 cells apart",
 >           "frames":   "all 30" }
 >       ],
 >       "contradictions": ["one string per place the design disagrees with itself, both halves cited"],
@@ -239,7 +241,8 @@ and without a failure message. Write the assertion into
 to it.
 
 That is what keeps this stage getting cheaper instead of accumulating a longer
-checklist. The panel's 18-row band arrived that way.
+checklist. The three-cell margins and the "nothing outside a diff is red"
+check arrived that way.
 
 ## When the judge is wrong
 

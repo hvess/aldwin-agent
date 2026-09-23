@@ -10,7 +10,7 @@ skill that drives the loop and owns the fifth. Excludes what the stages
 themselves test (that is each crate's own spec) and the design system's
 content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-23
 
 ## Why
 
@@ -44,7 +44,7 @@ harmless there because a bad frame is something the judge says out loud.
 ## Decisions
 
 1. **One screenshot baseline, not two.** `render.snap` serialises every
-   cell's symbol, foreground, background and modifiers for twelve scenes at
+   cell's symbol, foreground, background and modifiers for thirteen scenes at
    three sizes in both themes — 72 sections — in under a second, in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The
@@ -62,18 +62,19 @@ harmless there because a bad frame is something the judge says out loud.
    generating it, not against. It was honest because someone was checking by
    hand, every time, forever.
 
-3. **Three roles are deliberately not carried**, listed with reasons in
-   `crates/review/src/tokens.rs`. `--tui-add-bg` and `--tui-del-bg` are
-   `rgba()` tints for a browser; a terminal cell has one opaque background,
-   and the design ships `--tui-add-row` / `--tui-del-row` beside them for
-   exactly that. `--tui-line` is marked legacy in `semantic.css` itself. A
+3. **Ten roles are deliberately not carried**, listed with reasons in
+   `crates/review/src/tokens.rs`: `--chrome` and `--dot` paint the mock's
+   title bar, `--syn` and `--call` are reserved and applied nowhere, and the
+   six `--canvas-*` roles are the documentation page around the frames. A
    role that is neither carried nor on that list fails the stage rather than
-   being silently dropped.
+   being silently dropped. (Under Mjolnir the list was three `--tui-*` roles;
+   the principle is the same.)
 
-4. **Only tokens the app consumes are generated.** `cells.css` declares panel
-   and bar heights the app does not read. Emitting a constant nothing uses
-   would be the generator asserting a layout rule; whether the app *should*
-   consume one is stage 5's question.
+4. **Only tokens the app consumes are generated.** `layout.css` declares the
+   mock's window measures — `--fw`, `--chrome-h`, the body heights — which
+   are pixels, not cells, and which the app does not read. Emitting a
+   constant nothing uses would be the generator asserting a layout rule;
+   whether the app *should* consume one is stage 5's question.
 
 5. **Stage 5 judges only the screens the change touched.** The app has
    deviations that cannot be fixed in `crates/tui` — there is no branch in
@@ -160,6 +161,44 @@ harmless there because a bad frame is something the judge says out loud.
 - **Putting a check that needs a real terminal into stages 0–4.** They are
   hermetic and the value of that is the whole point; anything needing a
   compositor belongs after them, feeding stage 5.
+
+## Progress (2026-09-23, the redesign)
+
+The loop's shape is unchanged; what it measures moved with the design.
+
+- **Stage 3** reads `tokens/colors.css`, `tokens/layout.css`,
+  `guidelines/glyphs.html` and the frame. The generator converts OKLCH to
+  sRGB itself (there is no hex table to look values up in), mixes the brand
+  mark's 108 cells and the context bar's ramp table in OKLCH the way CSS
+  `color-mix` does, and checks its gauge arithmetic against the two bars
+  the frame draws. Ten roles are uncarried with a reason each; the check
+  that every declared role is carried or excused is unchanged.
+- **Stage 4** pins thirteen scenes at 80×24, 104×32 and 200×50 — the
+  medium size is now a terminal the size of the design's window body — and
+  asserts, beyond the snapshot: every colour is a token (or a mark or
+  gauge mix), every glyph is in the closed table, no stroke anywhere, the
+  three-cell margins on every conversation scene, and the two hue rules
+  (the agent's prose is never blue; nothing outside a diff is red or
+  green).
+- **The scene catalogue** (`scene.rs`) is re-scripted: `launch`,
+  `launch_unconfigured`, `plan`, `details`, `question`, `commands`,
+  `review`, `saved`, `markdown`, `failure`, `long`, `resume`. Grants are
+  gone from `Script`; `permissions.yaml` is not seeded at all. The `review`
+  scene is the real dispatcher opening the real review over a really
+  staged edit, which is the state the snapshot cannot reach. Three snapshot
+  scenes have no counterpart here and say why (open-tasks 30, 31).
+- **`baseline.json`** went from seven contradictions to three: ADR 0002's
+  table, and two that are the design against a decision.
+- **Capture and the caret.** The design's caret blinks (`motion.css`, 1.05s
+  stepped), so an app at rest on a field is never finally quiet: the first
+  full capture after the redesign failed on its first scene with the parser
+  and the picture disagreeing at exactly one cell — the caret, on in one
+  and off in the other. `wait_quiet` still settles between blinks; what
+  changed is that the shot and the grid are now taken inside one
+  half-period (`Proxy::wait_for_change` waits for the edge first), and the
+  grid is read back after the shot to prove it — a mismatch retakes on the
+  next edge, three times before giving up. A screen with no caret falls
+  through the wait and costs 1.3s.
 
 ## Progress (2026-09-20, the rebuild)
 

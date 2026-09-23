@@ -12,6 +12,8 @@ use crate::{
     prompt,
     types::*,
 };
+#[allow(unused_imports)]
+use crate::types::{Answer, ReviewDecision};
 
 pub struct Agent<C, D> {
     client:     C,
@@ -19,9 +21,8 @@ pub struct Agent<C, D> {
     log:        ConversationLog,
     model:      String,
     system:     String,
-    // Pending Edit approval gates and permission prompts, keyed by call_id
-    // (see `PendingReply` — a call is never mid-approval and mid-prompt at
-    // once, so one map keyed one way covers both). Shared rather than owned
+    // Pending questions (keyed by the `ask` call's id) and reviews (keyed by
+    // their own id) — see `PendingReply`. Shared rather than owned
     // locally by `run` so `DispatchContext` — handed to a dispatch future
     // that runs concurrently with the command loop — can register into the
     // same map the loop resolves against.
@@ -63,31 +64,31 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         self.log.set_sink(sink);
     }
 
-    /// Resolve a pending Edit approval gate. An entry that turns out to be a
-    /// prompt is put back unconsumed — that shouldn't happen, but it must not
-    /// destroy a live entry if it somehow does.
-    fn resolve_approval(&self, call_id: &str, approved: bool) {
+    /// Resolve a pending question. An entry that turns out to be a review is
+    /// put back unconsumed — that shouldn't happen, but it must not destroy
+    /// a live entry if it somehow does.
+    fn resolve_answer(&self, call_id: &str, answer: Answer) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(call_id) {
-            Some(PendingReply::Approval(tx)) => { let _ = tx.send(approved); }
+            Some(PendingReply::Answer(tx)) => { let _ = tx.send(answer); }
             Some(other) => {
                 pending.insert(call_id.to_string(), other);
-                warn!("approval decision for {call_id}, which is awaiting a prompt");
+                warn!("answer for {call_id}, which is awaiting a review decision");
             }
-            None => warn!("approval decision for unknown call_id {call_id}"),
+            None => warn!("answer for unknown call_id {call_id}"),
         }
     }
 
-    /// Resolve a pending permission prompt — same shape as `resolve_approval`.
-    fn resolve_prompt(&self, call_id: &str, payload: serde_json::Value) {
+    /// Resolve a pending review — same shape as `resolve_answer`.
+    fn resolve_review(&self, review_id: &str, decision: ReviewDecision) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
-        match pending.remove(call_id) {
-            Some(PendingReply::Prompt(tx)) => { let _ = tx.send(payload); }
+        match pending.remove(review_id) {
+            Some(PendingReply::Review(tx)) => { let _ = tx.send(decision); }
             Some(other) => {
-                pending.insert(call_id.to_string(), other);
-                warn!("PromptResponse for {call_id}, which is awaiting an approval");
+                pending.insert(review_id.to_string(), other);
+                warn!("review decision for {review_id}, which is awaiting an answer");
             }
-            None => warn!("PromptResponse for unknown call_id {call_id}"),
+            None => warn!("review decision for unknown review {review_id}"),
         }
     }
 
@@ -97,9 +98,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     async fn on_mid_turn_command(&self, cmd: Command, events: &mpsc::Sender<Event>) -> bool {
         let discarded = match cmd {
             Command::Cancel => return true,
-            Command::ApproveTool { call_id } => { self.resolve_approval(&call_id, true); None }
-            Command::DenyTool { call_id }    => { self.resolve_approval(&call_id, false); None }
-            Command::PromptResponse { call_id, payload } => { self.resolve_prompt(&call_id, payload); None }
+            Command::Answer { call_id, answer } => { self.resolve_answer(&call_id, answer); None }
+            Command::ReviewDecision { review_id, decision } => { self.resolve_review(&review_id, decision); None }
             Command::Submit { .. }  => Some("that message was not sent"),
             Command::ClearHistory   => Some("the conversation was not cleared"),
             Command::Resume { .. }  => Some("nothing was resumed"),
@@ -122,19 +122,30 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         while let Some(cmd) = commands.recv().await {
             match cmd {
                 Command::Submit { text } => {
-                    let turn_id = TurnId::next();
-                    self.log.append(LogRecord::TurnStarted { turn_id });
-                    self.log.append(LogRecord::UserMessage { turn_id, text });
+                    // A review at the end of a turn can hand back comments,
+                    // which are a message from the developer and start the
+                    // next turn without them having to type it (ADR 0009 §4).
+                    let mut next = Some(text);
+                    let mut typed = true;
+                    while let Some(text) = next.take() {
+                        let turn_id = TurnId::next();
+                        if !typed {
+                            let _ = events.send(Event::FollowUp { turn_id, text: text.clone() }).await;
+                        }
+                        typed = false;
+                        self.log.append(LogRecord::TurnStarted { turn_id });
+                        self.log.append(LogRecord::UserMessage { turn_id, text });
 
-                    let reason = self.run_turn(turn_id, &events, &mut commands).await;
+                        let (reason, follow_up) = self.run_turn(turn_id, &events, &mut commands).await;
 
-                    self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
-                    let _ = events.send(Event::TurnEnded { turn_id, reason }).await;
+                        self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
+                        let _ = events.send(Event::TurnEnded { turn_id, reason }).await;
+                        next = follow_up;
+                    }
                 }
 
-                Command::ApproveTool { call_id } => self.resolve_approval(&call_id, true),
-                Command::DenyTool { call_id }    => self.resolve_approval(&call_id, false),
-                Command::PromptResponse { call_id, payload } => self.resolve_prompt(&call_id, payload),
+                Command::Answer { call_id, answer } => self.resolve_answer(&call_id, answer),
+                Command::ReviewDecision { review_id, decision } => self.resolve_review(&review_id, decision),
                 Command::Cancel => {} // no-op outside an active turn
 
                 Command::ClearHistory => {
@@ -154,12 +165,15 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
+    /// Runs one turn to its end. The second half of the result is a message
+    /// the developer left at the closing review — see `ToolDispatcher::turn_ending`
+    /// — which the caller starts a new turn with.
     async fn run_turn(
         &mut self,
         turn_id:  TurnId,
         events:   &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
-    ) -> TurnEndReason {
+    ) -> (TurnEndReason, Option<String>) {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
 
         // The just-submitted user message is already in `self.log`, so
@@ -178,7 +192,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             match result {
                 StepResult::EndTurn(outcome) => {
                     self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
-                    return TurnEndReason::EndTurn;
+                    // The model has stopped; anything staged is about to be
+                    // left un-reviewed, so the dispatcher gets the moment to
+                    // open the review (ADR 0009 §4). Still cancellable: the
+                    // review is a wait on the developer like any other.
+                    let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
+                    let ending = self.dispatcher.turn_ending(&ctx);
+                    return match self.await_or_cancel(ending, events, commands).await {
+                        Ok(follow_up) => (TurnEndReason::EndTurn, follow_up),
+                        Err(reason) => {
+                            DispatchContext::clear_reviews(&self.pending);
+                            (reason, None)
+                        }
+                    };
                 }
                 StepResult::ToolsDispatched { outcome, results } => {
                     self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
@@ -201,10 +227,40 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     for result in results {
                         self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
                     }
-                    return reason;
+                    return (reason, None);
                 }
-                StepResult::Cancelled  => return TurnEndReason::Cancelled,
-                StepResult::Error(msg) => return TurnEndReason::Error(msg),
+                StepResult::Cancelled  => return (TurnEndReason::Cancelled, None),
+                StepResult::Error(msg) => return (TurnEndReason::Error(msg), None),
+            }
+        }
+    }
+
+    /// Drives `fut` while staying responsive to commands — `Cancel` above
+    /// all — the same way `dispatch_tools` does. `Err` is the reason the turn
+    /// ends instead.
+    async fn await_or_cancel<T>(
+        &self,
+        fut:      impl std::future::Future<Output = T>,
+        events:   &mpsc::Sender<Event>,
+        commands: &mut mpsc::Receiver<Command>,
+    ) -> std::result::Result<T, TurnEndReason> {
+        tokio::pin!(fut);
+        loop {
+            tokio::select! {
+                biased;
+
+                cmd = commands.recv() => {
+                    match cmd {
+                        Some(cmd) => {
+                            if self.on_mid_turn_command(cmd, events).await {
+                                return Err(TurnEndReason::Cancelled);
+                            }
+                        }
+                        None => return Err(TurnEndReason::Error("command channel closed".into())),
+                    }
+                }
+
+                value = &mut fut => return Ok(value),
             }
         }
     }
@@ -398,9 +454,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
     /// Dispatch all tool calls for a step concurrently, staying responsive to
     /// commands (Cancel above all) for the whole duration — a slow or stuck
-    /// tool must not make cancellation meaningless. Approval-gated tools (Edit)
-    /// block inside their own future via `DispatchContext`; the agent loop
-    /// just awaits.
+    /// tool must not make cancellation meaningless. A tool that needs the
+    /// developer blocks inside its own future via `DispatchContext`; the
+    /// agent loop just awaits.
     async fn dispatch_tools(
         &self,
         turn_id:  TurnId,
@@ -409,13 +465,31 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         events:   &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
     ) -> DispatchOutcome {
+        let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
+
+        // The dispatcher's moment before the step (ADR 0009 §4): a staged
+        // changeset that these calls would observe is reviewed first. A
+        // reason back means the calls do not run and are each answered with
+        // it — the developer's comments, or that the changes were discarded.
+        let before = self.dispatcher.before_step(&calls, &ctx);
+        match self.await_or_cancel(before, events, commands).await {
+            Ok(None) => {}
+            Ok(Some(reason)) => {
+                let results: Vec<ToolResult> =
+                    calls.iter().map(|call| ToolResult { call_id: call.id.clone(), content: reason.clone(), is_error: true }).collect();
+                for result in &results {
+                    let _ = events.send(Event::ToolCompleted { turn_id, step_id, result: result.clone() }).await;
+                }
+                return DispatchOutcome::Completed(results);
+            }
+            Err(reason) => return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await,
+        }
+
         for call in &calls {
             let _ = events.send(Event::ToolDispatched {
                 turn_id, step_id, call_id: call.id.clone(),
             }).await;
         }
-
-        let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
 
         // Drive all dispatch futures on the current task (cooperative).
         // Dispatcher impls use spawn_blocking internally for CPU-heavy work.
@@ -465,15 +539,17 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         events:  &mpsc::Sender<Event>,
         reason:  TurnEndReason,
     ) -> DispatchOutcome {
-        // A call whose dispatch future was mid-`request_approval` or
-        // mid-`request_prompt` otherwise leaves a dangling entry here —
-        // nothing resolves it once the future holding its receiver is gone.
+        // A call whose dispatch future was mid-`ask` otherwise leaves a
+        // dangling entry here — nothing resolves it once the future holding
+        // its receiver is gone. A review in flight is keyed by its own id
+        // rather than a call's, so it is cleared separately.
         {
             let mut pending = self.pending.lock().expect("pending lock poisoned");
             for call in calls {
                 pending.remove(&call.id);
             }
         }
+        DispatchContext::clear_reviews(&self.pending);
 
         let message = match &reason {
             TurnEndReason::Cancelled => "cancelled",
@@ -669,32 +745,54 @@ mod tests {
         fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
     }
 
-    /// Blocks on `DispatchContext::request_approval` — for exercising the
-    /// Edit-style approval round trip end to end.
-    struct ApprovalGatedDispatcher;
+    /// Opens a review from `turn_ending` — for exercising the review round
+    /// trip end to end, including a comment starting the next turn.
+    struct ReviewingDispatcher;
 
     #[async_trait]
-    impl ToolDispatcher for ApprovalGatedDispatcher {
-        async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
-            let approved = ctx.request_approval(call.id.clone(), "diff".into()).await;
-            ToolResult {
-                call_id:  call.id,
-                content:  if approved { "approved".into() } else { "denied".into() },
-                is_error: !approved,
-            }
+    impl ToolDispatcher for ReviewingDispatcher {
+        async fn dispatch(&self, call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
+            ToolResult { call_id: call.id, content: "staged".into(), is_error: false }
         }
         fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        async fn turn_ending(&self, ctx: &DispatchContext) -> Option<String> {
+            let changeset = Changeset { files: vec![ChangedFile { path: "f.rs".into(), before: Some("a".into()), after: "b".into() }] };
+            match ctx.review(changeset).await? {
+                ReviewDecision::Approve => {
+                    ctx.review_closed(ReviewOutcome::Saved { files: vec!["f.rs".into()], comments_resolved: 0 }).await;
+                    None
+                }
+                ReviewDecision::Comment { comments } => Some(comments.into_iter().map(|c| c.text).collect::<Vec<_>>().join("\n")),
+                ReviewDecision::Discard => None,
+            }
+        }
     }
 
-    /// Blocks on `DispatchContext::request_prompt` — for exercising the
-    /// permission-prompt round trip end to end.
-    struct PromptGatedDispatcher;
+    /// Refuses every step from `before_step` — the comments-before-a-run
+    /// path, where the step's calls are answered rather than dispatched.
+    struct RefusingDispatcher;
 
     #[async_trait]
-    impl ToolDispatcher for PromptGatedDispatcher {
+    impl ToolDispatcher for RefusingDispatcher {
+        async fn dispatch(&self, _call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
+            panic!("a refused step must not dispatch")
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        async fn before_step(&self, _calls: &[ToolCall], _ctx: &DispatchContext) -> Option<String> {
+            Some("the developer commented first".into())
+        }
+    }
+
+    /// Blocks on `DispatchContext::ask` — for exercising the question
+    /// round trip end to end.
+    struct AskingDispatcher;
+
+    #[async_trait]
+    impl ToolDispatcher for AskingDispatcher {
         async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
-            let payload = ctx.request_prompt(call.id.clone(), serde_json::json!({"ask": "confirm"})).await;
-            ToolResult { call_id: call.id, content: payload.to_string(), is_error: false }
+            let question = Question { question: "Limit anonymous requests too?".into(), detail: "why".into(), options: vec!["Yes".into(), "No".into(), "Chat about this".into()] };
+            let answer = ctx.ask(call.id.clone(), question).await;
+            ToolResult { call_id: call.id, content: format!("{answer:?}"), is_error: false }
         }
         fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
     }
@@ -1208,9 +1306,8 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn approval_gate_round_trips_through_approve_tool_command() {
-        let client = ScriptedClient::new(vec![
+    fn one_edit_then_done() -> ScriptedClient {
+        ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
                     call: ToolCall { id: "t1".into(), name: "edit".into(), input: serde_json::json!({}) },
@@ -1221,62 +1318,170 @@ mod tests {
                 LlmEvent::TextDelta { text: "done".into() },
                 LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
             ],
-        ]);
-        let agent = Agent::new(client, ApprovalGatedDispatcher, "test-model", None);
+        ])
+    }
+
+    /// ADR 0009 §4: the review opens when the turn is about to end, and an
+    /// approve is answered with `ReviewClosed` before `TurnEnded`.
+    #[tokio::test]
+    async fn the_review_opens_at_the_end_of_the_turn_and_an_approve_closes_it() {
+        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, "test-model", None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            if let Event::ToolApprovalRequested { call_id, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
-                cmd_tx.send(Command::ApproveTool { call_id }).await.unwrap();
+            if let Event::ReviewRequested { review_id, changeset } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert_eq!(changeset.files[0].path, "f.rs");
+                cmd_tx.send(Command::ReviewDecision { review_id, decision: ReviewDecision::Approve }).await.unwrap();
                 break;
             }
         }
 
-        let mut saw_approved = false;
+        let mut closed = false;
         loop {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::ToolCompleted { result, .. } => {
-                    assert_eq!(result.content, "approved");
-                    saw_approved = true;
+                Event::ReviewClosed { outcome: ReviewOutcome::Saved { files, .. } } => {
+                    assert_eq!(files, vec!["f.rs".to_string()]);
+                    closed = true;
                 }
                 Event::TurnEnded { reason, .. } => {
+                    assert!(closed, "the review must close before the turn ends");
                     assert!(matches!(reason, TurnEndReason::EndTurn));
                     break;
                 }
                 _ => {}
             }
         }
-        assert!(saw_approved);
     }
 
+    /// A comment at the closing review is a message from the developer: the
+    /// turn ends and the next one starts with it, without a `Submit`.
     #[tokio::test]
-    async fn prompt_gate_round_trips_through_prompt_response_command() {
+    async fn a_comment_at_the_closing_review_starts_the_next_turn() {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "risky".into(), input: serde_json::json!({}) },
+                    call: ToolCall { id: "t1".into(), name: "edit".into(), input: serde_json::json!({}) },
+                },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![LlmEvent::TextDelta { text: "ready".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            // The follow-up turn.
+            vec![LlmEvent::TextDelta { text: "addressed".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+        ]);
+        let seen_messages = client.seen_messages_handle();
+        let agent = Agent::new(client, ReviewingDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        let mut reviews = 0;
+        let mut turns_ended = 0;
+        let mut saw_follow_up = false;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::FollowUp { text, .. } => {
+                    assert_eq!(text, "Use config");
+                    assert_eq!(turns_ended, 1, "announced after the first turn ends and before the second starts");
+                    saw_follow_up = true;
+                }
+                Event::ReviewRequested { review_id, .. } => {
+                    reviews += 1;
+                    let decision = if reviews == 1 {
+                        ReviewDecision::Comment { comments: vec![ReviewComment { path: "f.rs".into(), lines: (1, 1), text: "Use config".into() }] }
+                    } else {
+                        ReviewDecision::Approve
+                    };
+                    cmd_tx.send(Command::ReviewDecision { review_id, decision }).await.unwrap();
+                }
+                Event::TurnEnded { .. } => {
+                    turns_ended += 1;
+                    if turns_ended == 2 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(reviews, 2, "the changeset stays staged and is reviewed again");
+        assert!(saw_follow_up, "the comment is announced before the turn it starts");
+
+        let turns = log.snapshot().iter().filter(|r| matches!(r, LogRecord::TurnStarted { .. })).count();
+        assert_eq!(turns, 2, "the comment started a second turn");
+        assert!(
+            log.snapshot().iter().any(|r| matches!(r, LogRecord::UserMessage { text, .. } if text == "Use config")),
+            "the comment is the second turn's user message"
+        );
+        let seen = seen_messages.lock().unwrap();
+        assert!(seen[2].iter().any(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::Text { text } if text == "Use config"))));
+    }
+
+    /// `before_step`'s refusal answers every call in the step and dispatches
+    /// none of them.
+    #[tokio::test]
+    async fn a_refused_step_answers_its_calls_without_dispatching_them() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested { call: ToolCall { id: "t1".into(), name: "run".into(), input: serde_json::json!({}) } },
+                LlmEvent::ToolUseRequested { call: ToolCall { id: "t2".into(), name: "run".into(), input: serde_json::json!({}) } },
+                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            ],
+            vec![LlmEvent::TextDelta { text: "ok".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+        ]);
+        let agent = Agent::new(client, RefusingDispatcher, "test-model", None);
+        let log = agent.log().clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        let mut answered = 0;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ToolDispatched { .. } => panic!("a refused step dispatches nothing"),
+                Event::ToolCompleted { result, .. } => {
+                    assert!(result.is_error);
+                    assert_eq!(result.content, "the developer commented first");
+                    answered += 1;
+                }
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(answered, 2);
+        let results = log.snapshot().iter().filter(|r| matches!(r, LogRecord::ToolResult { .. })).count();
+        assert_eq!(results, 2, "the log still pairs every ToolUse with a ToolResult");
+    }
+
+    #[tokio::test]
+    async fn a_question_round_trips_through_the_answer_command() {
+        let client = ScriptedClient::new(vec![
+            vec![
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall { id: "t1".into(), name: "ask".into(), input: serde_json::json!({}) },
                 },
                 LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
             ],
             vec![LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
         ]);
-        let agent = Agent::new(client, PromptGatedDispatcher, "test-model", None);
+        let agent = Agent::new(client, AskingDispatcher, "test-model", None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            if let Event::PromptRequested { call_id, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
-                cmd_tx.send(Command::PromptResponse { call_id, payload: serde_json::json!("yes") })
-                    .await.unwrap();
+            if let Event::QuestionAsked { call_id, question } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert_eq!(question.options.len(), 3);
+                cmd_tx.send(Command::Answer { call_id, answer: Answer::Chose { index: 0 } }).await.unwrap();
                 break;
             }
         }
@@ -1285,7 +1490,7 @@ mod tests {
         loop {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
                 Event::ToolCompleted { result, .. } => {
-                    assert_eq!(result.content, "\"yes\"");
+                    assert_eq!(result.content, "Some(Chose { index: 0 })");
                     saw_result = true;
                 }
                 Event::TurnEnded { reason, .. } => {
@@ -1298,32 +1503,30 @@ mod tests {
         assert!(saw_result);
     }
 
-    /// Cancelling a step with a permission prompt in flight must not leave a
-    /// dangling `oneshot::Sender` in `pending` — nothing else ever removes
-    /// it, since only a real `PromptResponse` does.
+    /// Cancelling with a question in flight must not leave a dangling
+    /// `oneshot::Sender` in `pending` — nothing else ever removes it.
     #[tokio::test]
-    async fn cancel_during_a_pending_prompt_does_not_leak_the_prompts_entry() {
+    async fn cancel_during_a_pending_question_does_not_leak_its_entry() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::ToolUseRequested {
-                call: ToolCall { id: "t1".into(), name: "risky".into(), input: serde_json::json!({}) },
+                call: ToolCall { id: "t1".into(), name: "ask".into(), input: serde_json::json!({}) },
             },
             LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
         ]]);
-        let agent = Agent::new(client, PromptGatedDispatcher, "test-model", None);
+        let agent = Agent::new(client, AskingDispatcher, "test-model", None);
         let pending = agent.pending.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-
         cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
 
         loop {
-            if let Event::PromptRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::QuestionAsked { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
                 break;
             }
         }
-        assert_eq!(pending.lock().unwrap().len(), 1, "the pending prompt should be registered before cancel");
+        assert_eq!(pending.lock().unwrap().len(), 1, "the pending question should be registered before cancel");
 
         cmd_tx.send(Command::Cancel).await.unwrap();
 
@@ -1333,8 +1536,35 @@ mod tests {
                 break;
             }
         }
-
         assert!(pending.lock().unwrap().is_empty(), "abort_dispatch must clear dangling pending entries on cancel");
+    }
+
+    /// The same for a review, which is keyed by its own id rather than a
+    /// call's and so needs its own clearing.
+    #[tokio::test]
+    async fn cancel_during_a_pending_review_does_not_leak_its_entry() {
+        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, "test-model", None);
+        let pending = agent.pending.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+
+        loop {
+            if let Event::ReviewRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                break;
+            }
+        }
+        assert_eq!(pending.lock().unwrap().len(), 1);
+        cmd_tx.send(Command::Cancel).await.unwrap();
+        loop {
+            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                assert!(matches!(reason, TurnEndReason::Cancelled));
+                break;
+            }
+        }
+        assert!(pending.lock().unwrap().is_empty());
     }
 
     /// A live run surfaced this: a tool-use-only step (no text) got its

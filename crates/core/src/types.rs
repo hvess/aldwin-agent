@@ -129,6 +129,93 @@ pub struct CacheStats {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason { EndTurn, ToolUse }
 
+// ── The plan, a question, and a review (ADR 0009) ───────────────────────────
+
+/// Where one step of the plan stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepState {
+    Pending,
+    Running,
+    Done,
+}
+
+/// One step of the plan: an outcome in plain words — *Count requests per
+/// key*, never a command — and where it stands. The `plan` tool declares and
+/// advances these; the TUI draws them as the design's `PlanStep` rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub text:  String,
+    pub state: StepState,
+}
+
+/// A question the agent puts to the developer through the `ask` tool: one
+/// line of question, one line of why, and a short list of answers. The
+/// design's rule is that the list always carries a yes, a no and "Chat about
+/// this"; the tool enforces the third and the prompt asks for the first two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    pub question: String,
+    pub detail:   String,
+    pub options:  Vec<String>,
+}
+
+/// The developer's answer to a [`Question`]: the option they chose, or —
+/// for "Chat about this" — what they typed instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Answer {
+    Chose { index: usize },
+    Said { text: String },
+}
+
+/// One file of a staged changeset, as the review draws it: the whole file
+/// before (`None` for a file that did not exist) and after every staged
+/// edit to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedFile {
+    pub path:   String,
+    pub before: Option<String>,
+    pub after:  String,
+}
+
+/// Everything a turn's edits have staged and nothing has written yet.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Changeset {
+    pub files: Vec<ChangedFile>,
+}
+
+/// A comment left on a run of lines in the review, on the *after* side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewComment {
+    pub path:  String,
+    /// Inclusive, 1-based line numbers in the file as it would be written.
+    pub lines: (usize, usize),
+    pub text:  String,
+}
+
+/// What the developer decided at a review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewDecision {
+    /// Write every file. The one way a change reaches disk.
+    Approve,
+    /// Nothing is written; the comments go back to the agent and the
+    /// changeset stays staged for the next review.
+    Comment { comments: Vec<ReviewComment> },
+    /// Nothing is written and the changeset is dropped.
+    Discard,
+}
+
+/// How a review ended — the row the conversation keeps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewOutcome {
+    Saved { files: Vec<String>, comments_resolved: usize },
+    Commented { comments: usize },
+    Discarded { files: Vec<String> },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryInfo {
     pub provider: String,

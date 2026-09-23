@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::paths::Workspace;
-use crate::gate::ApprovalGate;
+use aldwin_core::DispatchContext;
 use crate::lsp::{self, LspClient};
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 use aldwin_permissions::Class;
@@ -50,7 +50,6 @@ impl ExplainTool {
                     },
                     "required": ["op"],
                 }),
-                edit_class: false,
                 source:     ToolSource::Builtin,
             },
             workspace,
@@ -104,7 +103,7 @@ impl Tool for ExplainTool {
     /// Like `read`, `explain` only ever observes. `argv` carries whichever
     /// of the two shapes the call used, so the prompt can show what is being
     /// looked at.
-    fn permission(&self, input: &Value) -> Result<PermissionRequest, ToolError> {
+    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
         let subject = if let Some(path) = input.get("path").and_then(Value::as_str) {
             path.to_string()
         } else if let Some(query) = input.get("query").and_then(Value::as_str) {
@@ -112,10 +111,10 @@ impl Tool for ExplainTool {
         } else {
             return Err(invalid("requires either \"path\" or \"query\""));
         };
-        Ok(PermissionRequest { program: "explain".into(), class: Class::Read, argv: vec![subject] })
+        Ok(Some(PermissionRequest { program: "explain".into(), class: Class::Read, argv: vec![subject] }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _gate: &dyn ApprovalGate) -> Result<String, ToolError> {
+    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
         let op_value = input.get("op").cloned().ok_or_else(|| invalid("missing \"op\" field"))?;
         let op: Op = serde_json::from_value(op_value).map_err(|e| invalid(format!("invalid \"op\": {e}")))?;
 
@@ -262,10 +261,10 @@ mod tests {
     #[test]
     fn permission_target_prefers_path_then_query() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let by_path = tool.permission(&json!({"path": "src/main.rs"})).unwrap();
+        let by_path = tool.permission(&json!({"path": "src/main.rs"})).unwrap().unwrap();
         assert_eq!(by_path.argv, vec!["src/main.rs".to_string()]);
         assert_eq!(by_path.class, Class::Read);
-        assert_eq!(tool.permission(&json!({"query": "MyStruct"})).unwrap().argv, vec!["MyStruct".to_string()]);
+        assert_eq!(tool.permission(&json!({"query": "MyStruct"})).unwrap().unwrap().argv, vec!["MyStruct".to_string()]);
         assert!(tool.permission(&json!({})).is_err());
     }
 
@@ -326,14 +325,14 @@ mod tests {
     #[tokio::test]
     async fn missing_op_is_invalid_input() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let err = tool.call("c1", json!({}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
+        let err = tool.call("c1", json!({}), &crate::test_support::dispatch_context().0).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[tokio::test]
     async fn definition_without_path_is_invalid_input() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let err = tool.call("c1", json!({"op": "definition", "line": 0, "character": 0}), &crate::test_support::ALWAYS_APPROVE).await.unwrap_err();
+        let err = tool.call("c1", json!({"op": "definition", "line": 0, "character": 0}), &crate::test_support::dispatch_context().0).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
@@ -341,7 +340,7 @@ mod tests {
     async fn unconfigured_language_is_invalid_input_not_an_lsp_error() {
         let tool = ExplainTool::new(Workspace::new("."));
         let err = tool
-            .call("c1", json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}), &crate::test_support::ALWAYS_APPROVE)
+            .call("c1", json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}), &crate::test_support::dispatch_context().0)
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
@@ -368,7 +367,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let out = tool
-                .call("c1", json!({"op": "definition", "path": "src/lib.rs", "line": 1, "character": 25}), &crate::test_support::ALWAYS_APPROVE)
+                .call("c1", json!({"op": "definition", "path": "src/lib.rs", "line": 1, "character": 25}), &crate::test_support::dispatch_context().0)
                 .await
                 .unwrap();
             let parsed: Vec<LocationOut> = serde_json::from_str(&out).unwrap();

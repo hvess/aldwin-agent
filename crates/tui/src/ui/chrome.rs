@@ -1,623 +1,205 @@
-//! The frame's fixed furniture: the identity bar at the top, the live
-//! activity strip, and the composer. Everything here writes to a `Frame`
-//! directly rather than returning rows — none of it participates in the
-//! log's scroll or the panel's row budget.
+//! The frame's fixed furniture: the field, the comment field, and the
+//! footer with its context bar. Everything here writes to a `Frame`
+//! directly rather than returning rows — none of it scrolls.
 
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Padding, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::grid::{elide, truncate_spans, Ctx, CONTENT_INDENT, GROUP_GAP, MARGIN_X};
-use crate::app::{App, RunningTool};
+use super::grid::{truncate_spans, Ctx, GROUP_GAP, MARGIN_X, MARK_COL};
+use super::question;
+use crate::app::{App, Mode};
 use crate::draft;
-use crate::palette::Palette;
 use crate::log::LogEntry;
+use crate::palette::Palette;
+use crate::tokens::{gauge_filled, GAUGE_SEGMENTS};
 
-/// The product's name, and nothing else — "the name is the brand, and a pip
-/// there indicated nothing". Written once because two screens draw this bar:
-/// the session's and first run's.
-///
-/// Capitalised, which is the one place a left-hand word in this system is.
-/// Every *label* in the 8-cell column is lowercase (`you`, `provider`,
-/// `files`) and the Content Fundamentals ask for that; this is not a label
-/// but a proper noun, and the reference writes it `Aldwin` in all eleven
-/// frames while writing the same word `aldwin` as the speaker label two
-/// rows below. Six letters, so it sits inside `--label-col` with two cells
-/// to spare and the directory still lands on the body column.
-const BRAND: &str = "Aldwin";
-
-/// Cells between the brand and whatever follows it in the identity bar, so
-/// that what follows lands on the body column. Derived from `BRAND`'s own
-/// width rather than stated as a number — cell 13 is fixed by the grid, and
-/// a second statement of it could only ever drift.
-fn brand_pad() -> usize {
-    CONTENT_INDENT.saturating_sub(MARGIN_X).saturating_sub(BRAND.width())
-}
-
-/// `--spinner-frames` from `tokens/motion.css` — a quarter-block cycling at
-/// roughly 100ms per frame. `App::tick` advances this every 120ms
-/// (`run.rs`) — close enough to the token's ~100ms that a redraw-driven
-/// tick (not a dedicated timer) reads as continuous motion.
-const SPINNER_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
-
-/// `▸` plus two spaces — the reference's own composer row is
-/// `<span>▸</span><span>  </span>`, putting the draft's first character in
-/// cell 6 (the grid's 3-cell `MARGIN_X`, the glyph, then the two).
-///
-/// It is a *gutter*, not a one-off prefix: the glyph marks the first row
-/// only, but all three cells are reserved on every row, so a wrapped or
-/// multi-line draft stays on one left edge instead of stepping back three
-/// columns after its first row. That also makes the draft's column one
-/// number rather than two, which is what lets [`draft::Layout`] wrap it and
-/// place the caret from the same measurement.
-const PROMPT_PREFIX_LEN: u16 = 3;
-
-/// The drawn caret's own cell, held back from the draft's column so a row
-/// filled to its last character still has somewhere to put it.
-const CARET_LEN: u16 = 1;
-
-/// The most rows the composer may take, however long the draft is.
-///
-/// Without a ceiling a pasted file simply became the frame: the composer
-/// grew a row per line, the transcript's `Constraint::Min(1)` gave way, and
-/// a 60-line paste left one row of conversation above a wall of draft.
-/// Past this the draft scrolls inside the band instead, keeping the caret
-/// in view (see [`draw_input`]) — the same trade every editor makes.
+/// The most rows the field may take, however long the draft is. Past this
+/// the draft scrolls inside the band, keeping the caret in view.
 pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
 
-/// The draft, wrapped to the composer's column — measured **once** per
-/// frame and used for everything downstream of that measurement.
-///
-/// [`super::draw`] needs the band's height before it can lay the frame out,
-/// and [`draw_input`] needs the rows and the caret; both come off this one
-/// value. They were briefly two `draft::Layout`s built from two
-/// independently-derived widths, equal only because the bottom band happens
-/// to span the whole frame — which is the exact divergence the log panel's
-/// own `log_inner` comment in `super::draw` says must never be reintroduced,
-/// and twice the wrapping work on a draft big enough for that to matter.
-///
-/// Owns its rows rather than borrowing the draft, so holding one does not
-/// borrow `App` and the caller can still hand `draw_input` a `&mut App`.
+/// The cell the drawn caret takes, held back from the draft's column so a
+/// row filled to its last character still has somewhere to put it.
+const CARET_LEN: u16 = 1;
+
+/// The draft, wrapped to the field's column — measured **once** per frame
+/// and used for everything downstream of that measurement.
 pub(super) struct Composer {
     layout: draft::Layout,
-    /// Cells of text column the draft was wrapped to.
     width:  u16,
 }
 
 impl Composer {
-    pub(super) fn new(input: &str, frame_width: u16) -> Self {
-        // The frame less the grid's two margins, the prompt gutter every
-        // row reserves, and **one cell for the caret**. The caret is drawn
-        // (`14d`: the composer is `▸  ▌`, both `--t-mark`), so it occupies
-        // a cell of this column like any glyph — and the one place that
-        // binds is a row filled to its last cell, where a caret appended
-        // after the final character would fall outside the composer's rect
-        // and be clipped away by ratatui without a trace. Reserving the
-        // cell here is the same lesson `grid::justified_line` records: two
-        // things sized independently cannot keep a cell between them.
-        let width = frame_width.saturating_sub(MARGIN_X as u16 * 2).saturating_sub(PROMPT_PREFIX_LEN).saturating_sub(CARET_LEN).max(1);
+    /// `frame_width` less the field's two margins, the mark column, the
+    /// caret's cell, and `reserve` more on the right for an action.
+    pub(super) fn new(input: &str, frame_width: u16, reserve: u16) -> Self {
+        let width = frame_width
+            .saturating_sub(MARGIN_X as u16 * 2)
+            .saturating_sub(MARK_COL as u16)
+            .saturating_sub(CARET_LEN)
+            .saturating_sub(reserve)
+            .max(1);
         Self { layout: draft::Layout::new(input, width as usize), width }
     }
 
-    /// Rows the composer itself needs: just the draft's own, since the
-    /// blank rows above and below it belong to the bottom bar
-    /// (`BottomBar.jsx`'s blank/composer/blank/status/blank), not to the
-    /// composer's own padding.
-    ///
-    /// Counted from the draft's *wrapped* rows, not its newlines. A single
-    /// pasted paragraph is one source line and several screen rows, and
-    /// sizing the band by newlines gave it one — so everything past the
-    /// first row was clipped, and the caret was placed on rows that were
-    /// not on screen.
-    ///
-    /// Clamped in `usize` before the cast, not after: a draft of more than
-    /// `u16::MAX` rows is a perfectly ordinary paste of a large file, and
-    /// casting first would wrap it to an arbitrary small number that only
-    /// happens to land back inside the range.
     pub(super) fn height(&self) -> u16 {
         self.layout.row_count().clamp(1, COMPOSER_MAX_ROWS as usize) as u16
     }
 }
 
-/// Persistent 3-row identity bar — `TopBar.jsx`'s "Session" section. Left:
-/// the harness name alone, primary text, no glyph — per the design
-/// system's own revision log ("the top bar carries no accent mark: the name
-/// is the brand, and a pip there indicated nothing"), then the working
-/// directory. Right: the model name and, once a session has started, the
-/// running build version — the
-/// closest real facts Aldwin has to the reference's `model · gauge · cost`
-/// group; a context-window gauge and a per-session cost aren't tracked
-/// anywhere in `StatusInfo`, so neither is fabricated here.
-pub(super) fn draw_top_bar(frame: &mut Frame, area: Rect, app: &App) {
+/// What the bottom band holds, and the rows it needs — decided once so the
+/// layout and the draw cannot disagree.
+pub(super) enum Bottom {
+    /// blank / field / blank / footer / blank
+    Field(Composer),
+    /// blank / question / detail / blank / options / blank, then blank /
+    /// footer / blank on the window ground.
+    Question { rows: u16 },
+    /// blank / rows / blank / field / blank / footer / blank
+    Commands { rows: u16, composer: Composer },
+}
+
+impl Bottom {
+    pub(super) fn measure(app: &App, width: u16) -> Self {
+        match &app.mode {
+            Mode::Question(asking) => Bottom::Question { rows: question::panel_rows(asking, width) },
+            Mode::Commands(menu) => Bottom::Commands { rows: menu.list.rows.len() as u16, composer: Composer::new(&app.input, width, 0) },
+            Mode::Conversation | Mode::Review(_) => Bottom::Field(Composer::new(&app.input, width, 0)),
+        }
+    }
+
+    pub(super) fn height(&self) -> u16 {
+        match self {
+            Bottom::Field(c) => c.height() + 4,
+            Bottom::Question { rows } => rows + 3,
+            Bottom::Commands { rows, composer } => rows + composer.height() + 5,
+        }
+    }
+
+    pub(super) fn draw(self, frame: &mut Frame, area: Rect, app: &mut App) {
+        match self {
+            Bottom::Field(composer) => {
+                let [_, field, _, footer, _] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(composer.height()),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .areas(area);
+                draw_field(frame, field, app, &composer, None);
+                draw_footer(frame, footer, app);
+            }
+            Bottom::Question { rows } => {
+                let [panel, _, footer, _] =
+                    Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).areas(area);
+                if let Mode::Question(asking) = &app.mode {
+                    question::draw_panel(frame, panel, asking, app.theme.palette());
+                }
+                draw_footer(frame, footer, app);
+            }
+            Bottom::Commands { rows, composer } => {
+                let [_, list, _, field, _, footer, _] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(rows),
+                    Constraint::Length(1),
+                    Constraint::Length(composer.height()),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .areas(area);
+                if let Mode::Commands(menu) = &app.mode {
+                    question::draw_commands(frame, list, menu, app.theme.palette());
+                }
+                draw_field(frame, field, app, &composer, None);
+                draw_footer(frame, footer, app);
+            }
+        }
+    }
+}
+
+/// The field's right-hand action: `Approve  ⌃↩`, `Send 1 Comment  ⌃↩`.
+/// Grey until it can run.
+pub(super) struct Action {
+    pub label: String,
+    pub key:   &'static str,
+    pub ready: bool,
+}
+
+impl Action {
+    pub fn width(&self) -> u16 {
+        // label, two spaces, key, and the 1-cell pad the frame keeps.
+        (self.label.width() + 2 + self.key.width() + 1) as u16
+    }
+}
+
+/// What the field says when it is empty.
+fn placeholder(app: &App) -> &'static str {
+    if app.answering.is_some() {
+        return "Say what you're thinking";
+    }
+    if matches!(app.mode, Mode::Review(_)) {
+        return "Ask for a change, or select lines to comment";
+    }
+    if app.turn_active || app.awaiting_turn {
+        return "Add anything while it works";
+    }
+    if app.log.is_empty() {
+        "Describe a change, like adding rate limiting"
+    } else {
+        "What next?"
+    }
+}
+
+/// The field: `margin: 0 3ch`, on `--field`, the accent `›` in the mark
+/// column, then the draft or its placeholder, with an optional action flush
+/// right. In the commands mode the draft is the `/` and the filter.
+pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer, action: Option<Action>) {
     let pal = app.theme.palette();
-    // No rule under the bar. It is "its own ground, a step off the
-    // transcript" — the whole 3-row band is `bar`, and the step down to
-    // the transcript's `ground` beneath it is the boundary. Content still
-    // sits on row 1, centred in the band.
-    frame.render_widget(Block::new().style(Style::default().bg(pal.bar)), area);
-    // A frame too short to give the bar its middle row draws the ground and
-    // nothing on it, rather than the identity row over the band below.
-    if area.height < 2 {
+    let field = Style::default().bg(pal.field);
+    let inner = Rect { x: area.x + MARGIN_X as u16, width: area.width.saturating_sub(MARGIN_X as u16 * 2), ..area };
+    frame.render_widget(Block::new().style(field), inner);
+
+    let prompt = |glyph: &str| Span::styled(format!("{glyph:<width$}", width = MARK_COL), Style::default().fg(pal.accent).bg(pal.field));
+
+    // The commands mode: `/` and whatever was typed after it, the caret
+    // after that.
+    if let Mode::Commands(menu) = &app.mode {
+        let line = Line::from(vec![
+            Span::styled("/", Style::default().fg(pal.accent).bg(pal.field)),
+            Span::styled(menu.filter.clone(), Style::default().fg(pal.label).bg(pal.field)),
+            caret(pal, app.tick),
+        ]);
+        frame.render_widget(Paragraph::new(line).style(field), inner);
         return;
     }
-    let content_row = Rect { y: area.y + 1, height: 1, ..area };
-    let width = area.width as usize;
-    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
 
-    // Laid out by `identity_bar_row`, which first run's bar shares — see it
-    // for why the two groups are measured together and what each gives up
-    // when they do not both fit.
-    //
-    // Three tokens on the right, not one: the reference's right group is
-    // `quiet` for the model, `dim` for the `·` separators, and `text` for
-    // the last fact in the group — rendering the whole group in a single
-    // `label` flattened a deliberate three-step hierarchy into one tone. One
-    // space each side of the `·`: these are facts *within* one group, and
-    // `--group-gap` is what parts this group from the identity one.
-    let model = app.status.model_name.clone();
-    let version = format!("v{}", app.status.version);
-    let cwd = app.status.cwd.clone().unwrap_or_default();
+    let action_spans = action.as_ref().map(|a| {
+        let fg = if a.ready { pal.accent } else { pal.label3 };
+        vec![Span::styled(format!("{}  ", a.label), Style::default().fg(fg).bg(pal.field)), Span::styled(a.key, Style::default().fg(fg).bg(pal.field)), Span::styled(" ", field)]
+    });
+    let action_width = action.as_ref().map_or(0, Action::width);
 
-    // **No version on the returning/empty screen.** `14d` is explicit:
-    // "There is no version and no commit on this screen. The version lives
-    // in first run's top bar; the session's top bar carries the model
-    // instead." A frame with no transcript is that screen, so its right
-    // group is the model alone — which is also the fallback the group
-    // already degrades to when the two do not fit.
-    let groups = if app.log.is_empty() {
-        vec![vec![Span::styled(model, on_bar(pal.quiet))], Vec::new()]
-    } else {
-        vec![
-            vec![
-                Span::styled(model.clone(), on_bar(pal.quiet)),
-                Span::styled(" · ", on_bar(pal.dim)),
-                Span::styled(version, on_bar(pal.text)),
-            ],
-            vec![Span::styled(model, on_bar(pal.quiet))],
-            Vec::new(),
-        ]
-    };
-
-    let row = identity_bar_row(width, &cwd, pal.quiet, groups, pal);
-    frame.render_widget(Paragraph::new(row).style(Style::default().bg(pal.bar)), content_row);
-}
-
-/// The identity bar's one content row, composed whole.
-///
-/// Both bars that draw it — the session's and first run's — go through here,
-/// because their doc comments already promised the two "must not disagree"
-/// and they had drifted: each was laying its own groups out by hand.
-///
-/// The two groups are measured **together**. They used to be two independent
-/// half-width rects that could not see each other, so each filled to its own
-/// boundary: below ~56 cells the working directory ran straight into the
-/// model name with no gap at all, and above that both were cut at the seam
-/// with nothing marking it — a bar reading `~/Projects/aldwin-agen` and
-/// `v0.1.`, neither of which is a true statement. Composing one line is what
-/// makes `--group-gap` guaranteed rather than incidental.
-///
-/// `right` is the right-hand group in descending order of preference. The
-/// first candidate that still leaves the working directory a readable
-/// stretch wins; if none does, the group is dropped. The asymmetry is
-/// deliberate: a right-hand **fact goes whole or not at all**, because a
-/// clipped `v0.1.` is not a version and would be read as one, while the cwd
-/// is **elided**, because `…` states plainly that a path was shortened. Pass
-/// an empty `Vec` as the last candidate to allow dropping the group.
-pub(super) fn identity_bar_row(
-    width: usize,
-    cwd: &str,
-    cwd_fg: Color,
-    right: Vec<Vec<Span<'static>>>,
-    pal: &Palette,
-) -> Line<'static> {
-    let on_bar = |fg| Style::default().fg(fg).bg(pal.bar);
-    let field = Style::default().bg(pal.bar);
-
-    // What the identity group must keep before the right-hand one starts
-    // giving anything up. An elided path shorter than this says nothing
-    // useful — `~/P…` is not a location.
-    const MIN_CWD: usize = 12;
-    let wanted = cwd.width().min(MIN_CWD);
-    // Cells the cwd would have left, if the right group took `right_w`.
-    let room_for = |right_w: usize| width.saturating_sub(CONTENT_INDENT + GROUP_GAP + MARGIN_X + right_w);
-    let group_width = |g: &Vec<Span<'static>>| -> usize { g.iter().map(|s| s.content.width()).sum() };
-
-    let chosen = right
-        .into_iter()
-        .find(|candidate| room_for(group_width(candidate)) >= wanted)
-        .unwrap_or_default();
-    let right_w = group_width(&chosen);
-
-    // "aldwin    ~/src/gateway" — the directory starts on the body column,
-    // cell 13, like every other left-hand word in the system. That is a pad
-    // derived from the brand's own width, not a gap; see `grid::GROUP_GAP`.
-    let cwd = elide(cwd, room_for(right_w));
-    let mut spans = vec![Span::styled(" ".repeat(MARGIN_X), field), Span::styled(BRAND, on_bar(pal.text))];
-    if !cwd.is_empty() {
-        spans.push(Span::styled(" ".repeat(brand_pad()), field));
-        spans.push(Span::styled(cwd.clone(), on_bar(cwd_fg)));
-    }
-
-    let used = MARGIN_X + BRAND.width() + if cwd.is_empty() { 0 } else { brand_pad() + cwd.width() };
-    let gap = width.saturating_sub(used).saturating_sub(right_w).saturating_sub(MARGIN_X);
-    spans.push(Span::styled(" ".repeat(gap), field));
-    spans.extend(chosen);
-    spans.push(Span::styled(" ".repeat(MARGIN_X), field));
-    Line::from(spans)
-}
-
-/// A `RunningTool`'s display name — `name` comes from a `ToolUseRequested`
-/// looked up by `call_id` and falls back to an empty string if that lookup
-/// ever misses; falling back to the `call_id` itself here (rather than
-/// showing nothing) is what the status line's trailing tools list already
-/// did, shared so [`activity_label`]'s leading word can't drift from it.
-fn running_tool_name(tool: &RunningTool) -> &str {
-    if tool.name.is_empty() {
-        &tool.call_id
-    } else {
-        &tool.name
-    }
-}
-
-/// Present-progressive fragment for the status line's leading activity word
-/// — a separate small table from the permission prompt's own humanization,
-/// since the two need different grammar ("The agent wants to read a file"
-/// vs "reading a file…") for what's otherwise the same handful of tool
-/// kinds; not worth a shared abstraction for three arms each.
-fn tool_gerund(kind: &str) -> String {
-    match kind {
-        "read" => "reading a file".into(),
-        "shell" => "running a shell command".into(),
-        "explain" => "inspecting code".into(),
-        other => format!("using {other}"),
-    }
-}
-
-/// What to say next to the spinner while `app.turn_active` and not
-/// `app.thinking` (thinking has its own, more specific text) — per direct
-/// developer feedback that a bare "working…" for the entire stretch of a
-/// turn gave no sense of what was actually happening. Built entirely from
-/// state `App` already tracks: a running tool's own name, the count when
-/// more than one tool is running at once (parallel dispatch), or, with no
-/// tool in flight, whether assistant text is already streaming for this
-/// step versus still waiting on the step's first token or tool call.
-fn activity_label(app: &App) -> String {
-    match app.status.running_tools.as_slice() {
-        [] => {
-            if matches!(app.log.last(), Some(LogEntry::AssistantText { .. })) {
-                "responding…".into()
-            } else {
-                "working…".into()
-            }
-        }
-        [one] => format!("{}…", tool_gerund(running_tool_name(one))),
-        many => format!("running {} tools…", many.len()),
-    }
-}
-
-/// Live activity strip, one row, directly below the composer —
-/// `StatusLine.jsx`'s own job, distinct from [`draw_top_bar`]'s static
-/// identity row. Shows what's actually happening with the model: live
-/// activity (thinking/working/idle, with a spinner), turn/step, any tools
-/// in flight by name (in `value`, uniformly — a tool's *state* carries
-/// colour here, not its identity), a running message count, and a
-/// right-aligned Ctrl+C hint.
-///
-/// Permission state (read/shell/edit) is deliberately absent — it belongs
-/// to the once-per-session welcome hero and to an actual permission prompt
-/// when one fires, not to a line that repaints every frame.
-pub(super) fn draw_status_line(frame: &mut Frame, area: Rect, app: &App) {
-    let pal = app.theme.palette();
-    let s = &app.status;
-    // Raised ground — `StatusLine.jsx` sits inside `BottomBar.jsx`'s own
-    // `bar-bottom` field, not the plain frame `ground` the log panel uses.
-    frame.render_widget(Block::new().style(Style::default().bg(pal.bar_bottom)), area);
-    // Activity leads the row — per explicit developer request that "what's
-    // the LLM doing right now" is the single most useful thing this line
-    // can say, so it shouldn't be buried after the model name/turn counter.
-    let spinner = SPINNER_FRAMES[app.tick as usize % SPINNER_FRAMES.len()];
-    // Two tones, and the reference is consistent about which is which
-    // across all eleven frames. The *activity* — the glyph's word — is
-    // `--tui-quiet` (`◐  working`, `●  idle`, `○  waiting`); standing
-    // metadata beside it is `--tui-dim`, the tone the reference gives
-    // `config → ~/.aldwin/config.toml` on the same row. A running tool's
-    // name stays `value` because it is the one live datum here.
-    //
-    // Every state leads with a glyph now, idle included. The row used to
-    // open with a bare `idle`, which put the first word of this row one
-    // column left of where it sits in every other state and made the band
-    // twitch sideways each time a turn ended.
-    let ink = || Style::default().fg(pal.dim);
-    let activity = |glyph: &str, fg, text: String| {
-        vec![Span::styled(format!("{glyph}  "), Style::default().fg(fg)), Span::styled(text, Style::default().fg(pal.quiet))]
-    };
-    let running = |text: String| activity(spinner, pal.glyph_running, text);
-    // Two groups, and the rhythm says which is which. Activity (with the
-    // tools it is running) is what is happening *now*; the model, the turn
-    // and the message count are standing facts about the session. Unrelated
-    // groups are parted by `--group-gap`; facts within one ride ` · `. The
-    // row shipped two literal spaces everywhere, which is neither, so four
-    // unrelated facts read as one undifferentiated run — the same misreading
-    // `grid::GROUP_GAP` records for the identity bar.
-    let mut spans = if app.thinking {
-        running("thinking…".into())
-    // `awaiting_turn` counts as active here as well as in the hint below —
-    // between submitting and `TurnStarted` landing the harness is waiting
-    // on the provider, and reporting that stretch as "idle" is exactly the
-    // no-progress-feedback complaint `activity_label` exists to answer.
-    } else if app.turn_active || app.awaiting_turn {
-        running(activity_label(app))
-    } else {
-        activity("●", pal.done, "idle".into())
-    };
-
-    if !s.running_tools.is_empty() {
-        spans.push(Span::styled(" · ", ink()));
-        for (i, tool) in s.running_tools.iter().enumerate() {
-            if i > 0 {
-                // `ink()`, not a bare `Span::raw` — the separator carries a
-                // visible glyph, and `Style::default()` is the *terminal's*
-                // default foreground, not a token: on a light-profile
-                // terminal it renders near-black against this bar and on a
-                // dark one near-white, the one cell in the whole frame not
-                // under the palette's control. Same rule
-                // `highlight_command_tokens` states for composer words; the
-                // whitespace `Span::raw`s elsewhere are exempt only because
-                // they paint no glyph.
-                spans.push(Span::styled(", ", ink()));
-            }
-            spans.push(Span::styled(running_tool_name(tool).to_string(), Style::default().fg(pal.value)));
-        }
-    }
-
-    // A draft that already spans lines names the key that adds one (`2c`:
-    // `●  idle      ⇧⏎ newline`). Only then: it is a hint about the mode
-    // the composer is in, and on a one-line draft the row is better spent
-    // on the session's facts. Shift+Enter is the one of Aldwin's three
-    // newline bindings a developer reaches for — see `App::handle_key` for
-    // why Alt+Enter and Ctrl+J exist beside it.
-    if app.input.contains('\n') {
-        spans.push(Span::styled(" ".repeat(GROUP_GAP), ink()));
-        spans.push(Span::styled("⇧⏎", Style::default().fg(pal.body)));
-        spans.push(Span::styled(" newline", Style::default().fg(pal.quiet)));
-    }
-
-    // `--group-gap` parts the activity group from the session group.
-    spans.push(Span::styled(" ".repeat(GROUP_GAP), ink()));
-
-    // Lowercase words, not `T1 S2`: the Content Fundamentals ask for
-    // lowercase labels, and an uppercase cryptic abbreviation is what this
-    // was. An absent turn is now *omitted* rather than printed as `-` —
-    // that placeholder borrowed a diff sign to mean "no value", and a fact
-    // the session does not have yet is better left unsaid than signed.
-    let messages = app.log.len();
-    let mut facts = vec![s.model_name.clone()];
-    if let Some(t) = s.turn {
-        facts.push(format!("turn {t}"));
-    }
-    if let Some(st) = s.step {
-        facts.push(format!("step {st}"));
-    }
-    facts.push(format!("{messages} message{}", if messages == 1 { "" } else { "s" }));
-    for (i, fact) in facts.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" · ", ink()));
-        }
-        spans.push(Span::styled(fact, ink()));
-    }
-
-    // Right-aligned key hint — `StatusLine.jsx`'s own `right` prop (`esc to
-    // stop`), adapted to Aldwin's real binding: Ctrl+C, not Esc, is what
-    // cancels a turn or exits an idle session. Must read the same "is
-    // anything running" state `App::cancel_or_quit` acts on, or the hint
-    // promises one thing and the key does the other.
-    //
-    // Key then verb, no `to` between them: the reference writes every hint
-    // in every footer as `esc stop`, `⏎ send`, `^d close`. The key is
-    // `--tui-body` and the verb `--tui-quiet`, so a footer scans as a column
-    // of keys rather than as a sentence.
-    //
-    // The hint tracks what a key does *now*, which is how the reference
-    // uses the slot (`2a` `esc stop` while working, `2b` `⏎ send` over a
-    // draft). With a draft waiting, that is `⏎ send`; with nothing to send,
-    // it is how to leave.
-    //
-    // Two of the reference's hints are deliberately **not** drawn, because
-    // Aldwin does not bind them and a footer must not name a key that does
-    // something else: `esc stop` (a turn is cancelled with `^c`) and `2c`'s
-    // `esc clear` (nothing clears a draft on one keypress, and a hint is not
-    // the place to introduce a binding that destroys typed input).
-    let working = app.turn_active || app.awaiting_turn;
-    let (hint_key, hint_verb) = match (working, app.input.is_empty()) {
-        (true, _) => ("^c", " cancel"),
-        (false, false) => ("⏎", " send"),
-        (false, true) => ("^c", " exit"),
-    };
-    let hint_width = hint_key.width() + hint_verb.width();
-
-    // Composed as one line, for the reason the identity bar above is: two
-    // rects sized independently cannot keep a gap between them. This row
-    // reserved the hint's exact width so the hint never clipped, but the
-    // left group still filled to the seam — at 52 columns it read
-    // `0 messages^c to exit`, one fact running into the next with nothing
-    // between them. Found by screenshotting the bar at the widths the
-    // collision actually lives at, one row below the one being fixed.
-    //
-    // The activity group is elided rather than dropped: unlike a version
-    // number, a shortened `tools: rea…` is still true, and this row's whole
-    // job is to say what is happening right now.
-    let width = area.width as usize;
-    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(hint_width);
-    let mut line = vec![Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom))];
-    let spans = truncate_spans(spans, budget);
-    let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    line.extend(spans);
-    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(hint_width);
-    line.push(Span::styled(" ".repeat(gap), Style::default().bg(pal.bar_bottom)));
-    line.push(Span::styled(hint_key, Style::default().fg(pal.body).bg(pal.bar_bottom)));
-    line.push(Span::styled(hint_verb, Style::default().fg(pal.quiet).bg(pal.bar_bottom)));
-    line.push(Span::styled(" ".repeat(MARGIN_X), Style::default().bg(pal.bar_bottom)));
-
-    frame.render_widget(Paragraph::new(Line::from(line)).style(Style::default().bg(pal.bar_bottom)), area);
-}
-
-/// The notice row: `✗  turn failed · <why> · output above`, on the bottom
-/// band's first row, for as long as the failure is the last thing that
-/// happened (`2d`).
-///
-/// A failed turn already leaves a `✗` row in the transcript, and that row
-/// scrolls. This one does not: it sits against the composer, where the
-/// developer is about to type, and says the thing they need before they
-/// type it — the last turn did not finish. It clears itself, because it is
-/// derived rather than stored: the moment anything is appended to the log
-/// the failure is no longer the last entry, and the row is blank again.
-///
-/// The status is the err hue and the rest is `quiet`, the split the
-/// reference draws: only the *state* takes the status colour, and the
-/// detail after it is ordinary supporting text. The reason is elided rather
-/// than wrapped — this is one row by construction — and says where the rest
-/// of it is.
-pub(super) fn draw_notice(frame: &mut Frame, area: Rect, app: &App) {
-    use aldwin_core::TurnEndReason;
-    let pal = app.theme.palette();
-    let why = match app.log.last() {
-        Some(LogEntry::Error { message }) => message,
-        Some(LogEntry::TurnEnded { reason: TurnEndReason::Error(message) }) => message,
-        _ => return,
-    };
-    let on_band = |fg| Style::default().fg(fg).bg(pal.bar_bottom);
-    const STATUS: &str = "turn failed";
-    const WHERE: &str = " · output above";
-    // The first line only: a provider error can carry a body, and a newline
-    // in a one-row band would be drawn as a gap.
-    let why = why.lines().next().unwrap_or_default();
-    let room = (area.width as usize).saturating_sub(MARGIN_X * 2).saturating_sub(3 + STATUS.width() + 3 + WHERE.width());
-    let mut spans = vec![
-        Span::styled(" ".repeat(MARGIN_X), on_band(pal.quiet)),
-        Span::styled("✗  ", on_band(pal.err)),
-        Span::styled(STATUS, on_band(pal.err)),
-    ];
-    if room > 0 && !why.is_empty() {
-        spans.push(Span::styled(" · ", on_band(pal.quiet)));
-        spans.push(Span::styled(elide(why, room), on_band(pal.quiet)));
-        spans.push(Span::styled(WHERE, on_band(pal.quiet)));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(pal.bar_bottom)), area);
-}
-
-/// Every word `cli::slash::intercept` actually dispatches on, `/`-prefixed
-/// here to match whole-word input tokens directly. Duplicated because tui
-/// can't depend on cli; purely a hint for [`highlight_command_tokens`], so
-/// keep in sync by hand if slash.rs's arms change. Nothing forces the two
-/// files to agree: `/model` and `/resume` shipped undimmed until an audit
-/// read this list against that one.
-const KNOWN_COMMAND_WORDS: [&str; 7] = ["/help", "/clear", "/exit", "/model", "/reload-config", "/resume", "/theme"];
-
-/// Dims every word in `line` that exactly matches a known command, no
-/// matter where it falls — per explicit developer direction, this is a
-/// cosmetic hint only and deliberately does *not* mirror
-/// `transcript::is_command`'s "whole message must start with `/`" rule: a
-/// real slash command only fires when it's the very first thing in the
-/// message, so `/exit` typed mid-sentence never actually gets intercepted —
-/// it's still worth flagging live so the developer notices they typed a
-/// recognized command word, wherever it landed.
-///
-/// An ordinary word must carry an explicit `text` fg rather than a bare
-/// `Style::default()` (terminal-default foreground): the composer fills its
-/// own background regardless of the developer's terminal theme, and on a
-/// light-mode profile "terminal-default foreground" is typically dark,
-/// which rendered a typed word dark-on-dark. Reported directly: "text is
-/// dark on light mode and it clashes with the dark background."
-pub(super) fn highlight_command_tokens(line: &str, ctx: Ctx) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut rest = line;
-    while !rest.is_empty() {
-        let ws_len: usize = rest.chars().take_while(|c| c.is_whitespace()).map(|c| c.len_utf8()).sum();
-        if ws_len > 0 {
-            let (ws, tail) = rest.split_at(ws_len);
-            spans.push(Span::raw(ws.to_string()));
-            rest = tail;
-            continue;
-        }
-        let word_len: usize = rest.chars().take_while(|c| !c.is_whitespace()).map(|c| c.len_utf8()).sum();
-        let (word, tail) = rest.split_at(word_len);
-        let fg = if KNOWN_COMMAND_WORDS.contains(&word) { ctx.pal.dim } else { ctx.pal.text };
-        spans.push(Span::styled(word.to_string(), Style::default().fg(fg)));
-        rest = tail;
-    }
-    if spans.is_empty() {
-        spans.push(Span::raw(String::new()));
-    }
-    Line::from(spans)
-}
-
-/// The composer: no drawn border at all — per explicit developer feedback
-/// against a real screenshot that the left accent bar it used to carry read
-/// as stray decoration, not something the input needed. `bar_bottom` is its
-/// field; `Composer.jsx` has no surface of its own beyond `BottomBar.jsx`'s
-/// raised ground, and the prompt `▸` and caret carry the accent instead.
-pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer) {
-    let pal = app.theme.palette();
-    let ctx = Ctx::new(pal, area.width);
-    // `MARGIN_X` horizontally (the grid's `padding: 0 27px`), no vertical
-    // padding — the blank rows around the composer belong to the bottom bar
-    // itself, not to this widget.
-    let block = Block::new().style(Style::default().bg(pal.bar_bottom)).padding(Padding::horizontal(MARGIN_X as u16));
-    let inner = block.inner(area);
-    let blocked = !app.pending_approvals.is_empty() || !app.pending_prompts.is_empty();
-    let prompt = || Span::styled("▸  ", Style::default().fg(pal.mark));
-    let gutter = || Span::styled("   ", Style::default().bg(pal.bar_bottom));
-
-    // Dim placeholder text when the draft is empty — an empty filled box
-    // gave no hint at all that this was where a message goes. While
-    // blocked, the placeholder says so instead of inviting a keystroke it
-    // would silently drop.
-    //
-    // The caret and the placeholder used to claim the **same cell**,
-    // because the caret was the terminal's own cursor and
-    // `set_cursor_position` put it exactly where the placeholder's first
-    // character was painted: unfocused it outlined the `A`, focused it
-    // replaced it. Moving the text two cells right cleared the collision
-    // and left the worse half of the defect standing — cell 6 became a
-    // lone hollow `#ffffff` box, a colour in neither palette and a stroked
-    // object in a frame where nothing is stroked, 1.07:1 against the light
-    // composer and the brightest mark in the frame in dark.
-    //
-    // The caret is now drawn, which is what `14d` specifies in the first
-    // place: the empty composer is `▸  ▌`, both `--t-mark`. Nothing calls
-    // `set_cursor_position` any more, so the terminal's own cursor stays
-    // hidden (`run::draw` hides it across every paint) exactly as it
-    // already did on the first-run screen.
     if app.input.is_empty() {
         app.composer_top = 0;
-        let text = if blocked { "waiting on your decision above…" } else { "Ask Aldwin anything" };
-        let mut placeholder = vec![prompt()];
-        if !blocked {
-            placeholder.push(caret(pal));
-            placeholder.push(Span::styled(" ", Style::default().bg(pal.bar_bottom)));
+        let mut spans = vec![prompt("›"), Span::styled(placeholder(app), Style::default().fg(pal.label2).bg(pal.field)), caret(pal, app.tick)];
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        if let Some(action) = action_spans {
+            let gap = (inner.width as usize).saturating_sub(used).saturating_sub(action_width as usize);
+            spans.push(Span::styled(" ".repeat(gap), field));
+            spans.extend(action);
         }
-        placeholder.push(Span::styled(text, Style::default().fg(pal.dim)));
-        frame.render_widget(Paragraph::new(Line::from(placeholder)).block(block), area);
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(field), inner);
         return;
     }
 
-    // The frame's one measurement of the draft (see [`Composer`]) — the
-    // same rows the band was sized from. Its column is cached on `App` so
-    // that Up/Down navigate these rows between draws. Wrapping used to be
-    // left to `Paragraph`'s own `Wrap`, which reports nothing about where
-    // it broke, so the caret was placed from the draft's *source* line and
-    // column and drifted away from the text on any row long enough to wrap.
     let layout = &composer.layout;
     app.composer_width = composer.width;
     let (cursor_row, cursor_col) = layout.position(app.cursor);
-
-    // Keep the caret's row inside the band. A draft taller than the band
-    // scrolls under it rather than growing past `COMPOSER_MAX_ROWS`; the
-    // offset only moves when the caret would otherwise leave, so typing in
-    // the middle of a long paste doesn't drag the view around.
     let height = inner.height.max(1) as usize;
     let last_top = layout.row_count().saturating_sub(height);
     let mut top = app.composer_top.min(last_top);
@@ -625,104 +207,264 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, app: &mut App, composer:
     top = top.max((cursor_row + 1).saturating_sub(height));
     app.composer_top = top;
 
-    // Live counterpart to the dim styling of an already-submitted slash
-    // command in the log — without this, a command only reads as "directed
-    // at the harness, not the model" after Enter, not while it's being
-    // typed. The `▸` marks the draft's first row; every other row gets the
-    // same three cells as blank gutter, so the text keeps one left edge.
-    let mut lines: Vec<Line> = (top..(top + height).min(layout.row_count()))
+    let ctx = Ctx::new(pal, inner.width);
+    let mut lines: Vec<Line<'static>> = (top..(top + height).min(layout.row_count()))
         .map(|i| {
             let text = layout.row_text(i);
-            let mut line = if i == cursor_row { caret_row(&text, cursor_col, ctx) } else { highlight_command_tokens(&text, ctx) };
-            line.spans.insert(0, if i == 0 { prompt() } else { gutter() });
+            let mut line = if i == cursor_row { caret_row(&text, cursor_col, ctx, app.tick) } else { Line::from(Span::styled(text, Style::default().fg(pal.label).bg(pal.field))) };
+            line.spans.insert(0, if i == 0 { prompt("›") } else { Span::styled(" ".repeat(MARK_COL), field) });
             line
         })
         .collect();
 
-    // `4 lines`, flush right on the band's top row, once the draft has more
-    // than one (`2c`). The band grows a row per line, so its height already
-    // says the draft is long; what it cannot say is *how* long once the
-    // draft outgrows `COMPOSER_MAX_ROWS` and starts scrolling under it, and
-    // that is when the number earns its cell.
-    //
-    // Whole or not at all, like every other right-flush fact in the frame:
-    // a top row whose text reaches the count's column keeps its text.
-    if layout.row_count() > 1 {
-        if let Some(first) = lines.first_mut() {
-            let count = format!("{} lines", layout.row_count());
-            let used: usize = first.spans.iter().map(|s| s.content.width()).sum();
-            let room = (inner.width as usize).saturating_sub(used);
+    // The action, or `4 lines`, flush right on the first row — whole or
+    // not at all.
+    if let Some(first) = lines.first_mut() {
+        let used: usize = first.spans.iter().map(|s| s.content.width()).sum();
+        let room = (inner.width as usize).saturating_sub(used);
+        if let Some(action) = action_spans {
+            if room >= GROUP_GAP + action_width as usize {
+                first.spans.push(Span::styled(" ".repeat(room - action_width as usize), field));
+                first.spans.extend(action);
+            }
+        } else if layout.row_count() > 1 {
+            let count = format!("{} lines ", layout.row_count());
             if room >= GROUP_GAP + count.width() {
-                first.spans.push(Span::styled(" ".repeat(room - count.width()), Style::default().bg(pal.bar_bottom)));
-                first.spans.push(Span::styled(count, Style::default().fg(pal.dim).bg(pal.bar_bottom)));
+                first.spans.push(Span::styled(" ".repeat(room - count.width()), field));
+                first.spans.push(Span::styled(count, Style::default().fg(pal.label2).bg(pal.field)));
             }
         }
     }
-    // No `Wrap`: `layout` already broke the draft into rows that fit this
-    // column, so there is nothing left for a wrapper to do — and a second
-    // wrapper here is exactly what put the caret and the text on different
-    // rows before.
-    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
+    frame.render_widget(Paragraph::new(Text::from(lines)).style(field), inner);
 }
 
-/// The drawn caret — `14d`'s `▌` in `--t-mark`, on the composer's own
-/// field.
-fn caret(pal: &Palette) -> Span<'static> {
-    Span::styled("▌", Style::default().fg(pal.mark).bg(pal.bar_bottom))
+/// The caret: a `label` block, blinking on the tick (`--caret-period`
+/// 1.05s, stepped — ~9 ticks on, 9 off at 120ms).
+fn caret(pal: &Palette, tick: u64) -> Span<'static> {
+    let on = (tick / 9).is_multiple_of(2);
+    let bg = if on { pal.label } else { pal.field };
+    Span::styled(" ", Style::default().bg(bg))
 }
 
 /// One draft row with the caret drawn into it at display column `col`.
-///
-/// Mid-text the caret takes the cell of the character it sits on, the way
-/// a block cursor does, and a wide character under it leaves its second
-/// cell blank so nothing to the right shifts. The row is highlighted
-/// *first* and the spans split afterwards: splitting the text first would
-/// break a command word in half at the caret and lose its dim styling
-/// while it is being edited.
-fn caret_row(text: &str, col: usize, ctx: Ctx) -> Line<'static> {
-    let field = Style::default().bg(ctx.pal.bar_bottom);
+fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
+    let pal = ctx.pal;
+    let style = Style::default().fg(pal.label).bg(pal.field);
     let mut out: Vec<Span<'static>> = Vec::new();
+    let (mut before, mut after) = (String::new(), String::new());
+    let mut under = None;
     let mut at = 0;
-    let mut placed = false;
-    for span in highlight_command_tokens(text, ctx).spans {
-        let width = span.content.width();
-        if placed || at + width <= col {
-            at += width;
-            out.push(span);
-            continue;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(1);
+        if at < col {
+            before.push(c);
+        } else if under.is_none() {
+            under = Some(c);
+        } else {
+            after.push(c);
         }
-        let (mut before, mut after) = (String::new(), String::new());
-        let mut under = None;
-        for c in span.content.chars() {
-            // `unwrap_or(1)`, as `grid::elide` does and for the same reason:
-            // the outer walk above measures with `str::width`, which charges a
-            // control character one cell. A `0` here would drift from it.
-            let w = c.width().unwrap_or(1);
-            if at < col {
-                before.push(c);
-            } else if under.is_none() {
-                under = Some(c);
-            } else {
-                after.push(c);
-            }
-            at += w;
-        }
-        if !before.is_empty() {
-            out.push(Span::styled(before, span.style));
-        }
-        out.push(caret(ctx.pal));
-        if let Some(pad) = under.map(|c| c.width().unwrap_or(1).saturating_sub(1)).filter(|&p| p > 0) {
-            out.push(Span::styled(" ".repeat(pad), field));
-        }
-        if !after.is_empty() {
-            out.push(Span::styled(after, span.style));
-        }
-        placed = true;
+        at += w;
     }
-    // Past the last character — the common case, and the only one on an
-    // empty row.
-    if !placed {
-        out.push(caret(ctx.pal));
+    if !before.is_empty() {
+        out.push(Span::styled(before, style));
+    }
+    match under {
+        // Mid-text the caret takes the cell of the character it sits on.
+        Some(c) => {
+            let on = (tick / 9).is_multiple_of(2);
+            let s = if on { Style::default().fg(pal.field).bg(pal.label) } else { style };
+            out.push(Span::styled(c.to_string(), s));
+            if let Some(pad) = c.width().map(|w| w.saturating_sub(1)).filter(|&p| p > 0) {
+                out.push(Span::styled(" ".repeat(pad), style));
+            }
+        }
+        None => out.push(caret(pal, tick)),
+    }
+    if !after.is_empty() {
+        out.push(Span::styled(after, style));
     }
     Line::from(out)
+}
+
+/// A footer key: glyph, two spaces, verb.
+pub(super) struct KeyHint {
+    pub glyph: &'static str,
+    pub verb:  &'static str,
+}
+
+impl KeyHint {
+    const fn new(glyph: &'static str, verb: &'static str) -> Self {
+        Self { glyph, verb }
+    }
+}
+
+/// The footer's leading status: a word, or `● Working…` with the running
+/// amber dot in the mark column.
+enum Status {
+    Ready,
+    Working,
+    Waiting,
+    /// The review: no status word; the row opens with the keys.
+    None,
+}
+
+/// What the footer says now — only the keys that work in this state.
+fn footer_state(app: &App) -> (Status, Vec<KeyHint>) {
+    match &app.mode {
+        Mode::Question(_) => (Status::Waiting, vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")]),
+        Mode::Commands(_) => (Status::Ready, vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")]),
+        Mode::Review(r) => {
+            if r.keys_shown {
+                (
+                    Status::None,
+                    vec![
+                        KeyHint::new("↑↓", "Move"),
+                        KeyHint::new("⇧↑↓", "Select"),
+                        KeyHint::new("↩", "Comment"),
+                        KeyHint::new("⌃↩", "Approve"),
+                        KeyHint::new("⇥", "Next file"),
+                        KeyHint::new("⎋", "Discard"),
+                    ],
+                )
+            } else {
+                (Status::None, vec![KeyHint::new("?", "Keys")])
+            }
+        }
+        Mode::Conversation if app.turn_active || app.awaiting_turn => {
+            let mut keys = vec![KeyHint::new("⎋", "Stop")];
+            if app.input.is_empty() && has_details(app) {
+                keys.push(if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") });
+            }
+            (Status::Working, keys)
+        }
+        Mode::Conversation if app.answering.is_some() => (Status::Waiting, vec![KeyHint::new("↩", "Send")]),
+        Mode::Conversation if !app.input.is_empty() => (Status::Ready, vec![KeyHint::new("↩", "Send")]),
+        Mode::Conversation => {
+            let mut keys = vec![KeyHint::new("/", "Commands")];
+            if has_details(app) {
+                keys.push(if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") });
+            }
+            (Status::Ready, keys)
+        }
+    }
+}
+
+fn has_details(app: &App) -> bool {
+    let since = app.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })).unwrap_or(0);
+    app.log[since..].iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
+}
+
+/// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
+/// and after it, the key groups `--group-gap` apart, and the context bar
+/// flush right.
+pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let pal = app.theme.palette();
+    let (status, keys) = footer_state(app);
+    let dim = Style::default().fg(pal.label2);
+
+    let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
+    match status {
+        Status::Ready => groups.push(vec![Span::raw(" ".repeat(MARK_COL)), Span::styled("Ready", dim)]),
+        Status::Waiting => groups.push(vec![Span::raw(" ".repeat(MARK_COL)), Span::styled("Waiting for you", dim)]),
+        Status::Working => {
+            // The dot blinks with the tick, as the caret does — the one
+            // thing the design animates besides it.
+            groups.push(vec![Span::styled(format!("{:<width$}", "●", width = MARK_COL), Style::default().fg(pal.amber)), Span::styled("Working…", dim)])
+        }
+        Status::None => groups.push(vec![Span::raw(" ".repeat(MARK_COL))]),
+    }
+    for key in keys {
+        let glyph_fg = match key.glyph {
+            "↩" | "⌃↩" | "/" => pal.accent,
+            _ => pal.label2,
+        };
+        groups.push(vec![Span::styled(key.glyph, Style::default().fg(glyph_fg)), Span::styled(format!("  {}", key.verb), dim)]);
+    }
+
+    let mut left: Vec<Span<'static>> = Vec::new();
+    for (i, group) in groups.into_iter().enumerate() {
+        if i > 0 {
+            left.push(Span::raw(" ".repeat(GROUP_GAP)));
+        }
+        left.extend(group);
+    }
+    // The first group is the status, whose leading spaces are the mark
+    // column; a `Status::None` footer's first key sits right after them.
+    if let (Some(first), Some(second)) = (left.first().cloned(), left.get(1).cloned()) {
+        if first.content.trim().is_empty() && second.content.trim().is_empty() {
+            left.remove(1);
+        }
+    }
+
+    let right = context_bar(app.status.context_percent(), pal);
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+    let width = area.width as usize;
+    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(right_w);
+    let left = truncate_spans(left, budget);
+    let used: usize = left.iter().map(|s| s.content.width()).sum();
+    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(right_w);
+
+    let mut line = vec![Span::raw(" ".repeat(MARGIN_X))];
+    line.extend(left);
+    line.push(Span::raw(" ".repeat(gap)));
+    line.extend(right);
+    frame.render_widget(Paragraph::new(Line::from(line)), area);
+}
+
+/// `Context ━━━━━━━━━━ 41%` — ten segments, the filled run ramping to
+/// full accent at its leading edge, the rest on `--track`. With nothing
+/// measured yet the bar is drawn empty at `0%`, as the launch frame does.
+pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'static>> {
+    let pct = percent.unwrap_or(0);
+    let filled = gauge_filled(pct);
+    let colours = pal.gauge(filled);
+    let mut spans = vec![Span::styled("Context ", Style::default().fg(pal.label2))];
+    for colour in colours.iter().take(GAUGE_SEGMENTS) {
+        spans.push(Span::styled("━", Style::default().fg(*colour)));
+    }
+    spans.push(Span::styled(format!(" {pct}%"), Style::default().fg(pal.label2)));
+    spans
+}
+
+/// The comment field, two rows in place of the field while a selection is
+/// being commented on: the selection label on `--select`, the draft on
+/// `--field`, both with the accent `▎` edge.
+pub(super) fn draw_comment_field(frame: &mut Frame, area: Rect, app: &App, lines: &str, location: &str, draft: &str, cursor: usize) {
+    let pal = app.theme.palette();
+    let inner = Rect { x: area.x + MARGIN_X as u16, width: area.width.saturating_sub(MARGIN_X as u16 * 2), ..area };
+    let [label_row, draft_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+
+    let on_select = Style::default().bg(pal.select);
+    let edge = |bg: Color| Span::styled("▎", Style::default().fg(pal.accent).bg(bg));
+    let left = vec![
+        edge(pal.select),
+        Span::styled("Commenting on ", Style::default().fg(pal.label).bg(pal.select)),
+        Span::styled(lines.to_string(), Style::default().fg(pal.label).bg(pal.select).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {location}"), Style::default().fg(pal.label2).bg(pal.select)),
+    ];
+    let right = vec![Span::styled("esc ", Style::default().fg(pal.label2).bg(pal.select))];
+    frame.render_widget(Block::new().style(on_select), label_row);
+    frame.render_widget(Paragraph::new(justify(left, right, inner.width as usize, pal.select)).style(on_select), label_row);
+
+    let on_field = Style::default().bg(pal.field);
+    frame.render_widget(Block::new().style(on_field), draft_row);
+    let ctx = Ctx::new(pal, inner.width);
+    let mut row = caret_row(draft, cursor, ctx, app.tick);
+    row.spans.insert(0, edge(pal.field));
+    let used: usize = row.spans.iter().map(|s| s.content.width()).sum();
+    let gap = (inner.width as usize).saturating_sub(used).saturating_sub(2);
+    row.spans.push(Span::styled(" ".repeat(gap), on_field));
+    row.spans.push(Span::styled("↩ ", Style::default().fg(pal.accent).bg(pal.field)));
+    frame.render_widget(Paragraph::new(row).style(on_field), draft_row);
+}
+
+fn justify(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize, bg: Color) -> Line<'static> {
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+    let left = if left_w + right_w + 1 > width { truncate_spans(left, width.saturating_sub(right_w + 1)) } else { left };
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let mut spans = left;
+    spans.push(Span::styled(" ".repeat(width.saturating_sub(left_w).saturating_sub(right_w)), Style::default().bg(bg)));
+    spans.extend(right);
+    Line::from(spans)
 }

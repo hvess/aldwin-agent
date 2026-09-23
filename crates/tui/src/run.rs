@@ -1,10 +1,8 @@
 use std::io;
 use std::io::{BufWriter, Write};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aldwin_core::{Command, Event};
-use aldwin_permissions::Engine;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
@@ -13,15 +11,14 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
-    EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use ratatui::crossterm::{execute, queue, ExecutableCommand};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
-use crate::app::App;
-use crate::first_run::ProviderChoice;
+use crate::app::{App, ProviderChoice};
 use crate::resume::SessionChoice;
 use crate::palette::Theme;
 use crate::ui;
@@ -44,29 +41,21 @@ type Out = Terminal<CrosstermBackend<BufWriter<io::Stdout>>>;
 const OUT_BUFFER: usize = 1 << 20;
 
 /// What the session needs to know about *where* it is running, beyond the
-/// model id the status line already shows: the catalogue bare `/model`
-/// offers, and which of its rows the session is actually on.
-///
-/// A struct rather than two more positional parameters — `run` already
-/// takes five, and these two are one fact about the session.
+/// model id the launch card shows: the catalogue bare `/model` offers (and
+/// the first message asks over, when nothing is configured), which of its
+/// rows the session is actually on, and the sessions `/resume` offers.
 pub struct SessionProvider {
-    /// Display halves only, in catalogue order (see
-    /// [`crate::first_run::ProviderChoice`]). Empty means no picker: bare
-    /// `/model` is then forwarded to aldwin-cli, which reports rather than
-    /// picks.
+    /// Display halves only, in catalogue order. Empty means no question:
+    /// bare `/model` is then forwarded to aldwin-cli, which reports rather
+    /// than asks.
     pub catalogue:        Vec<ProviderChoice>,
     /// The catalogue id of the row `provider.yaml` resolves to, or `None`
-    /// for an endpoint the catalogue has never seen.
+    /// for an endpoint the catalogue has never seen — or for nothing
+    /// configured at all.
     pub current_provider: Option<String>,
-    /// What to call that provider on screen. The catalogue id where the row
-    /// is known, the declared kind where it is not — so the resting state's
-    /// `provider` fact always names a provider, never only a model.
-    pub provider_label: Option<String>,
     /// The past sessions bare `/resume` offers, newest first and never
-    /// including the one being written. Display halves only, exactly as
-    /// `catalogue` is: this crate reads no transcript and formats no
-    /// timestamp. Empty means no picker — bare `/resume` is then forwarded
-    /// to aldwin-cli, which reports rather than picks.
+    /// including the one being written. Display halves only: this crate
+    /// reads no transcript and formats no timestamp.
     pub sessions: Vec<SessionChoice>,
 }
 
@@ -125,7 +114,6 @@ pub async fn run(
     events: mpsc::Receiver<Event>,
     commands: mpsc::Sender<Command>,
     model_name: String,
-    permissions: Arc<Engine>,
     theme: Theme,
     session: SessionProvider,
 ) -> io::Result<()> {
@@ -138,6 +126,10 @@ pub async fn run(
     let guard = TerminalGuard::new();
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    // The design's title bar is the terminal's own — `gateway — aldwin`,
+    // set once and never drawn. Best-effort: a terminal that ignores the
+    // title ignores the sequence.
+    let _ = execute!(stdout, SetTitle(format!("{} — aldwin", crate::app::project_name())));
     let _ = execute!(stdout, EnableBracketedPaste);
     // Pushed after the alternate screen is up, because the keyboard mode is
     // part of the screen's own state — the flags have to land on the screen
@@ -151,7 +143,7 @@ pub async fn run(
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, events, commands, model_name, permissions, theme, session).await;
+    let result = run_loop(&mut terminal, events, commands, model_name, theme, session).await;
     // Before the guard, not after: the frame the loop last painted is still
     // sitting in `OUT_BUFFER` at this point, and restoring writes straight
     // to `io::stdout()`. Left to the `Terminal`'s own drop, that frame would
@@ -340,15 +332,13 @@ async fn run_loop(
     mut events: mpsc::Receiver<Event>,
     commands: mpsc::Sender<Command>,
     model_name: String,
-    permissions: Arc<Engine>,
     theme: Theme,
     session: SessionProvider,
 ) -> io::Result<()> {
-    let mut app = App::new(model_name, permissions)
+    let mut app = App::new(model_name)
         .with_theme(theme)
         .with_sessions(session.sessions)
-        .with_catalogue(session.catalogue, session.current_provider)
-        .with_provider_label(session.provider_label);
+        .with_catalogue(session.catalogue, session.current_provider);
     let mut input = spawn_input_reader();
     // Drives the "working"/"thinking" spinner's animation frame — a plain
     // redraw timer, not tied to any core event, since there'd otherwise be

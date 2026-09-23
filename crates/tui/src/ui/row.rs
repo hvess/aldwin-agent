@@ -37,37 +37,19 @@ pub(super) struct Row {
 }
 
 impl Row {
-    /// A card/panel content row: the grid's `MARGIN_X` padding on both
-    /// sides, filled edge to edge in `bg`, no border.
-    pub fn card(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, pad: MARGIN_X, bg }
+    /// A band inset by `MARGIN_X` on each side — the echoed prompt's
+    /// `margin: 0 3ch` — with `surround` painted in the margins and no
+    /// padding of its own, so content starts at the band's edge.
+    pub fn band(bg: Color, surround: Color) -> Self {
+        Self { margin: MARGIN_X, surround, pad: 0, bg }
     }
 
-    /// A row with no padding at all, content starting in cell 0 — the one
-    /// row type the reference deliberately runs flush to the frame's own
-    /// left edge, so a selectable option's `▌` mark lands in cell 0.
-    pub fn flush(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, pad: 0, bg }
-    }
-
-    /// A row inside a sunk field — a quoted diff or a command block. It has
-    /// no outline: the design system's Turn 13 rebuild replaced the inline
-    /// diff's `border: 1px solid var(--tui-line)` with "a recessed field,
-    /// no outline", so the only thing marking the field's extent is the
-    /// step between its own ground and the surface it is quoted on.
+    /// A row inside a field — a fenced code block on `tint`. It has no
+    /// outline: nothing inside a window is stroked, so the only thing
+    /// marking the field's extent is the step between its own ground and
+    /// the surface it is quoted on.
     pub fn field(bg: Color) -> Self {
         Self { margin: 0, surround: Color::Reset, pad: 0, bg }
-    }
-
-    /// Holds the row off each edge by `cells`, painting that strip in
-    /// `surround`. The reference nests a diff box two ways: inside the
-    /// permission card it rides the card's own `padding: 0 27px` margin
-    /// (`.inset(MARGIN_X, pal.bar)`, so the strip reads as card rather than
-    /// as diff), while inside a turn's body column it sits flush with no
-    /// second margin of its own — the body column's `CONTENT_INDENT` is
-    /// already the only offset it needs.
-    pub fn inset(self, cells: usize, surround: Color) -> Self {
-        Self { margin: cells, surround, ..self }
     }
 
     /// Overrides the cells of fill held between the row's edge and its
@@ -77,19 +59,6 @@ impl Row {
     /// `$` lands on cell 5.
     pub fn pad(self, cells: usize) -> Self {
         Self { pad: cells, ..self }
-    }
-
-    /// The same geometry over a different fill — a diff row keeps its
-    /// field's margins but swaps the surface it sits on for the semantic
-    /// `add_row`/`del_row` fill.
-    pub fn with_fill(self, bg: Color) -> Self {
-        Self { bg, ..self }
-    }
-
-    /// The surface this row fills, for a caller styling content to sit on
-    /// it.
-    pub fn fill(self) -> Color {
-        self.bg
     }
 
     /// Paints this row's own fill onto every span that didn't already ask
@@ -126,9 +95,27 @@ impl Row {
         wrap_line(Line::from(spans), avail).into_iter().map(|line| self.assemble(line.spans, ctx)).collect()
     }
 
-    /// One row of plain `text` in `fg`, on this row's own fill.
-    pub fn text(self, text: &str, fg: Color, ctx: Ctx) -> Vec<Line<'static>> {
-        self.build(vec![Span::styled(text.to_string(), Style::default().fg(fg).bg(self.bg))], ctx)
+    /// Like [`Row::build`], for a row whose first span is a glyph column:
+    /// the rest wraps to what is left after `indent` cells, and every
+    /// continuation row is indented by `indent` so the text keeps one left
+    /// edge under itself rather than stepping back under the glyph.
+    pub fn build_indented(self, mut spans: Vec<Span<'static>>, indent: usize, ctx: Ctx) -> Vec<Line<'static>> {
+        if spans.is_empty() {
+            return vec![self.blank(ctx)];
+        }
+        let glyph = spans.remove(0);
+        let avail = self.avail(ctx.width).saturating_sub(indent).max(1);
+        let field = Style::default().bg(self.bg);
+        wrap_line(Line::from(spans), avail)
+            .into_iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let mut content = Vec::with_capacity(line.spans.len() + 1);
+                content.push(if i == 0 { glyph.clone() } else { Span::styled(" ".repeat(indent), field) });
+                content.extend(line.spans);
+                self.assemble(content, ctx)
+            })
+            .collect()
     }
 
     /// A blank filled row — a leading/trailing spacer inside a card so its
@@ -137,38 +124,6 @@ impl Row {
     /// single-`Line` for its many `push` call sites.
     pub fn blank(self, ctx: Ctx) -> Line<'static> {
         self.assemble(Vec::new(), ctx)
-    }
-
-    /// A single row split left/right — the same shape a key-hint row and a
-    /// panel footer use (key hints on the left, a fact flush
-    /// right). Both halves are caller-styled: the panel's title band puts
-    /// its badge in `hunk_header` where the footer puts its note in `dim`,
-    /// and a single hardcoded colour here got one of the two wrong.
-    ///
-    /// On a column too narrow for both halves the right-hand group is
-    /// dropped outright rather than wrapped: this row is laid out by hand,
-    /// so an overlong one would spill onto a row *outside* the panel — the
-    /// frame's own ground showing through under a fragment of text. The
-    /// keys on the left are what a developer actually needs; the note on
-    /// the right is the half that can go.
-    pub fn split(self, left: Vec<Span<'static>>, right: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
-        let avail = self.avail(ctx.width);
-        let left = self.on_field(left);
-        let right = self.on_field(right);
-        let left_width: usize = left.iter().map(|s| s.content.width()).sum();
-        let right_width: usize = right.iter().map(|s| s.content.width()).sum();
-        // `<`, not `<=`: at least one cell of gap has to survive between
-        // the two halves, or they'd read as one run-on string.
-        let right = if left_width + right_width < avail { right } else { Vec::new() };
-        let right_width: usize = right.iter().map(|s| s.content.width()).sum();
-        let gap = avail.saturating_sub(left_width.min(avail)).saturating_sub(right_width);
-        let field = Style::default().bg(self.bg);
-        let mut spans = vec![Span::styled(" ".repeat(self.pad), field)];
-        spans.extend(left);
-        spans.push(Span::styled(" ".repeat(gap.max(1)), field));
-        spans.extend(right);
-        spans.push(Span::styled(" ".repeat(self.pad), field));
-        Line::from(spans)
     }
 
     /// Wraps already-fitted `content` in this row's margins, padding and

@@ -5,7 +5,7 @@ A coding agent harness where the developer's understanding is the product, not t
 **Status:** active
 **Scope:** Entire project — core, TUI, LLM client, tool layer.
 **Owner:** Maximilian
-**Last Updated:** 2026-05-20
+**Last Updated:** 2026-09-23
 
 ## Why
 
@@ -40,11 +40,11 @@ A tool for thought.
     - Depends on: (none)
     - Spec: .claude/spec/aldwin-config.md
   - **aldwin-permissions** (`crates/permissions`)
-    - Role: Default-deny permission engine. Three scopes, allowlist persistence, per-file CLAUDE.md and AGENTS.md prompt tracking. Cross-cutting — any crate that gates an action calls into this one.
+    - Role: The lock — a `deny:` entry refuses a program outright — and nothing else since ADR 0009. Reads and runs need no grant; the review gates edits.
     - Depends on: aldwin-config
     - Spec: .claude/spec/aldwin-permissions.md
   - **aldwin-tools** (`crates/tools`)
-    - Role: ToolDispatcher impl. Built-in tools (Read, Explain, Edit, shell), MCP bridge via rmcp, Edit approval gate.
+    - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask), the staged changeset the review opens over, the read-enforcing sandbox, MCP bridge via rmcp.
     - Depends on: aldwin-core, aldwin-permissions, aldwin-config
     - Spec: .claude/spec/aldwin-tools.md
   - **aldwin-tui** (`crates/tui`)
@@ -68,17 +68,17 @@ A tool for thought.
 
 - **Use the official rmcp crate for MCP client work.** — First-party Rust MCP SDK; reinventing the transport adds no value.
 
-- **No OS-level sandboxing in V0.** — Neither Claude Code nor OpenCode implements seccomp/landlock isolation; permission prompts and command allowlists are the established model. Revisit if a credible threat model emerges.
+- **No OS-level sandboxing in V0.** — *Reversed by ADR 0004 and load-bearing since ADR 0009.* A call the agent declares a read runs under Landlock (Linux) or Seatbelt (macOS) with the tree read-only and the network unreachable; with no prompt left in the product (ADR 0009), the sandbox is what holds a read declaration to its word. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
 
-- **Agent loop is discussion-first; action only on explicit user signal.** — Resting state is conversation. The agent proposes, explains, surfaces tradeoffs; the developer drives. Not OpenCode's build/plan toggle, not Claude Code's act-first model. Action requires an explicit signal ("apply", "do it", "go ahead").
+- **Agent loop is discussion-first; action follows intent.** — Amended by ADR 0008: resting state is conversation, and action follows the developer's *intent* rather than their grammatical mood. The agent proposes, explains, surfaces tradeoffs; the developer drives. Not OpenCode's build/plan toggle, not Claude Code's act-first model.
 
-- **Read and Explain are first-class tools; Edit has deliberate friction.** — Edits propose-then-wait by default, with the diff visible and approval required. Friction on Edit preserves the developer's role as conscious author. See the per-edit-request decision below. Diff is not a tool — `shell:git diff*` covers the VCS-aware case and `shell:diff*` is the non-repo fallback; the internal diff-rendering primitive Edit uses is an implementation detail of the approval surface, not a callable affordance.
+- **Read and Explain are first-class tools; Edit has deliberate friction.** — Amended by ADR 0009: an edit is *staged*, every edit of a turn is one changeset, and the changeset is reviewed in a full-window review at the first moment it would be observed on disk — before a run, or at the turn's end. Nothing is written before an approve. Friction on Edit preserves the developer's role as conscious author; it is structural, and there is no setting for it.
 
-- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — V0 ships Read, Explain, Edit, shell as built-ins. Additional capabilities via MCP through rmcp. New MCP servers connect with all tools fully denied; the developer promotes individual tools to the allowlist deliberately. The friction layer is owned by Aldwin regardless of tool origin — MCP descriptors are suggestions Aldwin may refuse, downgrade, or wrap.
+- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). What an MCP tool itself writes is outside the review; open-tasks 13.
 
-- **Permission model — default-deny across all surfaces, three persistent scopes.** — No tool may read, write, edit, or shell without explicit grant. Scopes: session > project > global; deny beats allow within a scope. No interactive first-run wizard — first launch writes a fully-denied annotated YAML. CLAUDE.md and AGENTS.md trigger per-file prompts. Current effective permissions are visible in the TUI at all times.
+- **Permission model — the review is the only gate.** — *Superseded by ADR 0009.* Reads and runs need no grant and never ask; the sandbox holds a read declaration to its word (ADR 0004 §4), and where it cannot the call runs unconfined and the developer is told once. A `deny:` entry is a lock (ADR 0004 §7). There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
 
-- **Edit happens only on explicit per-edit request, never allowlistable.** — Default is the strong reading — the developer must explicitly say "edit X". Configurable to a weaker reading (agent may propose diffs the developer then approves) but strong is default. Edit is never allowlistable in any configuration — friction on Edit is structural, not a setting.
+- **Edit is never allowlistable.** — Amended by ADR 0008 (intent, not grammar) and ADR 0009 (the review): the agent stages edits when the developer's intent is clear, and the review is where the developer approves, comments on, or discards them. There is nothing to allowlist an edit into. Friction on Edit is structural, not a setting.
 
 - **Developer-authored memory; sessions persist but nothing crosses between them.** — Amended by ADR 0005, which reversed the original "sessions are ephemeral" clause: a conversation is written to disk as it happens and `/resume` picks one back up. The rest of this Decision stands unchanged and is what ADR 0005 was careful not to touch — memory is developer-authored, Aldwin does not propose entries or prompt at end of session, and nothing is carried into a *new* session by itself. Privacy is local-only with no telemetry; inference is governed by the chosen model provider (Anthropic in V0; local models possible once V0.5 ships).
 
@@ -105,7 +105,8 @@ A tool for thought.
 
 - .claude/spec/aldwin-core.md — agent loop, conversation state, typed LLM/tool boundary.
 - .claude/spec/aldwin-llm.md — Anthropic client, SSE, wire-level retry, cache placement, provider config.
-- .claude/spec/aldwin-permissions.md — default-deny engine, scope precedence, tiered prompt round-trip.
+- .claude/spec/aldwin-permissions.md — the lock, and the keys nothing reads.
+- .claude/adr/0009-the-review-is-the-only-gate.md — the review, staging, plan and ask, no first run.
 - .claude/spec/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — prompt caching.

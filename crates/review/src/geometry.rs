@@ -23,7 +23,7 @@ pub struct Cell {
 /// * `Small` — 80×24, the universal floor. Chosen for **vertical** pressure,
 ///   not narrow width: at 24 rows `COMPOSER_MAX_ROWS = 10` takes 42% of the
 ///   frame and `ui::decision::clamp_panel` starts discarding rows.
-/// * `Medium` — 120×36, the frame `.claude/design/` is authored at
+/// * `Medium` — 104×32, a terminal the size of the design's window body (880px wide, 28 rows)
 ///   (`tokens/cells.css`). The only size with a reference to check against.
 /// * `Large` — 200×50, a maximized terminal. Its job is the opposite of
 ///   small's: prove nothing stretches that shouldn't.
@@ -44,7 +44,7 @@ impl Size {
     pub fn cells(self) -> (u32, u32) {
         match self {
             Size::Small => (80, 24),
-            Size::Medium => (120, 36),
+            Size::Medium => (104, 32),
             Size::Large => (200, 50),
         }
     }

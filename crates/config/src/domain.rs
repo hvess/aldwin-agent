@@ -50,10 +50,9 @@ impl Class {
     }
 }
 
-/// A scope's standing answer for any call no entry covers (ADR 0004 §6).
-/// Widening: `ask` prompts for everything, `read` runs read-classified calls,
-/// `write` runs both. `edit` asks under all three — it is the floor, not a
-/// rung.
+/// The standing rung of ADR 0004 §6, kept only so a `permissions.yaml` that
+/// states one still loads (ADR 0009). Nothing consults it: reads and runs
+/// need no grant, and an edit is a review whatever the file says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Rung {
@@ -182,26 +181,29 @@ impl<'de> Deserialize<'de> for GrantEntry {
     }
 }
 
-/// Permissions for one scope: the standing [`Rung`], and the two entry lists.
+/// Permissions for one scope: the deny list that is a lock, and the roots
+/// that are reach.
 ///
-/// Allow and deny stay separate on disk and in memory because deny is a lock
-/// (ADR 0004 §7) — collapsing them into one ordered list would turn that from
-/// a structural property into a sort order.
+/// Two keys survive from the model ADR 0009 replaced and are **parsed but
+/// never read**: `default:` (the standing [`Rung`]) and `allow:`. Reads and
+/// runs need no grant now, so neither changes anything — but a file written
+/// by the previous first run carries both, and refusing to load it would
+/// stop every existing project from starting. They are accepted, kept out
+/// of what is written (`skip_serializing_if`), and reported once at startup
+/// by `aldwin_permissions::Locks::stale_keys`. A later format version drops
+/// them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionsConfig {
     pub version: u32,
-    /// What runs without asking when no entry below covers the call.
-    ///
-    /// `None` means this file does not state one, which is not the same as
-    /// stating `ask`: ADR 0004 §6 has the narrower file win outright, so a
-    /// project that has never answered the question must fall through to the
-    /// global file rather than silently overriding it with a default that
-    /// serde invented.
+    /// Accepted for compatibility; nothing reads it. See the type's doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Rung>,
-    #[serde(default)]
+    /// Accepted for compatibility; nothing reads it. See the type's doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<GrantEntry>,
+    /// A deny is a lock (ADR 0004 §7, kept by ADR 0009): a call on a program
+    /// named here is refused outright, and nothing narrower overrides it.
     #[serde(default)]
     pub deny: Vec<GrantEntry>,
     /// Extra directories tools may be pointed at, beyond the project root

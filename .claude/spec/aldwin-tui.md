@@ -1,18 +1,102 @@
 # aldwin-tui
 
-ratatui frontend — renders the core event stream, submits commands, approval gate for Edit.
+ratatui frontend — renders the core event stream, submits commands, and is
+the one place a change reaches disk: the full-window review.
 
-**Status:** active. Two upstream defects are open and both are *the design
-contradicting a shipped ADR*, not gaps here — see `baseline.json`'s
-`permission-frame-predates-adr-0004` and
-`access-scale-is-four-points-in-the-frame-and-three-in-the-readme`. Do not
-"fix" either in this crate. (The light-wordmark defect that stood here is
-retired: the 2026-09-21 repaint removed the wordmark. The 2026-09-03
-colour-transport gap is closed by the 2026-09-06 entry; the syntax ramp by
-the 2026-09-07 Turn 15 entry and then re-cut by the repaint.)
+**Status:** active. Rebuilt 2026-09-23 against the Aldwin Design System
+(ADR 0009). Everything below the first Progress entry describes the crate as
+it was under the Mjolnir system and is kept as history — the label column,
+the top bar, the permission panel and first run are gone, and the entries
+that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-21
+**Last Updated:** 2026-09-23
+
+**Progress (2026-09-23, the Aldwin Design System — a replacement):** The
+design system was replaced whole (`.claude/design/IMPORT.md`, "None of
+Mjolnir's values carry over") and with it the product's behaviour (ADR
+0009). This crate was rewritten rather than retoned. What is here now, and
+what each thing was measured against:
+
+- **The grid lost its label column.** `tokens/layout.css`: a 3-cell margin,
+  a 2-cell mark column, prose on cell 5 (`grid::BODY_X`, declared by the
+  design and checked against the sum). The echoed prompt (`UserEcho`) is a
+  `tint` band inset by the margin with a `›` in the mark column; the agent's
+  prose is unlabelled at `BODY_X`. Speaker labels are gone.
+- **There is no top bar.** The design's title bar is the terminal's;
+  `run.rs` sets it (`gateway — aldwin`) with `SetTitle` and draws nothing.
+  The window opens on one blank row (`padding: 24px 0`) and the transcript
+  is top-anchored, as frames `B`–`F` are.
+- **The launch card** (`ui::launch`) is the brand mark beside four facts.
+  The mark is 18×6 `▀` cells with independent fg/bg, generated into
+  `tokens::MARK_{DARK,LIGHT}` from the frame's `linear-gradient` cells —
+  the README's "half-block cells" was the only prose about it, and it was
+  right. Facts are centred four-in-six against the mark, labels in
+  `--fact-col`.
+- **The bottom band** (`ui::chrome::Bottom`) is measured once and drawn
+  once: blank / field / blank / footer / blank for the conversation; the
+  question panel in place of the field; the command menu above it. The
+  footer's status word sits on the body column with the running `●` in the
+  mark column (amber, and the one thing besides the caret that blinks);
+  key groups are `--group-gap` apart; the context bar is flush right, ten
+  `━` segments, the filled run ramping through `tokens::GAUGE_*` —
+  `ContextBar.jsx`'s own arithmetic, `round(pct/10)` segments and a
+  `60/n` step, checked against the two bars the frame draws.
+- **The field** carries a `›` in accent and a blinking `label` caret; its
+  right edge carries an action only in the review (`Approve  ⌃↩` grey until
+  every file is read, `Send N Comments  ⌃↩` in accent). The placeholder
+  says what the field is for in each state, in the design's words.
+- **The plan** is `LogEntry::Plan`, one per turn, replaced in place:
+  `✓` accent over `label2`, `●` amber over `label`, `○` `label3` over
+  `label3`. **Work** is `LogEntry::Work`, a disclosure whose summary counts
+  by verb (`Read 3 files · Ran 1 program`) and whose rows are verb /
+  target / right-flush fact; Space on an empty field opens every
+  disclosure of the current turn.
+- **A question** (`ui::question`) is the one list control (`list.rs`) on
+  the `panel` ground: question in weight 600, detail, blank, numbered
+  options with the current on `field`. Four things ask through it — the
+  agent's `ask`, the provider and model questions when nothing is
+  configured, `/resume` — and the command menu is the same rows on the
+  window ground above the field.
+- **The review** (`review.rs`, `ui::review`) is the whole window: header
+  with the last request as title and the agent's last sentence as summary;
+  the tree 28 cells wide on `tint` from the frame's left edge with reading
+  dots and `✓`/`›` file rows; the diff with a 5-cell gutter, a 2-cell sign
+  column, `⋯  N lines` folds keeping one context line each side, `▎`
+  selection in the gutter's first cell, and `◆ comment` riding at the end
+  of its row. The comment field is two rows on `select` and `field`.
+  Approve is gated on every file's bottom having been on screen. `⌃↩`
+  exists on the wire only under the Kitty keyboard protocol (see the
+  2026-09-20 Shift+Enter entry), so a bare `↩` with nothing selected and
+  nothing typed does the same — approve, or send the comments — where the
+  terminal cannot tell the two apart; with a draft it is still the comment.
+- **A follow-up turn is echoed.** `Event::FollowUp` arrives before the
+  `TurnStarted` of a turn the developer did not type — their review
+  comments, or a discard, started as the next message (ADR 0009 §4) — and
+  the TUI pushes it as a `UserMessage` the way it echoes a typed one, so
+  the transcript on screen matches the one the model has.
+- **Failures are sentences** (ADR 0009 §5): `LogEntry::Failure` in
+  `label` with the detail in `label2` one disclosure below. No `✗`, no `!`,
+  no red outside a diff; `render_snapshot.rs` asserts it.
+- **Markdown keeps fences and tables and loses highlighting.** Fences are
+  `label2` on `tint` under a `label3` caption; tables draw per ADR 0002;
+  `syntect` is gone from the manifest. Inline code is `label` on `tint`.
+- **Deleted:** `first_run.rs`, `highlight.rs`, `picker.rs`, `ui/decision.rs`,
+  `ui/diff.rs`, `ui/first_run.rs`, `ui/picker.rs`, `examples/snapshot.rs`,
+  and the dependency on `aldwin-permissions`.
+
+Measured and rendered: every position above is a token lookup in
+`layout.css` checked against the frame's markup, and the frame was
+rendered with Firefox headless before any of it was drawn. Two things the
+render corrected that the prose had not stated: the plan's running dot is
+amber, and the footer's status word sits on the body column, not the
+margin.
+
+Tests: `ui/tests.rs` was rewritten around the new rules (eleven tests);
+`tests/render_snapshot.rs` pins thirteen scenes at 80×24, 104×32 and 200×50
+in both themes and asserts colour conformance, the closed glyph table, the
+margins, no strokes, and the two hue rules. The snapshot was re-recorded
+deliberately.
 
 **Progress (2026-09-21, the lantern-gold repaint):** The design system was
 replaced, not adjusted — warm greys under one brand colour where it was a

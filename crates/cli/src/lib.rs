@@ -9,7 +9,6 @@
 
 mod bootstrap;
 mod context;
-mod context_approval;
 mod error;
 mod history;
 mod slash;

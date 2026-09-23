@@ -1,5 +1,5 @@
-//! The provider catalogue — what first run's `provider` step and `/model`
-//! choose between.
+//! The provider catalogue — what the provider question (the first message
+//! with nothing configured, or bare `/model`) chooses between.
 //!
 //! It lives here rather than in aldwin-tui or aldwin-cli because every
 //! field in it is knowledge this crate already owns: which wire dialect a
@@ -11,8 +11,8 @@
 //! **The model lists are seeds, not a ceiling.** A provider's real catalogue
 //! is a network call away and changes without us; `provider.yaml` takes any
 //! model id as a plain string, and so does `/model`. What is listed here is
-//! what the harness will *suggest*, and the first entry is what first run
-//! writes when the developer picks that provider and nothing else.
+//! what the harness will *suggest*, and the first entry is what `/model
+//! provider` writes when the developer names a provider and nothing else.
 //!
 //! Every entry names an environment variable. A provider that needs no key
 //! at all — a local Ollama, say — has no representation here, because
@@ -29,6 +29,10 @@ use aldwin_config::ProviderKind;
 pub struct Model {
     pub id:      &'static str,
     pub purpose: &'static str,
+    /// The model's context window in tokens, for the context bar. A seed
+    /// like the rest of the row: a provider can change it without us, and
+    /// the bar is a gauge, not an accounting.
+    pub context: u32,
 }
 
 /// One provider on offer.
@@ -50,9 +54,9 @@ pub struct Provider {
 }
 
 impl Provider {
-    /// What first run writes when the developer picks this provider and
-    /// says nothing about a model. Never empty: `every_provider_offers_a_model`
-    /// pins that.
+    /// What `/model provider` writes when the developer names this provider
+    /// and says nothing about a model. Never empty:
+    /// `every_provider_offers_a_model` pins that.
     pub fn default_model(&self) -> &'static str {
         self.models[0].id
     }
@@ -62,9 +66,9 @@ impl Provider {
     }
 }
 
-/// How many of [`PROVIDERS`] first run shows before the `more` row. The
-/// design's `5d` shows a short list and hangs the rest behind one row, so
-/// the first question is answerable without reading a catalogue.
+/// How many of [`PROVIDERS`] a short list would show before a `more` row.
+/// The current provider question lists every row; this survives from the
+/// first-run screen for a caller that wants the curated prefix.
 pub const CURATED: usize = 3;
 
 /// Ordered: the curated rows first, then everything the `more` row reveals.
@@ -76,9 +80,9 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "ANTHROPIC_API_KEY",
         base_url:    None,
         models:      &[
-            Model { id: "claude-sonnet-5", purpose: "balanced; a good default" },
-            Model { id: "claude-opus-5", purpose: "slower, deeper" },
-            Model { id: "claude-haiku-4-5-20251001", purpose: "fast, cheap" },
+            Model { id: "claude-sonnet-5", purpose: "balanced; a good default", context: 1_000_000 },
+            Model { id: "claude-opus-5", purpose: "slower, deeper", context: 1_000_000 },
+            Model { id: "claude-haiku-4-5-20251001", purpose: "fast, cheap", context: 200_000 },
         ],
     },
     Provider {
@@ -88,8 +92,8 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "GOOGLE_API_KEY",
         base_url:    Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
         models:      &[
-            Model { id: "gemini-2.5-pro", purpose: "balanced; a good default" },
-            Model { id: "gemini-2.5-flash", purpose: "fast, cheap" },
+            Model { id: "gemini-2.5-pro", purpose: "balanced; a good default", context: 1_048_576 },
+            Model { id: "gemini-2.5-flash", purpose: "fast, cheap", context: 1_048_576 },
         ],
     },
     Provider {
@@ -99,8 +103,8 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "OPENAI_API_KEY",
         base_url:    Some("https://api.openai.com/v1/chat/completions"),
         models:      &[
-            Model { id: "gpt-5", purpose: "balanced; a good default" },
-            Model { id: "gpt-5-mini", purpose: "fast, cheap" },
+            Model { id: "gpt-5", purpose: "balanced; a good default", context: 400_000 },
+            Model { id: "gpt-5-mini", purpose: "fast, cheap", context: 400_000 },
         ],
     },
     // Everything below here is behind the `more` row.
@@ -111,8 +115,8 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "LUMO_API_KEY",
         base_url:    Some("https://lumo-api.proton.me/ai/v1/chat/completions"),
         models:      &[
-            Model { id: "lumo-max", purpose: "reasoning; 131k context" },
-            Model { id: "lumo-lite", purpose: "faster; 262k context" },
+            Model { id: "lumo-max", purpose: "reasoning; 131k context", context: 131_072 },
+            Model { id: "lumo-lite", purpose: "faster; 262k context", context: 262_144 },
         ],
     },
     Provider {
@@ -122,8 +126,8 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "MISTRAL_API_KEY",
         base_url:    Some("https://api.mistral.ai/v1/chat/completions"),
         models:      &[
-            Model { id: "mistral-large-latest", purpose: "balanced; a good default" },
-            Model { id: "mistral-small-latest", purpose: "fast, cheap" },
+            Model { id: "mistral-large-latest", purpose: "balanced; a good default", context: 128_000 },
+            Model { id: "mistral-small-latest", purpose: "fast, cheap", context: 128_000 },
         ],
     },
     Provider {
@@ -133,8 +137,8 @@ pub static PROVIDERS: &[Provider] = &[
         api_key_env: "DEEPSEEK_API_KEY",
         base_url:    Some("https://api.deepseek.com/v1/chat/completions"),
         models:      &[
-            Model { id: "deepseek-chat", purpose: "balanced; a good default" },
-            Model { id: "deepseek-reasoner", purpose: "slower, deeper" },
+            Model { id: "deepseek-chat", purpose: "balanced; a good default", context: 128_000 },
+            Model { id: "deepseek-reasoner", purpose: "slower, deeper", context: 128_000 },
         ],
     },
 ];
@@ -169,10 +173,21 @@ mod tests {
 
     /// `default_model()` indexes `[0]`, so an empty list would panic on
     /// first run rather than at compile time.
+    /// The context bar divides by this, so a zero would be a bar that never
+    /// moves — or a divide by zero, depending on who reads it.
+    #[test]
+    fn every_model_states_a_context_window() {
+        for p in PROVIDERS {
+            for m in p.models {
+                assert!(m.context >= 8_000, "{}/{} has an implausible context window {}", p.id, m.id, m.context);
+            }
+        }
+    }
+
     #[test]
     fn every_provider_offers_a_model() {
         for p in PROVIDERS {
-            assert!(!p.models.is_empty(), "{} offers no model, so first run has nothing to write", p.id);
+            assert!(!p.models.is_empty(), "{} offers no model, so /model has nothing to write", p.id);
         }
     }
 

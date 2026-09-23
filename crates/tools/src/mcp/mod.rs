@@ -88,7 +88,7 @@ mod tests {
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
-        let mut registry = crate::builtin_registry(crate::Workspace::new("."));
+        let mut registry = crate::builtin_registry(crate::Workspace::new("."), std::sync::Arc::new(crate::Staging::new()));
         // Alias one built-in's registered name to "echo" indirectly isn't
         // possible without changing a built-in's name, so instead prove the
         // mechanism directly: pre-register something under "echo" the same
@@ -98,14 +98,14 @@ mod tests {
         #[async_trait::async_trait]
         impl Tool for Stub {
             fn descriptor(&self) -> &ToolDescriptor { &self.0 }
-            fn permission(&self, _input: &serde_json::Value) -> Result<crate::registry::PermissionRequest, ToolError> {
-                Ok(crate::registry::PermissionRequest {
+            fn permission(&self, _input: &serde_json::Value) -> Result<Option<crate::registry::PermissionRequest>, ToolError> {
+                Ok(Some(crate::registry::PermissionRequest {
                     program: "stub".into(),
                     class:   aldwin_permissions::Class::Write,
                     argv:    Vec::new(),
-                })
+                }))
             }
-            async fn call(&self, _call_id: &str, _input: serde_json::Value, _gate: &dyn crate::gate::ApprovalGate) -> Result<String, ToolError> {
+            async fn call(&self, _call_id: &str, _input: serde_json::Value, _ctx: &aldwin_core::DispatchContext) -> Result<String, ToolError> {
                 Ok(String::new())
             }
         }
@@ -114,7 +114,6 @@ mod tests {
                 name: "echo".into(),
                 description: "pretend built-in".into(),
                 input_schema: serde_json::json!({}),
-                edit_class: false,
                 source: ToolSource::Builtin,
             })))
             .unwrap();

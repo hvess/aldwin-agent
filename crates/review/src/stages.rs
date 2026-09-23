@@ -85,14 +85,14 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 /// Stage 4 — the rendered frames.
 ///
 /// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
-/// `TestBackend` buffers for twelve scenes at three sizes in both themes:
+/// `TestBackend` buffers for thirteen scenes at three sizes in both themes:
 ///
 /// * **the baseline** — every cell's symbol, foreground, background and
 ///   modifiers, serialised and diffed against `tests/snapshots/render.snap`;
-/// * **design conformance** — every colour is one of the forty-two roles
-///   `tokens.rs` carries (or one dimmed toward a ground), every glyph is from
-///   the closed table, and the app's own copy is third person with no
-///   contractions.
+/// * **design conformance** — every colour is one of the nineteen roles
+///   `tokens.rs` carries (or a mark or gauge mix of two of them), every glyph
+///   is from the closed table, nothing is stroked, the agent's prose is never
+///   blue and nothing outside a diff is red.
 ///
 /// Both are hermetic and together take under two seconds. The conformance
 /// half ran against a real terminal until 2026-09-20 — a compositor, a
@@ -110,7 +110,7 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
-            format!("{passed} checks over 12 scenes x 3 sizes x 2 themes")
+            format!("{passed} checks over 13 scenes x 3 sizes x 2 themes")
         },
     );
     Ok(vec![if outcome.passed {

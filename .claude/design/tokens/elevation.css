@@ -1,0 +1,5 @@
+:root {
+  --shadow-window: 0 0 0 1px rgba(0,0,0,.1), 0 24px 48px -24px rgba(0,0,0,.35);
+  --radius-badge: 5px;
+  --radius-control: 6px;
+}

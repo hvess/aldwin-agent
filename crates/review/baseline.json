@@ -31,7 +31,7 @@
     {
       "id": "field-has-no-placeholder",
       "design_says": "Frames A, B, C, D and J (Saved) draw a `label2` placeholder in the empty field — `Describe a change, like adding rate limiting`, `Add anything while it works`, `What next?`.",
-      "design_also_says": "The README's `Field` names no placeholder among its parts, and the Content Fundamentals ask for outcomes, not instructions; a hint in the field is an instruction to the developer that the field repeats every time it is empty.",
+      "design_also_says": "The README's `Field` names no placeholder among its parts, and the Content Fundamentals ask for outcomes, not instructions; a hint in the field is an instruction to the developer that the field repeats every time it is empty. Apple's HIG (Writing) sides with the frames: “Show hints in text fields. If your app allows people to enter their own text, like account or contact information, label all fields clearly, and use hint or placeholder text so people know how to format the information.”",
       "app_follows": "The developer's decision of 2026-09-24: the field carries no hint in any state. An empty field is the accent `›` and the caret on the body column; the grid, ground and caret are the frame's exactly.",
       "glyphs": ""
     },
@@ -40,6 +40,20 @@
       "design_says": "`tokens/layout.css` is the grid, and the app draws every measure through it: `--margin-x`, `--body-x`, `--number-col` and the rest, each a token the frames read with `var(--…)`.",
       "design_also_says": "Frame E's `QuestionPanel` positions its contents with measures no token names: the panel's text is `padding:0 3ch` inside it, and each option row is `margin:0 1ch` inside the panel.",
       "app_follows": "Frame E's values, as the named constants `PANEL_PAD` (3) and `OPTION_INSET` (1) in `crates/tui/src/ui/question.rs`, citing this entry. Remove both, and this entry, when `layout.css` names them and the generator carries them.",
+      "glyphs": ""
+    },
+    {
+      "id": "label3-is-below-the-hig-contrast-minimum",
+      "design_says": "`tokens/colors.css`: `--label3` is the “tertiary: line numbers, folders, pending” tone — 2.5:1 on `--win` in the dark theme, 2.9:1 in the light — and the caption over the review frames G–J: “⌃↩ stays grey until every file is read, then turns blue.”",
+      "design_also_says": "Apple's HIG (Accessibility): “Strive to meet color contrast minimum standards.” — 4.5:1 for text up to 17 pts — and “Convey information with more than color alone.”",
+      "app_follows": "The design's `label3`, unchanged (the developer's decision, 2026-09-24). The not-ready approve does not rely on colour alone: until every file is read its words say so too, and they change when it is ready.",
+      "glyphs": ""
+    },
+    {
+      "id": "long-diff-lines-wrap",
+      "design_says": "README: “Comments ride at the end of their line, `◆ Use config`, like an Xcode annotation. The code is never broken up.”",
+      "design_also_says": "Apple's HIG (Layout): “For example, horizontally adjacent views may need to stack vertically to provide more space for text; table rows or other containers may need to grow in height so that text isn’t cropped or doesn’t overlap other content; and table rows with a single line of text by default might need to grow vertically to accommodate multiple lines of text.”",
+      "app_follows": "The HIG (the developer's decision, 2026-09-24): a diff line longer than the pane wraps onto continuation rows with a blank gutter, rather than being cut at the pane's edge.",
       "glyphs": ""
     }
   ]

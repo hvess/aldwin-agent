@@ -10,7 +10,7 @@ skill that drives the loop and owns the fifth. Excludes what the stages
 themselves test (that is each crate's own spec) and the design system's
 content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-09-24 (the audit)
 
 ## Why
 
@@ -30,7 +30,7 @@ what this spec replaces.
 | stage | answers | how | hermetic |
 | --- | --- | --- | --- |
 | 0 toolchain | are these results comparable to the last run's | `rustc --version` against the baseline | yes |
-| 1 lint | does it build clean | `cargo clippy --workspace --all-targets -- -D warnings` | yes |
+| 1 lint | is it formatted, and does it build clean | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` | yes |
 | 2 test | does the suite pass | `cargo test --workspace` | yes |
 | 3 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 4 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
@@ -88,10 +88,11 @@ harmless there because a bad frame is something the judge says out loud.
 
 7. **Design contradictions live in `crates/review/baseline.json`.** The
    reference disagrees with itself in places, and stage 3 cannot run against
-   it without somewhere to record where. Each entry states both halves of what
-   the design says and which half the app follows, and is removed when the
-   design is fixed upstream — it is a bug list for the design system, not a
-   compensation layer for the app.
+   it without somewhere to record where. Each entry states both halves — two
+   things the design says, or the design against Apple's HIG, each quoted —
+   and which half the app follows, and is removed when the design is fixed
+   upstream or the decision reversed — it is a bug list for the design
+   system, not a compensation layer for the app.
 
 8. **Everything that reads declared cells is a hermetic test in
    `crates/tui`, not a capture.** Palette membership, the closed glyph table
@@ -145,9 +146,10 @@ harmless there because a bad frame is something the judge says out loud.
 
 ## Pitfalls
 
-- **Letting the contradictions list grow.** It is two entries. A previous
-  version of this idea reached fourteen and then needed its own admission
-  rule, at which point it had become the thing it was built to prevent.
+- **Letting the contradictions list grow.** It is seven entries, each
+  accounted for in Progress below. A previous version of this idea reached
+  fourteen and then needed its own admission rule, at which point it had
+  become the thing it was built to prevent.
 - **Running stage 5 on a failing stage 1–4.** A judge looking at frames drawn
   with a drifted palette reports a consequence as a cause.
 - **Inferring the focus from the diff.** A change to a shared helper touches
@@ -161,6 +163,58 @@ harmless there because a bad frame is something the judge says out loud.
 - **Putting a check that needs a real terminal into stages 0–4.** They are
   hermetic and the value of that is the whole point; anything needing a
   compositor belongs after them, feeding stage 5.
+
+## Progress (2026-09-24, the audit)
+
+An audit of the loop found two ways it could pass a run it should have
+failed, and both are closed with a test that would have caught them.
+
+- **`UPDATE_SNAPSHOTS` leaked into the stages.** `stages::cargo` inherited
+  the developer's environment, so a shell that still exported the switch
+  from one deliberate regeneration had stage 4 rewrite `render.snap` and
+  pass against its own output. Every `cargo` the loop runs now has it
+  removed.
+- **Stage 5 could be written over a failing run.** The report always left
+  the placeholder, so `stage5` would put a judge's 100 beside a failed
+  suite, or beside a run that captured no frames. The placeholder is now
+  written only when stages 0–4 all passed and frames exist
+  (`report::Run::reaches_stage5`), and `review` prints the `stage5` command
+  only then. Decision 12 made the exit code say a review is incomplete;
+  this makes the report unable to say it is complete when it is not.
+- **The loop ran a stale binary.** The skill said `cargo build &&
+  ./target/release/aldwin-review`, which builds debug and runs whatever
+  release binary was last built. Every invocation is `cargo run --release
+  -p aldwin-review --` now, in the skill and in the hint `review` prints.
+- **`cargo fmt --check` is back in stage 1** (open-tasks 3): the developer
+  chose stable rustfmt and `516dd63` reformatted the workspace — including
+  the generated `tokens.rs`, which stage 3 then reported stale. The
+  generator now emits through `rustfmt`, as bindgen and prost do, so stage 1
+  and stage 3 agree about the same file.
+- **The generator stopped guessing.** A light value it could not read
+  fell back to the dark one, and a missing light scope made the light
+  theme the dark one; both are errors now. A colour outside sRGB is
+  clipped only within CSS Color 4's just-noticeable difference (ΔE OK
+  0.02 — `--del` needs it), and refused beyond. The baseline is an explicit
+  input to `generate` rather than a file it read on the side.
+
+**The contradictions, all seven:**
+
+- `no-table-component-adr-0002`, `frame-command-list-is-not-the-products`
+  and `frame-j-offers-undo` — the three the redesign kept (2026-09-23).
+- `field-has-no-placeholder` — the developer's no-hint decision
+  (`3a2bffe`), against frames A–D and J. The audit added the HIG's half:
+  "Show hints in text fields."
+- `question-panel-insets-are-untokenised` — from the whole-app pass below.
+  It is a gap in the token layer rather than two statements that disagree,
+  and it stays because the alternative is two unexplained literals in the
+  app; it leaves when `layout.css` names the insets.
+- `label3-is-below-the-hig-contrast-minimum` — `--label3` is 2.5:1 on
+  `--win` (dark) and 2.9:1 (light) against the HIG's 4.5:1, and the design
+  marks a not-ready approve by colour alone. The app keeps `label3` (the
+  developer's decision) and gives the not-ready approve words as well.
+- `long-diff-lines-wrap` — "the code is never broken up" against the HIG's
+  "containers may need to grow in height so that text isn't cropped". The
+  app follows the HIG: a long diff line wraps.
 
 ## Progress (2026-09-24, the threshold is 100)
 
@@ -270,8 +324,6 @@ plural pronoun for a count of one, on every 80×24 frame. It now reads
 
 - .claude/skills/review/SKILL.md — the loop, and stage 5's prompt.
 - crates/review/src/tokens.rs — stage 3, and the roles it does not carry.
-- crates/review/src/cells.rs — stage 3's cell half, and why it has no
-  judgement in it.
 - crates/tui/tests/render_snapshot.rs — stage 4's baseline.
 - crates/review/baseline.json — the design's own contradictions.
 - .claude/design/IMPORT.md — the reference, and its provenance.

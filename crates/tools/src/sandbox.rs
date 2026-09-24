@@ -22,7 +22,9 @@ use std::path::PathBuf;
 
 /// Paths a process may write outside the workspace, because ordinary
 /// programs cannot run without them: the null and random devices, the
-/// terminal, shared memory, the temp directories, and the per-user cache.
+/// terminal, shared memory, the temp directories, the per-user cache, and
+/// the package managers' shared stores — without those a build that fetches
+/// a new dependency fails (the developer's call, ADR 0011 §2).
 ///
 /// Kept short and readable on purpose — this list is the one place a
 /// judgement about what programs "need" enters a rule otherwise stated as
@@ -44,8 +46,17 @@ fn incidental_writes() -> Vec<PathBuf> {
     if let Some(tmp) = std::env::var_os("TMPDIR") {
         paths.push(PathBuf::from(tmp));
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join(".cache"));
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        // Each store where its tool puts it: the tool's own variable when
+        // set, its documented default under `$HOME` otherwise.
+        let store = |var: &str, default: &str| {
+            std::env::var_os(var).map_or_else(|| home.join(default), PathBuf::from)
+        };
+        paths.push(home.join(".cache"));
+        paths.push(store("CARGO_HOME", ".cargo"));
+        paths.push(store("RUSTUP_HOME", ".rustup"));
+        paths.push(store("npm_config_cache", ".npm"));
+        paths.push(store("GOMODCACHE", "go/pkg/mod"));
     }
     paths
 }

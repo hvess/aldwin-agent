@@ -55,8 +55,12 @@ and a short incidental list; read anything; reach any network.**
   writable on the same terms.
 - The incidental list is the null and random devices, `/dev/tty`,
   `/dev/shm`, `/tmp`, `$TMPDIR` and `~/.cache` — what ordinary programs
-  cannot run without. It is the one place a judgement enters the rule, and
-  it is kept short and readable.
+  cannot run without — and the package managers' shared stores: `$CARGO_HOME`
+  (`~/.cargo`), `$RUSTUP_HOME` (`~/.rustup`), npm's cache (`~/.npm`) and
+  `$GOMODCACHE` (`~/go/pkg/mod`), each at its tool's own variable when set.
+  Without the stores a build that fetches a new dependency fails; the
+  developer chose to allow them (2026-09-24). It is the one place a
+  judgement enters the rule, and it is kept short and readable.
 - Linux: Landlock. The ruleset handles every write right the kernel's ABI
   knows (ABI 1's ten, `REFER` from 2, `TRUNCATE` from 3) and no read right,
   and grants the handled rights beneath each root and incidental path. A
@@ -121,13 +125,11 @@ become the deny lock and nothing else, is deleted; the stale-key check is
   change a file outside your workspace, and nothing inside it changes
   through Aldwin's own tools except by an approved review. Where the system
   cannot enforce the first half, you are told at startup.
-- **Writes the old write-class `run` could make are gone.** A command that
-  must write outside the workspace fails with a permission error. The
-  sharpest cases are package managers' own stores: `cargo` fetching a
-  dependency into `~/.cargo`, `npm install` or `npx` writing `~/.npm`, `go`
-  writing `~/go`. Building with dependencies already fetched works (checked:
-  `cargo check` in this repository under the sandbox). The remedy is
-  open-tasks 33.
+- **Writes the old write-class `run` could make are gone,** except into
+  the incidental list. A command that must write anywhere else outside the
+  workspace fails with a permission error. The package stores are on the
+  list, so each is a directory where what a command writes persists
+  outside the workspace — the price of a build that can fetch.
 - **Landlock ABI 1 kernels (before 5.19) cannot handle `REFER`,** and on
   them the kernel refuses every rename across directories under a ruleset,
   inside the workspace too. Stated, not worked round.
@@ -148,7 +150,7 @@ become the deny lock and nothing else, is deleted; the stale-key check is
 - **Restrict the network too.** A worthwhile product of its own, not a
   line in this one; an allowlist of hosts is a configuration surface this
   ADR does not want to invent in passing.
-- **Add package-manager stores to the incidental list now.** Each entry is
-  a directory where anything a command writes persists outside the
-  workspace; which ones, and whether per tool, is a decision for the
-  developer (open-tasks 33), not an implementation detail.
+- **Keep package-manager stores locked**, so dependencies are fetched
+  outside Aldwin. Every agent build that adds a dependency would fail.
+- **A `writable:` key per project.** A configuration surface for what four
+  fixed, named paths answer.

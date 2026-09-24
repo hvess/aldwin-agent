@@ -206,8 +206,10 @@ contradicts) and the entry says so before it goes.
     in: `run` *is* `sh -c`, and the sandbox contains what a command does
     rather than reading what it says. `deny:` is gone with it.
 
-33. **A command cannot write a package manager's store outside the
-    workspace.** ADR 0011's incidental list is the devices, the temp
+33. ~~**A command cannot write a package manager's store outside the
+    workspace.**~~ **Closed 2026-09-24:** the stores (`$CARGO_HOME`,
+    `$RUSTUP_HOME`, `~/.npm`, `$GOMODCACHE`) joined the incidental list —
+    the developer's call, recorded in ADR 0011 §2. ADR 0011's incidental list is the devices, the temp
     directories and `~/.cache`, so `cargo` fetching a new dependency into
     `~/.cargo`, `npm install`/`npx` into `~/.npm`, and `go` into `~/go` fail
     with a permission error; building with dependencies already fetched

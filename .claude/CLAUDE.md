@@ -4,7 +4,7 @@
 
 Aldwin is a Rust TUI coding agent — a discussion-first harness where the developer's understanding is the product, not the agent's throughput. It is not a mobile SDK project. Do not apply mobile SDK, FFI, Android, or iOS framing here.
 
-Workspace: seven Cargo crates under `crates/`. Specs for all seven live in `.claude/spec/`. Read the relevant spec before working on any crate.
+Workspace: seven Cargo crates under `crates/` — cli, config, core, llm, review, tools and tui. Each has a spec in `.claude/spec/` or its `archive/`. Read the relevant spec before working on any crate.
 
 ## Language & Platform
 
@@ -12,11 +12,13 @@ All code is Rust. Idioms are Rust idioms — do not translate patterns from Kotl
 
 ## Spec Workflow
 
-Specs are in `.claude/spec/` — read before implementing. Five are archived
-under `.claude/spec/archive/` — config, core, llm and cli as of 2026-08-29,
-and history as of 2026-09-20 — implemented, tested, and audited with no known
-gaps. Four stay active: permissions, tools, tui and review. When a spec step is completed, note it;
-when all steps are done, move the spec to `.claude/spec/archive/`.
+Specs are in `.claude/spec/` — read before implementing. Six are archived
+under `.claude/spec/archive/`: config, core, llm and cli as of 2026-08-29,
+the transcript feature (history) as of 2026-09-20 — implemented, tested, and
+audited with no known gaps — and permissions as of 2026-09-24, closed when
+ADR 0011 deleted its crate. Three stay active: tools, tui and review. When a
+spec step is completed, note it; when all steps are done, move the spec to
+`.claude/spec/archive/`.
 
 `aldwin-review.md` is the feedback loop that runs after a change is ready
 for submission — five stages, four of them deterministic and one a blind
@@ -136,35 +138,40 @@ a decision they cover.
 - **0003 — A permission option is a sentence that states its own rule.**
   *Superseded by 0009*: there is no permission option.
 - **0004 — A permission is a declared class, an enforced sandbox, and a lock.**
-  *Superseded by 0009* except §5 (reach) and §7 (a deny is a lock), which
-  stand. The sandbox it built is what holds a read declaration to its word
-  now that nothing asks.
+  *Superseded by 0009 and 0011* except §5 (reach), which stands as 0007 and
+  0011 widened it. Kept for why argv and the lock were tried.
 - **0005 — A session outlives its process.** Unchanged: a conversation is
   written to disk as it happens and `/resume` picks one back up.
 - **0006 — Thinking is carried, not dropped.** Unchanged.
-- **0007 — Reach is a workspace, and every tool honours it.** Unchanged:
-  `roots:` in `permissions.yaml` is still the one way to widen reach.
+- **0007 — Reach is a workspace, and every tool honours it.** In force, and
+  since 0011 the whole rule; only its containment of `run`'s arguments is
+  superseded. `roots:` in `permissions.yaml` is the one way to widen the
+  workspace.
 - **0008 — Discussion-first is about intent, not grammar.** Unchanged.
-- **0009 — The review is the only gate.** Reads and runs need no grant and
-  never ask; the sandbox holds a read declaration to its word, and where it
-  cannot the call runs unconfined and says so once. An edit is staged, every
-  edit of a turn is one changeset, and the review opens at the first moment
-  the changeset would be observed on disk — before a `run`, or at the turn's
-  end. Nothing is written before an approve. A deny is still a lock. There
-  is no first run. `plan` and `ask` carry the plan and a question to the
-  screen. A failure is a sentence.
+- **0009 — The review is the only gate.** *§1–§3 superseded by 0011.* Reads
+  and runs need no grant and never ask. An edit is staged, every edit of a
+  turn is one changeset, and the review opens at the first moment the
+  changeset would be observed on disk — before a `run`, or at the turn's
+  end. Nothing is written before an approve. There is no first run. `plan`
+  and `ask` carry the plan and a question to the screen. A failure is a
+  sentence.
 - **0010 — Review lines are selected with the mouse.** The diff has no line
   cursor; a click selects a line, a drag selects a run, and `Shift ↑↓`
   selects from the keyboard. The mouse is captured only while a review is
   open, so the conversation keeps the terminal's own text selection.
+- **0011 — The workspace is the only boundary.** There is no class, no
+  argv rule and no `deny:` lock. `run` takes a shell command. Every process
+  Aldwin starts — a run, the language server, an MCP server — runs in one
+  sandbox that can write only inside the workspace roots and a short
+  incidental list; reads and the network are open, the network by stated
+  non-goal. Where the system cannot confine, the developer is told once at
+  startup. `allow:`, `default:` and `deny:` still parse, and are reported.
 
 ## Key Constraints (non-negotiable)
 
 - Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole.
 - Edit is never allowlistable: there is nothing to allowlist it into. The review is structural, not a setting.
-- No arbitrary commands: argv is executed directly, never through a shell (ADR 0004 §1, kept by 0009).
-- A read-declared call is enforced, not trusted: it runs where writing is impossible. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0009 §3).
-- A deny is a lock: a `deny:` entry refuses the call outright and nothing narrower overrides it (ADR 0004 §7).
-- **Every tool honours the workspace boundary, `run` included** (ADR 0007). Reach is `roots[0]` plus whatever the project `permissions.yaml` declares.
+- **The workspace is the only boundary** (ADR 0007, ADR 0011). It is `roots[0]` plus whatever the project `permissions.yaml` declares. Every tool refuses a path outside it, symlinks included, and an approved write is resolved again before it lands.
+- Every process Aldwin starts — `run`'s shell, the language server, an MCP server — can write only inside the workspace and the incidental paths, enforced by the kernel (Landlock, Seatbelt), not trusted. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0011 §3).
 - Discussion-first: resting state is conversation. Action follows the developer's **intent**, not their grammatical mood — a stated constraint is an instruction, an agreed plan is carried out whole (ADR 0008). The structural protection is the review, never the phrasing rule.
 - No Anthropic wire types past `LlmClient`: audit at the trait boundary, not after.

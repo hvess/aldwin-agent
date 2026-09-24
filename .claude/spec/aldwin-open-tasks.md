@@ -142,8 +142,8 @@ contradicts) and the entry says so before it goes.
     `~/.aldwin/history/` at mode `0600` until the developer deletes them.
 
 20. **An MCP tool's results land in the transcript with no classification.**
-    Every MCP call is a `Class::Write` whose result is written to a
-    transcript like any other. See entry 13.
+    Every MCP call's result is written to a transcript like any other; there
+    is no class to mark one by since ADR 0011. See entry 13.
 
 ## Repo
 
@@ -155,33 +155,33 @@ contradicts) and the entry says so before it goes.
     tag and is the only workflow. `cargo test` and `cargo clippy` could join
     it; the workspace is clippy-clean.
 
-## Permissions and the review (ADR 0009)
+## Permissions and the review (ADR 0009, ADR 0011)
 
 12. ~~**An MCP tool cannot be classified by the developer, so every one is a
     write.**~~ **Moot, 2026-09-23.** Nothing asks, so nothing needs a class
-    to decide whether to ask. The class still matters to the sandbox, which
-    an MCP call never enters; see 13.
+    to decide whether to ask — and since ADR 0011 there is no class at all:
+    an MCP server runs in the same write-confining sandbox as `run`.
 
 13. **An MCP tool that edits files does so outside the review.** The one
-    hole in the edit guarantee, and wider than it was: an MCP call runs in
-    its own process over the real tree, and the dispatcher opens the review
-    *before* it (ADR 0009 §4) precisely because it will see the disk — but
-    what the MCP tool itself writes is never staged and never reviewed.
+    hole in the edit guarantee: an MCP call runs in its own process over the
+    real tree, and the dispatcher opens the review *before* it (ADR 0009 §4)
+    precisely because it will see the disk — but what the MCP tool itself
+    writes is never staged and never reviewed. Since ADR 0011 it can write
+    only inside the workspace, which bounds the hole without closing it.
     Until an MCP tool can be declared edit-shaped (which argument is the
     path, which the content), the claim is worded narrowly: *Aldwin's `edit`
     tool never writes without a review you approved.*
 
-14. **A refused read is reported without naming the path.** `ReadRefused`
-    tells the model the call tried to write or connect; it does not say
-    *which path*, because the kernel hands the child an ordinary permission
-    error. Naming it needs syscall interception on top of Landlock. Worth
-    building for the message alone; not needed for the guarantee.
+14. ~~**A refused read is reported without naming the path.**~~ **Moot,
+    2026-09-24 (ADR 0011).** There is no read declaration to refuse. A
+    write outside the workspace fails with the program's own permission
+    error, which is the program's to word — most name the path.
 
 15. ~~**Reads can only be enforced on Linux.**~~ Done (ADR 0007).
 
-16. **Landlock's network control covers TCP only.** UDP and unix sockets are
-    outside it. A network namespace would close it completely; not taken
-    because it needs uid-map plumbing in `pre_exec`.
+16. ~~**Landlock's network control covers TCP only.**~~ **Moot, 2026-09-24
+    (ADR 0011).** The sandbox no longer restricts the network at all, and
+    ADR 0011 states that as a non-goal rather than a gap.
 
 17. ~~**A long command elides sooner than it used to.**~~ Moot: there is no
     permission panel for it to elide in. A long `run` target elides in the
@@ -192,16 +192,29 @@ contradicts) and the entry says so before it goes.
     new design specifies no treatment for reasoning text either, so this is
     still a design decision before it is a `LogEntry` variant.
 
-25. **The macOS sandbox backend has never run on macOS.** Unchanged. The
-    failure mode is now ADR 0009 §3's: a profile that will not load makes
-    `build` fail, the call runs unconfined, and the developer is told once.
+25. **The macOS sandbox backend has never run on macOS.** Unchanged, and
+    it now carries every process rather than read-declared ones (ADR 0011).
+    Without `/usr/bin/sandbox-exec` the session says once that commands can
+    write outside the workspace; a profile `sandbox-exec` refuses to load
+    fails each command with its own message, which is loud rather than
+    silent but is not yet a sentence of ours.
 
-26. **`bash -c` is still a hole in argument containment.** Unchanged, and
-    worth restating under ADR 0009: with no grant to make, running `bash` is
-    no longer "a deliberate act" — it is a call like any other, held only by
-    the sandbox when declared a read and by nothing when declared a write. A
-    `deny: [bash, sh]` in the global file is the developer's lever, and the
-    annotated template could suggest it.
+26. ~~**`bash -c` is still a hole in argument containment.**~~ **Done,
+    2026-09-24 (ADR 0011).** There is no argument containment to have a hole
+    in: `run` *is* `sh -c`, and the sandbox contains what a command does
+    rather than reading what it says. `deny:` is gone with it.
+
+33. **A command cannot write a package manager's store outside the
+    workspace.** ADR 0011's incidental list is the devices, the temp
+    directories and `~/.cache`, so `cargo` fetching a new dependency into
+    `~/.cargo`, `npm install`/`npx` into `~/.npm`, and `go` into `~/go` fail
+    with a permission error; building with dependencies already fetched
+    works (`cargo check` of this repository, checked under the sandbox on
+    2026-09-24). An `npx`-launched MCP server that has not been cached yet
+    fails to start the same way. Closing it is a decision, not a fix: which
+    stores join the incidental list — each is a directory anything a command
+    writes persists in — or a `writable:` key beside `roots:` that widens
+    writes without widening what the tools may be pointed at.
 
 ## References
 

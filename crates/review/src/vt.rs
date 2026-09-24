@@ -1,7 +1,8 @@
 //! A terminal emulator, cut down to what the app under test actually emits.
 //!
-//! This is what turns the proxy's byte stream into the thing the gates read:
-//! a grid of cells, each carrying its character and the foreground and
+//! This is what turns the proxy's byte stream into the thing capture waits on
+//! and stage 5 reads positions from — the `.txt` beside each frame: a grid of
+//! cells, each carrying its character and the foreground and
 //! background the app *declared* for it. Reading those off the PNG instead
 //! cannot work — font rasterization antialiases every glyph edge into colours
 //! that belong to no palette, and a pixel says nothing about which run of
@@ -11,7 +12,7 @@
 //! so this handles cursor addressing, erases, SGR and the alternate screen,
 //! and treats the rest as noise. Anything it does not understand is skipped
 //! rather than guessed at — a parser that invents cells is worse than one
-//! that admits a gap, because the gates would report confidently about cells
+//! that admits a gap, because the judge would report confidently about cells
 //! the app never drew.
 //!
 //! The defence against that failure is in `proxy::verify_against_pixels`:
@@ -60,7 +61,7 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// The pair actually shown. `SGR 7` swaps them, and a gate comparing
+    /// The pair actually shown. `SGR 7` swaps them, and anything comparing
     /// against the design's role pairing wants what the eye gets.
     pub fn effective(&self) -> (Color, Color) {
         if self.attrs.reverse {
@@ -188,14 +189,6 @@ impl Vt {
 
     pub fn grid(&self) -> &Grid {
         &self.grid
-    }
-
-    pub fn resize(&mut self, cols: u16, rows: u16) {
-        if (cols, rows) != (self.grid.cols, self.grid.rows) {
-            self.grid = Grid::new(cols, rows);
-            self.row = 0;
-            self.col = 0;
-        }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -520,7 +513,7 @@ impl Vt {
                     match (n, color) {
                         (38, Some(c)) => self.pen.fg = c,
                         (48, Some(c)) => self.pen.bg = c,
-                        _ => {} // 58 is the underline colour; not a gate's business yet
+                        _ => {} // 58 is the underline colour; nothing reads it
                     }
                     i += consumed;
                 }
@@ -672,7 +665,7 @@ mod tests {
     #[test]
     fn an_unrecognised_sequence_is_skipped_rather_than_printed() {
         // A parser that prints what it cannot parse would fabricate cells,
-        // and every gate downstream would report on glyphs the app never
+        // and the grid stage 5 reads would report on glyphs the app never
         // drew.
         let vt = vt(b"\x1b]0;a window title\x07\x1b[?25lok");
         assert_eq!(vt.grid().row_text(0), "ok");

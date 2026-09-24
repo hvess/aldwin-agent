@@ -1,6 +1,6 @@
 //! `aldwin-review` — the deterministic stages of the review loop.
 //!
-//! `review` runs stages 1 to 4 and prints what failed. Stage 5 is a subagent
+//! `review` runs stages 0 to 4 and prints what failed. Stage 5 is a subagent
 //! and belongs to the skill; this binary's job ends at handing it a directory
 //! of frames.
 //!
@@ -190,7 +190,7 @@ fn capture_all(
         )));
     }
     let themes = theme.map_or_else(|| Theme::ALL.to_vec(), |t| vec![t]);
-    for name in scene::IMPLEMENTED {
+    for name in scene::CATALOGUE {
         for size in Size::ALL {
             for &theme in &themes {
                 capture(
@@ -243,12 +243,7 @@ fn main() -> std::io::Result<()> {
 
         Command::Scenes => {
             for name in scene::CATALOGUE {
-                let state = if scene::IMPLEMENTED.contains(name) {
-                    "ready"
-                } else {
-                    "not wired up"
-                };
-                println!("{name:<16} {state}");
+                println!("{name}");
             }
             Ok(())
         }
@@ -279,13 +274,13 @@ fn main() -> std::io::Result<()> {
         Command::Tokens { write } => {
             let design_dir = tokens::design_dir();
             if write {
-                let text = tokens::generate(&design_dir)?;
+                let text = tokens::generate(&design_dir, &base)?;
                 let path = tokens::output_path(&root);
                 std::fs::write(&path, &text)?;
                 println!("wrote {}", path.display());
                 return Ok(());
             }
-            match tokens::check(&root, &design_dir)? {
+            match tokens::check(&root, &design_dir, &base)? {
                 Ok(n) => {
                     println!("{} is current — {n} values from the design", tokens::OUTPUT);
                     Ok(())
@@ -315,7 +310,7 @@ fn main() -> std::io::Result<()> {
             let cell = measure_cell(&comp, &base.font)?;
             let names: Vec<&str> = match &one {
                 Some(name) => vec![name.as_str()],
-                None => scene::IMPLEMENTED.to_vec(),
+                None => scene::CATALOGUE.to_vec(),
             };
             let sizes = size.map_or_else(|| Size::ALL.to_vec(), |s| vec![s]);
             let themes = theme.map_or_else(|| Theme::ALL.to_vec(), |t| vec![t]);
@@ -334,7 +329,7 @@ fn main() -> std::io::Result<()> {
                             &[],
                             &dir,
                         )?;
-                        println!("{name} {s} {t}  {}", frame.path.display());
+                        println!("{name} {s} {t}  {}", frame.display());
                     }
                 }
             }
@@ -357,7 +352,7 @@ fn main() -> std::io::Result<()> {
                 .collect();
             let unknown: Vec<&&str> = focused
                 .iter()
-                .filter(|s| !scene::IMPLEMENTED.contains(s))
+                .filter(|s| !scene::CATALOGUE.contains(s))
                 .collect();
             if focused.is_empty() || !unknown.is_empty() {
                 return Err(std::io::Error::other(format!(
@@ -367,7 +362,7 @@ fn main() -> std::io::Result<()> {
                     } else {
                         format!("{unknown:?}")
                     },
-                    scene::IMPLEMENTED.join(", ")
+                    scene::CATALOGUE.join(", ")
                 )));
             }
 
@@ -380,7 +375,7 @@ fn main() -> std::io::Result<()> {
             // colours and reporting those would be reporting a consequence
             // as a cause.
             let design_dir = tokens::design_dir();
-            outcomes.push(match tokens::check(&root, &design_dir)? {
+            outcomes.push(match tokens::check(&root, &design_dir, &base)? {
                 Ok(n) => stages::Outcome { stage: "3 tokens", passed: true, detail: format!("{n} values from the design") },
                 Err(detail) => stages::Outcome {
                     stage:  "3 tokens",
@@ -439,17 +434,15 @@ fn main() -> std::io::Result<()> {
                 Some(dir) => dir.clone(),
                 None => frames_dir(&root)?,
             };
-            let written = aldwin_review::report::write(
-                &dir,
-                &aldwin_review::report::Run {
-                    goal: &goal,
-                    focus: &focus,
-                    commit: &commit,
-                    outcomes: &outcomes,
-                    frames: frames.as_deref(),
-                    captured,
-                },
-            )?;
+            let run = aldwin_review::report::Run {
+                goal: &goal,
+                focus: &focus,
+                commit: &commit,
+                outcomes: &outcomes,
+                frames: frames.as_deref(),
+                captured,
+            };
+            let written = aldwin_review::report::write(&dir, &run)?;
 
             println!();
             match &frames {
@@ -477,12 +470,15 @@ fn main() -> std::io::Result<()> {
             // section was left empty on three separate runs because writing it
             // depended on the operator recalling a command rather than copying
             // one, and the moment it is needed is the moment attention is on
-            // the findings instead.
-            println!("\nStage 5 is not written yet. After the judge, run:");
-            println!(
-                "  ./target/release/aldwin-review stage5 --run {} --findings <file.json>",
-                dir.display()
-            );
+            // the findings instead. `cargo run` rather than a path under
+            // `target/`, because a path runs whatever was last built there.
+            if run.reaches_stage5() {
+                println!("\nStage 5 is not written yet. After the judge, run:");
+                println!(
+                    "  cargo run --release -p aldwin-review -- stage5 --run {} --findings <file.json>",
+                    dir.display()
+                );
+            }
             if failed > 0 {
                 return Err(std::io::Error::other(format!(
                     "{failed} of {} deterministic stages failed",
@@ -504,7 +500,13 @@ fn main() -> std::io::Result<()> {
             // Debug-formatted, so a multi-line message comes out with its
             // escapes showing.
             println!("stages 0–4 clean — review INCOMPLETE until stage 5 is written.");
-            println!("Spawn the judge against those frames, then run the stage5 command above.");
+            if run.reaches_stage5() {
+                println!(
+                    "Spawn the judge against those frames, then run the stage5 command above."
+                );
+            } else {
+                println!("Stage 5 needs frames: run the review again without --no-capture.");
+            }
             println!("(Use --stages-only if you wanted the deterministic check alone.)");
             Err(std::io::Error::other(
                 "review incomplete: stage 5 not written",

@@ -103,10 +103,11 @@ contradicts) and the entry says so before it goes.
 
 ## Review loop
 
-3. **`cargo fmt` is not in stage 1.** The codebase's aligned struct fields and
-   grouped imports need `struct_field_align_threshold` and `group_imports`,
-   both nightly-only, and the workspace pins no nightly. Revisit when either
-   option stabilises or the project pins a nightly.
+3. ~~**`cargo fmt` is not in stage 1.**~~ **Done, 2026-09-24.** The
+   developer chose stable rustfmt over the hand alignment, `516dd63`
+   reformatted the workspace, and stage 1 runs `cargo fmt --all --check`
+   before clippy. The generator emits `tokens.rs` through rustfmt, so the
+   generated file and the formatter agree.
 
 4. ~~**No scene reaches two pending prompts.**~~ **Moot, 2026-09-23.** There
    are no prompts. Two `ask` calls in one step would queue as two
@@ -127,9 +128,10 @@ contradicts) and the entry says so before it goes.
    a key sends, so it cannot vouch that they are what foot would send. See
    entry 30 for where that now bites.
 
-8. **The loop has never iterated.** No session has gone review → fix →
-   re-review → rescore, so the five-iteration cap and stage 5's re-run are
-   untested by use.
+8. ~~**The loop has never iterated.**~~ **Stale, 2026-09-24.** The
+   whole-app pass that raised the threshold to 100 went review → fix →
+   re-review → rescore and reached 100 on its fourth iteration (the review
+   spec's Progress, 2026-09-24).
 
 ## History (ADR 0005)
 

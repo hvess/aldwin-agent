@@ -205,16 +205,8 @@ impl Drop for Compositor {
 fn runtime_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", current_uid())))
-}
-
-/// `id -u` — a subprocess rather than an ioctl, because this runs once per run
-/// and only as a fallback when `XDG_RUNTIME_DIR` is unset.
-fn current_uid() -> String {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "1000".into())
+        .unwrap_or_else(|| {
+            // SAFETY: getuid takes nothing and cannot fail.
+            PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
+        })
 }

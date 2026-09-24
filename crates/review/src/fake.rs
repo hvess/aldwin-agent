@@ -57,17 +57,16 @@ fn split_into_deltas(reply: &str) -> Vec<String> {
 /// A tool call, streamed the way an OpenAI-compatible provider sends one:
 /// whole, in a single delta, with the arguments as a JSON *string*.
 ///
-/// This is what puts the TUI's decision surfaces on screen. Whether the call
-/// then runs, asks for permission, or opens an approval with a diff is the
-/// permissions engine's business, not the provider's — which is exactly why a
-/// scene can reach those states by choosing the grants it seeds rather than by
-/// faking a panel.
+/// This is what puts the TUI's plan, question and review on screen. What the
+/// call then does — a read, a staged edit, a question — is the real
+/// dispatcher's business, not the provider's, so a scene reaches those states
+/// through the real path rather than by faking a panel.
 pub fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> Canned {
     tool_calls(&[(id, name, arguments)])
 }
 
-/// Several calls in one turn — which is how a scene reaches a *queued*
-/// prompt: the first is asked about, the rest wait behind it.
+/// Several calls in one turn — which is how a scene stages more than one
+/// edit into a single changeset, or updates the plan beside a read.
 pub fn tool_calls(calls: &[(&str, &str, serde_json::Value)]) -> Canned {
     let encoded = calls
         .iter()

@@ -6,7 +6,7 @@
 //! when the app stops drawing rather than after a hopeful interval.
 //!
 //! Every capture leaves two artefacts side by side: the PNG a human reads,
-//! and the declared cell grid the gates read. They are cross-checked against
+//! and the declared cell grid stage 5 reads positions from. They are cross-checked against
 //! each other before either is trusted.
 
 use std::io::{Error, ErrorKind, Result};
@@ -67,17 +67,8 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
     Ok(cell)
 }
 
-pub struct Frame {
-    pub path: PathBuf,
-    pub grid: PathBuf,
-    pub scene: String,
-    pub size: Size,
-    pub theme: Theme,
-    /// How many cells the parser and the frame were checked to agree on.
-    pub checked: usize,
-}
-
-/// Capture one frame: one scene, one size, one theme.
+/// Capture one frame: one scene, one size, one theme. Returns the PNG's
+/// path; the declared grid is beside it with a `.txt` extension.
 ///
 /// The compositor is cleared on every exit path, not only the happy one. An
 /// early error used to leave foot on the output, where it both held the
@@ -96,7 +87,7 @@ pub fn capture(
     quiet_for: Duration,
     keys: &[Vec<u8>],
     run_dir: &Path,
-) -> Result<Frame> {
+) -> Result<PathBuf> {
     let outcome = take_frame(
         comp, binary, baseline, cell, scene_name, size, theme, quiet_for, keys, run_dir,
     );
@@ -116,7 +107,7 @@ fn take_frame(
     quiet_for: Duration,
     keys: &[Vec<u8>],
     run_dir: &Path,
-) -> Result<Frame> {
+) -> Result<PathBuf> {
     let (cols, rows) = size.cells();
     let (px_w, px_h) = size.pixels(cell);
     let work = run_dir.join(format!("{scene_name}-{size}-{theme}"));
@@ -238,15 +229,7 @@ fn take_frame(
     // terminal is for is the picture: stage 5 looks at these, and nothing
     // else does.
     drop(proxy);
-
-    Ok(Frame {
-        path,
-        grid: grid_path,
-        scene: scene_name.to_string(),
-        size,
-        theme,
-        checked,
-    })
+    Ok(path)
 }
 
 /// Whether `now` is the hidden half of the caret's blink, judged against

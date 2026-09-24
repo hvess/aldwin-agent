@@ -3,12 +3,14 @@
 //!
 //! The first two are facts about this machine. The third is the honest part.
 //!
-//! `HANDOFF.md` is prose written across fifteen turns over a token layer that
-//! was rebuilt twice underneath it, and in places it states one thing and its
-//! own CSS states another. Stage 3 cannot be run against a reference that
-//! contradicts itself without somewhere to record where. **Each entry here is
-//! a bug in the design system, not in the app** — it is removed when the
-//! design is fixed upstream, not when the app changes.
+//! The design's prose, its tokens and its frames state one thing in one place
+//! and another elsewhere, and where the developer has decided against the
+//! design — or where the design disagrees with Apple's Human Interface
+//! Guidelines, the usability reference the `ux` skill names — the app follows
+//! one half. The loop cannot be run against such a reference without
+//! somewhere to record which. **Each entry here is a bug in the design
+//! system, not in the app** — it is removed when the design is fixed
+//! upstream or the decision reversed, not when the app changes.
 //!
 //! An entry with no `design_says` and `design_also_says` is not a
 //! contradiction, it is an unfixed bug wearing a costume, and [`Baseline::load`]
@@ -43,7 +45,8 @@ pub struct Contradiction {
     pub id: String,
     /// What the design states in one place.
     pub design_says: String,
-    /// What it states in another, or what its own rendered frame shows.
+    /// What it states in another, what its own rendered frame shows, or what
+    /// the HIG says against it.
     pub design_also_says: String,
     /// Which half the app follows, and why that is the defensible one.
     pub app_follows: String,

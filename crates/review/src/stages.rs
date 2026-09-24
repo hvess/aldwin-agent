@@ -1,4 +1,4 @@
-//! Stages 1, 2 and 4 — the ones that are somebody else's command.
+//! Stages 0, 1, 2 and 4 — the ones that are somebody else's command.
 //!
 //! Each returns the same shape so the loop's report reads uniformly, and each
 //! runs the tool the developer would run by hand. Nothing is reimplemented
@@ -57,31 +57,39 @@ impl Outcome {
     }
 }
 
-fn cargo(root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Command::new("cargo").current_dir(root).args(args).output()
+/// `cargo` in the workspace, with `UPDATE_SNAPSHOTS` removed.
+///
+/// The loop inherits the developer's shell, and a shell that exported
+/// `UPDATE_SNAPSHOTS=1` for one deliberate regeneration would otherwise have
+/// stages 2 and 4 rewrite the baseline they exist to check, and report the
+/// rewrite as a pass.
+fn cargo(root: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(root)
+        .args(args)
+        .env_remove("UPDATE_SNAPSHOTS");
+    command
 }
 
-/// Stage 1 — static analysis.
+/// Stage 1 — formatting and static analysis.
 ///
-/// `--all-targets` so tests are linted too; a clippy warning that only fires
-/// in a test module is still a warning the next reader has to read past.
-/// `-D warnings` because a warning nobody fails on is a warning nobody fixes.
+/// `cargo fmt --check` first, because it is the cheaper of the two. The
+/// workspace is formatted by stable rustfmt with no options, so its verdict
+/// is the one `cargo fmt` gives the developer.
 ///
-/// # Why `cargo fmt --check` is not here
-///
-/// It was, and it fails on 500 files. This codebase is written with aligned
-/// struct fields and grouped imports, which need `struct_field_align_threshold`
-/// and `group_imports` — both nightly-only rustfmt options — and the
-/// workspace pins no nightly toolchain. Under stable rustfmt the check
-/// demands a reformat that would flatten the alignment the code is
-/// deliberately written in, which is a large unrelated diff to buy a
-/// consistency the codebase already has by hand.
-///
-/// Worth revisiting when either option stabilises or the project pins a
-/// nightly; until then clippy is the static analysis that carries this
-/// stage, and it is clean workspace-wide.
+/// Clippy with `--all-targets` so tests are linted too; a clippy warning that
+/// only fires in a test module is still a warning the next reader has to read
+/// past. `-D warnings` because a warning nobody fails on is a warning nobody
+/// fixes.
 pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
-    Ok(vec![Outcome::from(
+    let fmt = Outcome::from(
+        "1 lint · fmt",
+        cargo(root, &["fmt", "--all", "--check"]).output()?,
+        40,
+        |_| "formatted".to_string(),
+    );
+    let clippy = Outcome::from(
         "1 lint · clippy",
         cargo(
             root,
@@ -93,7 +101,8 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
                 "-D",
                 "warnings",
             ],
-        )?,
+        )
+        .output()?,
         40,
         |out| {
             // Cargo prints a `Checking` line per target it actually builds,
@@ -109,14 +118,15 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
                 n => format!("clippy clean across {n} crate targets"),
             }
         },
-    )])
+    );
+    Ok(vec![fmt, clippy])
 }
 
 /// Stage 2 — the suite.
 pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![Outcome::from(
         "2 test",
-        cargo(root, &["test", "--workspace"])?,
+        cargo(root, &["test", "--workspace"]).output()?,
         60,
         |out| {
             let (passed, _, ignored) = crate::report::test_counts(out);
@@ -152,7 +162,8 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         cargo(
             root,
             &["test", "-p", "aldwin-tui", "--test", "render_snapshot"],
-        )?,
+        )
+        .output()?,
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
@@ -201,4 +212,24 @@ pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
             ),
         }
     }])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::*;
+
+    /// A shell that exported `UPDATE_SNAPSHOTS=1` once would have stage 4
+    /// regenerate `render.snap` and then pass against its own output.
+    #[test]
+    fn cargo_never_inherits_the_snapshot_regeneration_switch() {
+        let command = cargo(Path::new("."), &["test"]);
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == OsStr::new("UPDATE_SNAPSHOTS") && value.is_none()),
+            "every cargo the loop runs must have UPDATE_SNAPSHOTS removed"
+        );
+    }
 }

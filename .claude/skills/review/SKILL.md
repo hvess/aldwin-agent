@@ -24,16 +24,21 @@ Ask if you have not been told. Do not infer the focus from the diff: a change
 to a shared helper touches screens its diff never names, and a judge pointed
 at the wrong screens reports the whole app's backlog instead of this change.
 
-## 1–4. The deterministic stages
+## 0–4. The deterministic stages
 
 ```sh
-cargo build && ./target/release/aldwin-review review \
+cargo run --release -p aldwin-review -- review \
   --goal  "<what this change set out to do, in a sentence>" \
   --focus "<the scenes it touched>"
 ```
 
 Both flags are required — a review that cannot say what it is reviewing
 cannot judge whether the change did it, and stage 5 is handed them verbatim.
+
+Always through `cargo run`, never a path under `target/`: a path runs
+whatever was last built there, and `cargo build` builds the debug profile, so
+`cargo build && ./target/release/…` ran a stale release binary — a loop
+older than the change it was reviewing.
 
 Roughly three minutes, almost all of it capture. It prints one line per stage,
 the directory of frames stage 5 needs, and writes **`review.html`** into that
@@ -45,7 +50,7 @@ in a browser from disk and survives being moved.
 | stage | what it runs | what a failure means |
 | --- | --- | --- |
 | 0 toolchain | `rustc --version` against the baseline | the toolchain moved. Clippy's lint set changes between releases, so stage 1 may now fail on code nobody touched — record the new version deliberately rather than puzzling over it |
-| 1 lint | `cargo clippy --workspace --all-targets -- -D warnings` | fix it before anything else; a lint failure means the other stages ran against code you are about to change |
+| 1 lint | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` | fix it before anything else (`cargo fmt` for the first); a lint failure means the other stages ran against code you are about to change |
 | 2 test | `cargo test --workspace` | a regression, or a test that needed updating with the change |
 | 3 tokens | regenerates `crates/tui/src/tokens.rs` from `.claude/design/tokens/` and diffs | the app's design system and the imported one have drifted. `cargo run -p aldwin-review -- tokens --write`, then read the diff before committing it |
 | 4 frames | `cargo test -p aldwin-tui --test render_snapshot` | either the rendered frames changed against the baseline, or a cell left the design system — the failure names which. If the change is *meant* to alter the frames, regenerate deliberately after reading the diff: `UPDATE_SNAPSHOTS=1 cargo test -p aldwin-tui --test render_snapshot` |
@@ -68,7 +73,13 @@ stage 5 actually reads.
 
 **Every one of these must pass before stage 5 runs.** A judge looking at
 frames drawn with a drifted palette is a judge reporting a consequence as a
-cause.
+cause. The report enforces it: it leaves stage 5 a placeholder only when
+stages 0–4 all passed and frames were captured, so `stage5` refuses to write
+a score into any other run.
+
+`UPDATE_SNAPSHOTS` is removed from every `cargo` the loop runs. A shell that
+still has it exported from a deliberate regeneration would otherwise have
+stage 4 rewrite the baseline it checks, and pass.
 
 ## 5. Confidence
 
@@ -195,7 +206,7 @@ Five things the prompt does that matter, each for a measured reason:
 Do not hand-edit the HTML:
 
 ```sh
-./target/release/aldwin-review stage5 --run <dir> --findings findings.json
+cargo run --release -p aldwin-review -- stage5 --run <dir> --findings findings.json
 ```
 
 where `findings.json` is **the judge's JSON block, saved verbatim**. The
@@ -249,8 +260,10 @@ check arrived that way.
 It will sometimes be, because the design reference contradicts itself in
 places. When a finding turns out to be the *design's* fault rather than the
 app's, add it to `contradictions` in `crates/review/baseline.json` — both
-halves of what the design says, and which half the app follows. Remove the
-entry when the design is fixed upstream.
+halves of what the design says, and which half the app follows. Where the
+design disagrees with Apple's HIG rather than with itself, the second half is
+the HIG's own sentence, quoted. Remove the entry when the design is fixed
+upstream or the decision reversed.
 
 **Keep that list short.** It is a bug list for the design system, and a bug
 list that only grows is a list nobody reads. If it is getting long, the answer
@@ -272,9 +285,6 @@ is to fix the design, not to keep recording it.
   compositor, a terminal and a fake provider, and waits `quiet_ms` for the
   app to settle. It is stage 5's input, not a gate: a bad frame is something
   the judge will say out loud.
-- **`cargo fmt` is not in stage 1.** The codebase's alignment needs
-  nightly-only rustfmt options and the workspace pins no nightly; see
-  `stages::lint`.
 - **Stage 5 is flaky and no prompt fixes that.** Two runs will not produce the
   same number. Treat the findings as the output and the score as a threshold,
   not as a measurement.

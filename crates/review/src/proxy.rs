@@ -4,8 +4,8 @@
 //! gives three things no screenshot can:
 //!
 //! * **the declared cell grid** — the character and the foreground and
-//!   background the app asked for, per cell, which is what every
-//!   deterministic gate reads;
+//!   background the app asked for, per cell, which is the declared
+//!   grid stage 5 reads positions from;
 //! * **quiesce** — the app going quiet is observable, so a frame is captured
 //!   when it is finished rather than after a hopeful interval;
 //! * **input** — keystrokes go in as bytes.
@@ -22,8 +22,8 @@
 //! starts the app. The app is therefore born at its final size and never
 //! sees the 80×24 foot would otherwise have handed it.
 
-use std::io::{Error, ErrorKind, Result};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::fs::File;
+use std::io::{Error, ErrorKind, Result, Write};
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,7 +99,7 @@ impl Proxy {
         let start = Instant::now();
 
         // app → parser → foot. Every byte the app writes is both the thing
-        // foot renders and the thing the gates are decided from, so there is
+        // foot renders and the thing the grid is parsed from, so there is
         // no way for the two to disagree about what was sent.
         spawn_pump(
             app.try_clone_master()?,
@@ -176,7 +176,7 @@ impl Proxy {
     /// app's handling and not foot's key encoding — the one thing this
     /// arrangement cannot vouch for.
     pub fn send(&self, bytes: &[u8]) -> Result<()> {
-        pty::write_all(self.app.master_fd(), bytes)
+        self.app.write_all(bytes)
     }
 
     /// Press a key and wait for the app to finish reacting to **that key**.
@@ -228,7 +228,7 @@ struct Observer {
     last_print: u64,
 }
 
-fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
+fn spawn_pump(mut from: File, mut to: File, mut observe: Option<Observer>) {
     // `ALDWIN_SHOT_TRACE=<path>` tees the app's byte stream to a file. When
     // the parser and the frame disagree, this is the only place the answer
     // can be: both of them are downstream of these bytes.
@@ -246,11 +246,10 @@ fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
-            match pty::read(from.as_raw_fd(), &mut buf) {
+            match pty::read(&mut from, &mut buf) {
                 Ok(0) | Err(_) => return,
                 Ok(n) => {
                     if let Some(f) = trace.as_mut() {
-                        use std::io::Write;
                         let _ = f.write_all(&buf[..n]);
                     }
                     if let Some(observer) = observe.as_mut() {
@@ -269,7 +268,7 @@ fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
                             );
                         }
                     }
-                    if pty::write_all(to.as_raw_fd(), &buf[..n]).is_err() {
+                    if to.write_all(&buf[..n]).is_err() {
                         return;
                     }
                 }
@@ -281,7 +280,7 @@ fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
 /// Cross-check the parser against the picture.
 ///
 /// A subtly wrong parser is the same class of defect as the wrong cell size:
-/// it produces a grid that looks entirely plausible, and every gate then
+/// it produces a grid that looks entirely plausible, and the judge then
 /// reports confidently about cells the app never drew. So every cell the
 /// parser calls "a space on a known ground" must be a flat block of exactly
 /// that colour in the frame. Where they disagree, one of them is lying and

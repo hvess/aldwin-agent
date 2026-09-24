@@ -26,7 +26,6 @@ use crate::geometry::Theme;
 
 /// The static half of a scene: what it needs seeded and what it will be told.
 pub struct Script {
-    pub name: &'static str,
     /// One per request the scene makes, in order.
     pub replies: Vec<Canned>,
     /// Files the scene needs in the project before it runs — a `read` needs
@@ -66,10 +65,6 @@ pub const CATALOGUE: &[&str] = &[
     "resume",
 ];
 
-/// Scenes that are wired up. The rest stay in `CATALOGUE` so the vocabulary is
-/// visible, and refuse to run rather than capture something else.
-pub const IMPLEMENTED: &[&str] = CATALOGUE;
-
 const ROUTER: &str = "src/gateway/router.rs";
 
 const ROUTER_RS: &str = "pub fn app(cfg: &Config) -> Router {\n    Router::new()\n        .route(\"/v1/chat\", post(chat))\n        .layer(auth_layer(cfg))\n        .layer(TraceLayer::new_for_http())\n}\n";
@@ -99,9 +94,6 @@ pub fn script(name: &str) -> Result<Script> {
             format!("unknown scene {name:?}; see scene::CATALOGUE"),
         ));
     }
-    if !IMPLEMENTED.contains(&name) {
-        return Err(Error::new(ErrorKind::Unsupported, format!("scene {name:?} is in the catalogue but not wired up yet; implemented: {IMPLEMENTED:?}")));
-    }
 
     let ask = "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter";
     let edit = || {
@@ -117,15 +109,14 @@ pub fn script(name: &str) -> Result<Script> {
     };
     Ok(match name {
         // Every launch, the first included: the card and the field.
-        "launch" => Script { name: "launch", replies: vec![], history: &[], files: vec![], keys: "", provider: true },
+        "launch" => Script { replies: vec![], history: &[], files: vec![], keys: "", provider: true },
 
         // Nothing configured: the card reads `Model  not set`. There is no
         // first-run screen (ADR 0009 §6).
-        "launch_unconfigured" => Script { name: "launch_unconfigured", replies: vec![], history: &[], files: vec![], keys: "", provider: false },
+        "launch_unconfigured" => Script { replies: vec![], history: &[], files: vec![], keys: "", provider: false },
 
         // The plan and a collapsed disclosure, as a finished turn leaves them.
         "plan" => Script {
-            name:    "plan",
             replies: vec![
                 fake::tool_calls(&[("call-plan", "plan", plan(["running", "pending", "pending"])), ("call-read", "read", serde_json::json!({ "path": ROUTER }))]),
                 fake::tool_call("call-plan-2", "plan", plan(["done", "running", "pending"])),
@@ -139,7 +130,6 @@ pub fn script(name: &str) -> Result<Script> {
 
         // The same, with the disclosure opened by Space.
         "details" => Script {
-            name:    "details",
             replies: vec![
                 fake::tool_calls(&[("call-plan", "plan", plan(["running", "pending", "pending"])), ("call-read", "read", serde_json::json!({ "path": ROUTER }))]),
                 fake::tool_call("call-plan-2", "plan", plan(["done", "running", "pending"])),
@@ -153,7 +143,6 @@ pub fn script(name: &str) -> Result<Script> {
 
         // The `ask` tool: the panel takes the band with the three answers.
         "question" => Script {
-            name:    "question",
             replies: vec![fake::tool_call(
                 "call-ask",
                 "ask",
@@ -169,12 +158,11 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        "commands" => Script { name: "commands", replies: vec![], history: &[], files: vec![], keys: "\"/\"", provider: true },
+        "commands" => Script { replies: vec![], history: &[], files: vec![], keys: "\"/\"", provider: true },
 
         // The review, opened by the real dispatcher at the end of a turn
         // that staged one edit and created one file (ADR 0009 §4).
         "review" => Script {
-            name:    "review",
             replies: vec![
                 fake::tool_calls(&[
                     ("call-plan", "plan", plan(["done", "running", "pending"])),
@@ -195,7 +183,6 @@ pub fn script(name: &str) -> Result<Script> {
 
         // Approved: the review folds into the one row the conversation keeps.
         "saved" => Script {
-            name:    "saved",
             replies: vec![edit(), fake::text("Each key gets 100 requests a minute; the rest are turned away before auth.")],
             history: &[],
             files:   vec![(ROUTER, ROUTER_RS)],
@@ -203,13 +190,12 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        "markdown" => Script { name: "markdown", replies: vec![fake::text(TABLE)], history: &[], files: vec![], keys: "\"which providers are set up?\",Enter", provider: true },
+        "markdown" => Script { replies: vec![fake::text(TABLE)], history: &[], files: vec![], keys: "\"which providers are set up?\",Enter", provider: true },
 
         // A turn that did not finish: the provider answered with an error
         // the client does not retry. A sentence in `label`, its detail one
         // disclosure below — no red (ADR 0009 §5).
         "failure" => Script {
-            name:    "failure",
             replies: vec![Canned::Status(400, "{\"error\":{\"message\":\"the request was malformed: unknown model gpt-5\"}}".into())],
             history: &[],
             files:   vec![],
@@ -219,7 +205,6 @@ pub fn script(name: &str) -> Result<Script> {
 
         // Long enough to fill the tallest frame and scroll the shortest.
         "long" => Script {
-            name:    "long",
             replies: vec![fake::text(&format!("{PROSE}\n\n{TABLE}\n\n{PROSE}\n\n{PROSE}"))],
             history: &[],
             files:   vec![],
@@ -230,7 +215,6 @@ pub fn script(name: &str) -> Result<Script> {
         // Bare `/resume`: the session question over two past sessions, so
         // the list is a list.
         "resume" => Script {
-            name:    "resume",
             replies: vec![],
             history: &[("how should the retry loop back off?", 1_789_732_800, 4), ("which providers are set up?", 1_789_819_200, 1)],
             files:   vec![],
@@ -238,7 +222,7 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        _ => unreachable!("guarded by IMPLEMENTED above"),
+        _ => unreachable!("guarded by CATALOGUE above"),
     })
 }
 

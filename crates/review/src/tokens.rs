@@ -27,8 +27,11 @@
 //! omission — see [`generate`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind, Result, Write};
 use std::path::Path;
+use std::process::{Command, Stdio};
+
+use crate::Baseline;
 
 /// Roles the terminal does not draw, with the reason.
 const UNCARRIED: [(&str, &str); 10] = [
@@ -92,7 +95,10 @@ pub fn output_path(root: &Path) -> std::path::PathBuf {
 type Roles = BTreeMap<String, Rgb>;
 
 /// Emit the file. Returns its full text.
-pub fn generate(design_dir: &Path) -> Result<String> {
+///
+/// `baseline` is an input like the design files: its contradictions license
+/// the glyphs in `MARKS_BY_EXCEPTION`.
+pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let colors = strip_comments(&std::fs::read_to_string(
         design_dir.join("tokens/colors.css"),
     )?);
@@ -102,35 +108,36 @@ pub fn generate(design_dir: &Path) -> Result<String> {
     let glyph_card = std::fs::read_to_string(design_dir.join("guidelines/glyphs.html"))?;
     let frame = std::fs::read_to_string(design_dir.join(FRAME))?;
 
-    let dark_raw = declarations(scope(&colors, ":root"));
-    let light_raw = declarations(scope(&colors, ".tui-light"));
+    let dark_raw = scope_declarations(&colors, ":root")?;
+    let light_raw = scope_declarations(&colors, ".tui-light")?;
 
     let uncarried = |role: &str| UNCARRIED.iter().any(|(name, _)| *name == role);
     let carried: Vec<&String> = dark_raw.keys().filter(|role| !uncarried(role)).collect();
 
     // Every carried role must parse to a colour in the dark scope; the light
     // scope overrides most and inherits the rest, which is the design's own
-    // arrangement rather than a fallback.
+    // arrangement rather than a fallback. Only a role the light scope does not
+    // declare is inherited: one it declares and this generator cannot read is
+    // an error, never a silent dark value in the light theme.
     let resolve_scope = |raw: &BTreeMap<String, String>,
-                         fallback: Option<&Roles>|
+                         inherited: Option<&Roles>|
      -> Result<Roles> {
         let mut out = Roles::new();
         for role in &carried {
-            let value = raw
-                .get(*role)
-                .and_then(|v| parse_color(v))
-                .or_else(|| fallback?.get(*role).copied());
-            match value {
-                Some(rgb) => {
-                    out.insert((*role).clone(), rgb);
-                }
-                None => return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "--{role} resolves to no colour this generator can read (oklch() or #hex)"
-                    ),
-                )),
-            }
+            let rgb = match raw.get(*role) {
+                Some(value) => parse_color(value).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("--{role}: {value} is not a colour this generator can read (oklch() or #hex)"),
+                    )
+                })??,
+                None => inherited
+                    .and_then(|roles| roles.get(*role).copied())
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::InvalidData, format!("--{role} is not declared"))
+                    })?,
+            };
+            out.insert((*role).clone(), rgb);
         }
         Ok(out)
     };
@@ -188,7 +195,7 @@ pub fn generate(design_dir: &Path) -> Result<String> {
             for cell in row {
                 let top = cell.top.map_or(win, |p| mix_oklch(fill, win, p));
                 let bottom = cell.bottom.map_or(win, |p| mix_oklch(fill, win, p));
-                let (top, bottom) = (top.to_rgb(), bottom.to_rgb());
+                let (top, bottom) = (top.to_rgb()?, bottom.to_rgb()?);
                 mark_colors.push(top);
                 mark_colors.push(bottom);
                 out.push_str(&format!("({}, {}), ", top.literal(), bottom.literal()));
@@ -211,8 +218,8 @@ pub fn generate(design_dir: &Path) -> Result<String> {
             out.push_str("    [");
             for i in 0..GAUGE_SEGMENTS {
                 let rgb = match gauge_mix(n, i) {
-                    Some(p) => mix_oklch_f(fill, track, p).to_rgb(),
-                    None => track.to_rgb(),
+                    Some(p) => mix_oklch_f(fill, track, p).to_rgb()?,
+                    None => track.to_rgb()?,
                 };
                 ramp_colors.push(rgb);
                 out.push_str(&format!("{}, ", rgb.literal()));
@@ -265,8 +272,39 @@ pub fn generate(design_dir: &Path) -> Result<String> {
     ));
 
     out.push_str(&grid(&layout)?);
-    out.push_str(&glyphs(&glyph_card, &frame)?);
-    Ok(out)
+    out.push_str(&glyphs(&glyph_card, &frame, baseline)?);
+    rustfmt(&out)
+}
+
+/// The generated source as `cargo fmt` leaves it.
+///
+/// The file is committed inside a workspace that stage 1 holds to `cargo fmt
+/// --check`, so it is emitted formatted — the way bindgen and prost emit
+/// theirs — rather than written one way by this generator and rewritten
+/// another by the formatter, which would fail stage 1 or stage 3 whichever
+/// ran last. The edition is the workspace's, which is what `cargo fmt` passes.
+fn rustfmt(source: &str) -> Result<String> {
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2021"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // rustfmt reads all of stdin before it writes, so this cannot deadlock
+    // against a full stdout pipe.
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped above")
+        .write_all(source.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(Error::other(format!(
+            "rustfmt rejected the generated source: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    String::from_utf8(output.stdout).map_err(|e| Error::new(ErrorKind::InvalidData, e))
 }
 
 fn header() -> String {
@@ -345,7 +383,7 @@ fn gauge_mix(n: usize, i: usize) -> Option<f64> {
 ///
 /// `MARKS_BY_EXCEPTION` is there because the design contradicts itself and
 /// `crates/review/baseline.json` records where.
-fn glyphs(card: &str, frame: &str) -> Result<String> {
+fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
     let mut marks = BTreeSet::new();
     // Each entry of the card is `…width:3ch">X</span>`; the glyph is what
     // sits between the closing bracket and the closing tag.
@@ -366,7 +404,6 @@ fn glyphs(card: &str, frame: &str) -> Result<String> {
     }
     marks.insert('▀');
 
-    let baseline = crate::Baseline::load()?;
     let mut excepted: BTreeSet<char> = BTreeSet::new();
     for c in &baseline.contradictions {
         excepted.extend(c.glyphs.chars());
@@ -640,6 +677,20 @@ fn declarations(css: &str) -> BTreeMap<String, String> {
     map
 }
 
+/// The declarations of one colour scope, which must exist and declare
+/// something: an empty light scope would otherwise inherit every role and
+/// generate a light theme that is the dark one.
+fn scope_declarations(css: &str, selector: &str) -> Result<BTreeMap<String, String>> {
+    let found = declarations(scope(css, selector));
+    if found.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("tokens/colors.css declares no roles in `{selector}`"),
+        ));
+    }
+    Ok(found)
+}
+
 fn scope<'a>(css: &'a str, selector: &str) -> &'a str {
     let Some(start) = css
         .find(&format!("{selector} {{"))
@@ -714,19 +765,28 @@ struct Oklch {
 }
 
 impl Oklch {
-    fn to_rgb(self) -> Rgb {
+    fn to_rgb(self) -> Result<Rgb> {
         let (a, b) = (
             self.c * self.h.to_radians().cos(),
             self.c * self.h.to_radians().sin(),
         );
-        oklab_to_rgb(self.l, a, b)
+        oklab_to_rgb(self.l, a, b).map_err(|delta| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "oklch({} {} {}) is outside sRGB by ΔE OK {delta:.3}, past CSS Color 4's {GAMUT_JND}: clipping it would draw a visibly different colour",
+                    self.l, self.c, self.h
+                ),
+            )
+        })
     }
 }
 
-/// `oklch(0.64 0.2 255)` or `#1e8a3c` → sRGB.
-fn parse_color(value: &str) -> Option<Rgb> {
+/// `oklch(0.64 0.2 255)` or `#1e8a3c` → sRGB. `None` when the value is
+/// neither; an error when it is an OKLCH colour sRGB cannot hold.
+fn parse_color(value: &str) -> Option<Result<Rgb>> {
     if let Some(hex) = parse_hex(value) {
-        return Some(hex);
+        return Some(Ok(hex));
     }
     parse_oklch(value).map(Oklch::to_rgb)
 }
@@ -757,8 +817,22 @@ fn parse_hex(value: &str) -> Option<Rgb> {
     ))
 }
 
-/// Björn Ottosson's OKLab → linear sRGB, then the sRGB transfer curve.
-fn oklab_to_rgb(l: f64, a: f64, b: f64) -> Rgb {
+/// CSS Color 4's just-noticeable difference, in ΔE OK.
+///
+/// A token in OKLCH can sit a little outside sRGB — `--del`, a red at
+/// `oklch(0.7 0.2 27)`, does — and a terminal can draw only sRGB. CSS Color 4
+/// maps such a colour by clipping each channel when the clipped colour is
+/// within this distance of the original, because nobody can see the
+/// difference; the generator does the same. Every role and mix the design
+/// declares today clips within it. Further out, CSS reduces chroma to find a
+/// different colour, and a terminal palette that silently drew a different
+/// colour from the design's is the drift stage 3 exists to prevent — so the
+/// generator refuses instead, and the design has to say what it means.
+const GAMUT_JND: f64 = 0.02;
+
+/// Björn Ottosson's OKLab → linear sRGB, clipped, then the sRGB transfer
+/// curve. The error is the clip's ΔE OK when it is not below [`GAMUT_JND`].
+fn oklab_to_rgb(l: f64, a: f64, b: f64) -> std::result::Result<Rgb, f64> {
     let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
     let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
     let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;
@@ -766,7 +840,13 @@ fn oklab_to_rgb(l: f64, a: f64, b: f64) -> Rgb {
     let r = 4.076_741_662_1 * l3 - 3.307_711_591_3 * m3 + 0.230_969_929_2 * s3;
     let g = -1.268_438_004_6 * l3 + 2.609_757_401_1 * m3 - 0.341_319_396_5 * s3;
     let bl = -0.004_196_086_3 * l3 - 0.703_418_614_7 * m3 + 1.707_614_701_0 * s3;
-    Rgb(encode(r), encode(g), encode(bl))
+    let [r, g, bl] = [r, g, bl].map(|c| c.clamp(0.0, 1.0));
+    let (cl, ca, cb) = linear_to_oklab(r, g, bl);
+    let delta = ((l - cl).powi(2) + (a - ca).powi(2) + (b - cb).powi(2)).sqrt();
+    if delta >= GAMUT_JND {
+        return Err(delta);
+    }
+    Ok(Rgb(encode(r), encode(g), encode(bl)))
 }
 
 fn encode(linear: f64) -> u8 {
@@ -788,14 +868,20 @@ fn decode(channel: u8) -> f64 {
     }
 }
 
-fn rgb_to_oklch(rgb: Rgb) -> Oklch {
-    let (r, g, b) = (decode(rgb.0), decode(rgb.1), decode(rgb.2));
+/// Linear sRGB → OKLab.
+fn linear_to_oklab(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
     let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
     let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
-    let lab_l = 0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s;
-    let lab_a = 1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s;
-    let lab_b = 0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s;
+    (
+        0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s,
+        1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s,
+        0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s,
+    )
+}
+
+fn rgb_to_oklch(rgb: Rgb) -> Oklch {
+    let (lab_l, lab_a, lab_b) = linear_to_oklab(decode(rgb.0), decode(rgb.1), decode(rgb.2));
     let c = (lab_a * lab_a + lab_b * lab_b).sqrt();
     let h = lab_b.atan2(lab_a).to_degrees().rem_euclid(360.0);
     Oklch { l: lab_l, c, h }
@@ -826,8 +912,12 @@ fn mix_oklch_f(a: Oklch, b: Oklch, percent: f64) -> Oklch {
 // ---- The stage --------------------------------------------------------------
 
 /// The stage itself: regenerate, and report the first line that differs.
-pub fn check(root: &Path, design_dir: &Path) -> Result<std::result::Result<usize, String>> {
-    let wanted = generate(design_dir)?;
+pub fn check(
+    root: &Path,
+    design_dir: &Path,
+    baseline: &Baseline,
+) -> Result<std::result::Result<usize, String>> {
+    let wanted = generate(design_dir, baseline)?;
     let path = output_path(root);
     let found = std::fs::read_to_string(&path).unwrap_or_default();
     if wanted == found {
@@ -859,7 +949,7 @@ mod tests {
 
     #[test]
     fn every_role_the_design_declares_is_carried_or_explained() {
-        let text = generate(&design_dir()).expect("tokens generate");
+        let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");
         let colors = strip_comments(
             &std::fs::read_to_string(design_dir().join("tokens/colors.css")).unwrap(),
         );
@@ -877,7 +967,7 @@ mod tests {
     /// is inherited), and every carried role still resolves.
     #[test]
     fn the_light_theme_inherits_what_it_does_not_redeclare() {
-        let text = generate(&design_dir()).expect("tokens generate");
+        let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");
         let light = text
             .split("pub(crate) const LIGHT: Palette")
             .nth(1)
@@ -888,15 +978,19 @@ mod tests {
         );
     }
 
+    fn rgb(value: &str) -> Rgb {
+        parse_color(value).expect("a colour").expect("inside sRGB")
+    }
+
     /// A white and a black, and the round trip through OKLCH.
     #[test]
     fn oklch_conversion_hits_the_ends_of_the_scale() {
-        assert_eq!(parse_color("oklch(0.99 0 0)"), Some(Rgb(252, 252, 252)));
-        assert_eq!(parse_color("oklch(0 0 0)"), Some(Rgb(0, 0, 0)));
-        assert_eq!(parse_color("oklch(1 0 0)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(rgb("oklch(0.99 0 0)"), Rgb(252, 252, 252));
+        assert_eq!(rgb("oklch(0 0 0)"), Rgb(0, 0, 0));
+        assert_eq!(rgb("oklch(1 0 0)"), Rgb(255, 255, 255));
         for hex in ["#1e8a3c", "#d84040", "#f1d2cf", "#183020"] {
             let rgb = parse_hex(hex).unwrap();
-            let back = rgb_to_oklch(rgb).to_rgb();
+            let back = rgb_to_oklch(rgb).to_rgb().unwrap();
             let close = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= 1;
             assert!(
                 close(rgb.0, back.0) && close(rgb.1, back.1) && close(rgb.2, back.2),
@@ -905,11 +999,71 @@ mod tests {
         }
     }
 
+    /// Generate from a copy of the design whose `colors.css` has been edited.
+    fn generate_with_colors(name: &str, edit: impl Fn(&str) -> String) -> Result<String> {
+        let dir = std::env::temp_dir().join(format!(
+            "aldwin-review-tokens-{name}-{}",
+            std::process::id()
+        ));
+        for file in [
+            "tokens/colors.css",
+            "tokens/layout.css",
+            "guidelines/glyphs.html",
+            FRAME,
+        ] {
+            let text = std::fs::read_to_string(design_dir().join(file))?;
+            let text = if file == "tokens/colors.css" {
+                edit(&text)
+            } else {
+                text
+            };
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
+            std::fs::write(path, text)?;
+        }
+        let generated = generate(&dir, &Baseline::load()?);
+        let _ = std::fs::remove_dir_all(&dir);
+        generated
+    }
+
+    /// A light value the generator cannot read used to fall back to the
+    /// dark one, drawing a dark-theme colour in the light theme.
+    #[test]
+    fn an_unreadable_light_value_is_an_error_not_the_dark_one() {
+        let result = generate_with_colors("unreadable", |css| {
+            css.replace(
+                "--label3: oklch(0.66 0.006 260);",
+                "--label3: oklch(0.66 0.006);",
+            )
+        });
+        let error = result.expect_err("an unreadable light --label3");
+        assert!(error.to_string().contains("--label3"), "{error}");
+    }
+
+    /// With no light scope at all, every role would be inherited and the
+    /// light theme would be the dark one.
+    #[test]
+    fn a_missing_light_scope_is_an_error() {
+        let result = generate_with_colors("no-light", |css| {
+            css.replace(".tui-light {", ".elsewhere {")
+        });
+        let error = result.expect_err("no .tui-light scope");
+        assert!(error.to_string().contains(".tui-light"), "{error}");
+    }
+
+    /// A hair outside sRGB is clipped; well outside is refused, because a
+    /// clip that far draws a colour the design never named.
+    #[test]
+    fn a_colour_well_outside_srgb_is_refused_rather_than_clipped() {
+        assert!(parse_color("oklch(0.7 0.4 150)").expect("parses").is_err());
+        assert!(parse_color("oklch(0.64 0.2 255)").expect("parses").is_ok());
+    }
+
     /// The accent, checked against the value Firefox rendered the frame with
     /// (measured off the screenshot's `›`): a bright, saturated blue.
     #[test]
     fn the_accent_is_a_blue() {
-        let Rgb(r, g, b) = parse_color("oklch(0.64 0.2 255)").unwrap();
+        let Rgb(r, g, b) = rgb("oklch(0.64 0.2 255)");
         assert!(
             b > 200 && r < 80 && g > 100 && g < 160,
             "expected a blue, got ({r}, {g}, {b})"
@@ -921,8 +1075,14 @@ mod tests {
     fn a_mix_at_the_ends_is_one_of_its_inputs() {
         let fill = parse_oklch("oklch(0.53 0.2 258)").unwrap();
         let win = parse_oklch("oklch(0.19 0.006 260)").unwrap();
-        assert_eq!(mix_oklch(fill, win, 100).to_rgb(), fill.to_rgb());
-        assert_eq!(mix_oklch(fill, win, 0).to_rgb(), win.to_rgb());
+        assert_eq!(
+            mix_oklch(fill, win, 100).to_rgb().unwrap(),
+            fill.to_rgb().unwrap()
+        );
+        assert_eq!(
+            mix_oklch(fill, win, 0).to_rgb().unwrap(),
+            win.to_rgb().unwrap()
+        );
         let mid = mix_oklch(fill, win, 50);
         assert!(
             (mid.l - 0.36).abs() < 0.001,
@@ -1004,7 +1164,7 @@ mod tests {
 
     #[test]
     fn the_grid_is_read_in_cells() {
-        let text = generate(&design_dir()).expect("tokens generate");
+        let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");
         for (name, value) in [
             ("MARGIN_X", 3),
             ("BODY_X", 5),
@@ -1023,7 +1183,7 @@ mod tests {
     /// the table; the canvas captions around the frames do not.
     #[test]
     fn the_glyph_table_is_the_card_plus_the_frame() {
-        let text = generate(&design_dir()).expect("tokens generate");
+        let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");
         let marks = text
             .split("pub(crate) const MARKS: [char; ")
             .nth(1)

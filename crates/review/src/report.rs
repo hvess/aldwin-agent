@@ -76,6 +76,17 @@ pub struct Run<'a> {
     pub captured: usize,
 }
 
+impl Run<'_> {
+    /// Whether this run can be judged: every deterministic stage passed and
+    /// there are frames to look at. Only then does the report leave stage 5 a
+    /// placeholder, so `stage5` has nowhere to write a passing score over a
+    /// failing run — a judge looking at frames drawn by broken code reports a
+    /// consequence as a cause, and a judge with no frames judges nothing.
+    pub fn reaches_stage5(&self) -> bool {
+        self.outcomes.iter().all(|o| o.passed) && self.frames.is_some() && self.captured > 0
+    }
+}
+
 /// Text into HTML text. Everything user- or tool-supplied goes through this:
 /// a clippy diagnostic is full of `&`, `<` and `>`, and one unescaped `<`
 /// silently swallows the rest of a cell.
@@ -86,6 +97,12 @@ fn esc(s: &str) -> String {
 }
 
 pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
+    let path = dir.join("review.html");
+    std::fs::write(&path, render(run))?;
+    Ok(path)
+}
+
+fn render(run: &Run) -> String {
     let failures: Vec<&Outcome> = run.outcomes.iter().filter(|o| !o.passed).collect();
     let passed = run.outcomes.len() - failures.len();
 
@@ -148,18 +165,23 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
     }
 
     out.push_str("<h2>Stage 5 &middot; confidence</h2>");
-    out.push_str(STAGE5_MARKER);
-    out.push_str(
-        "<p class=\"note\">Appended by the review skill once the judge has run. \
-         Until then this run is incomplete: stages 0&ndash;4 say nothing about whether \
-         the change matches its design.</p>",
-    );
+    if run.reaches_stage5() {
+        out.push_str(STAGE5_MARKER);
+        out.push_str(
+            "<p class=\"note\">Appended by the review skill once the judge has run. \
+             Until then this run is incomplete: stages 0&ndash;4 say nothing about whether \
+             the change matches its design.</p>",
+        );
+    } else {
+        out.push_str(
+            "<p class=\"note\">Not reached. Stage&nbsp;5 judges a run whose deterministic \
+             stages all passed and whose frames were captured, and this one is not that. \
+             Fix and run the loop again.</p>",
+        );
+    }
 
     out.push_str("</main></body></html>\n");
-
-    let path = dir.join("review.html");
-    std::fs::write(&path, out)?;
-    Ok(path)
+    out
 }
 
 /// One finding, as the judge reported it.
@@ -242,12 +264,20 @@ fn severity(f: &Finding) -> &'static str {
 /// gets skipped.
 pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     let text = std::fs::read_to_string(report)?;
-    let start = text.find(STAGE5_MARKER).ok_or_else(|| {
+    let (filled, value) = fill_stage5(&text, stage5).ok_or_else(|| {
         std::io::Error::other(format!(
-            "{} has no {STAGE5_MARKER} — already filled in?",
+            "{} has no stage 5 placeholder: stage 5 was already written, or the run did not reach it (a deterministic stage failed, or no frames were captured)",
             report.display()
         ))
     })?;
+    std::fs::write(report, filled)?;
+    Ok(value)
+}
+
+/// The report with stage 5 rendered over its placeholder, and the score —
+/// or `None` when the report has no placeholder to fill.
+fn fill_stage5(text: &str, stage5: &Stage5) -> Option<(String, u32)> {
+    let start = text.find(STAGE5_MARKER)?;
     // The placeholder paragraph the marker introduces runs to the next
     // `</p>`; everything after that is the page's own closing tags.
     let end = text[start..]
@@ -281,9 +311,9 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     } else {
         out.push_str("<table><tr><th>severity</th><th>source</th><th>design</th><th>frame</th><th>frames</th></tr>");
         for f in &stage5.findings {
-            let class = match f.severity.trim() {
-                "blocking" | "major" => "bad",
-                _ => "",
+            let class = match severity(f) {
+                "minor" => "",
+                _ => "bad",
             };
             out.push_str(&format!(
                 "<tr><td class=\"{class}\">{}</td><td class=\"note\">{}</td><td>{}</td><td>{}</td><td class=\"note\">{}</td></tr>",
@@ -314,8 +344,7 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     section("Questions — unresolved, not scored", &stage5.questions);
     section("Confirmed matching", &stage5.matches);
 
-    std::fs::write(report, format!("{}{out}{}", &text[..start], &text[end..]))?;
-    Ok(value)
+    Some((format!("{}{out}{}", &text[..start], &text[end..]), value))
 }
 
 #[cfg(test)]
@@ -345,5 +374,97 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
         let escaped = esc("expected `Vec<String>` & found `&str` --> src/x.rs");
         assert!(!escaped.contains('<') && !escaped.contains('>'));
         assert!(escaped.contains("&lt;String&gt;") && escaped.contains("&amp;"));
+    }
+
+    fn outcome(passed: bool) -> Outcome {
+        Outcome {
+            stage: "2 test",
+            passed,
+            detail: String::new(),
+        }
+    }
+
+    fn run<'a>(outcomes: &'a [Outcome], frames: Option<&'a Path>, captured: usize) -> Run<'a> {
+        Run {
+            goal: "goal",
+            focus: "launch",
+            commit: "abc1234",
+            outcomes,
+            frames,
+            captured,
+        }
+    }
+
+    fn finding(severity: &str) -> Finding {
+        Finding {
+            severity: severity.into(),
+            source: String::new(),
+            design: String::new(),
+            frame: String::new(),
+            frames: String::new(),
+        }
+    }
+
+    fn judged(findings: Vec<Finding>) -> Stage5 {
+        Stage5 {
+            iteration: 1,
+            findings,
+            matches: vec![],
+            contradictions: vec![],
+            questions: vec![],
+        }
+    }
+
+    /// A clean run with frames is the only report `stage5` can write into.
+    #[test]
+    fn a_clean_run_with_frames_leaves_stage_5_its_placeholder() {
+        let passed = [outcome(true)];
+        let page = render(&run(&passed, Some(Path::new("frames")), 72));
+        let (filled, score) = fill_stage5(&page, &judged(vec![])).expect("a placeholder");
+        assert_eq!(score, 100);
+        assert!(!filled.contains(STAGE5_MARKER), "filled once, not twice");
+    }
+
+    /// The false pass this closes: a judge's 100 written over a run whose
+    /// suite failed, or over a run that captured nothing to judge.
+    #[test]
+    fn a_failing_or_frameless_run_has_nowhere_to_write_stage_5() {
+        let failed = [outcome(true), outcome(false)];
+        let passed = [outcome(true)];
+        for page in [
+            render(&run(&failed, Some(Path::new("frames")), 72)),
+            render(&run(&passed, None, 0)),
+            render(&run(&passed, Some(Path::new("frames")), 0)),
+        ] {
+            assert!(!page.contains(STAGE5_MARKER));
+            assert!(fill_stage5(&page, &judged(vec![])).is_none());
+        }
+    }
+
+    #[test]
+    fn the_score_deducts_by_severity_and_floors_at_zero() {
+        assert_eq!(score(&[]), 100);
+        let one_of_each = [finding("blocking"), finding("major"), finding("minor")];
+        assert_eq!(score(&one_of_each), 100 - 25 - 15 - 5);
+        let five_blocking: Vec<Finding> = (0..5).map(|_| finding("blocking")).collect();
+        assert_eq!(score(&five_blocking), 0);
+    }
+
+    /// A `Minor` was once deducted but not counted. Severity is read once,
+    /// case-insensitively, and anything unrecognised is a minor.
+    #[test]
+    fn severity_is_read_the_same_way_for_the_score_and_the_counts() {
+        assert_eq!(severity(&finding(" Major ")), "major");
+        assert_eq!(severity(&finding("BLOCKING")), "blocking");
+        assert_eq!(severity(&finding("nit")), "minor");
+
+        let passed = [outcome(true)];
+        let page = render(&run(&passed, Some(Path::new("frames")), 72));
+        let (filled, score) =
+            fill_stage5(&page, &judged(vec![finding("Major"), finding("Minor")])).unwrap();
+        assert_eq!(score, 80);
+        assert!(filled.contains("(15 &times; 1 major)"), "{filled}");
+        assert!(filled.contains("(5 &times; 1 minor)"), "{filled}");
+        assert!(filled.contains("<td class=\"bad\">Major</td>"), "{filled}");
     }
 }

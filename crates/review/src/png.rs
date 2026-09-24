@@ -1,10 +1,10 @@
 //! Just enough PNG to read pixels back.
 //!
-//! The harness does not process images; it needs to *check* one — that the
-//! frame a gate is about really shows what the parser says the app drew. So
-//! this decodes 8-bit RGB/RGBA, non-interlaced, which is what `grim` writes,
-//! and refuses anything else rather than guessing. The encoder exists only
-//! for [`annotate`].
+//! The harness does not process images; it needs to *check* one — that a
+//! captured frame really shows what the parser says the app drew. So this
+//! decodes 8-bit RGB/RGBA, non-interlaced, which is what `grim` writes, and
+//! refuses anything else rather than guessing. The encoder is test-only: it
+//! makes the images the decoder's tests read back.
 
 use std::io::{Error, ErrorKind, Read, Result};
 use std::path::Path;

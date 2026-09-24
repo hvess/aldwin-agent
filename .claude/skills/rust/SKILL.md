@@ -214,7 +214,7 @@ cargo run -p aldwin-review -- tokens --write
 - Write unit tests in `#[cfg(test)]` modules
 - Use `tempfile` for filesystem tests
 - Use `assert_cmd` for CLI integration tests
-- Follow test-first development (Constitution II)
+- A bug fix lands with the test that would have caught it (quality-gate §8)
 
 ## Quality Assurance
 

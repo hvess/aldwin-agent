@@ -209,7 +209,7 @@ contradicts) and the entry says so before it goes.
 33. ~~**A command cannot write a package manager's store outside the
     workspace.**~~ **Closed 2026-09-24:** the stores (`$CARGO_HOME`,
     `$RUSTUP_HOME`, `~/.npm`, `$GOMODCACHE`) joined the incidental list —
-    the developer's call, recorded in ADR 0011 §2. ADR 0011's incidental list is the devices, the temp
+    the developer's call, recorded in ADR 0011 §1. ADR 0011's incidental list is the devices, the temp
     directories and `~/.cache`, so `cargo` fetching a new dependency into
     `~/.cargo`, `npm install`/`npx` into `~/.npm`, and `go` into `~/go` fail
     with a permission error; building with dependencies already fetched

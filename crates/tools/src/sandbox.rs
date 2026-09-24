@@ -24,7 +24,7 @@ use std::path::PathBuf;
 /// programs cannot run without them: the null and random devices, the
 /// terminal, shared memory, the temp directories, the per-user cache, and
 /// the package managers' shared stores — without those a build that fetches
-/// a new dependency fails (the developer's call, ADR 0011 §2).
+/// a new dependency fails (the developer's call, ADR 0011 §1).
 ///
 /// Kept short and readable on purpose — this list is the one place a
 /// judgement about what programs "need" enters a rule otherwise stated as

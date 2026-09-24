@@ -15,7 +15,7 @@ use ratatui::crossterm::event::{
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 
-use super::grid::{BODY_X, COMMAND_COL, MARGIN_X, MARK_COL, NUMBER_COL};
+use super::grid::{BODY_X, COMMAND_COL, GUTTER_LN, MARGIN_X, MARK_COL, NUMBER_COL, SIGN_COL};
 use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::LogEntry;
@@ -24,6 +24,7 @@ use crate::palette::Theme;
 fn app() -> App {
     App::new("claude-sonnet-5".into())
         .with_facts("gateway", Some("main"))
+        .with_commands(crate::app::tests::commands())
         .with_catalogue(
             vec![ProviderChoice {
                 id: "anthropic".into(),
@@ -222,7 +223,7 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     a.log.push(LogEntry::Work {
         items: vec![crate::log::WorkItem {
             call_id: "c".into(),
-            verb: "Read".into(),
+            verb: crate::log::Verb::Read,
             target: "src/x.rs".into(),
             fact: Some("6 lines".into()),
             failed: false,
@@ -344,8 +345,7 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     assert_eq!(buf[(option_x, opt + 1)].bg, pal.panel);
     let footer = find_row(&buf, "Waiting for you").unwrap();
     assert!(
-        row_text(&buf, footer).contains("↑↓  Choose")
-            && row_text(&buf, footer).contains("↩  Select")
+        row_text(&buf, footer).contains("⎋  Chat") && row_text(&buf, footer).contains("↩  Select")
     );
     assert!(
         !row_text(&buf, footer).contains("›"),
@@ -400,9 +400,10 @@ fn the_command_menu_lists_the_four_commands_above_the_field() {
         pal.label,
         "the caret sits on the body column"
     );
+    let footer = row_text(&buf, field + 2);
     assert!(
-        row_text(&buf, field + 2).contains("↩  Run")
-            && row_text(&buf, field + 2).contains("⎋  Close")
+        footer.contains("↩  Select") && footer.contains("⎋  Close"),
+        "the menu names its keys as every list does: {footer:?}"
     );
 }
 
@@ -486,8 +487,9 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
         Some(32 + 3),
         "the line number right-aligned in 5"
     );
-    // The field carries no placeholder, and the approve is grey.
-    let field = find_row(&buf, "Approve  ⌃↩").unwrap();
+    // The field carries no placeholder, and the approve is grey — and says
+    // in words what it waits for, so the grey is not the only cue.
+    let field = find_row(&buf, "Approve after reading 1 file  ⌃↩").unwrap();
     assert!(
         !row_text(&buf, field).contains("Ask"),
         "an empty field carries no placeholder"
@@ -738,13 +740,13 @@ fn the_review_offers_space_only_while_there_is_a_fold() {
     });
     a.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
     let footer = |a: &mut App| {
-        let buf = render(a, 160, 36);
+        let buf = render(a, 200, 36);
         row_text(&buf, find_row(&buf, "Context").unwrap())
     };
     let keys = footer(&mut a);
     assert!(
         keys.contains("Space  Show All Lines")
-            && keys.contains("Shift ↑↓  Select")
+            && keys.contains("Click, drag or Shift ↑↓  Select")
             && keys.contains("Tab  Next file"),
         "{keys:?}"
     );
@@ -755,4 +757,138 @@ fn the_review_offers_space_only_while_there_is_a_fold() {
     );
     a.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
     assert!(!footer(&mut a).contains("Space"), "every fold is open");
+}
+
+fn one_file_review(a: &mut App, after: String) {
+    a.apply_event(Event::ReviewRequested {
+        review_id: "r".into(),
+        changeset: Changeset {
+            files: vec![ChangedFile {
+                path: "src/f.rs".into(),
+                before: None,
+                after,
+            }],
+        },
+    });
+}
+
+/// Decision 3: the action's words change when it is ready, not only its
+/// colour — and a line typed in the field is counted as what `⌃↩` sends.
+#[test]
+fn the_review_action_says_what_the_key_will_do() {
+    let mut a = app();
+    one_file_review(&mut a, (1..=80).map(|i| format!("line {i}\n")).collect());
+    let buf = render(&mut a, 100, 30);
+    assert!(
+        find_row(&buf, "Approve after reading 1 file").is_some(),
+        "not read yet"
+    );
+    for c in "rename it".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let buf = render(&mut a, 100, 30);
+    let field = find_row(&buf, "Send 1 Comment  ⌃↩").expect("the typed line is a comment");
+    assert_eq!(
+        buf[(col_of(&buf, field, "Send").unwrap() as u16, field)].fg,
+        Theme::Dark.palette().accent
+    );
+}
+
+/// Decision 4: a line wider than the pane goes on onto continuation rows
+/// with a blank gutter, on the row's own ground — none of it is cut off.
+#[test]
+fn a_long_diff_line_wraps_under_a_blank_gutter() {
+    let mut a = app();
+    let long = format!("let s = \"{}\";", "x".repeat(150));
+    one_file_review(&mut a, format!("{long}\nshort\n"));
+    let buf = render(&mut a, 100, 30);
+    let pal = Theme::Dark.palette();
+    let first = find_row(&buf, "let s").unwrap();
+    let code_x = col_of(&buf, first, "let s").unwrap();
+    let text: String = (first..first + 4)
+        .map(|y| {
+            let row: String = row_text(&buf, y).chars().skip(code_x).collect();
+            row.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        text.contains(&"x".repeat(150)),
+        "every character is on screen"
+    );
+    let next = first + 1;
+    assert_ne!(buf[(code_x as u16, next)].symbol(), " ", "the code goes on");
+    assert!(
+        row_text(&buf, next)
+            .chars()
+            .skip(code_x - GUTTER_LN - SIGN_COL)
+            .take(GUTTER_LN + SIGN_COL)
+            .all(|c| c == ' '),
+        "under a blank gutter and sign"
+    );
+    assert_eq!(buf[(code_x as u16 - 1, next)].bg, pal.addrow);
+    assert!(find_row(&buf, "short").unwrap() > next);
+}
+
+/// A wrapped file is read only once its last row has been on screen whole.
+#[test]
+fn a_wrapped_file_is_read_only_when_its_last_row_is_seen() {
+    let mut a = app();
+    let lines: String = (1..=30)
+        .map(|i| format!("{i} {}\n", "y".repeat(120)))
+        .collect();
+    one_file_review(&mut a, lines);
+    render(&mut a, 100, 30);
+    assert!(!a.review().unwrap().all_read());
+    for _ in 0..10 {
+        a.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        render(&mut a, 100, 30);
+    }
+    assert!(a.review().unwrap().all_read());
+}
+
+/// M4: after "Chat about this" the question stays above the field, the
+/// footer says the turn is waiting on you, and `⎋` is named as the way
+/// back to the options.
+#[test]
+fn answering_in_words_keeps_the_question_on_screen() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.apply_event(Event::QuestionAsked {
+        call_id: "q1".into(),
+        question: Question {
+            question: "Should requests without a key be limited?".into(),
+            detail: "Right now they skip the limit.".into(),
+            options: vec!["Yes".into(), Question::CHAT_ABOUT_THIS.into()],
+        },
+    });
+    a.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 30);
+    let question = find_row(&buf, "Should requests without a key").expect("the question stays");
+    let field = find_row(&buf, "›").unwrap();
+    assert!(question < field, "above the field");
+    assert!(
+        find_row(&buf, "1  Yes").is_none(),
+        "the options are not offered while you type"
+    );
+    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
+    assert!(
+        footer.contains("Waiting for you") && footer.contains("⎋  Back"),
+        "{footer:?}"
+    );
+    assert!(!footer.contains("Working"), "{footer:?}");
+}
+
+/// m3: the comment field names `⎋` with the glyph every other footer uses.
+#[test]
+fn the_comment_field_names_escape_by_its_glyph() {
+    let mut a = app();
+    one_file_review(&mut a, "a\nb\n".into());
+    render(&mut a, 100, 30);
+    a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 30);
+    let label = find_row(&buf, "Commenting on").unwrap();
+    assert!(row_text(&buf, label).trim_end().ends_with('⎋'));
+    assert!(!row_text(&buf, label).contains("esc"));
 }

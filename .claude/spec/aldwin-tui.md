@@ -12,6 +12,44 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-24
 
+**Progress (2026-09-24, the audit's TUI and HIG findings):** Each fix
+landed with the test that would have caught it.
+
+- **Keys.** `⎋` only ever stops a turn, and once; only a second `⌃C`
+  leaves, and the notice names the key pressed. `⌃C` on the agent's
+  question stops the turn; at idle it clears a draft before it quits.
+  Closing the provider question puts the held first message back in the
+  field. After "Chat about this" the question stays above the field, the
+  footer says `Waiting for you  ↩ Send  ⎋ Back`, and `⎋` returns to the
+  options with the draft kept.
+- **The `/` menu** is aldwin-cli's command table (`slash::COMMANDS`, which
+  `/help` is drawn from too), handed in through `SessionProvider`. A
+  non-letter, or a filter nothing matches, steps the menu aside and leaves
+  `/` and what was typed in the field, so `/theme light` can be typed. A
+  pick and a typed command take one path (`App::send`).
+- **The review.** The action says in words what `⌃↩` will do — `Approve
+  after reading 2 files` until it can (baseline
+  `label3-is-below-the-hig-contrast-minimum`), `Send N Comments` counting a
+  typed line. A refused approve brings up the first unread file. A diff
+  line wider than the pane wraps under a blank gutter (baseline
+  `long-diff-lines-wrap`); the pane records the drawn row of every screen
+  row. `⎋` in the comment field keeps the words. The discard question is a
+  `List`. The `?` list names the mouse.
+- **One of each.** One editor (`draft::Draft`) for the field and a comment;
+  one tab expansion (`draft::TAB`); `log::plural` for every count; one
+  place a tool's name is read (`WorkItem::describe`, now a `Verb`, `run`
+  read as `command` per ADR 0011); "Chat about this" and the answer's
+  wording live in aldwin-core beside `Question`. Every list's footer is `↩
+  Select  ⎋ …`, and a footer drops a whole key rather than cut one.
+- **Motion.** The running `●` is steady — motion.css: "Nothing else
+  animates" — so the entry below that calls it blinking is wrong; a tick
+  redraws only while a caret is on screen.
+- **Markdown.** A list item's mark is `·`; a quote is set in with no mark
+  (`▎` is the selection's). The glyph test licenses the table's glyphs in
+  the markdown scene only — the licence had been dead code.
+- **Out of the TUI.** Project and branch come from aldwin-cli; the "Ready
+  for you to review" line is gone; test seams are behind `test-util`.
+
 **Progress (2026-09-24, a whole-app conformance pass):** The review loop was
 run over every scene rather than one change's (goal: "every screen should
 match the Aldwin Design System as amended by the ADRs"), with stage 5's

@@ -26,23 +26,100 @@ enum Intercepted {
     Quit,
 }
 
-/// What `/help` says. The `/` menu lists the four commands the developer
-/// chose (`aldwin_tui::COMMANDS`); the rest are reachable by typing them
-/// and are named here so they are not secret.
-const HELP_TEXT: &str = "Commands: /resume (pick up an earlier conversation), /model (change the model, or /model [provider/]model), \
-     /quit (leave Aldwin), /clear (start a fresh conversation). Also: /theme light|dark, /reload-config, /help.";
+/// One slash command, as the developer sees it: the name typed after the
+/// `/`, what follows it when it takes an argument, and what it does.
+pub(crate) struct SlashCommand {
+    name: &'static str,
+    argument: &'static str,
+    summary: &'static str,
+    /// Offered by the `/` menu. The rest are typed, and `/help` names them
+    /// so they are not secret.
+    in_menu: bool,
+}
+
+/// Every command `intercept` answers — the one table the `/` menu and
+/// `/help` are both drawn from. The menu offers the developer's four, in
+/// this order (`crates/review/baseline.json`,
+/// `frame-command-list-is-not-the-products`). `/exit` is `/quit` under the
+/// name it always had, and is not listed twice.
+const COMMANDS: [SlashCommand; 7] = [
+    SlashCommand {
+        name: "resume",
+        argument: "",
+        summary: "Pick up an earlier conversation",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "model",
+        argument: "",
+        summary: "Change the model",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "quit",
+        argument: "",
+        summary: "Leave Aldwin",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "clear",
+        argument: "",
+        summary: "Start a fresh conversation in this project",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "theme",
+        argument: " light or dark",
+        summary: "Change the theme",
+        in_menu: false,
+    },
+    SlashCommand {
+        name: "reload-config",
+        argument: "",
+        summary: "Read the settings files again",
+        in_menu: false,
+    },
+    SlashCommand {
+        name: "help",
+        argument: "",
+        summary: "List these commands",
+        in_menu: false,
+    },
+];
+
+/// The `/` menu's rows, for aldwin-tui.
+pub(crate) fn menu() -> Vec<aldwin_tui::CommandChoice> {
+    COMMANDS
+        .iter()
+        .filter(|c| c.in_menu)
+        .map(|c| aldwin_tui::CommandChoice {
+            name: c.name.into(),
+            summary: c.summary.into(),
+        })
+        .collect()
+}
+
+/// What `/help` says: every command, the menu's first.
+fn help_text() -> String {
+    let commands: Vec<String> = COMMANDS
+        .iter()
+        .map(|c| format!("/{}{} — {}", c.name, c.argument, c.summary.to_lowercase()))
+        .collect();
+    format!("The commands are {}.", commands.join(" · "))
+}
 
 /// What `/clear` and `/resume` say while a turn runs — see
-/// `History::turn_in_flight`.
-const TURN_IN_FLIGHT: &str = "a turn is running; cancel it with ctrl+c first";
+/// `History::turn_in_flight`. `⎋` because it is the key the footer offers
+/// for stopping.
+const TURN_IN_FLIGHT: &str = "A turn is running. Stop it with ⎋ first, then try again.";
 
-/// `/resume`'s usage line, quoted by the branches that cannot act — same
-/// "never make them go and find /help" rule as `MODEL_USAGE`.
-const RESUME_USAGE: &str = "usage: /resume <id> (or /resume on its own to pick from a list)";
+/// How to resume, quoted by the branches that cannot act — same "never
+/// make them go and find /help" rule as `MODEL_USAGE`.
+const RESUME_USAGE: &str = "Type /resume on its own to pick a conversation from a list.";
 
-/// `/model`'s own usage line, quoted by every branch that rejects an
+/// How to change the model, quoted by every branch that rejects an
 /// argument so the developer never has to go and find `/help`.
-const MODEL_USAGE: &str = "usage: /model [provider/]model";
+const MODEL_USAGE: &str = "Change it with /model provider/model.";
 
 /// Valid `/theme` argument values — kept as the single source of truth for
 /// both the accept-check and the error message's own listing, so the two
@@ -133,7 +210,7 @@ async fn intercept(
         ("help", None) => {
             let _ = events
                 .send(Event::Notice {
-                    message: HELP_TEXT.into(),
+                    message: help_text(),
                 })
                 .await;
             Intercepted::Handled
@@ -189,7 +266,7 @@ async fn intercept(
         _ => {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("There is no /{rest} command. Type / for the list."),
+                    message: format!("There is no /{rest} command. /help lists them all."),
                 })
                 .await;
             Intercepted::Handled
@@ -219,7 +296,8 @@ async fn handle_resume(
     let Some(history) = history else {
         let _ = events
             .send(Event::Notice {
-                message: "history is off for this session; there is nothing to resume".into(),
+                message: "This session is not being recorded, so there is nothing to resume."
+                    .into(),
             })
             .await;
         return None;
@@ -228,8 +306,9 @@ async fn handle_resume(
     let Some(arg) = arg.filter(|a| !a.is_empty()) else {
         let count = history.resumable().len();
         let message = match count {
-            0 => "no past sessions recorded for this project".to_string(),
-            n => format!("{n} past session(s) here — {RESUME_USAGE}"),
+            0 => "There are no earlier conversations in this project to resume.".to_string(),
+            1 => format!("There is 1 earlier conversation here. {RESUME_USAGE}"),
+            n => format!("There are {n} earlier conversations here. {RESUME_USAGE}"),
         };
         let _ = events.send(Event::Notice { message }).await;
         return None;
@@ -251,7 +330,7 @@ async fn handle_resume(
     if history.is_current(&id) {
         let _ = events
             .send(Event::Notice {
-                message: "that is the session you are in".into(),
+                message: "That is the conversation you are in.".into(),
             })
             .await;
         return None;
@@ -262,7 +341,7 @@ async fn handle_resume(
         Err(e) => {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("cannot read session {arg}: {e} ({RESUME_USAGE})"),
+                    message: format!("That conversation could not be read: {e}. {RESUME_USAGE}"),
                 })
                 .await;
             return None;
@@ -275,7 +354,7 @@ async fn handle_resume(
     if records.is_empty() {
         let _ = events
             .send(Event::Notice {
-                message: format!("session {arg} has no completed turns to resume"),
+                message: "That conversation has no finished turn to resume.".into(),
             })
             .await;
         return None;
@@ -284,7 +363,7 @@ async fn handle_resume(
     if let Err(e) = history.continue_session(&id) {
         let _ = events
             .send(Event::Notice {
-                message: format!("cannot continue session {arg}: {e}"),
+                message: format!("That conversation could not be continued: {e}."),
             })
             .await;
         return None;
@@ -296,7 +375,10 @@ async fn handle_resume(
         .count();
     let _ = events
         .send(Event::Notice {
-            message: format!("resumed session {arg} — {turns} turn(s) restored"),
+            message: match turns {
+                1 => "Resumed the conversation: 1 turn restored.".to_string(),
+                n => format!("Resumed the conversation: {n} turns restored."),
+            },
         })
         .await;
     Some(Command::Resume { records })
@@ -315,7 +397,9 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
         let current = config.global_tui().theme.unwrap_or_else(|| "dark".into());
         let _ = events
             .send(Event::Notice {
-                message: format!("current theme: {current} (usage: /theme light|dark)"),
+                message: format!(
+                    "The theme is {current}. Change it with /theme light or /theme dark."
+                ),
             })
             .await;
         return;
@@ -324,7 +408,7 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
     if !VALID_THEMES.contains(&normalized.as_str()) {
         let _ = events
             .send(Event::Notice {
-                message: format!("unknown theme {arg:?} (usage: /theme light|dark)"),
+                message: format!("There is no {arg} theme. Use /theme light or /theme dark."),
             })
             .await;
         return;
@@ -336,7 +420,7 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
         Ok(()) => {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("theme set to {normalized}"),
+                    message: format!("The theme is now {normalized}."),
                 })
                 .await;
             let _ = events.send(Event::ThemeChanged { theme: normalized }).await;
@@ -344,7 +428,7 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
         Err(e) => {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("failed to save theme: {e}"),
+                    message: format!("The theme could not be saved: {e}."),
                 })
                 .await;
         }
@@ -430,7 +514,10 @@ async fn handle_model(
     let Some(arg) = arg.filter(|a| !a.is_empty()) else {
         let message = match &current {
             Some(current) => describe(current, known),
-            None => format!("No provider is configured yet. Pick one with /model provider/model (providers: {}).", aldwin_llm::provider_ids().join(", ")),
+            None => format!(
+                "No provider is configured yet. Pick one with /model provider/model. The providers are {}.",
+                aldwin_llm::provider_ids().join(", ")
+            ),
         };
         let _ = events.send(Event::Notice { message }).await;
         return;
@@ -460,7 +547,9 @@ async fn handle_model(
         }
         None if arg.contains('/') => {
             let ids = aldwin_llm::provider_ids().join(", ");
-            let message = format!("unknown provider {head:?} (known: {ids}; {MODEL_USAGE})");
+            let message = format!(
+                "There is no provider called {head}. The providers are {ids}. {MODEL_USAGE}"
+            );
             let _ = events.send(Event::Notice { message }).await;
             return;
         }
@@ -472,7 +561,7 @@ async fn handle_model(
             },
             None => {
                 let ids = aldwin_llm::provider_ids().join(", ");
-                let message = format!("no provider is configured, so a bare model id has nowhere to go; say which provider runs it: /model provider/{arg} (providers: {ids})");
+                let message = format!("No provider is configured, so say which one runs {arg}: /model provider/{arg}. The providers are {ids}.");
                 let _ = events.send(Event::Notice { message }).await;
                 return;
             }
@@ -493,7 +582,7 @@ async fn handle_model(
         // most likely way to reach this branch, and it is what a developer
         // types when they are reaching for a list of models — so the notice
         // says where the list is rather than stopping at "already on".
-        let message = format!("already on {now} · /model with no argument opens the list");
+        let message = format!("You are already on {now}. /model on its own opens the list.");
         let _ = events.send(Event::Notice { message }).await;
         return;
     }
@@ -511,7 +600,7 @@ async fn handle_model(
     // reach must not be left on disk for the next start to fail on.
     if let Err(e) = session.switch.switch(&resolved) {
         let message = format!(
-            "cannot switch to {now}: {e} · this session is still on {}, and nothing was saved",
+            "Could not switch to {now}: {e}. You are still on {}, and nothing was saved.",
             session.model
         );
         let _ = events.send(Event::Notice { message }).await;
@@ -523,11 +612,11 @@ async fn handle_model(
         aldwin_config::Scope::Global => "the global provider.yaml",
     };
     let message = match config.set_provider(scope, next.clone()) {
-        Ok(()) => format!("now on {now} · saved to {where_}"),
+        Ok(()) => format!("Now on {now}, saved to {where_}."),
         // The swap already happened, so the session really is on the new
         // model — it is only the next start that will not be.
         Err(e) => format!(
-            "now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}",
+            "Now on {now}, but it could not be saved to {where_}: {e}. The next start will use {}.",
             current.as_ref().map_or_else(
                 || "nothing".to_string(),
                 |c| qualified(c, aldwin_llm::identify(c))
@@ -627,7 +716,7 @@ fn describe(
     current: &aldwin_config::ProviderConfig,
     known: Option<&aldwin_llm::Provider>,
 ) -> String {
-    let mut out = format!("model: {}", qualified(current, known));
+    let mut out = format!("You are on {}.", qualified(current, known));
     if let Some(p) = known {
         let others: Vec<&str> = p
             .models
@@ -636,14 +725,14 @@ fn describe(
             .filter(|id| *id != current.model)
             .collect();
         if !others.is_empty() {
-            out.push_str(&format!(" · known {} models: {}", p.id, others.join(", ")));
+            out.push_str(&format!(" Other {} models: {}.", p.id, others.join(", ")));
         }
     } else {
         // An endpoint the catalogue has never seen — say so rather than
         // silently reporting a bare model id as though it were the whole
         // answer.
         out.push_str(&format!(
-            " · at {}",
+            " It runs at {}.",
             current
                 .base_url
                 .as_deref()
@@ -651,10 +740,10 @@ fn describe(
         ));
     }
     out.push_str(&format!(
-        " · providers: {}",
+        " The providers are {}.",
         aldwin_llm::provider_ids().join(", ")
     ));
-    out.push_str(&format!(" ({MODEL_USAGE})"));
+    out.push_str(&format!(" {MODEL_USAGE}"));
     out
 }
 
@@ -663,7 +752,7 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
         Ok(()) => {
             let _ = events
                 .send(Event::Notice {
-                    message: "Config reloaded.".into(),
+                    message: "Settings reloaded.".into(),
                 })
                 .await;
             // The permissions header promises an edit to the file is picked
@@ -680,7 +769,9 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
                 .join("; ");
             let _ = events
                 .send(Event::Notice {
-                    message: format!("reload failed ({detail}); previous config retained"),
+                    message: format!(
+                        "The settings could not be reloaded, so nothing changed: {detail}."
+                    ),
                 })
                 .await;
         }
@@ -896,7 +987,7 @@ mod tests {
         );
         let notices = drain(&mut rx);
         assert!(
-            notices.iter().any(|m| m.contains("cannot read session")),
+            notices.iter().any(|m| m.contains("could not be read")),
             "{notices:?}"
         );
     }
@@ -932,7 +1023,7 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
         assert!(
-            notices.iter().any(|m| m.contains("no completed turns")),
+            notices.iter().any(|m| m.contains("no finished turn")),
             "{notices:?}"
         );
     }
@@ -953,7 +1044,9 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
         assert!(
-            notices.iter().any(|m| m.contains("no past sessions")),
+            notices
+                .iter()
+                .any(|m| m.contains("no earlier conversations")),
             "{notices:?}"
         );
     }
@@ -973,7 +1066,7 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
         assert!(
-            notices.iter().any(|m| m.contains("history is off")),
+            notices.iter().any(|m| m.contains("not being recorded")),
             "{notices:?}"
         );
     }
@@ -1084,7 +1177,9 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
         assert!(
-            notices.iter().any(|m| m.contains("the session you are in")),
+            notices
+                .iter()
+                .any(|m| m.contains("the conversation you are in")),
             "{notices:?}"
         );
     }
@@ -1118,9 +1213,20 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_the_four_menu_commands() {
-        for command in ["/resume", "/model", "/quit", "/clear"] {
-            assert!(HELP_TEXT.contains(command), "{command} missing from help");
+    fn the_menu_and_help_are_drawn_from_one_table() {
+        let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
+        assert_eq!(
+            menu,
+            ["resume", "model", "quit", "clear"],
+            "the developer's four, in order"
+        );
+        let help = help_text();
+        for command in COMMANDS {
+            assert!(
+                help.contains(&format!("/{}", command.name)),
+                "{} missing from help",
+                command.name
+            );
         }
     }
 
@@ -1316,7 +1422,7 @@ mod tests {
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => assert!(
-                message.contains("current theme: dark"),
+                message.contains("The theme is dark"),
                 "message was: {message}"
             ),
             other => panic!("expected a Notice, got {other:?}"),
@@ -1394,7 +1500,7 @@ mod tests {
             &tx,
         )
         .await;
-        assert!(notice(&mut rx).await.contains("theme set to light"));
+        assert!(notice(&mut rx).await.contains("The theme is now light"));
     }
 
     #[tokio::test]
@@ -1515,11 +1621,11 @@ mod tests {
 
         let message = notice(&mut rx).await;
         assert!(
-            message.contains("model: anthropic/claude-sonnet-5"),
+            message.contains("You are on anthropic/claude-sonnet-5"),
             "{message}"
         );
         assert!(
-            message.contains("providers: anthropic"),
+            message.contains("The providers are anthropic"),
             "the bare form has to say what it would accept: {message}"
         );
         assert!(message.contains(MODEL_USAGE), "{message}");
@@ -1580,7 +1686,7 @@ mod tests {
 
         let message = notice(&mut rx).await;
         assert!(
-            message.contains("now on anthropic/claude-opus-5"),
+            message.contains("Now on anthropic/claude-opus-5"),
             "{message}"
         );
         assert!(
@@ -2015,8 +2121,11 @@ mod tests {
         .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("unknown provider \"gogle\""), "{message}");
-        assert!(message.contains("known: anthropic"), "{message}");
+        assert!(
+            message.contains("There is no provider called gogle"),
+            "{message}"
+        );
+        assert!(message.contains("The providers are anthropic"), "{message}");
         assert_eq!(
             cfg.global_provider().unwrap().model,
             "claude-sonnet-5",
@@ -2116,7 +2225,7 @@ mod tests {
             "the session is not on it, whatever the file says: {message}"
         );
         assert!(
-            message.contains("now on anthropic/claude-sonnet-5"),
+            message.contains("Now on anthropic/claude-sonnet-5"),
             "{message}"
         );
         assert_eq!(
@@ -2150,7 +2259,7 @@ mod tests {
         .await;
         assert!(notice(&mut rx)
             .await
-            .contains("now on anthropic/claude-opus-5"));
+            .contains("Now on anthropic/claude-opus-5"));
         let _ = rx.recv().await; // ModelChanged
 
         intercept(
@@ -2163,7 +2272,7 @@ mod tests {
             &tx,
         )
         .await;
-        assert!(notice(&mut rx).await.contains("now on lumo/lumo-max"));
+        assert!(notice(&mut rx).await.contains("Now on lumo/lumo-max"));
         let _ = rx.recv().await; // ModelChanged
 
         let built = seen.lock().unwrap().clone();
@@ -2223,13 +2332,13 @@ mod tests {
         .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("model: qwen3-coder"), "{message}");
+        assert!(message.contains("You are on qwen3-coder"), "{message}");
         assert!(
             message.contains("http://localhost:8000/v1/chat/completions"),
             "{message}"
         );
         assert!(
-            !message.contains("model: lumo/"),
+            !message.contains("on lumo/"),
             "a local endpoint must not be labelled with someone else's name: {message}"
         );
     }
@@ -2252,7 +2361,7 @@ mod tests {
         )
         .await;
         assert!(
-            notice(&mut rx).await.contains("no provider is configured"),
+            notice(&mut rx).await.contains("No provider is configured"),
             "a bare model id has nowhere to go"
         );
         assert!(cfg.global_provider().is_err());
@@ -2270,7 +2379,7 @@ mod tests {
         .await;
         assert!(notice(&mut rx)
             .await
-            .contains("now on anthropic/claude-opus-5"));
+            .contains("Now on anthropic/claude-opus-5"));
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
         assert_eq!(seen.lock().unwrap().len(), 1, "the client is built on it");
     }

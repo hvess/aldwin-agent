@@ -53,6 +53,10 @@
 
 use ratatui::style::Color;
 
+use crate::tokens::{
+    GAUGE_DARK, GAUGE_LIGHT, GAUGE_SEGMENTS, MARK_COLS, MARK_DARK, MARK_LIGHT, MARK_ROWS,
+};
+
 /// The two palettes, **generated** from `.claude/design/tokens/` into
 /// [`crate::tokens`] and re-exported here so every call site keeps reading
 /// `palette::DARK`. The review loop's stage 3 regenerates the file and
@@ -118,23 +122,21 @@ pub(crate) struct Palette {
 impl Palette {
     /// The brand mark's cells for this theme, `[row][col]` of (upper half,
     /// lower half) — see `tokens::MARK_CELL`.
-    pub fn mark(
-        &self,
-    ) -> &'static [[(Color, Color); crate::tokens::MARK_COLS]; crate::tokens::MARK_ROWS] {
+    pub fn mark(&self) -> &'static [[(Color, Color); MARK_COLS]; MARK_ROWS] {
         match self.theme {
-            Theme::Dark => &crate::tokens::MARK_DARK,
-            Theme::Light => &crate::tokens::MARK_LIGHT,
+            Theme::Dark => &MARK_DARK,
+            Theme::Light => &MARK_LIGHT,
         }
     }
 
     /// The context bar's ten segments for `filled` of them lit, left to
     /// right — the filled run ramping to `fill` at its leading edge.
-    pub fn gauge(&self, filled: usize) -> &'static [Color; crate::tokens::GAUGE_SEGMENTS] {
+    pub fn gauge(&self, filled: usize) -> &'static [Color; GAUGE_SEGMENTS] {
         let table = match self.theme {
-            Theme::Dark => &crate::tokens::GAUGE_DARK,
-            Theme::Light => &crate::tokens::GAUGE_LIGHT,
+            Theme::Dark => &GAUGE_DARK,
+            Theme::Light => &GAUGE_LIGHT,
         };
-        &table[filled.min(crate::tokens::GAUGE_SEGMENTS)]
+        &table[filled.min(GAUGE_SEGMENTS)]
     }
 }
 

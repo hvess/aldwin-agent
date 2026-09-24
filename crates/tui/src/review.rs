@@ -6,25 +6,38 @@
 //! Pure state, no drawing: `ui::review` reads this and `App` drives it, so
 //! every rule here is testable without a terminal.
 
-use aldwin_core::{Changeset, ReviewComment, ReviewDecision};
+use aldwin_core::{Changeset, Question, ReviewComment, ReviewDecision};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
+use crate::draft::Draft;
+use crate::list::{List, ListOutcome, ListRow};
+use crate::log::plural;
 use crate::scroll::WHEEL_ROWS;
 
 /// Rows `PgUp` and `PgDn` scroll the diff.
 const PAGE_ROWS: usize = 10;
 
-/// Where the diff's rows were drawn last frame: the screen rect of the rows
-/// themselves (not the pane's header) and the index of the drawn row at its
-/// top. Only valid for the rows it was drawn from — anything that changes
-/// them (another file, an opened fold) drops it until the next draw.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where the diff's rows were drawn last frame. Only valid for the rows it
+/// was drawn from — anything that changes them (another file, an opened
+/// fold) drops it until the next draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Pane {
+    /// The screen cell of the first row's left edge, below the pane's
+    /// header, and the pane's width.
     pub x: u16,
     pub y: u16,
     pub width: u16,
-    pub height: u16,
+    /// The drawn row each screen row shows, top to bottom. A line wider
+    /// than the pane wraps (baseline `long-diff-lines-wrap`), so one drawn
+    /// row can take several.
+    pub lines: Vec<usize>,
+    /// The first drawn row shown.
     pub top: usize,
+    /// The last drawn row shown whole.
+    pub bottom: usize,
+    /// The largest `top` that still fills the pane — how far the diff
+    /// scrolls.
+    pub last_top: usize,
 }
 
 /// Unchanged lines kept on each side of a change; the rest fold. One, as
@@ -182,13 +195,6 @@ impl Selection {
     }
 }
 
-/// The comment being typed for a selection.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct CommentDraft {
-    pub text: String,
-    pub cursor: usize,
-}
-
 /// What one key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
@@ -215,9 +221,14 @@ pub struct Review {
     /// Where the drawing side put the diff's rows on screen last frame —
     /// what a click is measured against.
     pub(crate) pane: Option<Pane>,
-    pub comment: Option<CommentDraft>,
-    /// `⎋` with nothing selected asks before dropping the changes.
-    pub confirm_discard: bool,
+    /// The comment field is open for the selection.
+    pub(crate) commenting: bool,
+    /// What is typed into it. `⎋` closes the field and keeps this, so a
+    /// comment half-written is never lost to a key.
+    pub(crate) comment: Draft,
+    /// `⎋` with nothing selected asks before dropping the changes: the
+    /// question's list, while it is open.
+    pub(crate) confirm: Option<List>,
     /// `?` toggles the key list in the footer.
     pub keys_shown: bool,
 }
@@ -237,8 +248,9 @@ impl Review {
             dragging: false,
             scroll: 0,
             pane: None,
-            comment: None,
-            confirm_discard: false,
+            commenting: false,
+            comment: Draft::default(),
+            confirm: None,
             keys_shown: false,
         }
     }
@@ -315,13 +327,14 @@ impl Review {
         self.keep_in_view(next);
     }
 
-    /// Scrolls just far enough that drawn row `row` is in the pane.
+    /// Scrolls just far enough that drawn row `row` is in the pane, by as
+    /// many rows as the last frame showed whole.
     fn keep_in_view(&mut self, row: usize) {
-        let height = self.pane.map_or(1, |p| p.height.max(1) as usize);
+        let shown = self.pane.as_ref().map_or(1, |p| p.bottom + 1 - p.top);
         if row < self.scroll {
             self.scroll = row;
-        } else if row >= self.scroll + height {
-            self.scroll = row + 1 - height;
+        } else if row >= self.scroll + shown {
+            self.scroll = row + 1 - shown;
         }
     }
 
@@ -329,10 +342,7 @@ impl Review {
     /// Before the first draw there is no pane to measure, so the drawing
     /// side's clamp is the only one.
     fn scroll_by(&mut self, delta: isize) {
-        let rows = self.file().rows().len();
-        let last_top = self
-            .pane
-            .map_or(usize::MAX, |p| rows.saturating_sub(p.height as usize));
+        let last_top = self.pane.as_ref().map_or(usize::MAX, |p| p.last_top);
         self.scroll = self.scroll.saturating_add_signed(delta).min(last_top);
     }
 
@@ -348,7 +358,7 @@ impl Review {
     /// to the row under the pointer, a release ends it, and a press on a
     /// fold opens it. The wheel scrolls the diff wherever it is.
     pub fn handle_mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
-        if self.comment.is_some() || self.confirm_discard {
+        if self.commenting || self.confirm.is_some() {
             return;
         }
         match kind {
@@ -386,19 +396,14 @@ impl Review {
     /// `clamp`, a point above or below the pane (a drag carried past its
     /// edge) lands on the first or last row shown.
     fn row_at(&self, column: u16, row: u16, clamp: bool) -> Option<usize> {
-        let pane = self.pane?;
-        let shown = self
-            .file()
-            .rows()
-            .len()
-            .saturating_sub(pane.top)
-            .min(pane.height as usize);
+        let pane = self.pane.as_ref()?;
+        let shown = pane.lines.len();
         let inside = (pane.x..pane.x + pane.width).contains(&column)
             && (pane.y..pane.y + shown as u16).contains(&row);
         if shown == 0 || !(inside || clamp) {
             return None;
         }
-        Some(pane.top + (row.saturating_sub(pane.y) as usize).min(shown - 1))
+        Some(pane.lines[(row.saturating_sub(pane.y) as usize).min(shown - 1)])
     }
 
     /// `router.rs · 144–145` and `2 lines` — what the comment field's label
@@ -418,11 +423,7 @@ impl Review {
         } else {
             format!("{name} · {}–{}", lines.0, lines.1)
         };
-        let n = last - first + 1;
-        Some((
-            format!("{n} {}", if n == 1 { "line" } else { "lines" }),
-            where_,
-        ))
+        Some((plural(last - first + 1, "line"), where_))
     }
 
     /// The new-file lines unfolded rows `first` through `last` anchor to.
@@ -440,6 +441,34 @@ impl Review {
     /// The drawing side says the bottom of the current file was on screen.
     pub fn mark_read(&mut self) {
         self.file_mut().read = true;
+    }
+
+    /// Files not yet read to the bottom — what an approve is waiting for.
+    pub fn unread(&self) -> usize {
+        self.files.len() - self.files_read()
+    }
+
+    /// An approve refused because a file is unread brings the first such
+    /// file up, so the key does something you can see; the words on the
+    /// action say why. The file on screen stays if it is unread itself.
+    fn show_unread(&mut self) {
+        if self.file().read {
+            if let Some(i) = self.files.iter().position(|f| !f.read) {
+                self.go_to_file(i);
+            }
+        }
+    }
+
+    /// The question `⎋` asks before the changes are dropped.
+    pub fn discard_question(&self) -> Question {
+        Question {
+            question: "Discard these changes?".into(),
+            detail: "Nothing has been written. The agent is told.".into(),
+            options: vec![
+                "Keep reviewing".into(),
+                format!("Discard {}", plural(self.files.len(), "file")),
+            ],
+        }
     }
 
     /// Every pending comment, plus `general` if it is not empty, as the
@@ -475,57 +504,23 @@ impl Review {
         modifiers: KeyModifiers,
         general: &str,
     ) -> ReviewOutcome {
-        if self.confirm_discard {
-            return match code {
-                KeyCode::Char('1') | KeyCode::Esc => {
-                    self.confirm_discard = false;
+        if let Some(list) = &mut self.confirm {
+            return match list.handle_key(code, modifiers) {
+                ListOutcome::Stay => ReviewOutcome::Stay,
+                ListOutcome::Chose(1) => ReviewOutcome::Decide(ReviewDecision::Discard),
+                ListOutcome::Close | ListOutcome::Chose(_) => {
+                    self.confirm = None;
                     ReviewOutcome::Stay
                 }
-                KeyCode::Char('2') => ReviewOutcome::Decide(ReviewDecision::Discard),
-                _ => ReviewOutcome::Stay,
             };
         }
-        if let Some(draft) = &mut self.comment {
+        if self.commenting {
             match code {
-                KeyCode::Esc => self.comment = None,
-                KeyCode::Enter => {
-                    let text = draft.text.trim().to_string();
-                    if !text.is_empty() {
-                        let lines = self
-                            .selected
-                            .and_then(|s| self.line_range(s.lines().0, s.lines().1));
-                        if let Some(lines) = lines {
-                            self.file_mut()
-                                .comments
-                                .push(PendingComment { lines, text });
-                        }
-                    }
-                    self.comment = None;
-                    self.selected = None;
+                KeyCode::Esc => self.commenting = false,
+                KeyCode::Enter => self.add_comment(),
+                code => {
+                    self.comment.edit(code, modifiers);
                 }
-                KeyCode::Backspace => {
-                    if draft.cursor > 0 {
-                        draft.cursor -= 1;
-                        let at = draft
-                            .text
-                            .char_indices()
-                            .nth(draft.cursor)
-                            .map_or(draft.text.len(), |(i, _)| i);
-                        draft.text.remove(at);
-                    }
-                }
-                KeyCode::Left => draft.cursor = draft.cursor.saturating_sub(1),
-                KeyCode::Right => draft.cursor = (draft.cursor + 1).min(draft.text.chars().count()),
-                KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    let at = draft
-                        .text
-                        .char_indices()
-                        .nth(draft.cursor)
-                        .map_or(draft.text.len(), |(i, _)| i);
-                    draft.text.insert(at, c);
-                    draft.cursor += 1;
-                }
-                _ => {}
             }
             return ReviewOutcome::Stay;
         }
@@ -555,38 +550,57 @@ impl Review {
                 .go_to_file((self.current + self.files.len().max(1) - 1) % self.files.len().max(1)),
             KeyCode::Char('?') if general.is_empty() => self.keys_shown = !self.keys_shown,
             KeyCode::Enter if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(decision) = self.comments_decision(general) {
-                    return ReviewOutcome::Decide(decision);
-                }
-                if self.all_read() {
-                    return ReviewOutcome::Decide(ReviewDecision::Approve);
-                }
+                return self.act(general)
             }
             // `↩` opens a comment on a selection, sends what was typed, and
             // — with nothing selected and nothing typed — stands in for
             // `⌃↩`: a terminal without the Kitty keyboard protocol cannot
             // tell the two apart, and a review with no way to approve is a
             // review that cannot end.
-            KeyCode::Enter => {
-                if self.selected.is_some() {
-                    self.comment = Some(CommentDraft::default());
-                } else if let Some(decision) = self.comments_decision(general) {
-                    return ReviewOutcome::Decide(decision);
-                } else if self.all_read() {
-                    return ReviewOutcome::Decide(ReviewDecision::Approve);
-                }
-            }
+            KeyCode::Enter if self.selected.is_some() => self.commenting = true,
+            KeyCode::Enter => return self.act(general),
             KeyCode::Esc => {
                 if self.selected.is_some() {
                     self.selected = None;
                     self.dragging = false;
                 } else {
-                    self.confirm_discard = true;
+                    let rows = self.discard_question().options;
+                    self.confirm = Some(List::new(rows.into_iter().map(ListRow::new).collect()));
                 }
             }
             _ => {}
         }
         ReviewOutcome::Stay
+    }
+
+    /// The field's action, `⌃↩`: send the comments — what is typed in the
+    /// field counts as one — or approve once every file is read. Refused,
+    /// it brings up what is left to read.
+    fn act(&mut self, general: &str) -> ReviewOutcome {
+        if let Some(decision) = self.comments_decision(general) {
+            return ReviewOutcome::Decide(decision);
+        }
+        if self.all_read() {
+            return ReviewOutcome::Decide(ReviewDecision::Approve);
+        }
+        self.show_unread();
+        ReviewOutcome::Stay
+    }
+
+    /// `↩` in the comment field: the comment rides on the selection, and
+    /// the field closes.
+    fn add_comment(&mut self) {
+        let text = self.comment.take().trim().to_string();
+        let lines = self
+            .selected
+            .and_then(|s| self.line_range(s.lines().0, s.lines().1));
+        if let (false, Some(lines)) = (text.is_empty(), lines) {
+            self.file_mut()
+                .comments
+                .push(PendingComment { lines, text });
+        }
+        self.commenting = false;
+        self.selected = None;
     }
 
     fn go_to_file(&mut self, i: usize) {
@@ -729,8 +743,21 @@ enum Op<'a> {
     Add(&'a str),
 }
 
+/// Above this many cells the LCS table is not built: a rewrite of two
+/// large files would allocate it on the UI thread, and a rewrite that
+/// large reads as well as its old lines out and its new ones in.
+const LCS_CELLS: usize = 1 << 20;
+
 fn lcs_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
     let (n, m) = (a.len(), b.len());
+    if (n + 1).saturating_mul(m + 1) > LCS_CELLS {
+        return a
+            .iter()
+            .copied()
+            .map(Op::Del)
+            .chain(b.iter().copied().map(Op::Add))
+            .collect();
+    }
     let mut lcs = vec![vec![0usize; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
@@ -856,15 +883,19 @@ mod tests {
         );
     }
 
-    /// A pane whose rows start at screen row 10, column 30, showing from
-    /// row `top` of the file.
+    /// A 20-row pane whose rows start at screen row 10, column 30, showing
+    /// from row `top` of the file, no line of it wrapped.
     fn pane_at(r: &mut Review, top: usize) {
+        let rows = r.file().rows().len();
+        let lines: Vec<usize> = (top..rows.min(top + 20)).collect();
         r.pane = Some(Pane {
             x: 30,
             y: 10,
             width: 60,
-            height: 20,
+            bottom: lines.last().copied().unwrap_or(top),
+            lines,
             top,
+            last_top: rows.saturating_sub(20),
         });
     }
 
@@ -1109,7 +1140,7 @@ mod tests {
         );
 
         r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
-        assert!(r.comment.is_some());
+        assert!(r.commenting);
         for c in "Use config".chars() {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
@@ -1210,15 +1241,96 @@ mod tests {
         r.select(0, 0);
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
         assert_eq!(r.selection(), None);
-        assert!(!r.confirm_discard);
+        assert!(r.confirm.is_none());
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
-        assert!(r.confirm_discard);
+        assert!(r.confirm.is_some());
         r.handle_key(KeyCode::Char('1'), KeyModifiers::NONE, "");
-        assert!(!r.confirm_discard, "1 keeps reviewing");
+        assert!(r.confirm.is_none(), "1 keeps reviewing");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
         assert_eq!(
             r.handle_key(KeyCode::Char('2'), KeyModifiers::NONE, ""),
             ReviewOutcome::Decide(ReviewDecision::Discard)
         );
+    }
+
+    /// The bug: the discard question took `1`, `2` and `⎋` and nothing
+    /// else, where every other list answers the arrows and `↩`.
+    #[test]
+    fn the_discard_question_is_a_list_like_any_other() {
+        let mut r = review_of(Some("x\n"), "y\n");
+        r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
+        r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::NONE, ""),
+            ReviewOutcome::Decide(ReviewDecision::Discard)
+        );
+        let mut r = review_of(Some("x\n"), "y\n");
+        r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
+        r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
+        assert!(r.confirm.is_none(), "⎋ closes it, keeping the review");
+    }
+
+    /// The bug: `⎋` in the comment field threw away what was typed.
+    #[test]
+    fn escape_leaves_the_comment_field_and_the_words_survive() {
+        let mut r = review_of(Some("x\n"), "y\n");
+        r.select(1, 1);
+        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
+        for c in "use config".chars() {
+            r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
+        }
+        r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
+        assert!(!r.commenting);
+        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
+        assert!(r.commenting);
+        assert_eq!(r.comment.text(), "use config");
+    }
+
+    /// The bug: `⌃↩` before every file was read did nothing at all.
+    #[test]
+    fn a_refused_approve_brings_up_the_first_unread_file() {
+        let mut r = Review::open(
+            "r".into(),
+            Changeset {
+                files: ["a.rs", "b.rs", "c.rs"]
+                    .into_iter()
+                    .map(|p| ChangedFile {
+                        path: p.into(),
+                        before: None,
+                        after: "x\n".into(),
+                    })
+                    .collect(),
+            },
+        );
+        r.mark_read();
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),
+            ReviewOutcome::Stay
+        );
+        assert_eq!(r.current, 1, "the first file not yet read");
+        assert_eq!(r.unread(), 2);
+    }
+
+    /// The bug: a line typed in the review's field went out as a change
+    /// request on `⌃↩` while the action still read "Approve".
+    #[test]
+    fn a_typed_line_is_sent_as_a_comment_rather_than_approved() {
+        let mut r = review_of(Some("x\n"), "y\n");
+        r.mark_read();
+        assert!(matches!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, "rename it"),
+            ReviewOutcome::Decide(ReviewDecision::Comment { .. })
+        ));
+    }
+
+    #[test]
+    fn a_rewrite_too_large_to_match_is_its_old_lines_out_and_new_ones_in() {
+        let before = numbered(1100);
+        let after: String = (1..=1100).map(|i| format!("row {i}\n")).collect();
+        let r = review_of(Some(&before), &after);
+        let rows = r.file().rows();
+        assert!(matches!(rows[0], DiffRow::Del { .. }));
+        assert!(matches!(rows[1100], DiffRow::Add { .. }));
+        assert_eq!((r.file().added_lines, r.file().removed_lines), (1100, 1100));
     }
 }

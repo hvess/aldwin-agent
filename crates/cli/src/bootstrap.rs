@@ -123,6 +123,20 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
         .collect()
 }
 
+/// The checked-out branch of the checkout `dir` is in, read from
+/// `.git/HEAD` rather than by running git: the launch card's `Branch`
+/// fact. A detached head is its commit, short.
+fn git_branch(dir: &Path) -> Option<String> {
+    dir.ancestors().find_map(|dir| {
+        let head = std::fs::read_to_string(dir.join(".git").join("HEAD")).ok()?;
+        let head = head.trim();
+        Some(
+            head.strip_prefix("ref: refs/heads/")
+                .map_or_else(|| head.chars().take(8).collect(), str::to_string),
+        )
+    })
+}
+
 /// The context files the session carries — `CLAUDE.md` and `AGENTS.md`
 /// at the project root, whichever exist. Reading them is a read, and reads
 /// need no permission (ADR 0009 §6); the old stdin prompt for each one is
@@ -276,6 +290,12 @@ pub async fn run() -> Result<(), StartupError> {
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
     let session = aldwin_tui::SessionProvider {
+        project: cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        branch: git_branch(&cwd),
+        commands: slash::menu(),
         catalogue: catalogue_choices(),
         current_provider: effective_provider
             .as_ref()
@@ -604,5 +624,22 @@ mod tests {
             "{notice}"
         );
         assert!(notice.contains("no-such-dir"), "{notice}");
+    }
+
+    #[test]
+    fn the_branch_is_read_from_the_nearest_checkout() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = repo.path().join(".git");
+        std::fs::create_dir(&git).unwrap();
+        let nested = repo.path().join("crates/cli");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/audit-fixes\n").unwrap();
+        assert_eq!(git_branch(&nested).as_deref(), Some("audit-fixes"));
+        std::fs::write(git.join("HEAD"), "c82a5db0123456789\n").unwrap();
+        assert_eq!(
+            git_branch(repo.path()).as_deref(),
+            Some("c82a5db0"),
+            "detached, the short commit"
+        );
     }
 }

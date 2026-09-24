@@ -7,36 +7,22 @@ use aldwin_core::{
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use ratatui::text::Line;
 
+use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
-use crate::log::{LogEntry, WorkItem};
+use crate::log::{failure_sentence, plural, LogEntry, WorkItem};
+use crate::palette::Theme;
 use crate::resume::SessionChoice;
 use crate::review::{Review, ReviewOutcome as ReviewKey};
 use crate::scroll::{ScrollState, WHEEL_ROWS};
+use crate::ui::Transcript;
+use crate::version::{GIT_HASH, VERSION};
 
 /// How long a second Ctrl+C still counts as "again" for the exit escape
-/// hatch in `App::cancel_or_quit`, in `App::tick`s — `run.rs` advances that
+/// hatch in `App::interrupt`, in `App::tick`s — `run.rs` advances that
 /// counter every 120ms, so ~2 seconds.
 const DOUBLE_CTRL_C_TICKS: u64 = 16;
-
-/// The design's option row for a question the developer would rather
-/// answer in words. Appended by the `ask` tool; matched here by text.
-const CHAT_ABOUT_THIS: &str = "Chat about this";
-
-/// The four commands the `/` menu offers, in the order drawn — the
-/// developer's list (see `crates/review/baseline.json`,
-/// `frame-command-list-is-not-the-products`). Name, purpose, and what
-/// picking it submits.
-pub const COMMANDS: [(&str, &str, &str); 4] = [
-    ("resume", "Pick up an earlier conversation", "/resume"),
-    ("model", "Change the model", "/model"),
-    ("quit", "Leave Aldwin", "/exit"),
-    (
-        "clear",
-        "Start a fresh conversation in this project",
-        "/clear",
-    ),
-];
 
 /// The display halves of one provider the catalogue offers, handed in by
 /// aldwin-cli — an id, a purpose, and its models. This crate never sees an
@@ -54,6 +40,14 @@ pub struct ModelChoice {
     pub purpose: String,
     /// What the context bar divides by once this model is running.
     pub context: u32,
+}
+
+/// One row of the `/` menu, handed in by aldwin-cli, which owns the
+/// commands: the name typed after the slash and what it is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandChoice {
+    pub name: String,
+    pub summary: String,
 }
 
 /// Who asked the question on screen, which decides where the answer goes.
@@ -82,7 +76,8 @@ pub struct Asking {
     pub asker: Asker,
 }
 
-/// The `/` menu: the four commands, filtered by what is typed after the slash.
+/// The `/` menu: the commands whose name starts with what is typed after
+/// the slash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMenu {
     pub filter: String,
@@ -90,32 +85,28 @@ pub struct CommandMenu {
 }
 
 impl CommandMenu {
-    fn open() -> Self {
+    fn open(commands: &[CommandChoice]) -> Self {
         let mut menu = Self {
             filter: String::new(),
             list: List::new(Vec::new()),
         };
-        menu.refilter();
+        menu.refilter(commands);
         menu
     }
 
-    /// The commands whose name starts with the filter, in the fixed order.
-    pub fn matching(&self) -> Vec<(&'static str, &'static str, &'static str)> {
-        COMMANDS
+    fn refilter(&mut self, commands: &[CommandChoice]) {
+        let rows = commands
             .iter()
-            .copied()
-            .filter(|(name, _, _)| name.starts_with(self.filter.as_str()))
-            .collect()
-    }
-
-    fn refilter(&mut self) {
-        let rows = self
-            .matching()
-            .into_iter()
-            .map(|(name, purpose, _)| ListRow::with_detail(format!("/{name}"), purpose))
+            .filter(|c| c.name.starts_with(self.filter.as_str()))
+            .map(|c| ListRow::with_detail(format!("/{}", c.name), c.summary.clone()))
             .collect();
         let selected = self.list.selected;
         self.list = List::new(rows).opened_on(selected);
+    }
+
+    /// What is typed so far, as the field would hold it.
+    fn typed(&self) -> String {
+        format!("/{}", self.filter)
     }
 }
 
@@ -160,84 +151,61 @@ impl StatusInfo {
     }
 }
 
-/// The working directory's own name — the launch card's `Project` fact.
-pub(crate) fn project_name() -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_default()
-}
-
-/// The checked-out branch, read from `.git/HEAD` rather than by running
-/// git — this crate spawns nothing.
-pub(crate) fn git_branch() -> Option<String> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let head = dir.join(".git").join("HEAD");
-        if let Ok(text) = std::fs::read_to_string(&head) {
-            let text = text.trim();
-            return Some(
-                text.strip_prefix("ref: refs/heads/")
-                    .map_or_else(|| text.chars().take(8).collect(), str::to_string),
-            );
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 /// Application state and the pure logic that mutates it. Rendering (`ui/`)
 /// only ever reads from this; the terminal/event-loop glue (`run.rs`) only
 /// ever calls `apply_event`/`handle_key` and does no interpretation of its
 /// own — kept this way so both are unit-testable without a terminal.
 pub struct App {
-    pub log: Vec<LogEntry>,
-    pub mode: Mode,
-    pub thinking: bool,
-    pub scroll: ScrollState,
+    pub(crate) log: Vec<LogEntry>,
+    pub(crate) mode: Mode,
+    pub(crate) scroll: ScrollState,
     /// The log area's real render width, last set by `ui::draw`. Scroll
     /// navigation happens between draws with no render access of its own,
     /// so it reads this cached value.
-    pub render_width: u16,
-    pub input: String,
-    pub cursor: usize, // char index into `input`
+    pub(crate) render_width: u16,
+    /// What is typed into the field.
+    pub(crate) draft: Draft,
     /// The field's real text-column width, cached by the field's own draw
     /// exactly as `render_width` is.
-    pub composer_width: u16,
+    pub(crate) composer_width: u16,
     /// First visual row of the draft the field is showing.
-    pub composer_top: usize,
-    pub status: StatusInfo,
-    pub should_quit: bool,
+    pub(crate) composer_top: usize,
+    pub(crate) status: StatusInfo,
+    pub(crate) should_quit: bool,
     /// True from `TurnStarted` until the matching `TurnEnded`.
-    pub turn_active: bool,
+    pub(crate) turn_active: bool,
     /// True from a submitted message until the turn it asks for either
     /// starts or is answered without one ever starting (a locally-handled
-    /// slash command). Only `cancel_or_quit` reads it.
-    pub awaiting_turn: bool,
-    /// The next submission answers this `ask` call in words — the developer
-    /// chose "Chat about this".
-    pub answering: Option<String>,
+    /// slash command).
+    pub(crate) awaiting_turn: bool,
+    /// A stop has been asked for and the turn has not ended yet — a second
+    /// `⎋` asks nothing more.
+    stopping: bool,
+    /// The agent's question the next submission answers in words — the
+    /// developer chose "Chat about this". Kept whole, so `⎋` can go back
+    /// to its options.
+    pub(crate) answering: Option<Asking>,
     /// Whether the work disclosures of the current turn are open. Space
     /// toggles it (`Space  Hide Details`).
-    pub details_open: bool,
+    pub(crate) details_open: bool,
     /// Where the current (or last) turn begins in `log`: the message that
     /// opened it. Not simply the last `UserMessage` — an answer given
     /// through "Chat about this" is one too, and it lands mid-turn.
     turn_start: usize,
-    last_cancel_tick: Option<u64>,
-    pub tick: u64,
+    last_ctrl_c: Option<u64>,
+    pub(crate) tick: u64,
     /// Populated on `ToolUseRequested` (the one event that carries the
     /// tool's name and input), consumed on `ToolDispatched`.
     pending_calls: HashMap<String, (String, serde_json::Value)>,
     /// Commands `handle_key`/`apply_event` want sent — drained by the event
     /// loop after each call.
-    pub outbox: Vec<Command>,
-    pub catalogue: Vec<ProviderChoice>,
-    pub current_provider: Option<String>,
-    pub sessions: Vec<SessionChoice>,
-    pub theme: crate::palette::Theme,
-    transcript: crate::ui::Transcript,
+    pub(crate) outbox: Vec<Command>,
+    catalogue: Vec<ProviderChoice>,
+    current_provider: Option<String>,
+    sessions: Vec<SessionChoice>,
+    commands: Vec<CommandChoice>,
+    pub(crate) theme: Theme,
+    transcript: Transcript,
 }
 
 impl App {
@@ -245,42 +213,48 @@ impl App {
         Self {
             log: Vec::new(),
             mode: Mode::Conversation,
-            thinking: false,
             scroll: ScrollState::default(),
             render_width: 80,
-            input: String::new(),
-            cursor: 0,
+            draft: Draft::default(),
             composer_width: 74,
             composer_top: 0,
             status: StatusInfo {
                 model_name,
-                version: crate::version::VERSION.to_string(),
-                commit: crate::version::GIT_HASH.to_string(),
-                project: project_name(),
-                branch: git_branch(),
+                version: VERSION.to_string(),
+                commit: GIT_HASH.to_string(),
+                project: String::new(),
+                branch: None,
                 context_window: None,
                 context_used: None,
             },
             should_quit: false,
             turn_active: false,
             awaiting_turn: false,
+            stopping: false,
             answering: None,
             details_open: false,
             turn_start: 0,
-            last_cancel_tick: None,
+            last_ctrl_c: None,
             tick: 0,
             pending_calls: HashMap::new(),
             outbox: Vec::new(),
             catalogue: Vec::new(),
             current_provider: None,
             sessions: Vec::new(),
-            theme: crate::palette::Theme::default(),
-            transcript: crate::ui::Transcript::default(),
+            commands: Vec::new(),
+            theme: Theme::default(),
+            transcript: Transcript::default(),
         }
     }
 
     pub fn with_sessions(mut self, sessions: Vec<SessionChoice>) -> Self {
         self.sessions = sessions;
+        self
+    }
+
+    /// The `/` menu's rows, in the order drawn.
+    pub fn with_commands(mut self, commands: Vec<CommandChoice>) -> Self {
+        self.commands = commands;
         self
     }
 
@@ -298,13 +272,14 @@ impl App {
         self
     }
 
-    pub fn with_theme(mut self, theme: crate::palette::Theme) -> Self {
+    pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
-    /// Test and preview seams for facts a real session reads from the
-    /// machine.
+    /// Where the session runs: the project's name and its git branch,
+    /// which the launch card states. Read by aldwin-cli — this crate reads
+    /// no files.
     pub fn with_facts(mut self, project: &str, branch: Option<&str>) -> Self {
         self.status.project = project.into();
         self.status.branch = branch.map(str::to_string);
@@ -319,25 +294,23 @@ impl App {
         p.models.iter().find(|m| m.id == model).map(|m| m.context)
     }
 
-    pub fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
     }
 
-    /// Whether anything on screen reads `tick` — the running dot, and the
-    /// caret, which blinks whenever a field is drawn (`--caret-period`).
+    /// Whether anything on screen reads `tick`: the caret, which blinks
+    /// wherever a field is drawn (`--caret-period`). Nothing else animates —
+    /// the running `●` is steady (motion.css: "Nothing else animates").
     /// ratatui diffs cells, so a tick that moves nothing costs a draw and
     /// no bytes.
     pub(crate) fn is_animating(&self) -> bool {
-        self.thinking
-            || self.turn_active
-            || self.awaiting_turn
-            || matches!(
-                self.mode,
-                Mode::Conversation | Mode::Review(_) | Mode::Commands(_)
-            )
+        matches!(
+            self.mode,
+            Mode::Conversation | Mode::Review(_) | Mode::Commands(_)
+        )
     }
 
-    pub fn review(&self) -> Option<&Review> {
+    pub(crate) fn review(&self) -> Option<&Review> {
         match &self.mode {
             Mode::Review(r) => Some(r),
             _ => None,
@@ -351,16 +324,13 @@ impl App {
         }
     }
 
-    /// The open review, for the snapshot harness to seed a state the keys
-    /// alone cannot reach in a fixed number of presses.
-    #[doc(hidden)]
-    pub fn review_for_tests(&mut self) -> Option<&mut Review> {
-        self.review_mut()
-    }
-
     /// True while something other than the field takes keys.
     fn band_is_held(&self) -> bool {
         !matches!(self.mode, Mode::Conversation)
+    }
+
+    fn busy(&self) -> bool {
+        self.turn_active || self.awaiting_turn
     }
 
     /// The current turn's entries, or the last turn's while idle.
@@ -397,9 +367,9 @@ impl App {
         self.turn_start = 0;
         self.log.clear();
         self.scroll = ScrollState::default();
-        self.thinking = false;
         self.turn_active = false;
         self.awaiting_turn = false;
+        self.stopping = false;
         self.details_open = false;
     }
 
@@ -409,7 +379,7 @@ impl App {
         self.scroll.on_content_grew(total);
     }
 
-    pub fn total_lines(&mut self) -> usize {
+    pub(crate) fn total_lines(&mut self) -> usize {
         self.sync_transcript();
         self.transcript.len()
     }
@@ -419,7 +389,7 @@ impl App {
         self.transcript.rebuilt()
     }
 
-    pub(crate) fn transcript_view(&mut self, height: usize) -> Vec<ratatui::text::Line<'static>> {
+    pub(crate) fn transcript_view(&mut self, height: usize) -> Vec<Line<'static>> {
         self.sync_transcript();
         let total = self.transcript.len();
         self.scroll.set_viewport_height(height, total);
@@ -440,8 +410,10 @@ impl App {
         }
     }
 
-    fn record_call(&mut self, call_id: String, name: String, input: serde_json::Value) {
-        let (verb, target) = WorkItem::describe(&name, &input);
+    fn record_call(&mut self, call_id: String, name: &str, input: &serde_json::Value) {
+        let Some((verb, target)) = WorkItem::describe(name, input) else {
+            return;
+        };
         let item = WorkItem {
             call_id,
             verb,
@@ -449,11 +421,6 @@ impl App {
             fact: None,
             failed: false,
         };
-        // `plan` and `ask` are not work the disclosure lists: the plan is
-        // drawn as itself, and a question is its own row.
-        if name == "plan" || name == "ask" {
-            return;
-        }
         let open = self.details_open;
         match self.open_work() {
             Some(items) => items.push(item),
@@ -470,7 +437,7 @@ impl App {
             if let LogEntry::Work { items, .. } = entry {
                 if let Some(item) = items.iter_mut().find(|i| i.call_id == call_id) {
                     item.failed = is_error;
-                    item.fact = Some(WorkItem::fact_for(&item.verb, content, is_error));
+                    item.fact = Some(item.verb.fact(content, is_error));
                     return;
                 }
             }
@@ -484,12 +451,7 @@ impl App {
             .rev()
             .find(|e| matches!(e, LogEntry::Question { answer: None, .. }))
         {
-            *answer = Some(
-                content
-                    .trim_start_matches("The developer chose: ")
-                    .trim_start_matches("The developer said: ")
-                    .to_string(),
-            );
+            *answer = Some(Answer::words_of(content).to_string());
         }
     }
 
@@ -505,7 +467,7 @@ impl App {
                     self.log.push(LogEntry::AssistantText { text });
                 }
             }
-            LogRecord::ToolUse { call, .. } => self.record_call(call.id, call.name, call.input),
+            LogRecord::ToolUse { call, .. } => self.record_call(call.id, &call.name, &call.input),
             LogRecord::ToolResult { result, .. } => {
                 self.finish_call(&result.call_id, &result.content, result.is_error)
             }
@@ -540,9 +502,8 @@ impl App {
             TurnEndReason::Error(message) => {
                 // A sentence you can act on; the error itself, a provider's
                 // own body as often as not, is the detail (ADR 0009 §5).
-                let sentence = crate::log::failure_sentence(&message).to_string();
                 self.push(LogEntry::Failure {
-                    message: sentence,
+                    message: failure_sentence(&message).to_string(),
                     detail: Some(message),
                     open: false,
                 });
@@ -557,6 +518,7 @@ impl App {
                 self.mark_turn_started();
                 self.turn_active = true;
                 self.awaiting_turn = false;
+                self.stopping = false;
                 self.details_open = false;
             }
             Event::TextDelta { text, .. } => {
@@ -566,20 +528,21 @@ impl App {
                     self.push(LogEntry::AssistantText { text });
                 }
             }
-            Event::ThinkingStart { .. } | Event::ThinkingDelta { .. } => self.thinking = true,
-            Event::ThinkingEnd { .. } => self.thinking = false,
+            Event::ThinkingStart { .. }
+            | Event::ThinkingDelta { .. }
+            | Event::ThinkingEnd { .. } => {}
             Event::ToolUseRequested { call, .. } => {
                 self.pending_calls.insert(call.id, (call.name, call.input));
             }
             Event::ToolDispatched { call_id, .. } => {
                 if let Some((name, input)) = self.pending_calls.remove(&call_id) {
-                    self.record_call(call_id, name, input);
+                    self.record_call(call_id, &name, &input);
                 }
             }
             Event::ToolCompleted { result, .. } => {
                 // A call refused before dispatch never got `ToolDispatched`.
                 if let Some((name, input)) = self.pending_calls.remove(&result.call_id) {
-                    self.record_call(result.call_id.clone(), name, input);
+                    self.record_call(result.call_id.clone(), &name, &input);
                 }
                 self.finish_call(&result.call_id, &result.content, result.is_error);
             }
@@ -595,7 +558,13 @@ impl App {
                 self.pending_calls.clear();
                 self.turn_active = false;
                 self.awaiting_turn = false;
-                self.thinking = false;
+                self.stopping = false;
+                // A question the turn was waiting on is gone with it.
+                self.answering = None;
+                if matches!(&self.mode, Mode::Question(a) if matches!(a.asker, Asker::Agent { .. }))
+                {
+                    self.mode = Mode::Conversation;
+                }
                 self.push_turn_end(reason);
             }
             // The developer's review comments, echoed the way a typed
@@ -610,11 +579,7 @@ impl App {
                     question: question.question.clone(),
                     answer: None,
                 });
-                let rows = question
-                    .options
-                    .iter()
-                    .map(|o| ListRow::new(o.clone()))
-                    .collect();
+                let rows = question.options.iter().cloned().map(ListRow::new).collect();
                 self.mode = Mode::Question(Asking {
                     question,
                     list: List::new(rows),
@@ -635,9 +600,6 @@ impl App {
                     });
                     return;
                 }
-                self.push(LogEntry::AssistantText {
-                    text: format!("Ready for you to review: {}.", review_title(&changeset)),
-                });
                 self.mode = Mode::Review(Review::open(review_id, changeset));
             }
             Event::ReviewClosed { outcome } => {
@@ -664,7 +626,7 @@ impl App {
             }
             Event::ThemeChanged { theme } => {
                 self.awaiting_turn = false;
-                self.theme = crate::palette::Theme::from_config(Some(&theme));
+                self.theme = Theme::from_config(Some(&theme));
             }
             Event::ModelChanged {
                 provider,
@@ -708,35 +670,32 @@ impl App {
     fn handle_conversation_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Enter, m) if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-                self.insert_char('\n')
+                self.draft.insert('\n')
             }
             (KeyCode::Enter, _) => self.submit(),
-            (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.insert_char('\n'),
-            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.cancel_or_quit(),
-            // `⎋  Stop` while working; nothing otherwise.
-            (KeyCode::Esc, _) if self.turn_active || self.awaiting_turn => self.cancel_or_quit(),
+            (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.draft.insert('\n'),
+            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.interrupt(),
+            // Answering in words: `⎋` goes back to the options, the draft
+            // kept. Otherwise `⎋  Stop` while working, and nothing idle.
+            (KeyCode::Esc, _) => {
+                if let Some(asking) = self.answering.take() {
+                    self.mode = Mode::Question(asking);
+                } else if self.busy() {
+                    self.stop("Stopping.");
+                }
+            }
             // `/` into an empty field opens the menu; anywhere else it types.
-            (KeyCode::Char('/'), _) if self.input.is_empty() => {
-                self.mode = Mode::Commands(CommandMenu::open())
+            (KeyCode::Char('/'), _) if self.draft.is_empty() => {
+                self.mode = Mode::Commands(CommandMenu::open(&self.commands))
             }
             // `Space  Hide Details` — on an empty field only; otherwise it
             // is a space.
-            (KeyCode::Char(' '), _) if self.input.is_empty() && self.has_work() => {
+            (KeyCode::Char(' '), _) if self.draft.is_empty() && self.has_work() => {
                 self.toggle_details()
             }
-            (KeyCode::Backspace, _) => self.backspace(),
-            (KeyCode::Delete, _) => self.delete_forward(),
-            (KeyCode::Left, _) => self.cursor = self.cursor.saturating_sub(1),
-            (KeyCode::Right, _) => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
-            (KeyCode::Home, _) => {
-                self.cursor = crate::draft::source_line(&self.input, self.cursor).0
-            }
-            (KeyCode::End, _) if self.input.is_empty() => {
+            (KeyCode::End, _) if self.draft.is_empty() => {
                 let total = self.total_lines();
                 self.scroll.jump_to_bottom(total);
-            }
-            (KeyCode::End, _) => {
-                self.cursor = crate::draft::source_line(&self.input, self.cursor).1
             }
             (KeyCode::PageUp, _) => self.scroll.page_up(),
             (KeyCode::PageDown, _) => {
@@ -754,25 +713,15 @@ impl App {
                     self.scroll.line_down(total);
                 }
             }
-            (KeyCode::Char(_), m)
-                if m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) => {}
-            (KeyCode::Char(c), _) => self.insert_char(c),
-            _ => {}
+            (code, modifiers) => {
+                self.draft.edit(code, modifiers);
+            }
         }
     }
 
     /// Whether the current turn has any work to show or hide.
     fn has_work(&self) -> bool {
-        self.this_turn().iter().any(|e| {
-            matches!(
-                e,
-                LogEntry::Work { .. }
-                    | LogEntry::Failure {
-                        detail: Some(_),
-                        ..
-                    }
-            )
-        })
+        self.this_turn().iter().any(LogEntry::has_details)
     }
 
     fn toggle_details(&mut self) {
@@ -791,26 +740,37 @@ impl App {
         }
     }
 
+    /// The `/` menu. Letters filter it and a digit picks a row, as in every
+    /// other list. Anything else typed — a space before an argument, the
+    /// `-` of `/reload-config` — or a filter nothing matches means the
+    /// command is not one the menu offers, so the menu steps aside and
+    /// what was typed goes on in the field.
     fn handle_commands_key(&mut self, key: KeyEvent) {
         let Mode::Commands(menu) = &mut self.mode else {
             return;
         };
+        let typing = !key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            // Letters filter by name; a digit picks the row, as in every
-            // other list.
-            KeyCode::Char(c)
-                if !key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() =>
-            {
+            KeyCode::Char(c) if typing && c.is_ascii_alphabetic() => {
                 menu.filter.push(c.to_ascii_lowercase());
-                menu.refilter();
+                menu.refilter(&self.commands);
+                if menu.list.rows.is_empty() {
+                    let typed = menu.typed();
+                    self.leave_menu_typing(typed);
+                }
+                return;
+            }
+            KeyCode::Char(c) if typing && !c.is_ascii_digit() => {
+                let typed = format!("{}{c}", menu.typed());
+                self.leave_menu_typing(typed);
                 return;
             }
             KeyCode::Backspace => {
                 if menu.filter.pop().is_none() {
                     self.mode = Mode::Conversation;
-                    return;
+                } else {
+                    menu.refilter(&self.commands);
                 }
-                menu.refilter();
                 return;
             }
             _ => {}
@@ -819,66 +779,78 @@ impl App {
             ListOutcome::Stay => {}
             ListOutcome::Close => self.mode = Mode::Conversation,
             ListOutcome::Chose(i) => {
-                let Some((name, _, submits)) = menu.matching().get(i).copied() else {
-                    return;
-                };
+                let command = menu.list.rows[i].label.clone();
                 self.mode = Mode::Conversation;
-                match name {
-                    "resume" if !self.sessions.is_empty() => self.open_session_question(),
-                    "model" if !self.catalogue.is_empty() => self.open_provider_question(None),
-                    _ => self.submit_text(submits.to_string()),
-                }
+                self.send(command);
             }
         }
     }
 
+    fn leave_menu_typing(&mut self, typed: String) {
+        self.mode = Mode::Conversation;
+        self.draft.set(typed);
+    }
+
     fn handle_question_key(&mut self, key: KeyEvent) {
+        // `⌃C` interrupts the turn the agent's question is part of, as it
+        // does everywhere else a turn runs.
+        let agent =
+            matches!(&self.mode, Mode::Question(a) if matches!(a.asker, Asker::Agent { .. }));
+        if agent && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.interrupt();
+            return;
+        }
         let Mode::Question(asking) = &mut self.mode else {
             return;
         };
         let outcome = asking.list.handle_key(key.code, key.modifiers);
-        let asking = asking.clone();
+        let Mode::Question(asking) = std::mem::replace(&mut self.mode, Mode::Conversation) else {
+            return;
+        };
         match outcome {
-            ListOutcome::Stay => {}
-            // A question from the agent cannot be dismissed — the tool is
-            // waiting — so `⎋` is "Chat about this".
-            ListOutcome::Close => match asking.asker {
-                Asker::Agent { call_id } => self.chat_about(call_id),
-                _ => self.mode = Mode::Conversation,
-            },
+            ListOutcome::Stay => self.mode = Mode::Question(asking),
+            ListOutcome::Close => self.close_question(asking),
             ListOutcome::Chose(i) => self.answer(asking, i),
         }
     }
 
-    fn chat_about(&mut self, call_id: String) {
-        self.answering = Some(call_id);
-        self.mode = Mode::Conversation;
+    /// `⎋` on a question. The agent's cannot be dismissed — the tool is
+    /// waiting — so it is "Chat about this". Any other puts back the
+    /// message it was holding, so closing it loses nothing.
+    fn close_question(&mut self, asking: Asking) {
+        match asking.asker {
+            Asker::Agent { .. } => self.answering = Some(asking),
+            Asker::Provider { then } | Asker::Model { then, .. } => {
+                if let Some(text) = then {
+                    self.draft.set(text);
+                }
+            }
+            Asker::Session => {}
+        }
     }
 
     fn answer(&mut self, asking: Asking, index: usize) {
-        let chosen = asking
-            .question
-            .options
-            .get(index)
-            .cloned()
-            .unwrap_or_default();
-        self.mode = Mode::Conversation;
         match asking.asker {
-            Asker::Agent { call_id } => {
-                if chosen == CHAT_ABOUT_THIS {
-                    self.chat_about(call_id);
+            Asker::Agent { ref call_id } => {
+                let chat = asking
+                    .question
+                    .options
+                    .get(index)
+                    .is_some_and(|o| Question::is_chat_about_this(o));
+                if chat {
+                    self.answering = Some(asking);
                 } else {
                     self.outbox.push(Command::Answer {
-                        call_id,
+                        call_id: call_id.clone(),
                         answer: Answer::Chose { index },
                     });
                 }
             }
             Asker::Provider { then } => {
-                let Some(provider) = self.catalogue.get(index).cloned() else {
-                    return;
-                };
-                self.open_model_question(provider, then);
+                if let Some(provider) = self.catalogue.get(index).cloned() {
+                    self.open_model_question(provider, then);
+                }
             }
             Asker::Model { provider, then } => {
                 let model = self
@@ -959,12 +931,7 @@ impl App {
             .map(|s| {
                 ListRow::with_detail(
                     s.title.clone(),
-                    format!(
-                        "{} · {} {}",
-                        s.when,
-                        s.turns,
-                        if s.turns == 1 { "turn" } else { "turns" }
-                    ),
+                    format!("{} · {}", s.when, plural(s.turns, "turn")),
                 )
             })
             .collect();
@@ -981,35 +948,37 @@ impl App {
     }
 
     fn handle_review_key(&mut self, key: KeyEvent) {
-        // Ctrl+C in a review cancels the turn (which cancels the review).
+        // Ctrl+C in a review interrupts the turn (which cancels the review).
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.cancel_or_quit();
+            self.interrupt();
             return;
         }
-        let general = self.input.clone();
+        let general = self.draft.text().to_string();
+        let typing = self
+            .review()
+            .is_some_and(|r| !r.commenting && r.confirm.is_none());
+        // Text keys go to the review's own field unless a comment draft has
+        // them; everything else is the review's. Space and `?` are keys of
+        // their own until something is typed.
+        let is_text = match key.code {
+            KeyCode::Char(' ' | '?') => !general.is_empty(),
+            KeyCode::Char(_) => !key.modifiers.contains(KeyModifiers::CONTROL),
+            KeyCode::Backspace => !general.is_empty(),
+            _ => false,
+        };
+        if typing && is_text {
+            self.draft.edit(key.code, key.modifiers);
+            return;
+        }
         let Some(review) = self.review_mut() else {
             return;
         };
-        let typing = review.comment.is_none() && !review.confirm_discard;
-        // Text keys go to the review's own field unless a comment draft has
-        // them; everything else is the review's.
-        let is_text = matches!(key.code, KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && c != ' ' && c != '?')
-            || (matches!(key.code, KeyCode::Char(' ') | KeyCode::Char('?')) && !general.is_empty());
-        if typing && (is_text || (key.code == KeyCode::Backspace && !general.is_empty())) {
-            match key.code {
-                KeyCode::Backspace => self.backspace(),
-                KeyCode::Char(c) => self.insert_char(c),
-                _ => {}
-            }
-            return;
-        }
         match review.handle_key(key.code, key.modifiers, &general) {
             ReviewKey::Stay => {}
             ReviewKey::Decide(decision) => {
                 let review_id = review.review_id.clone();
                 if matches!(decision, ReviewDecision::Comment { .. }) {
-                    self.input.clear();
-                    self.cursor = 0;
+                    self.draft.take();
                 }
                 self.outbox.push(Command::ReviewDecision {
                     review_id,
@@ -1054,88 +1023,60 @@ impl App {
         if self.band_is_held() {
             return;
         }
-        self.insert_str(&crate::draft::sanitize(text));
+        self.draft.insert_str(&draft::sanitize(text));
     }
 
     fn move_cursor_vertical(&mut self, delta: isize) -> bool {
-        let layout = crate::draft::Layout::new(&self.input, self.composer_width as usize);
-        match layout.step_row(self.cursor, delta) {
+        let layout = draft::Layout::new(self.draft.text(), self.composer_width as usize);
+        match layout.step_row(self.draft.cursor(), delta) {
             Some(cursor) => {
-                self.cursor = cursor;
+                self.draft.move_to(cursor);
                 true
             }
             None => false,
         }
     }
 
-    fn insert_char(&mut self, c: char) {
-        let byte_idx = self.byte_at(self.cursor);
-        self.input.insert(byte_idx, c);
-        self.cursor += 1;
-    }
-
-    fn insert_str(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let byte_idx = self.byte_at(self.cursor);
-        self.input.insert_str(byte_idx, text);
-        self.cursor += text.chars().count();
-    }
-
-    fn byte_at(&self, index: usize) -> usize {
-        self.input
-            .char_indices()
-            .nth(index)
-            .map_or(self.input.len(), |(i, _)| i)
-    }
-
-    fn backspace(&mut self) {
-        let cursor = self.cursor.min(self.input.chars().count());
-        if cursor == 0 {
-            return;
-        }
-        self.cursor = cursor - 1;
-        let byte_idx = self.byte_at(self.cursor);
-        self.input.remove(byte_idx);
-    }
-
-    fn delete_forward(&mut self) {
-        if let Some((byte_idx, _)) = self.input.char_indices().nth(self.cursor) {
-            self.input.remove(byte_idx);
-        }
-    }
-
+    /// `↩` in the field.
     fn submit(&mut self) {
-        if self.input.trim().is_empty() {
+        if self.draft.text().trim().is_empty() {
             return;
         }
-        let text = std::mem::take(&mut self.input);
-        self.cursor = 0;
+        let text = self.draft.take();
+        self.send(text);
+    }
+
+    /// A line sent from the field or picked from the `/` menu — one path,
+    /// so a command reads the same however it was reached.
+    fn send(&mut self, text: String) {
         // "Chat about this": what was typed answers the question.
-        if let Some(call_id) = self.answering.take() {
-            self.push(LogEntry::UserMessage { text: text.clone() });
-            self.outbox.push(Command::Answer {
-                call_id,
-                answer: Answer::Said { text },
-            });
+        if let Some(asking) = self.answering.take() {
+            if let Asker::Agent { call_id } = asking.asker {
+                self.push(LogEntry::UserMessage { text: text.clone() });
+                self.outbox.push(Command::Answer {
+                    call_id,
+                    answer: Answer::Said { text },
+                });
+            }
             return;
         }
+        let command = text.trim();
         // No model yet: the first message is held while the two questions
         // are answered, then sent.
         if self.status.model_name.is_empty()
             && !self.catalogue.is_empty()
-            && !text.trim_start().starts_with('/')
+            && !command.starts_with('/')
         {
             self.open_provider_question(Some(text));
             return;
         }
-        let trimmed = text.trim();
-        if trimmed == "/resume" && !self.sessions.is_empty() {
+        // Bare `/resume` and `/model` are asked here, as a list; with
+        // nothing to list, the interceptor answers them.
+        if command == "/resume" && !self.sessions.is_empty() {
             self.open_session_question();
             return;
         }
-        if trimmed == "/model" && !self.catalogue.is_empty() {
+        if command == "/model" && !self.catalogue.is_empty() {
             self.open_provider_question(None);
             return;
         }
@@ -1149,35 +1090,58 @@ impl App {
         self.outbox.push(Command::Submit { text });
     }
 
-    /// Ctrl+C: cancel the running turn if there is one, otherwise exit. A
-    /// second Ctrl+C within `DOUBLE_CTRL_C_TICKS` always exits.
-    fn cancel_or_quit(&mut self) {
-        let busy = self.turn_active || self.awaiting_turn;
-        let repeat = self
-            .last_cancel_tick
-            .is_some_and(|t| self.tick.saturating_sub(t) <= DOUBLE_CTRL_C_TICKS);
-        if busy && !repeat {
-            self.last_cancel_tick = Some(self.tick);
+    /// Asks the running turn to stop, once, and says so.
+    fn stop(&mut self, notice: &str) {
+        if !self.stopping {
+            self.stopping = true;
             self.outbox.push(Command::Cancel);
-            self.push(LogEntry::Notice {
-                message: "Stopping. Press ⌃C again to leave Aldwin.".into(),
-            });
+        }
+        self.push(LogEntry::Notice {
+            message: notice.into(),
+        });
+    }
+
+    /// `⌃C`, as a terminal has it: stop what is running, or clear what is
+    /// typed, or — with neither, or pressed again within
+    /// `DOUBLE_CTRL_C_TICKS` — leave.
+    fn interrupt(&mut self) {
+        let repeat = self
+            .last_ctrl_c
+            .is_some_and(|t| self.tick.saturating_sub(t) <= DOUBLE_CTRL_C_TICKS);
+        self.last_ctrl_c = Some(self.tick);
+        if repeat {
+            self.should_quit = true;
+        } else if self.busy() {
+            self.stop("Stopping. Press ⌃C again to leave Aldwin.");
+        } else if !self.draft.is_empty() {
+            self.draft.take();
         } else {
             self.should_quit = true;
         }
     }
 }
 
-/// `rate limiting for the gateway` — the review's title is the first line
-/// of the conversation's last request, lowercased, or the files when
-/// there is none.
-pub(crate) fn review_title(changeset: &aldwin_core::Changeset) -> String {
-    let n = changeset.files.len();
-    format!("{n} {}", if n == 1 { "file" } else { "files" })
+/// The seams `tests/render_snapshot.rs` and `examples/preview.rs` seed a
+/// scene through — states a real session reaches only after a provider
+/// has streamed a turn.
+#[cfg(feature = "test-util")]
+impl App {
+    /// Appends an entry as the live path would have.
+    pub fn seed(&mut self, entry: LogEntry) {
+        self.push(entry);
+    }
+
+    pub fn status_mut(&mut self) -> &mut StatusInfo {
+        &mut self.status
+    }
+
+    pub fn review_for_tests(&mut self) -> Option<&mut Review> {
+        self.review_mut()
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use aldwin_core::{
         CacheStats, ChangedFile, Changeset, StepId, StepOutcome, StopReason, ToolCall, ToolResult,
@@ -1185,8 +1149,28 @@ mod tests {
     };
     use ratatui::crossterm::event::KeyEventState;
 
+    use crate::log::Verb;
+
+    const CHAT_ABOUT_THIS: &str = Question::CHAT_ABOUT_THIS;
+
+    /// The four the menu offers, as aldwin-cli hands them in.
+    pub(crate) fn commands() -> Vec<CommandChoice> {
+        [
+            ("resume", "Pick up an earlier conversation"),
+            ("model", "Change the model"),
+            ("quit", "Leave Aldwin"),
+            ("clear", "Start a fresh conversation in this project"),
+        ]
+        .into_iter()
+        .map(|(name, summary)| CommandChoice {
+            name: name.into(),
+            summary: summary.into(),
+        })
+        .collect()
+    }
+
     fn app() -> App {
-        App::new("claude-sonnet-5".into())
+        App::new("claude-sonnet-5".into()).with_commands(commands())
     }
 
     fn press(code: KeyCode) -> KeyEvent {
@@ -1256,9 +1240,8 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "a/b");
         assert!(matches!(a.mode, Mode::Conversation));
-        assert_eq!(a.input, "a/b");
-        a.input.clear();
-        a.cursor = 0;
+        assert_eq!(a.draft.text(), "a/b");
+        a.draft.take();
         a.handle_key(press(KeyCode::Char('/')));
         let Mode::Commands(menu) = &a.mode else {
             panic!("the menu opens")
@@ -1275,8 +1258,8 @@ mod tests {
         let Mode::Commands(menu) = &a.mode else {
             panic!()
         };
-        assert_eq!(menu.matching().len(), 1);
-        assert_eq!(menu.matching()[0].0, "clear");
+        assert_eq!(menu.list.rows.len(), 1);
+        assert_eq!(menu.list.rows[0].label, "/clear");
         a.handle_key(press(KeyCode::Enter));
         assert_eq!(
             a.outbox,
@@ -1292,14 +1275,14 @@ mod tests {
     }
 
     #[test]
-    fn quit_from_the_menu_submits_exit() {
+    fn quit_from_the_menu_submits_what_it_names() {
         let mut a = app();
         a.handle_key(press(KeyCode::Char('/')));
         a.handle_key(press(KeyCode::Char('3')));
         assert_eq!(
             a.outbox,
             vec![Command::Submit {
-                text: "/exit".into()
+                text: "/quit".into()
             }]
         );
     }
@@ -1333,7 +1316,9 @@ mod tests {
     /// go, in that order.
     #[test]
     fn with_no_model_the_first_message_waits_for_the_two_questions() {
-        let mut a = App::new(String::new()).with_catalogue(catalogue(), None);
+        let mut a = App::new(String::new())
+            .with_commands(commands())
+            .with_catalogue(catalogue(), None);
         type_str(&mut a, "add rate limiting");
         a.handle_key(press(KeyCode::Enter));
         assert!(
@@ -1369,7 +1354,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::Question(_)));
         type_str(&mut a, "x");
         assert!(
-            a.input.is_empty(),
+            a.draft.is_empty(),
             "no typing ahead while a question is open"
         );
         a.handle_key(press(KeyCode::Char('2')));
@@ -1395,7 +1380,7 @@ mod tests {
             },
         });
         a.handle_key(press(KeyCode::Esc));
-        assert_eq!(a.answering.as_deref(), Some("q1"));
+        assert!(a.answering.is_some());
         type_str(&mut a, "only for keyed requests");
         a.handle_key(press(KeyCode::Enter));
         assert_eq!(
@@ -1435,7 +1420,9 @@ mod tests {
             step_id: StepId(1),
             result: ToolResult {
                 call_id: "q1".into(),
-                content: "The developer chose: Yes".into(),
+                content: Answer::Chose { index: 0 }
+                    .to_result(&["Yes".into()])
+                    .unwrap(),
                 is_error: false,
             },
         });
@@ -1495,7 +1482,7 @@ mod tests {
             panic!("{:?}", a.log)
         };
         assert!(!open);
-        assert_eq!(items[0].verb, "Read");
+        assert_eq!(items[0].verb, Verb::Read);
         assert_eq!(items[0].target, "src/x.rs");
         assert_eq!(items[0].fact.as_deref(), Some("2 lines"));
     }
@@ -1513,9 +1500,9 @@ mod tests {
             a.log.last(),
             Some(LogEntry::Work { open: true, .. })
         ));
-        assert!(a.input.is_empty());
+        assert!(a.draft.is_empty());
         type_str(&mut a, "a ");
-        assert_eq!(a.input, "a ");
+        assert_eq!(a.draft.text(), "a ");
     }
 
     #[test]
@@ -1734,7 +1721,7 @@ mod tests {
             changeset,
         });
         type_str(&mut a, "rename it");
-        assert_eq!(a.input, "rename it");
+        assert_eq!(a.draft.text(), "rename it");
         a.handle_key(press(KeyCode::Enter));
         let Some(Command::ReviewDecision {
             decision: ReviewDecision::Comment { comments },
@@ -1744,7 +1731,7 @@ mod tests {
             panic!("{:?}", a.outbox)
         };
         assert_eq!(comments[0].text, "rename it");
-        assert!(a.input.is_empty());
+        assert!(a.draft.is_empty());
     }
 
     #[test]
@@ -1830,7 +1817,7 @@ mod tests {
                     call: ToolCall {
                         id: "c1".into(),
                         name: "run".into(),
-                        input: serde_json::json!({"program": "ls"}),
+                        input: serde_json::json!({"command": "ls"}),
                     },
                 },
                 LogRecord::ToolResult {
@@ -1857,5 +1844,176 @@ mod tests {
             matches!(&a.log[1], LogEntry::Work { items, .. } if items[0].fact.as_deref() == Some("ok"))
         );
         assert_eq!(a.log.last(), Some(&LogEntry::TurnBreak));
+    }
+
+    fn ask(a: &mut App) {
+        a.apply_event(Event::QuestionAsked {
+            call_id: "q1".into(),
+            question: Question {
+                question: "Q?".into(),
+                detail: String::new(),
+                options: vec!["Yes".into(), CHAT_ABOUT_THIS.into()],
+            },
+        });
+    }
+
+    /// The bug: `⎋` called the same function as `⌃C`, so a second `⎋`
+    /// inside two seconds counted as "again" and quit mid-turn.
+    #[test]
+    fn escape_only_ever_stops_and_asks_once() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.handle_key(press(KeyCode::Esc));
+        a.handle_key(press(KeyCode::Esc));
+        assert!(!a.should_quit, "a second ⎋ does not leave Aldwin");
+        assert_eq!(a.outbox, vec![Command::Cancel], "and asks for one stop");
+        assert!(
+            matches!(a.log.last(), Some(LogEntry::Notice { message }) if message == "Stopping."),
+            "the notice names no key that was not pressed: {:?}",
+            a.log
+        );
+    }
+
+    #[test]
+    fn ctrl_c_says_its_own_key_is_the_way_out() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(
+            matches!(a.log.last(), Some(LogEntry::Notice { message }) if message.contains("⌃C again"))
+        );
+    }
+
+    /// The bug: the question's list took `⌃C` as "close", which for the
+    /// agent's question meant "Chat about this" — the one key that stops a
+    /// turn everywhere else answered it instead.
+    #[test]
+    fn ctrl_c_during_an_agent_question_stops_the_turn() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        ask(&mut a);
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(a.outbox, vec![Command::Cancel]);
+        assert!(a.answering.is_none() && !a.should_quit);
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Cancelled,
+        });
+        assert!(
+            matches!(a.mode, Mode::Conversation),
+            "the question goes with its turn"
+        );
+    }
+
+    /// The bug: with nothing configured the first message is held while the
+    /// provider is asked, and closing the question dropped it.
+    #[test]
+    fn closing_the_provider_question_puts_the_held_message_back() {
+        for close in [
+            press(KeyCode::Esc),
+            press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ] {
+            let mut a = App::new(String::new())
+                .with_commands(commands())
+                .with_catalogue(catalogue(), None);
+            type_str(&mut a, "add rate limiting");
+            a.handle_key(press(KeyCode::Enter));
+            a.handle_key(close);
+            assert!(matches!(a.mode, Mode::Conversation));
+            assert_eq!(a.draft.text(), "add rate limiting");
+            assert!(a.outbox.is_empty() && !a.should_quit);
+        }
+    }
+
+    /// The bug: after "Chat about this" the question vanished, the footer
+    /// said `Working…`, and `⎋` stopped the whole turn.
+    #[test]
+    fn escape_while_answering_in_words_goes_back_to_the_options() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        ask(&mut a);
+        a.handle_key(press(KeyCode::Char('2')));
+        assert!(a.answering.is_some());
+        type_str(&mut a, "it depends");
+        a.handle_key(press(KeyCode::Esc));
+        assert!(
+            matches!(&a.mode, Mode::Question(q) if matches!(q.asker, Asker::Agent { .. })),
+            "the options again"
+        );
+        assert!(a.outbox.is_empty(), "the turn was not stopped");
+        assert_eq!(a.draft.text(), "it depends", "and the words are kept");
+    }
+
+    /// The bug: the menu swallowed every key but a letter, so `/theme
+    /// light` and `/model x` could not be typed at all.
+    #[test]
+    fn a_command_the_menu_does_not_offer_is_typed_in_the_field() {
+        let mut a = app();
+        a.handle_key(press(KeyCode::Char('/')));
+        type_str(&mut a, "theme light");
+        assert!(matches!(a.mode, Mode::Conversation));
+        assert_eq!(a.draft.text(), "/theme light");
+
+        let mut a = app();
+        a.handle_key(press(KeyCode::Char('/')));
+        type_str(&mut a, "model");
+        assert!(matches!(a.mode, Mode::Commands(_)), "still a menu row");
+        type_str(&mut a, " x");
+        a.handle_key(press(KeyCode::Enter));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "/model x".into()
+            }]
+        );
+    }
+
+    /// A pick and a typed command take one path: both open the list.
+    #[test]
+    fn picking_resume_and_typing_it_do_the_same_thing() {
+        let session = SessionChoice {
+            id: "s1".into(),
+            title: "rate limiting".into(),
+            when: "2026-09-20 18:11".into(),
+            turns: 3,
+        };
+        let mut picked = app().with_sessions(vec![session.clone()]);
+        picked.handle_key(press(KeyCode::Char('/')));
+        picked.handle_key(press(KeyCode::Char('1')));
+        let mut typed = app().with_sessions(vec![session]);
+        typed.draft.set("/resume".into());
+        typed.handle_key(press(KeyCode::Enter));
+        for a in [&picked, &typed] {
+            assert!(matches!(&a.mode, Mode::Question(q) if q.asker == Asker::Session));
+            assert!(a.outbox.is_empty());
+        }
+    }
+
+    /// The bug: `⌃C` at idle quit with a half-typed message in the field.
+    #[test]
+    fn ctrl_c_at_idle_clears_a_draft_before_it_quits() {
+        let mut a = app();
+        type_str(&mut a, "half a thought");
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.draft.is_empty());
+        assert!(!a.should_quit, "the first clears");
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.should_quit, "the second leaves");
+    }
+
+    #[test]
+    fn a_review_says_nothing_into_the_conversation_when_it_opens() {
+        let mut a = app();
+        a.apply_event(Event::ReviewRequested {
+            review_id: "r".into(),
+            changeset: Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: None,
+                    after: "x\n".into(),
+                }],
+            },
+        });
+        assert!(a.log.is_empty(), "{:?}", a.log);
     }
 }

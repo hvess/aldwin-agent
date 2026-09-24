@@ -5,8 +5,8 @@
 //! `.github/workflows/release.yml` refuses to publish a tag that disagrees
 //! with it. Before that discipline, releases were tag-only — the manifest
 //! sat at `0.1.0` through eleven tagged releases, so `aldwin --version`
-//! and the TUI's own top bar both reported `0.1.0` no matter which build
-//! you were running.
+//! and the TUI's own launch card both reported `0.1.0` no matter which
+//! build you were running.
 //!
 //! [`GIT_HASH`] comes from `build.rs` and is what distinguishes two builds
 //! of the *same* version — the common case on an actively developed
@@ -19,11 +19,11 @@
 //! workflow, which is a poor trade for three constants.
 
 /// The release version, from `Cargo.toml`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Short commit this was built from, with a `-dirty` suffix when the tree
 /// had uncommitted changes.
-pub const GIT_HASH: &str = env!("ALDWIN_GIT_HASH");
+pub(crate) const GIT_HASH: &str = env!("ALDWIN_GIT_HASH");
 
 /// `0.1.12 (a1b2c3d4)` — what `aldwin --version` prints. The version alone
 /// can't identify a build between releases; the commit alone doesn't say
@@ -40,7 +40,7 @@ mod tests {
     use super::*;
 
     /// The bug these guard: releases were tag-only, so `VERSION` — which is
-    /// what `aldwin --version` and the TUI's top bar both print — stayed at
+    /// what `aldwin --version` and the launch card both print — stayed at
     /// the manifest's `0.1.0` through eleven tagged releases. Nothing in the
     /// build could notice, because the manifest and the tag never met. They
     /// meet in `.github/workflows/release.yml` now; what is checked here is

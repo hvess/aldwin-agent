@@ -12,16 +12,19 @@
 //! the current row on `--tint` with the `›`, between the margins.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+use aldwin_core::Question;
+
 use super::grid::{column, elide, justified, Ctx, COMMAND_COL, MARGIN_X, MARK_COL, NUMBER_COL};
 use super::row::Row;
 use super::wrap::wrap_line;
-use crate::app::{Asking, CommandMenu};
+use crate::app::CommandMenu;
+use crate::list::List;
 use crate::palette::Palette;
 
 /// Frame E's `QuestionPanel`: the panel is a band inset by `MARGIN_X`
@@ -45,20 +48,29 @@ fn text_width(width: u16) -> usize {
         .max(1)
 }
 
-/// Rows the panel takes at `width`: the fixed five plus the options, with
-/// the question and its detail wrapped.
-pub(super) fn panel_rows(asking: &Asking, width: u16) -> u16 {
+/// Rows the panel takes at `width`: a blank row, the question and its
+/// detail wrapped, a blank row — and with `options`, each option and a
+/// blank row after them. Without, it is the question alone, as it stays
+/// above the field while it is answered in words.
+pub(super) fn panel_rows(question: &Question, options: Option<&List>, width: u16) -> u16 {
     let text_width = text_width(width);
-    let question = wrap_line(Line::from(asking.question.question.clone()), text_width).len();
-    let detail = if asking.question.detail.is_empty() {
+    let heading = wrap_line(Line::from(question.question.clone()), text_width).len();
+    let detail = if question.detail.is_empty() {
         0
     } else {
-        wrap_line(Line::from(asking.question.detail.clone()), text_width).len()
+        wrap_line(Line::from(question.detail.clone()), text_width).len()
     };
-    (1 + question + detail + 1 + asking.list.rows.len() + 1) as u16
+    let options = options.map_or(0, |list| list.rows.len() + 1);
+    (1 + heading + detail + 1 + options) as u16
 }
 
-pub(super) fn draw_panel(frame: &mut Frame, area: Rect, asking: &Asking, pal: &Palette) {
+pub(super) fn draw_panel(
+    frame: &mut Frame,
+    area: Rect,
+    question: &Question,
+    options: Option<&List>,
+    pal: &Palette,
+) {
     let inner = Rect {
         x: area.x + MARGIN_X as u16,
         width: area.width.saturating_sub(2 * MARGIN_X as u16),
@@ -71,21 +83,21 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, asking: &Asking, pal: &P
     let text_width = text_width(area.width);
 
     let mut lines: Vec<Line<'static>> = vec![Line::default()];
-    let question = Line::from(Span::styled(
-        asking.question.question.clone(),
+    let heading = Line::from(Span::styled(
+        question.question.clone(),
         Style::default()
             .fg(pal.label)
             .bg(pal.panel)
             .add_modifier(Modifier::BOLD),
     ));
     lines.extend(
-        wrap_line(question, text_width)
+        wrap_line(heading, text_width)
             .into_iter()
             .map(|l| padded(l, pal.panel)),
     );
-    if !asking.question.detail.is_empty() {
+    if !question.detail.is_empty() {
         let detail = Line::from(Span::styled(
-            asking.question.detail.clone(),
+            question.detail.clone(),
             Style::default().fg(pal.label2).bg(pal.panel),
         ));
         lines.extend(
@@ -95,21 +107,23 @@ pub(super) fn draw_panel(frame: &mut Frame, area: Rect, asking: &Asking, pal: &P
         );
     }
     lines.push(Line::default());
-    for (i, row) in asking.list.rows.iter().enumerate() {
-        lines.push(option_row(
-            i,
-            &row.label,
-            &row.detail,
-            i == asking.list.selected,
-            ctx,
-            pal.panel,
-        ));
+    if let Some(list) = options {
+        for (i, row) in list.rows.iter().enumerate() {
+            lines.push(option_row(
+                i,
+                &row.label,
+                &row.detail,
+                i == list.selected,
+                ctx,
+                pal.panel,
+            ));
+        }
+        lines.push(Line::default());
     }
-    lines.push(Line::default());
     frame.render_widget(Paragraph::new(Text::from(lines)).style(on_panel), inner);
 }
 
-fn padded(mut line: Line<'static>, bg: ratatui::style::Color) -> Line<'static> {
+fn padded(mut line: Line<'static>, bg: Color) -> Line<'static> {
     line.spans.insert(
         0,
         Span::styled(" ".repeat(PANEL_PAD), Style::default().bg(bg)),
@@ -130,7 +144,7 @@ fn option_row(
     detail: &str,
     current: bool,
     ctx: Ctx,
-    ground: ratatui::style::Color,
+    ground: Color,
 ) -> Line<'static> {
     let pal = ctx.pal;
     let bg = if current { pal.field } else { ground };

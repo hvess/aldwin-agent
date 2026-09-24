@@ -13,7 +13,7 @@
 //! Rendering is verified two ways. `ui/tests.rs` asserts frame-level facts
 //! against `ratatui::backend::TestBackend` — why each thing is where it is.
 //! `tests/render_snapshot.rs` pins every cell, colour and modifier of every
-//! scene at four frame sizes in both themes, so a refactor that was meant
+//! scene at three frame sizes in both themes, so a refactor that was meant
 //! to preserve output can be shown to have done so.
 //!
 //! Shift+Enter does not rely on the terminal happening to report it:
@@ -33,34 +33,38 @@ mod resume;
 mod review;
 mod run;
 mod scroll;
+// The palettes as flat lists and the glyph table are the design as data for
+// the conformance tests (`design_palette`, `design_glyphs` below); the app
+// itself draws through the named roles and marks.
+#[cfg_attr(not(feature = "test-util"), allow(dead_code))]
 mod tokens;
 mod ui;
 mod version;
 
-pub use app::{
-    App, Asker, Asking, CommandMenu, Mode, ModelChoice, ProviderChoice, StatusInfo, COMMANDS,
-};
-pub use list::{List, ListRow};
-pub use log::{LogEntry, WorkItem};
+pub use app::{CommandChoice, ModelChoice, ProviderChoice};
 pub use palette::Theme;
 pub use resume::SessionChoice;
-pub use review::Review;
 pub use run::{run, SessionProvider};
-pub use scroll::ScrollState;
-pub use version::{GIT_HASH, VERSION, VERSION_FULL};
+pub use version::VERSION_FULL;
 
-/// Exposed only for `examples/` and `tests/render_snapshot.rs` — the
-/// harnesses that seed an `App` and draw it once outside the normal
-/// core/channel wiring. Not part of the supported public API.
-#[doc(hidden)]
-pub use ui::draw as __preview_draw;
+/// What `tests/render_snapshot.rs` and `examples/preview.rs` seed and draw
+/// a scene with, outside the normal core/channel wiring. Behind the
+/// `test-util` feature, which only this crate's own tests and examples
+/// turn on — not part of what aldwin-cli sees.
+#[cfg(feature = "test-util")]
+pub use {
+    app::{App, StatusInfo},
+    log::{LogEntry, Verb, WorkItem},
+    review::Review,
+    ui::draw,
+};
 
 /// The design system as data, for the conformance tests in
 /// `tests/render_snapshot.rs`: every colour the app may paint in a theme.
 /// `tokens.rs` is generated from `.claude/design/tokens/`, so asserting
 /// against these values *is* asserting against the design.
-#[doc(hidden)]
-pub fn __design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
+#[cfg(feature = "test-util")]
+pub fn design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
     match theme {
         Theme::Dark => &tokens::DARK_VALUES,
         Theme::Light => &tokens::LIGHT_VALUES,
@@ -69,7 +73,7 @@ pub fn __design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
 
 /// The closed glyph table, and the glyphs a recorded design contradiction
 /// licenses on top of it — see `crates/review/baseline.json`.
-#[doc(hidden)]
-pub fn __design_glyphs() -> (&'static [char], &'static [char]) {
+#[cfg(feature = "test-util")]
+pub fn design_glyphs() -> (&'static [char], &'static [char]) {
     (&tokens::MARKS, &tokens::MARKS_BY_EXCEPTION)
 }

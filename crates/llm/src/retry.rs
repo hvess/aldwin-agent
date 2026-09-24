@@ -24,7 +24,10 @@ pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> Llm
             None => LlmError::Network(message),
         }
     } else {
-        LlmError::Terminal { attempts: attempt, message }
+        LlmError::Terminal {
+            attempts: attempt,
+            message,
+        }
     }
 }
 

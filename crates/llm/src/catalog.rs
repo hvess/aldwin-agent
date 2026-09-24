@@ -27,7 +27,7 @@ use aldwin_config::ProviderKind;
 /// in `provider.yaml`, and what picking it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
-    pub id:      &'static str,
+    pub id: &'static str,
     pub purpose: &'static str,
     /// The model's context window in tokens, for the context bar. A seed
     /// like the rest of the row: a provider can change it without us, and
@@ -40,17 +40,17 @@ pub struct Model {
 pub struct Provider {
     /// The lowercase name in the option's 16-cell field, and the word
     /// `/model` takes before the `/`.
-    pub id:          &'static str,
-    pub kind:        ProviderKind,
+    pub id: &'static str,
+    pub kind: ProviderKind,
     /// What picking it does — the design's own row copy, which names the
     /// models and the key variable because both are what the developer
     /// needs before they can choose.
-    pub purpose:     &'static str,
+    pub purpose: &'static str,
     pub api_key_env: &'static str,
     /// The full chat-completions URL, used verbatim — not a prefix. `None`
     /// for Anthropic, whose client has a single well-known endpoint.
-    pub base_url:    Option<&'static str>,
-    pub models:      &'static [Model],
+    pub base_url: Option<&'static str>,
+    pub models: &'static [Model],
 }
 
 impl Provider {
@@ -74,71 +74,123 @@ pub const CURATED: usize = 3;
 /// Ordered: the curated rows first, then everything the `more` row reveals.
 pub static PROVIDERS: &[Provider] = &[
     Provider {
-        id:          "anthropic",
-        kind:        ProviderKind::Anthropic,
-        purpose:     "claude models · ANTHROPIC_API_KEY",
+        id: "anthropic",
+        kind: ProviderKind::Anthropic,
+        purpose: "claude models · ANTHROPIC_API_KEY",
         api_key_env: "ANTHROPIC_API_KEY",
-        base_url:    None,
-        models:      &[
-            Model { id: "claude-sonnet-5", purpose: "balanced; a good default", context: 1_000_000 },
-            Model { id: "claude-opus-5", purpose: "slower, deeper", context: 1_000_000 },
-            Model { id: "claude-haiku-4-5-20251001", purpose: "fast, cheap", context: 200_000 },
+        base_url: None,
+        models: &[
+            Model {
+                id: "claude-sonnet-5",
+                purpose: "balanced; a good default",
+                context: 1_000_000,
+            },
+            Model {
+                id: "claude-opus-5",
+                purpose: "slower, deeper",
+                context: 1_000_000,
+            },
+            Model {
+                id: "claude-haiku-4-5-20251001",
+                purpose: "fast, cheap",
+                context: 200_000,
+            },
         ],
     },
     Provider {
-        id:          "google",
-        kind:        ProviderKind::OpenaiCompatible,
-        purpose:     "gemini models · GOOGLE_API_KEY",
+        id: "google",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "gemini models · GOOGLE_API_KEY",
         api_key_env: "GOOGLE_API_KEY",
-        base_url:    Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
-        models:      &[
-            Model { id: "gemini-2.5-pro", purpose: "balanced; a good default", context: 1_048_576 },
-            Model { id: "gemini-2.5-flash", purpose: "fast, cheap", context: 1_048_576 },
+        base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+        models: &[
+            Model {
+                id: "gemini-2.5-pro",
+                purpose: "balanced; a good default",
+                context: 1_048_576,
+            },
+            Model {
+                id: "gemini-2.5-flash",
+                purpose: "fast, cheap",
+                context: 1_048_576,
+            },
         ],
     },
     Provider {
-        id:          "openai",
-        kind:        ProviderKind::OpenaiCompatible,
-        purpose:     "gpt models · OPENAI_API_KEY",
+        id: "openai",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "gpt models · OPENAI_API_KEY",
         api_key_env: "OPENAI_API_KEY",
-        base_url:    Some("https://api.openai.com/v1/chat/completions"),
-        models:      &[
-            Model { id: "gpt-5", purpose: "balanced; a good default", context: 400_000 },
-            Model { id: "gpt-5-mini", purpose: "fast, cheap", context: 400_000 },
+        base_url: Some("https://api.openai.com/v1/chat/completions"),
+        models: &[
+            Model {
+                id: "gpt-5",
+                purpose: "balanced; a good default",
+                context: 400_000,
+            },
+            Model {
+                id: "gpt-5-mini",
+                purpose: "fast, cheap",
+                context: 400_000,
+            },
         ],
     },
     // Everything below here is behind the `more` row.
     Provider {
-        id:          "lumo",
-        kind:        ProviderKind::OpenaiCompatible,
-        purpose:     "proton lumo · LUMO_API_KEY",
+        id: "lumo",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "proton lumo · LUMO_API_KEY",
         api_key_env: "LUMO_API_KEY",
-        base_url:    Some("https://lumo-api.proton.me/ai/v1/chat/completions"),
-        models:      &[
-            Model { id: "lumo-max", purpose: "reasoning; 131k context", context: 131_072 },
-            Model { id: "lumo-lite", purpose: "faster; 262k context", context: 262_144 },
+        base_url: Some("https://lumo-api.proton.me/ai/v1/chat/completions"),
+        models: &[
+            Model {
+                id: "lumo-max",
+                purpose: "reasoning; 131k context",
+                context: 131_072,
+            },
+            Model {
+                id: "lumo-lite",
+                purpose: "faster; 262k context",
+                context: 262_144,
+            },
         ],
     },
     Provider {
-        id:          "mistral",
-        kind:        ProviderKind::OpenaiCompatible,
-        purpose:     "mistral models · MISTRAL_API_KEY",
+        id: "mistral",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "mistral models · MISTRAL_API_KEY",
         api_key_env: "MISTRAL_API_KEY",
-        base_url:    Some("https://api.mistral.ai/v1/chat/completions"),
-        models:      &[
-            Model { id: "mistral-large-latest", purpose: "balanced; a good default", context: 128_000 },
-            Model { id: "mistral-small-latest", purpose: "fast, cheap", context: 128_000 },
+        base_url: Some("https://api.mistral.ai/v1/chat/completions"),
+        models: &[
+            Model {
+                id: "mistral-large-latest",
+                purpose: "balanced; a good default",
+                context: 128_000,
+            },
+            Model {
+                id: "mistral-small-latest",
+                purpose: "fast, cheap",
+                context: 128_000,
+            },
         ],
     },
     Provider {
-        id:          "deepseek",
-        kind:        ProviderKind::OpenaiCompatible,
-        purpose:     "deepseek models · DEEPSEEK_API_KEY",
+        id: "deepseek",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "deepseek models · DEEPSEEK_API_KEY",
         api_key_env: "DEEPSEEK_API_KEY",
-        base_url:    Some("https://api.deepseek.com/v1/chat/completions"),
-        models:      &[
-            Model { id: "deepseek-chat", purpose: "balanced; a good default", context: 128_000 },
-            Model { id: "deepseek-reasoner", purpose: "slower, deeper", context: 128_000 },
+        base_url: Some("https://api.deepseek.com/v1/chat/completions"),
+        models: &[
+            Model {
+                id: "deepseek-chat",
+                purpose: "balanced; a good default",
+                context: 128_000,
+            },
+            Model {
+                id: "deepseek-reasoner",
+                purpose: "slower, deeper",
+                context: 128_000,
+            },
         ],
     },
 ];
@@ -164,7 +216,9 @@ pub fn provider_ids() -> Vec<&'static str> {
 /// menu was clicked, and adding a name field would create a second source
 /// of truth that could disagree with the URL beside it.
 pub fn identify(config: &aldwin_config::ProviderConfig) -> Option<&'static Provider> {
-    PROVIDERS.iter().find(|p| p.kind == config.provider && p.base_url == config.base_url.as_deref())
+    PROVIDERS
+        .iter()
+        .find(|p| p.kind == config.provider && p.base_url == config.base_url.as_deref())
 }
 
 #[cfg(test)]
@@ -179,7 +233,13 @@ mod tests {
     fn every_model_states_a_context_window() {
         for p in PROVIDERS {
             for m in p.models {
-                assert!(m.context >= 8_000, "{}/{} has an implausible context window {}", p.id, m.id, m.context);
+                assert!(
+                    m.context >= 8_000,
+                    "{}/{} has an implausible context window {}",
+                    p.id,
+                    m.id,
+                    m.context
+                );
             }
         }
     }
@@ -187,7 +247,11 @@ mod tests {
     #[test]
     fn every_provider_offers_a_model() {
         for p in PROVIDERS {
-            assert!(!p.models.is_empty(), "{} offers no model, so /model has nothing to write", p.id);
+            assert!(
+                !p.models.is_empty(),
+                "{} offers no model, so /model has nothing to write",
+                p.id
+            );
         }
     }
 
@@ -195,8 +259,14 @@ mod tests {
     /// first run shows `PROVIDERS[..CURATED]` and then everything.
     #[test]
     fn the_curated_rows_are_a_prefix_and_leave_something_behind_more() {
-        assert!(CURATED < PROVIDERS.len(), "the `more` row must reveal something");
-        assert_eq!(PROVIDERS[0].id, "anthropic", "the curated list opens on the provider the harness was built against");
+        assert!(
+            CURATED < PROVIDERS.len(),
+            "the `more` row must reveal something"
+        );
+        assert_eq!(
+            PROVIDERS[0].id, "anthropic",
+            "the curated list opens on the provider the harness was built against"
+        );
     }
 
     /// Ids reach `/model` as the half before a `/`, and land in
@@ -207,8 +277,17 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for p in PROVIDERS {
             assert!(seen.insert(p.id), "duplicate provider id {}", p.id);
-            assert_eq!(p.id, p.id.to_ascii_lowercase(), "{} must be lowercase", p.id);
-            assert!(!p.id.contains('/'), "{} would split ambiguously in /model", p.id);
+            assert_eq!(
+                p.id,
+                p.id.to_ascii_lowercase(),
+                "{} must be lowercase",
+                p.id
+            );
+            assert!(
+                !p.id.contains('/'),
+                "{} would split ambiguously in /model",
+                p.id
+            );
         }
     }
 
@@ -218,9 +297,13 @@ mod tests {
     fn only_the_openai_compatible_entries_carry_an_endpoint() {
         for p in PROVIDERS {
             match p.kind {
-                ProviderKind::Anthropic => assert!(p.base_url.is_none(), "{} needs no base_url", p.id),
+                ProviderKind::Anthropic => {
+                    assert!(p.base_url.is_none(), "{} needs no base_url", p.id)
+                }
                 ProviderKind::OpenaiCompatible => {
-                    let url = p.base_url.expect("an openai-compatible provider needs an endpoint");
+                    let url = p
+                        .base_url
+                        .expect("an openai-compatible provider needs an endpoint");
                     assert!(
                         url.ends_with("/chat/completions"),
                         "{url} must be the full chat-completions URL, not a prefix — the client posts to it verbatim"
@@ -235,8 +318,17 @@ mod tests {
     #[test]
     fn every_provider_names_a_key_variable() {
         for p in PROVIDERS {
-            assert!(!p.api_key_env.trim().is_empty(), "{} must name a key variable", p.id);
-            assert_eq!(p.api_key_env, p.api_key_env.to_ascii_uppercase(), "{} names a variable, not a value", p.id);
+            assert!(
+                !p.api_key_env.trim().is_empty(),
+                "{} must name a key variable",
+                p.id
+            );
+            assert_eq!(
+                p.api_key_env,
+                p.api_key_env.to_ascii_uppercase(),
+                "{} names a variable, not a value",
+                p.id
+            );
         }
     }
 
@@ -247,7 +339,11 @@ mod tests {
         let mut seen: Vec<(ProviderKind, Option<&str>)> = Vec::new();
         for p in PROVIDERS {
             let key = (p.kind, p.base_url);
-            assert!(!seen.contains(&key), "{} is indistinguishable from an earlier row on disk", p.id);
+            assert!(
+                !seen.contains(&key),
+                "{} is indistinguishable from an earlier row on disk",
+                p.id
+            );
             seen.push(key);
         }
     }
@@ -262,9 +358,17 @@ mod tests {
         const NAME_FIELD: usize = 16;
         const BODY_COLUMN: usize = 120 - 13 - 3;
         for p in PROVIDERS {
-            assert!(p.id.chars().count() < NAME_FIELD, "{} does not fit the 16-cell name field", p.id);
+            assert!(
+                p.id.chars().count() < NAME_FIELD,
+                "{} does not fit the 16-cell name field",
+                p.id
+            );
             let row = 3 + NAME_FIELD + p.purpose.chars().count();
-            assert!(row <= BODY_COLUMN, "{}'s row is {row} cells, past the {BODY_COLUMN} the body column has", p.id);
+            assert!(
+                row <= BODY_COLUMN,
+                "{}'s row is {row} cells, past the {BODY_COLUMN} the body column has",
+                p.id
+            );
         }
     }
 
@@ -275,18 +379,22 @@ mod tests {
     /// footer — 24 rows, leaving 12.
     #[test]
     fn the_whole_catalogue_fits_the_expanded_first_run_screen() {
-        assert!(PROVIDERS.len() <= 12, "{} providers would be clipped by the 36-row frame", PROVIDERS.len());
+        assert!(
+            PROVIDERS.len() <= 12,
+            "{} providers would be clipped by the 36-row frame",
+            PROVIDERS.len()
+        );
     }
 
     #[test]
     fn identify_recovers_the_catalogue_row_from_a_written_config() {
         let anthropic = provider("anthropic").unwrap();
         let written = aldwin_config::ProviderConfig {
-            version:                  aldwin_config::PROVIDER_VERSION,
-            provider:                 anthropic.kind,
-            model:                    anthropic.default_model().into(),
-            base_url:                 anthropic.base_url.map(String::from),
-            api_key_env:              anthropic.api_key_env.into(),
+            version: aldwin_config::PROVIDER_VERSION,
+            provider: anthropic.kind,
+            model: anthropic.default_model().into(),
+            base_url: anthropic.base_url.map(String::from),
+            api_key_env: anthropic.api_key_env.into(),
             extended_thinking_budget: None,
         };
         assert_eq!(identify(&written).map(|p| p.id), Some("anthropic"));
@@ -295,13 +403,17 @@ mod tests {
     #[test]
     fn identify_returns_none_for_a_hand_written_endpoint() {
         let written = aldwin_config::ProviderConfig {
-            version:                  aldwin_config::PROVIDER_VERSION,
-            provider:                 ProviderKind::OpenaiCompatible,
-            model:                    "qwen3-coder".into(),
-            base_url:                 Some("http://localhost:8000/v1/chat/completions".into()),
-            api_key_env:              "VLLM_API_KEY".into(),
+            version: aldwin_config::PROVIDER_VERSION,
+            provider: ProviderKind::OpenaiCompatible,
+            model: "qwen3-coder".into(),
+            base_url: Some("http://localhost:8000/v1/chat/completions".into()),
+            api_key_env: "VLLM_API_KEY".into(),
             extended_thinking_budget: None,
         };
-        assert_eq!(identify(&written), None, "a developer's own endpoint must not be reported as a catalogue provider");
+        assert_eq!(
+            identify(&written),
+            None,
+            "a developer's own endpoint must not be reported as a catalogue provider"
+        );
     }
 }

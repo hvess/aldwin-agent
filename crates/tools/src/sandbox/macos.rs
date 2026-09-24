@@ -38,9 +38,14 @@ pub fn availability() -> Availability {
         // Seatbelt's network control is not ABI-versioned the way Landlock's
         // is; there is one profile language and it either applies or does
         // not. `abi: 0` reads as "not applicable" rather than a version.
-        Availability::Enforcing { abi: 0, network: true }
+        Availability::Enforcing {
+            abi: 0,
+            network: true,
+        }
     } else {
-        Availability::Unavailable { reason: "reads need /usr/bin/sandbox-exec, which is not present on this system" }
+        Availability::Unavailable {
+            reason: "reads need /usr/bin/sandbox-exec, which is not present on this system",
+        }
     }
 }
 
@@ -118,7 +123,12 @@ impl ReadOnly {
     /// `--` is what keeps a program whose own first argument starts with `-`
     /// from being read as a flag to `sandbox-exec`.
     pub fn command_line(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
-        let mut argv = vec!["-p".to_string(), self.profile.clone(), "--".to_string(), program.to_string()];
+        let mut argv = vec![
+            "-p".to_string(),
+            self.profile.clone(),
+            "--".to_string(),
+            program.to_string(),
+        ];
         argv.extend(args.iter().cloned());
         (SANDBOX_EXEC.to_string(), argv)
     }
@@ -149,9 +159,18 @@ mod tests {
         let Ok(plan) = ReadOnly::build(&[PathBuf::from("/tmp/project")]) else {
             return; // no sandbox-exec on this machine; nothing to assert
         };
-        let deny = plan.profile.find("(deny file-write*)").expect("a blanket write denial");
-        let allow = plan.profile.find("(allow file-write* (subpath").expect("an exemption");
-        assert!(deny < allow, "Seatbelt is last-match-wins: exemptions must follow the denial");
+        let deny = plan
+            .profile
+            .find("(deny file-write*)")
+            .expect("a blanket write denial");
+        let allow = plan
+            .profile
+            .find("(allow file-write* (subpath")
+            .expect("an exemption");
+        assert!(
+            deny < allow,
+            "Seatbelt is last-match-wins: exemptions must follow the denial"
+        );
     }
 
     #[test]
@@ -159,7 +178,8 @@ mod tests {
         let Ok(plan) = ReadOnly::build(&[PathBuf::from("/tmp/project")]) else {
             return; // no sandbox-exec on this machine
         };
-        let (program, argv) = plan.command_line("/bin/grep", &["-r".to_string(), "needle".to_string()]);
+        let (program, argv) =
+            plan.command_line("/bin/grep", &["-r".to_string(), "needle".to_string()]);
         assert_eq!(program, SANDBOX_EXEC);
         let dash = argv.iter().position(|a| a == "--").expect("a -- separator");
         assert_eq!(argv[dash + 1], "/bin/grep");
@@ -168,7 +188,10 @@ mod tests {
 
     #[test]
     fn a_path_that_cannot_be_quoted_is_skipped_not_embedded() {
-        assert_eq!(sbpl_string(Path::new("/tmp/ok")), Some("\"/tmp/ok\"".to_string()));
+        assert_eq!(
+            sbpl_string(Path::new("/tmp/ok")),
+            Some("\"/tmp/ok\"".to_string())
+        );
         assert_eq!(sbpl_string(Path::new("/tmp/we\"ird")), None);
         assert_eq!(sbpl_string(Path::new("/tmp/new\nline")), None);
     }

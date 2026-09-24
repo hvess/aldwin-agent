@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub struct Outcome {
-    pub stage:  &'static str,
+    pub stage: &'static str,
     pub passed: bool,
     /// What the developer should read. Empty when the stage passed.
     pub detail: String,
@@ -19,17 +19,41 @@ pub struct Outcome {
 impl Outcome {
     /// `stat` is what the stage reports when it passes — a count the tool
     /// itself produced, not one recomputed here.
-    fn from(stage: &'static str, output: std::process::Output, keep: usize, stat: impl Fn(&str) -> String) -> Self {
-        let combined = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+    fn from(
+        stage: &'static str,
+        output: std::process::Output,
+        keep: usize,
+        stat: impl Fn(&str) -> String,
+    ) -> Self {
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
         if output.status.success() {
-            return Outcome { stage, passed: true, detail: stat(&combined) };
+            return Outcome {
+                stage,
+                passed: true,
+                detail: stat(&combined),
+            };
         }
         // Both streams: cargo puts diagnostics on stderr and test failures on
         // stdout, and a stage that showed only one of them would report a
         // failing suite as an empty error.
         let lines: Vec<&str> = combined.lines().filter(|l| !l.trim().is_empty()).collect();
-        let tail = lines.iter().rev().take(keep).rev().copied().collect::<Vec<_>>().join("\n");
-        Outcome { stage, passed: false, detail: tail }
+        let tail = lines
+            .iter()
+            .rev()
+            .take(keep)
+            .rev()
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        Outcome {
+            stage,
+            passed: false,
+            detail: tail,
+        }
     }
 }
 
@@ -59,14 +83,28 @@ fn cargo(root: &Path, args: &[&str]) -> Result<std::process::Output> {
 pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![Outcome::from(
         "1 lint · clippy",
-        cargo(root, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?,
+        cargo(
+            root,
+            &[
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )?,
         40,
         |out| {
             // Cargo prints a `Checking` line per target it actually builds,
             // so a warm cache reports none. "0 crate targets" would read as
             // a lint that checked nothing, which is the opposite of what a
             // cached pass means.
-            match out.lines().filter(|l| l.trim_start().starts_with("Checking ")).count() {
+            match out
+                .lines()
+                .filter(|l| l.trim_start().starts_with("Checking "))
+                .count()
+            {
                 0 => "clippy clean (cached)".to_string(),
                 n => format!("clippy clean across {n} crate targets"),
             }
@@ -76,10 +114,15 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
 
 /// Stage 2 — the suite.
 pub fn test(root: &Path) -> Result<Vec<Outcome>> {
-    Ok(vec![Outcome::from("2 test", cargo(root, &["test", "--workspace"])?, 60, |out| {
-        let (passed, _, ignored) = crate::report::test_counts(out);
-        format!("{passed} passed, {ignored} ignored")
-    })])
+    Ok(vec![Outcome::from(
+        "2 test",
+        cargo(root, &["test", "--workspace"])?,
+        60,
+        |out| {
+            let (passed, _, ignored) = crate::report::test_counts(out);
+            format!("{passed} passed, {ignored} ignored")
+        },
+    )])
 }
 
 /// Stage 4 — the rendered frames.
@@ -106,7 +149,10 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     let outcome = Outcome::from(
         "4 frames",
-        cargo(root, &["test", "-p", "aldwin-tui", "--test", "render_snapshot"])?,
+        cargo(
+            root,
+            &["test", "-p", "aldwin-tui", "--test", "render_snapshot"],
+        )?,
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
@@ -135,10 +181,17 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
 /// possibility, and a recorded version turns it from a mystery into a line in
 /// the report.
 pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
-    let output = Command::new("rustc").current_dir(root).arg("--version").output()?;
+    let output = Command::new("rustc")
+        .current_dir(root)
+        .arg("--version")
+        .output()?;
     let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(vec![if found == expected {
-        Outcome { stage: "0 toolchain", passed: true, detail: found }
+        Outcome {
+            stage: "0 toolchain",
+            passed: true,
+            detail: found,
+        }
     } else {
         Outcome {
             stage:  "0 toolchain",

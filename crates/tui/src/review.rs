@@ -20,11 +20,11 @@ const PAGE_ROWS: usize = 10;
 /// them (another file, an opened fold) drops it until the next draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Pane {
-    pub x:      u16,
-    pub y:      u16,
-    pub width:  u16,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
     pub height: u16,
-    pub top:    usize,
+    pub top: usize,
 }
 
 /// Unchanged lines kept on each side of a change; the rest fold. One, as
@@ -37,13 +37,25 @@ const CONTEXT: usize = 1;
 pub enum DiffRow {
     /// A folded run of unchanged lines. `first` is the row index into the
     /// unfolded list where it starts; `len` how many it hides.
-    Fold { first: usize, len: usize },
+    Fold {
+        first: usize,
+        len: usize,
+    },
     /// Unchanged, with its line number in the file as it would be written.
-    Context { line: usize, text: String },
-    Add { line: usize, text: String },
+    Context {
+        line: usize,
+        text: String,
+    },
+    Add {
+        line: usize,
+        text: String,
+    },
     /// Removed; no line in the new file, so it carries the number of the
     /// nearest line after it for a comment to anchor on.
-    Del { after: usize, text: String },
+    Del {
+        after: usize,
+        text: String,
+    },
 }
 
 impl DiffRow {
@@ -62,24 +74,24 @@ impl DiffRow {
 pub struct PendingComment {
     /// Inclusive new-file line numbers.
     pub lines: (usize, usize),
-    pub text:  String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewFile {
-    pub path:     String,
+    pub path: String,
     /// The file did not exist before — the tree draws ` +` beside it.
-    pub added:    bool,
+    pub added: bool,
     /// Every row, unfolded.
-    unfolded:     Vec<DiffRow>,
+    unfolded: Vec<DiffRow>,
     /// Folds over `unfolded`, as (start row, length), in order. Expanded
     /// ones are removed from this list.
-    folds:        Vec<(usize, usize)>,
+    folds: Vec<(usize, usize)>,
     /// `+11 −2`.
-    pub added_lines:   usize,
+    pub added_lines: usize,
     pub removed_lines: usize,
     /// The developer has seen the whole of it — `⌃↩` waits for every file.
-    pub read:     bool,
+    pub read: bool,
     pub comments: Vec<PendingComment>,
 }
 
@@ -108,19 +120,29 @@ impl ReviewFile {
     /// The rows as drawn: folds collapsed to one row each.
     pub fn rows(&self) -> Vec<DiffRow> {
         self.spans()
-            .map(|(start, len, folded)| if folded { DiffRow::Fold { first: start, len } } else { self.unfolded[start].clone() })
+            .map(|(start, len, folded)| {
+                if folded {
+                    DiffRow::Fold { first: start, len }
+                } else {
+                    self.unfolded[start].clone()
+                }
+            })
             .collect()
     }
 
     /// The unfolded rows drawn row `row` stands for, first and last.
     fn span_of(&self, row: usize) -> Option<(usize, usize)> {
-        self.spans().nth(row).map(|(start, len, _)| (start, start + len - 1))
+        self.spans()
+            .nth(row)
+            .map(|(start, len, _)| (start, start + len - 1))
     }
 
     /// The drawn row that shows unfolded row `unfolded` — its own, or the
     /// fold hiding it.
     fn row_of(&self, unfolded: usize) -> usize {
-        self.spans().position(|(start, len, _)| unfolded < start + len).unwrap_or(0)
+        self.spans()
+            .position(|(start, len, _)| unfolded < start + len)
+            .unwrap_or(0)
     }
 
     /// Opens the fold starting at unfolded row `first`.
@@ -147,20 +169,23 @@ struct Selection {
     /// Where the press landed.
     anchor: (usize, usize),
     /// Where the drag is now.
-    head:   (usize, usize),
+    head: (usize, usize),
 }
 
 impl Selection {
     /// The unfolded rows covered, first and last.
     fn lines(self) -> (usize, usize) {
-        (self.anchor.0.min(self.head.0), self.anchor.1.max(self.head.1))
+        (
+            self.anchor.0.min(self.head.0),
+            self.anchor.1.max(self.head.1),
+        )
     }
 }
 
 /// The comment being typed for a selection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommentDraft {
-    pub text:   String,
+    pub text: String,
     pub cursor: usize,
 }
 
@@ -175,22 +200,22 @@ pub enum ReviewOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
     pub review_id: String,
-    pub files:     Vec<ReviewFile>,
-    pub current:   usize,
+    pub files: Vec<ReviewFile>,
+    pub current: usize,
     /// The lines selected for a comment in the current file. There is no
     /// line cursor — lines are selected with the mouse (ADR 0010), so a row
     /// is marked only when it is part of a selection.
-    selected:      Option<Selection>,
+    selected: Option<Selection>,
     /// A button is down on the diff and the selection follows the pointer.
-    dragging:      bool,
+    dragging: bool,
     /// First drawn row of the current file's pane. The keys and the wheel
     /// move it, clamped to the last full pane once one has been drawn; the
     /// drawing side clamps it again (the pane can shrink) and writes it back.
-    pub scroll:    usize,
+    pub scroll: usize,
     /// Where the drawing side put the diff's rows on screen last frame —
     /// what a click is measured against.
     pub(crate) pane: Option<Pane>,
-    pub comment:   Option<CommentDraft>,
+    pub comment: Option<CommentDraft>,
     /// `⎋` with nothing selected asks before dropping the changes.
     pub confirm_discard: bool,
     /// `?` toggles the key list in the footer.
@@ -199,7 +224,11 @@ pub struct Review {
 
 impl Review {
     pub fn open(review_id: String, changeset: Changeset) -> Self {
-        let files = changeset.files.into_iter().map(|f| file_from(&f.path, f.before.as_deref(), &f.after)).collect();
+        let files = changeset
+            .files
+            .into_iter()
+            .map(|f| file_from(&f.path, f.before.as_deref(), &f.after))
+            .collect();
         Self {
             review_id,
             files,
@@ -264,9 +293,25 @@ impl Review {
             return;
         };
         let head = self.file().row_of(selected.head.0);
-        let next = if up { head.saturating_sub(1) } else { (head + 1).min(rows.saturating_sub(1)) };
-        let Some(span) = self.file().span_of(next) else { return };
-        self.selected = Some(if extend { Selection { head: span, ..selected } } else { Selection { anchor: span, head: span } });
+        let next = if up {
+            head.saturating_sub(1)
+        } else {
+            (head + 1).min(rows.saturating_sub(1))
+        };
+        let Some(span) = self.file().span_of(next) else {
+            return;
+        };
+        self.selected = Some(if extend {
+            Selection {
+                head: span,
+                ..selected
+            }
+        } else {
+            Selection {
+                anchor: span,
+                head: span,
+            }
+        });
         self.keep_in_view(next);
     }
 
@@ -285,7 +330,9 @@ impl Review {
     /// side's clamp is the only one.
     fn scroll_by(&mut self, delta: isize) {
         let rows = self.file().rows().len();
-        let last_top = self.pane.map_or(usize::MAX, |p| rows.saturating_sub(p.height as usize));
+        let last_top = self
+            .pane
+            .map_or(usize::MAX, |p| rows.saturating_sub(p.height as usize));
         self.scroll = self.scroll.saturating_add_signed(delta).min(last_top);
     }
 
@@ -308,7 +355,9 @@ impl Review {
             MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_ROWS as isize)),
             MouseEventKind::ScrollDown => self.scroll_by(WHEEL_ROWS as isize),
             MouseEventKind::Down(MouseButton::Left) => {
-                let Some(at) = self.row_at(column, row, false) else { return };
+                let Some(at) = self.row_at(column, row, false) else {
+                    return;
+                };
                 if let Some(DiffRow::Fold { first, .. }) = self.file().rows().get(at) {
                     let first = *first;
                     self.file_mut().expand(first);
@@ -321,7 +370,9 @@ impl Review {
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
                 // Past the pane's top or bottom edge the selection stops at
                 // the last row shown rather than being dropped.
-                let head = self.row_at(column, row, true).and_then(|at| self.file().span_of(at));
+                let head = self
+                    .row_at(column, row, true)
+                    .and_then(|at| self.file().span_of(at));
                 if let (Some(head), Some(selected)) = (head, &mut self.selected) {
                     selected.head = head;
                 }
@@ -336,8 +387,14 @@ impl Review {
     /// edge) lands on the first or last row shown.
     fn row_at(&self, column: u16, row: u16, clamp: bool) -> Option<usize> {
         let pane = self.pane?;
-        let shown = self.file().rows().len().saturating_sub(pane.top).min(pane.height as usize);
-        let inside = (pane.x..pane.x + pane.width).contains(&column) && (pane.y..pane.y + shown as u16).contains(&row);
+        let shown = self
+            .file()
+            .rows()
+            .len()
+            .saturating_sub(pane.top)
+            .min(pane.height as usize);
+        let inside = (pane.x..pane.x + pane.width).contains(&column)
+            && (pane.y..pane.y + shown as u16).contains(&row);
         if shown == 0 || !(inside || clamp) {
             return None;
         }
@@ -349,15 +406,34 @@ impl Review {
     pub fn selection_label(&self) -> Option<(String, String)> {
         let (first, last) = self.selected?.lines();
         let lines = self.line_range(first, last)?;
-        let name = self.file().path.rsplit('/').next().unwrap_or(&self.file().path).to_string();
-        let where_ = if lines.0 == lines.1 { format!("{name} · {}", lines.0) } else { format!("{name} · {}–{}", lines.0, lines.1) };
+        let name = self
+            .file()
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&self.file().path)
+            .to_string();
+        let where_ = if lines.0 == lines.1 {
+            format!("{name} · {}", lines.0)
+        } else {
+            format!("{name} · {}–{}", lines.0, lines.1)
+        };
         let n = last - first + 1;
-        Some((format!("{n} {}", if n == 1 { "line" } else { "lines" }), where_))
+        Some((
+            format!("{n} {}", if n == 1 { "line" } else { "lines" }),
+            where_,
+        ))
     }
 
     /// The new-file lines unfolded rows `first` through `last` anchor to.
     fn line_range(&self, first: usize, last: usize) -> Option<(usize, usize)> {
-        let anchors: Vec<usize> = self.file().unfolded.get(first..=last)?.iter().filter_map(DiffRow::anchor).collect();
+        let anchors: Vec<usize> = self
+            .file()
+            .unfolded
+            .get(first..=last)?
+            .iter()
+            .filter_map(DiffRow::anchor)
+            .collect();
         Some((*anchors.iter().min()?, *anchors.iter().max()?))
     }
 
@@ -372,10 +448,20 @@ impl Review {
         let mut comments: Vec<ReviewComment> = self
             .files
             .iter()
-            .flat_map(|f| f.comments.iter().map(move |c| ReviewComment { path: f.path.clone(), lines: c.lines, text: c.text.clone() }))
+            .flat_map(|f| {
+                f.comments.iter().map(move |c| ReviewComment {
+                    path: f.path.clone(),
+                    lines: c.lines,
+                    text: c.text.clone(),
+                })
+            })
             .collect();
         if !general.trim().is_empty() {
-            comments.push(ReviewComment { path: String::new(), lines: (0, 0), text: general.trim().to_string() });
+            comments.push(ReviewComment {
+                path: String::new(),
+                lines: (0, 0),
+                text: general.trim().to_string(),
+            });
         }
         (!comments.is_empty()).then_some(ReviewDecision::Comment { comments })
     }
@@ -383,7 +469,12 @@ impl Review {
     /// One key, with the review's own field text (`general`, what the
     /// developer typed into "Ask for a change") for the keys that send.
     /// Typing into that field is the caller's; this handles the rest.
-    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, general: &str) -> ReviewOutcome {
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        general: &str,
+    ) -> ReviewOutcome {
         if self.confirm_discard {
             return match code {
                 KeyCode::Char('1') | KeyCode::Esc => {
@@ -400,9 +491,13 @@ impl Review {
                 KeyCode::Enter => {
                     let text = draft.text.trim().to_string();
                     if !text.is_empty() {
-                        let lines = self.selected.and_then(|s| self.line_range(s.lines().0, s.lines().1));
+                        let lines = self
+                            .selected
+                            .and_then(|s| self.line_range(s.lines().0, s.lines().1));
                         if let Some(lines) = lines {
-                            self.file_mut().comments.push(PendingComment { lines, text });
+                            self.file_mut()
+                                .comments
+                                .push(PendingComment { lines, text });
                         }
                     }
                     self.comment = None;
@@ -411,14 +506,22 @@ impl Review {
                 KeyCode::Backspace => {
                     if draft.cursor > 0 {
                         draft.cursor -= 1;
-                        let at = draft.text.char_indices().nth(draft.cursor).map_or(draft.text.len(), |(i, _)| i);
+                        let at = draft
+                            .text
+                            .char_indices()
+                            .nth(draft.cursor)
+                            .map_or(draft.text.len(), |(i, _)| i);
                         draft.text.remove(at);
                     }
                 }
                 KeyCode::Left => draft.cursor = draft.cursor.saturating_sub(1),
                 KeyCode::Right => draft.cursor = (draft.cursor + 1).min(draft.text.chars().count()),
                 KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    let at = draft.text.char_indices().nth(draft.cursor).map_or(draft.text.len(), |(i, _)| i);
+                    let at = draft
+                        .text
+                        .char_indices()
+                        .nth(draft.cursor)
+                        .map_or(draft.text.len(), |(i, _)| i);
                     draft.text.insert(at, c);
                     draft.cursor += 1;
                 }
@@ -432,7 +535,9 @@ impl Review {
             // The keyboard's way to a selection (HIG, "Keyboards": Shift and
             // an arrow extends a selection). With nothing selected the
             // arrows scroll; once a line is selected they move it.
-            KeyCode::Up | KeyCode::Down if shift || self.selected.is_some() => self.step_selection(code == KeyCode::Up, shift),
+            KeyCode::Up | KeyCode::Down if shift || self.selected.is_some() => {
+                self.step_selection(code == KeyCode::Up, shift)
+            }
             KeyCode::Up => self.scroll_by(-1),
             KeyCode::Down => self.scroll_by(1),
             KeyCode::PageUp => self.scroll_by(-(PAGE_ROWS as isize)),
@@ -443,8 +548,11 @@ impl Review {
                 self.file_mut().expand_all();
                 self.rows_changed();
             }
-            KeyCode::Tab | KeyCode::Right => self.go_to_file((self.current + 1) % self.files.len().max(1)),
-            KeyCode::BackTab | KeyCode::Left => self.go_to_file((self.current + self.files.len().max(1) - 1) % self.files.len().max(1)),
+            KeyCode::Tab | KeyCode::Right => {
+                self.go_to_file((self.current + 1) % self.files.len().max(1))
+            }
+            KeyCode::BackTab | KeyCode::Left => self
+                .go_to_file((self.current + self.files.len().max(1) - 1) % self.files.len().max(1)),
             KeyCode::Char('?') if general.is_empty() => self.keys_shown = !self.keys_shown,
             KeyCode::Enter if modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(decision) = self.comments_decision(general) {
@@ -499,13 +607,26 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     let before_lines: Vec<&str> = before.map(|b| b.lines().collect()).unwrap_or_default();
     let after_lines: Vec<&str> = after.lines().collect();
 
-    let prefix = before_lines.iter().zip(&after_lines).take_while(|(a, b)| a == b).count();
+    let prefix = before_lines
+        .iter()
+        .zip(&after_lines)
+        .take_while(|(a, b)| a == b)
+        .count();
     let max_suffix = before_lines.len().min(after_lines.len()) - prefix;
-    let suffix = before_lines.iter().rev().zip(after_lines.iter().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
+    let suffix = before_lines
+        .iter()
+        .rev()
+        .zip(after_lines.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
 
     let mut unfolded: Vec<DiffRow> = Vec::with_capacity(after_lines.len() + before_lines.len());
     for (i, text) in after_lines[..prefix].iter().enumerate() {
-        unfolded.push(DiffRow::Context { line: i + 1, text: (*text).to_string() });
+        unfolded.push(DiffRow::Context {
+            line: i + 1,
+            text: (*text).to_string(),
+        });
     }
     let mid_a = &before_lines[prefix..before_lines.len() - suffix];
     let mid_b = &after_lines[prefix..after_lines.len() - suffix];
@@ -517,9 +638,15 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
         match op {
             Op::Same(text) => {
                 for d in pending_dels.drain(..) {
-                    unfolded.push(DiffRow::Del { after: line, text: d });
+                    unfolded.push(DiffRow::Del {
+                        after: line,
+                        text: d,
+                    });
                 }
-                unfolded.push(DiffRow::Context { line, text: text.to_string() });
+                unfolded.push(DiffRow::Context {
+                    line,
+                    text: text.to_string(),
+                });
                 line += 1;
             }
             Op::Del(text) => {
@@ -528,24 +655,45 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
             }
             Op::Add(text) => {
                 for d in pending_dels.drain(..) {
-                    unfolded.push(DiffRow::Del { after: line, text: d });
+                    unfolded.push(DiffRow::Del {
+                        after: line,
+                        text: d,
+                    });
                 }
                 added_lines += 1;
-                unfolded.push(DiffRow::Add { line, text: text.to_string() });
+                unfolded.push(DiffRow::Add {
+                    line,
+                    text: text.to_string(),
+                });
                 line += 1;
             }
         }
     }
     for d in pending_dels.drain(..) {
-        unfolded.push(DiffRow::Del { after: line, text: d });
+        unfolded.push(DiffRow::Del {
+            after: line,
+            text: d,
+        });
     }
     for text in &after_lines[after_lines.len() - suffix..] {
-        unfolded.push(DiffRow::Context { line, text: (*text).to_string() });
+        unfolded.push(DiffRow::Context {
+            line,
+            text: (*text).to_string(),
+        });
         line += 1;
     }
 
     let folds = fold_runs(&unfolded);
-    ReviewFile { path: path.to_string(), added: before.is_none(), unfolded, folds, added_lines, removed_lines, read: false, comments: Vec::new() }
+    ReviewFile {
+        path: path.to_string(),
+        added: before.is_none(),
+        unfolded,
+        folds,
+        added_lines,
+        removed_lines,
+        read: false,
+        comments: Vec::new(),
+    }
 }
 
 /// Runs of context longer than `2 * CONTEXT` fold, keeping `CONTEXT` lines
@@ -586,7 +734,11 @@ fn lcs_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
     let mut lcs = vec![vec![0usize; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            lcs[i][j] = if a[i] == b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+            lcs[i][j] = if a[i] == b[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
         }
     }
     let mut ops = Vec::new();
@@ -625,7 +777,16 @@ mod tests {
     }
 
     fn review_of(before: Option<&str>, after: &str) -> Review {
-        Review::open("r1".into(), Changeset { files: vec![ChangedFile { path: "src/x.rs".into(), before: before.map(str::to_string), after: after.into() }] })
+        Review::open(
+            "r1".into(),
+            Changeset {
+                files: vec![ChangedFile {
+                    path: "src/x.rs".into(),
+                    before: before.map(str::to_string),
+                    after: after.into(),
+                }],
+            },
+        )
     }
 
     /// The frame's own shape: a long unchanged run folds to one row with a
@@ -637,11 +798,41 @@ mod tests {
         let r = review_of(Some(&before), &after);
         let rows = r.file().rows();
         assert_eq!(rows[0], DiffRow::Fold { first: 0, len: 143 });
-        assert_eq!(rows[1], DiffRow::Context { line: 144, text: "line 144".into() });
-        assert_eq!(rows[2], DiffRow::Del { after: 145, text: "line 145".into() });
-        assert_eq!(rows[3], DiffRow::Add { line: 145, text: "line 145 changed".into() });
-        assert_eq!(rows[4], DiffRow::Context { line: 146, text: "line 146".into() });
-        assert_eq!(rows[5], DiffRow::Fold { first: 147, len: 14 });
+        assert_eq!(
+            rows[1],
+            DiffRow::Context {
+                line: 144,
+                text: "line 144".into()
+            }
+        );
+        assert_eq!(
+            rows[2],
+            DiffRow::Del {
+                after: 145,
+                text: "line 145".into()
+            }
+        );
+        assert_eq!(
+            rows[3],
+            DiffRow::Add {
+                line: 145,
+                text: "line 145 changed".into()
+            }
+        );
+        assert_eq!(
+            rows[4],
+            DiffRow::Context {
+                line: 146,
+                text: "line 146".into()
+            }
+        );
+        assert_eq!(
+            rows[5],
+            DiffRow::Fold {
+                first: 147,
+                len: 14
+            }
+        );
         assert_eq!(rows.len(), 6);
         assert_eq!((r.file().added_lines, r.file().removed_lines), (1, 1));
     }
@@ -650,13 +841,31 @@ mod tests {
     fn a_new_file_is_all_additions_and_marked_added() {
         let r = review_of(None, "a\nb\n");
         assert!(r.file().added);
-        assert_eq!(r.file().rows(), vec![DiffRow::Add { line: 1, text: "a".into() }, DiffRow::Add { line: 2, text: "b".into() }]);
+        assert_eq!(
+            r.file().rows(),
+            vec![
+                DiffRow::Add {
+                    line: 1,
+                    text: "a".into()
+                },
+                DiffRow::Add {
+                    line: 2,
+                    text: "b".into()
+                }
+            ]
+        );
     }
 
     /// A pane whose rows start at screen row 10, column 30, showing from
     /// row `top` of the file.
     fn pane_at(r: &mut Review, top: usize) {
-        r.pane = Some(Pane { x: 30, y: 10, width: 60, height: 20, top });
+        r.pane = Some(Pane {
+            x: 30,
+            y: 10,
+            width: 60,
+            height: 20,
+            top,
+        });
     }
 
     #[test]
@@ -667,36 +876,68 @@ mod tests {
         assert!(matches!(r.file().rows()[0], DiffRow::Fold { .. }));
         pane_at(&mut r, 0);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 10);
-        assert_eq!(r.file().rows()[0], DiffRow::Context { line: 1, text: "line 1".into() });
+        assert_eq!(
+            r.file().rows()[0],
+            DiffRow::Context {
+                line: 1,
+                text: "line 1".into()
+            }
+        );
         assert_eq!(r.selection(), None);
     }
 
     #[test]
     fn a_click_selects_one_line_and_a_drag_carries_it_either_way() {
-        let mut r = review_of(Some(&numbered(5)), "line 1\nline 2 changed\nline 3 changed\nline 4\nline 5\n");
+        let mut r = review_of(
+            Some(&numbered(5)),
+            "line 1\nline 2 changed\nline 3 changed\nline 4\nline 5\n",
+        );
         pane_at(&mut r, 0);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 13);
         r.handle_mouse(MouseEventKind::Up(MouseButton::Left), 40, 13);
-        assert_eq!(r.selection(), Some((3, 3)), "a click is a one-line selection");
+        assert_eq!(
+            r.selection(),
+            Some((3, 3)),
+            "a click is a one-line selection"
+        );
 
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 14);
         r.handle_mouse(MouseEventKind::Drag(MouseButton::Left), 40, 12);
-        assert_eq!(r.selection(), Some((2, 4)), "dragging upward selects the rows between");
+        assert_eq!(
+            r.selection(),
+            Some((2, 4)),
+            "dragging upward selects the rows between"
+        );
         r.handle_mouse(MouseEventKind::Drag(MouseButton::Left), 40, 2);
-        assert_eq!(r.selection(), Some((0, 4)), "past the pane's top it stops at the first row shown");
+        assert_eq!(
+            r.selection(),
+            Some((0, 4)),
+            "past the pane's top it stops at the first row shown"
+        );
         r.handle_mouse(MouseEventKind::Up(MouseButton::Left), 40, 2);
         r.handle_mouse(MouseEventKind::Drag(MouseButton::Left), 40, 16);
-        assert_eq!(r.selection(), Some((0, 4)), "a move after the release does not drag");
+        assert_eq!(
+            r.selection(),
+            Some((0, 4)),
+            "a move after the release does not drag"
+        );
     }
 
     #[test]
     fn a_click_off_the_diff_selects_nothing_and_the_rows_follow_the_scroll() {
-        let mut r = review_of(Some(&numbered(5)), "line 1\nline 2 changed\nline 3 changed\nline 4\nline 5\n");
+        let mut r = review_of(
+            Some(&numbered(5)),
+            "line 1\nline 2 changed\nline 3 changed\nline 4\nline 5\n",
+        );
         pane_at(&mut r, 0);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 5, 12);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 9);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 29);
-        assert_eq!(r.selection(), None, "the tree, the header and below the last row are not lines");
+        assert_eq!(
+            r.selection(),
+            None,
+            "the tree, the header and below the last row are not lines"
+        );
         pane_at(&mut r, 2);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 10);
         assert_eq!(r.selection(), Some((2, 2)));
@@ -716,10 +957,24 @@ mod tests {
         assert_eq!(r.selection_label().unwrap().1, "x.rs · 15");
         pane_at(&mut r, 0);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 10);
-        assert!(!matches!(r.file().rows()[0], DiffRow::Fold { .. }), "the fold above opened");
-        assert_eq!(r.selection_label().unwrap().1, "x.rs · 15", "the selection did not move onto line 4");
-        assert_eq!(r.selection(), Some((15, 15)), "its drawn row moved down with the lines it covers");
-        assert_eq!(r.pane, None, "the pane drawn before the fold opened no longer says what is under a click");
+        assert!(
+            !matches!(r.file().rows()[0], DiffRow::Fold { .. }),
+            "the fold above opened"
+        );
+        assert_eq!(
+            r.selection_label().unwrap().1,
+            "x.rs · 15",
+            "the selection did not move onto line 4"
+        );
+        assert_eq!(
+            r.selection(),
+            Some((15, 15)),
+            "its drawn row moved down with the lines it covers"
+        );
+        assert_eq!(
+            r.pane, None,
+            "the pane drawn before the fold opened no longer says what is under a click"
+        );
     }
 
     #[test]
@@ -729,7 +984,10 @@ mod tests {
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 14);
         r.handle_mouse(MouseEventKind::Drag(MouseButton::Left), 40, 15);
         assert_eq!(r.selection(), Some((4, 5)));
-        assert_eq!(r.selection_label(), Some(("15 lines".into(), "x.rs · 16–30".into())));
+        assert_eq!(
+            r.selection_label(),
+            Some(("15 lines".into(), "x.rs · 16–30".into()))
+        );
     }
 
     #[test]
@@ -738,7 +996,11 @@ mod tests {
         r.select(3, 3);
         r.handle_key(KeyCode::Char(' '), KeyModifiers::NONE, "");
         assert!(!r.file().has_folds());
-        assert_eq!(r.file().rows().len(), 31, "thirty lines and the one removed");
+        assert_eq!(
+            r.file().rows().len(),
+            31,
+            "thirty lines and the one removed"
+        );
         assert_eq!(r.selection_label().unwrap().1, "x.rs · 15");
     }
 
@@ -750,23 +1012,47 @@ mod tests {
         pane_at(&mut r, 0);
         r.handle_key(KeyCode::PageDown, KeyModifiers::NONE, "");
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
-        assert_eq!(r.selection_label(), Some(("1 line".into(), "x.rs · 11".into())), "the first line shown");
+        assert_eq!(
+            r.selection_label(),
+            Some(("1 line".into(), "x.rs · 11".into())),
+            "the first line shown"
+        );
         r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
         r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
-        assert_eq!(r.selection_label(), Some(("1 line".into(), "x.rs · 13".into())), "the arrows move a selection");
+        assert_eq!(
+            r.selection_label(),
+            Some(("1 line".into(), "x.rs · 13".into())),
+            "the arrows move a selection"
+        );
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
-        assert_eq!(r.selection_label(), Some(("3 lines".into(), "x.rs · 13–15".into())), "Shift extends it");
+        assert_eq!(
+            r.selection_label(),
+            Some(("3 lines".into(), "x.rs · 13–15".into())),
+            "Shift extends it"
+        );
         r.handle_key(KeyCode::Up, KeyModifiers::SHIFT, "");
-        assert_eq!(r.selection_label(), Some(("2 lines".into(), "x.rs · 13–14".into())), "and takes it back");
+        assert_eq!(
+            r.selection_label(),
+            Some(("2 lines".into(), "x.rs · 13–14".into())),
+            "and takes it back"
+        );
         for _ in 0..30 {
             r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
         }
-        assert_eq!(r.selection_label().unwrap().1, "x.rs · 40", "it stops at the last line");
+        assert_eq!(
+            r.selection_label().unwrap().1,
+            "x.rs · 40",
+            "it stops at the last line"
+        );
         assert_eq!(r.scroll, 40 - 20, "and the pane follows it");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
         r.handle_key(KeyCode::Up, KeyModifiers::NONE, "");
-        assert_eq!((r.selection(), r.scroll), (None, 19), "with nothing selected the arrows scroll again");
+        assert_eq!(
+            (r.selection(), r.scroll),
+            (None, 19),
+            "with nothing selected the arrows scroll again"
+        );
     }
 
     #[test]
@@ -788,7 +1074,20 @@ mod tests {
     fn another_file_drops_the_selection_and_the_pane() {
         let mut r = Review::open(
             "r".into(),
-            Changeset { files: vec![ChangedFile { path: "a.rs".into(), before: None, after: "a\n".into() }, ChangedFile { path: "b.rs".into(), before: None, after: "b\n".into() }] },
+            Changeset {
+                files: vec![
+                    ChangedFile {
+                        path: "a.rs".into(),
+                        before: None,
+                        after: "a\n".into(),
+                    },
+                    ChangedFile {
+                        path: "b.rs".into(),
+                        before: None,
+                        after: "b\n".into(),
+                    },
+                ],
+            },
         );
         pane_at(&mut r, 0);
         r.select(0, 0);
@@ -804,7 +1103,10 @@ mod tests {
         // Rows: 1 ctx, del 2, del 3, add 2, add 3, 4 ctx, 5 ctx (no folds: runs of 1 and 2).
         r.select(4, 3);
         assert_eq!(r.selection(), Some((3, 4)));
-        assert_eq!(r.selection_label(), Some(("2 lines".into(), "x.rs · 2–3".into())));
+        assert_eq!(
+            r.selection_label(),
+            Some(("2 lines".into(), "x.rs · 2–3".into()))
+        );
 
         r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
         assert!(r.comment.is_some());
@@ -812,7 +1114,13 @@ mod tests {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
         r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
-        assert_eq!(r.file().comments, vec![PendingComment { lines: (2, 3), text: "Use config".into() }]);
+        assert_eq!(
+            r.file().comments,
+            vec![PendingComment {
+                lines: (2, 3),
+                text: "Use config".into()
+            }]
+        );
         assert_eq!(r.selection(), None);
         assert_eq!(r.comment_count(), 1);
     }
@@ -823,18 +1131,33 @@ mod tests {
             "r1".into(),
             Changeset {
                 files: vec![
-                    ChangedFile { path: "a.rs".into(), before: Some("x\n".into()), after: "y\n".into() },
-                    ChangedFile { path: "b.rs".into(), before: None, after: "z\n".into() },
+                    ChangedFile {
+                        path: "a.rs".into(),
+                        before: Some("x\n".into()),
+                        after: "y\n".into(),
+                    },
+                    ChangedFile {
+                        path: "b.rs".into(),
+                        before: None,
+                        after: "z\n".into(),
+                    },
                 ],
             },
         );
-        assert_eq!(r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""), ReviewOutcome::Stay, "grey until every file is read");
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),
+            ReviewOutcome::Stay,
+            "grey until every file is read"
+        );
         r.mark_read();
         r.handle_key(KeyCode::Tab, KeyModifiers::NONE, "");
         assert_eq!(r.current, 1);
         r.mark_read();
         assert!(r.all_read());
-        assert_eq!(r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""), ReviewOutcome::Decide(ReviewDecision::Approve));
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),
+            ReviewOutcome::Decide(ReviewDecision::Approve)
+        );
     }
 
     /// Without the Kitty protocol `⌃↩` is `↩`, so a bare `↩` on a fully read
@@ -842,9 +1165,16 @@ mod tests {
     #[test]
     fn a_bare_enter_approves_where_ctrl_enter_cannot_be_told_apart() {
         let mut r = review_of(Some("x\n"), "y\n");
-        assert_eq!(r.handle_key(KeyCode::Enter, KeyModifiers::NONE, ""), ReviewOutcome::Stay, "not before every file is read");
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::NONE, ""),
+            ReviewOutcome::Stay,
+            "not before every file is read"
+        );
         r.mark_read();
-        assert_eq!(r.handle_key(KeyCode::Enter, KeyModifiers::NONE, ""), ReviewOutcome::Decide(ReviewDecision::Approve));
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::NONE, ""),
+            ReviewOutcome::Decide(ReviewDecision::Approve)
+        );
     }
 
     #[test]
@@ -857,12 +1187,21 @@ mod tests {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
         r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
-        let ReviewOutcome::Decide(ReviewDecision::Comment { comments }) = r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, "and rename it") else {
+        let ReviewOutcome::Decide(ReviewDecision::Comment { comments }) =
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, "and rename it")
+        else {
             panic!("comments must send before an approve")
         };
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].path, "src/x.rs");
-        assert_eq!(comments[1], ReviewComment { path: String::new(), lines: (0, 0), text: "and rename it".into() });
+        assert_eq!(
+            comments[1],
+            ReviewComment {
+                path: String::new(),
+                lines: (0, 0),
+                text: "and rename it".into()
+            }
+        );
     }
 
     #[test]
@@ -877,6 +1216,9 @@ mod tests {
         r.handle_key(KeyCode::Char('1'), KeyModifiers::NONE, "");
         assert!(!r.confirm_discard, "1 keeps reviewing");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
-        assert_eq!(r.handle_key(KeyCode::Char('2'), KeyModifiers::NONE, ""), ReviewOutcome::Decide(ReviewDecision::Discard));
+        assert_eq!(
+            r.handle_key(KeyCode::Char('2'), KeyModifiers::NONE, ""),
+            ReviewOutcome::Decide(ReviewDecision::Discard)
+        );
     }
 }

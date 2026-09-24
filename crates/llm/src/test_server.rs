@@ -45,7 +45,9 @@ pub fn spawn(responses: Vec<Canned>) -> FakeServer {
 
     tokio::spawn(async move {
         loop {
-            let Ok((socket, _)) = listener.accept().await else { return };
+            let Ok((socket, _)) = listener.accept().await else {
+                return;
+            };
             let queue = queue.clone();
             tokio::spawn(handle_connection(socket, queue));
         }
@@ -59,7 +61,9 @@ async fn handle_connection(mut socket: tokio::net::TcpStream, queue: Arc<Mutex<V
         return;
     }
 
-    let Some(response) = queue.lock().expect("queue lock poisoned").pop_front() else { return };
+    let Some(response) = queue.lock().expect("queue lock poisoned").pop_front() else {
+        return;
+    };
     match response {
         Canned::Status(code, body) => {
             let head = format!("HTTP/1.1 {code} status\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
@@ -68,13 +72,15 @@ async fn handle_connection(mut socket: tokio::net::TcpStream, queue: Arc<Mutex<V
             let _ = socket.shutdown().await;
         }
         Canned::Sse(body) => {
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(head.as_bytes()).await;
             let _ = socket.write_all(body.as_bytes()).await;
             let _ = socket.shutdown().await;
         }
         Canned::SseThenStall(prefix) => {
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(head.as_bytes()).await;
             let _ = socket.write_all(prefix.as_bytes()).await;
             std::future::pending::<()>().await;
@@ -124,7 +130,11 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 fn parse_content_length(headers: &[u8]) -> usize {
     let text = String::from_utf8_lossy(headers);
     text.lines()
-        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(|v| v.trim().to_string())
+        })
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
 }

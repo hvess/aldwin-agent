@@ -18,16 +18,18 @@ const PROVIDER_NAME: &str = "openai-compatible";
 /// (see aldwin-llm.md). No OpenAI wire type crosses this struct's public
 /// surface — see `wire_openai.rs`.
 pub struct OpenAiCompatibleClient {
-    http:         reqwest::Client,
-    config:       ProviderConfig,
-    headers:      HeaderMap,
-    endpoint:     String,
+    http: reqwest::Client,
+    config: ProviderConfig,
+    headers: HeaderMap,
+    endpoint: String,
     idle_timeout: std::time::Duration,
 }
 
 impl std::fmt::Debug for OpenAiCompatibleClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenAiCompatibleClient").field("config", &self.config).finish_non_exhaustive()
+        f.debug_struct("OpenAiCompatibleClient")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
     }
 }
 
@@ -36,36 +38,76 @@ impl OpenAiCompatibleClient {
     /// `config.base_url` — there's no sane default URL for
     /// "OpenAI-compatible," unlike Anthropic's single well-known endpoint.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
-        let endpoint = config.base_url.clone().ok_or(LlmClientInitError::MissingBaseUrl)?;
+        let endpoint = config
+            .base_url
+            .clone()
+            .ok_or(LlmClientInitError::MissingBaseUrl)?;
 
-        let api_key = std::env::var(&config.api_key_env)
-            .map_err(|_| LlmClientInitError::MissingApiKeyEnv { var: config.api_key_env.clone() })?;
+        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
+            LlmClientInitError::MissingApiKeyEnv {
+                var: config.api_key_env.clone(),
+            }
+        })?;
 
         let mut headers = HeaderMap::new();
-        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|_| LlmClientInitError::InvalidApiKeyValue { var: config.api_key_env.clone() })?;
+        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
+            LlmClientInitError::InvalidApiKeyValue {
+                var: config.api_key_env.clone(),
+            }
+        })?;
         headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
 
-        let http = reqwest::Client::builder().build().map_err(LlmClientInitError::HttpClient)?;
+        let http = reqwest::Client::builder()
+            .build()
+            .map_err(LlmClientInitError::HttpClient)?;
 
-        Ok(Self { http, config, headers, endpoint, idle_timeout: crate::retry::IDLE_TIMEOUT })
+        Ok(Self {
+            http,
+            config,
+            headers,
+            endpoint,
+            idle_timeout: crate::retry::IDLE_TIMEOUT,
+        })
     }
 
     /// Test-only: points at a local fake server instead of a real endpoint,
     /// with an injectable idle timeout — mirrors `AnthropicClient::with_endpoint`.
     #[cfg(test)]
-    pub(crate) fn with_endpoint(config: ProviderConfig, api_key: &str, endpoint: String, idle_timeout: std::time::Duration) -> Self {
+    pub(crate) fn with_endpoint(
+        config: ProviderConfig,
+        api_key: &str,
+        endpoint: String,
+        idle_timeout: std::time::Duration,
+    ) -> Self {
         let mut headers = HeaderMap::new();
-        headers.insert(reqwest::header::AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap());
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         let http = reqwest::Client::builder().build().unwrap();
-        Self { http, config, headers, endpoint, idle_timeout }
+        Self {
+            http,
+            config,
+            headers,
+            endpoint,
+            idle_timeout,
+        }
     }
 }
 
 impl LlmClient for OpenAiCompatibleClient {
-    fn stream<'a>(&'a self, request: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+    fn stream<'a>(
+        &'a self,
+        request: LlmRequest<'a>,
+    ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
         let body = wire_openai::build_request(&self.config, &request);
 
         Box::pin(try_stream! {
@@ -197,12 +239,26 @@ mod tests {
         }
     }
 
-    fn client_at(server: &test_server::FakeServer, idle_timeout: Duration) -> OpenAiCompatibleClient {
-        OpenAiCompatibleClient::with_endpoint(config(), "test-key", server.url("/v1/chat/completions"), idle_timeout)
+    fn client_at(
+        server: &test_server::FakeServer,
+        idle_timeout: Duration,
+    ) -> OpenAiCompatibleClient {
+        OpenAiCompatibleClient::with_endpoint(
+            config(),
+            "test-key",
+            server.url("/v1/chat/completions"),
+            idle_timeout,
+        )
     }
 
     fn request<'a>(messages: &'a [Message]) -> LlmRequest<'a> {
-        LlmRequest { model: "unused", system: "sys", tools: &[], messages, cache_breakpoints: &[] }
+        LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools: &[],
+            messages,
+            cache_breakpoints: &[],
+        }
     }
 
     fn success_sse() -> String {
@@ -248,7 +304,13 @@ mod tests {
         let server = test_server::spawn(vec![Canned::Sse(lumo_sse())]);
         let client = client_at(&server, Duration::from_secs(5));
         let messages = vec![];
-        let events: Vec<LlmEvent> = client.stream(request(&messages)).collect::<Vec<_>>().await.into_iter().map(|e| e.unwrap()).collect();
+        let events: Vec<LlmEvent> = client
+            .stream(request(&messages))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|e| e.unwrap())
+            .collect();
 
         let [LlmEvent::TextDelta { text }, LlmEvent::StepEnded { outcome }] = &events[..] else {
             panic!("expected TextDelta then StepEnded, got {events:?}")
@@ -265,20 +327,41 @@ mod tests {
     /// error all reach.
     #[tokio::test]
     async fn stream_ending_after_finish_reason_completes_instead_of_retrying() {
-        let sse = [r#"data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}"#, "data:[DONE]", ""].join("\n\n");
+        let sse = [
+            r#"data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}"#,
+            "data:[DONE]",
+            "",
+        ]
+        .join("\n\n");
         let server = test_server::spawn(vec![Canned::Sse(sse), Canned::Sse(success_sse())]);
         let client = client_at(&server, Duration::from_secs(5));
         let messages = vec![];
-        let events: Vec<LlmEvent> = client.stream(request(&messages)).collect::<Vec<_>>().await.into_iter().map(|e| e.unwrap()).collect();
+        let events: Vec<LlmEvent> = client
+            .stream(request(&messages))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|e| e.unwrap())
+            .collect();
 
-        assert!(!events.iter().any(|e| matches!(e, LlmEvent::RetryAttempt { .. })), "got {events:?}");
-        let [LlmEvent::TextDelta { .. }, LlmEvent::StepEnded { outcome }] = &events[..] else { panic!("got {events:?}") };
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::RetryAttempt { .. })),
+            "got {events:?}"
+        );
+        let [LlmEvent::TextDelta { .. }, LlmEvent::StepEnded { outcome }] = &events[..] else {
+            panic!("got {events:?}")
+        };
         assert_eq!(outcome.usage.input_tokens, 0);
     }
 
     #[tokio::test]
     async fn retryable_status_retries_then_succeeds() {
-        let server = test_server::spawn(vec![Canned::Status(503, r#"{"detail":"overloaded"}"#.into()), Canned::Sse(success_sse())]);
+        let server = test_server::spawn(vec![
+            Canned::Status(503, r#"{"detail":"overloaded"}"#.into()),
+            Canned::Sse(success_sse()),
+        ]);
         let client = client_at(&server, Duration::from_secs(5));
         let messages = vec![];
         let events: Vec<_> = client.stream(request(&messages)).collect().await;
@@ -303,13 +386,22 @@ mod tests {
         let messages = vec![];
         let events: Vec<_> = client.stream(request(&messages)).collect().await;
 
-        assert!(events.iter().any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
-        assert!(events.iter().any(|e| matches!(e, Ok(LlmEvent::StepEnded { .. }))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Ok(LlmEvent::StepEnded { .. }))));
     }
 
     #[tokio::test]
     async fn retries_exhaust_into_a_terminal_error() {
-        let server = test_server::spawn(vec![Canned::HangUp, Canned::HangUp, Canned::HangUp, Canned::HangUp]);
+        let server = test_server::spawn(vec![
+            Canned::HangUp,
+            Canned::HangUp,
+            Canned::HangUp,
+            Canned::HangUp,
+        ]);
         let client = client_at(&server, Duration::from_secs(5));
         let messages = vec![];
         let events: Vec<_> = client.stream(request(&messages)).collect().await;
@@ -327,6 +419,9 @@ mod tests {
             base_url: None,
             extended_thinking_budget: 4096,
         };
-        assert!(matches!(OpenAiCompatibleClient::new(config), Err(LlmClientInitError::MissingBaseUrl)));
+        assert!(matches!(
+            OpenAiCompatibleClient::new(config),
+            Err(LlmClientInitError::MissingBaseUrl)
+        ));
     }
 }

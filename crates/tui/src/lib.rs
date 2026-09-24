@@ -37,7 +37,9 @@ mod tokens;
 mod ui;
 mod version;
 
-pub use app::{App, Asker, Asking, CommandMenu, Mode, ModelChoice, ProviderChoice, StatusInfo, COMMANDS};
+pub use app::{
+    App, Asker, Asking, CommandMenu, Mode, ModelChoice, ProviderChoice, StatusInfo, COMMANDS,
+};
 pub use list::{List, ListRow};
 pub use log::{LogEntry, WorkItem};
 pub use palette::Theme;

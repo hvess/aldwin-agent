@@ -25,13 +25,13 @@ use unicode_width::UnicodeWidthChar;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Row {
     pub start: usize,
-    pub end:   usize,
+    pub end: usize,
 }
 
 /// A draft wrapped to a column width.
 pub(crate) struct Layout {
     chars: Vec<char>,
-    rows:  Vec<Row>,
+    rows: Vec<Row>,
 }
 
 impl Layout {
@@ -78,7 +78,10 @@ impl Layout {
                 last_space = Some(i);
             }
         }
-        rows.push(Row { start, end: chars.len() });
+        rows.push(Row {
+            start,
+            end: chars.len(),
+        });
         Self { chars, rows }
     }
 
@@ -121,7 +124,9 @@ impl Layout {
     /// instead.
     pub(crate) fn step_row(&self, cursor: usize, delta: isize) -> Option<usize> {
         let (row, col) = self.position(cursor);
-        let target = row.checked_add_signed(delta).filter(|&t| t < self.rows.len())?;
+        let target = row
+            .checked_add_signed(delta)
+            .filter(|&t| t < self.rows.len())?;
         Some(self.index_at(target, col))
     }
 
@@ -134,9 +139,18 @@ impl Layout {
     /// the caret visibly is). Clamping to the end would make Up from a full
     /// row appear not to move at all.
     fn index_at(&self, i: usize, col: usize) -> usize {
-        let Some(row) = self.rows.get(i) else { return self.chars.len() };
-        let soft = self.rows.get(i + 1).is_some_and(|next| next.start == row.end);
-        let limit = if soft { row.end.saturating_sub(1).max(row.start) } else { row.end };
+        let Some(row) = self.rows.get(i) else {
+            return self.chars.len();
+        };
+        let soft = self
+            .rows
+            .get(i + 1)
+            .is_some_and(|next| next.start == row.end);
+        let limit = if soft {
+            row.end.saturating_sub(1).max(row.start)
+        } else {
+            row.end
+        };
         let mut used = 0usize;
         for idx in row.start..limit {
             let w = self.chars[idx].width().unwrap_or(0);
@@ -149,7 +163,10 @@ impl Layout {
     }
 
     fn width_of(&self, from: usize, to: usize) -> usize {
-        self.chars[from..to.max(from)].iter().map(|c| c.width().unwrap_or(0)).sum()
+        self.chars[from..to.max(from)]
+            .iter()
+            .map(|c| c.width().unwrap_or(0))
+            .sum()
     }
 }
 
@@ -247,7 +264,9 @@ mod tests {
 
     fn rows(text: &str, width: usize) -> Vec<String> {
         let layout = Layout::new(text, width);
-        (0..layout.row_count()).map(|i| layout.row_text(i)).collect()
+        (0..layout.row_count())
+            .map(|i| layout.row_text(i))
+            .collect()
     }
 
     #[test]
@@ -274,8 +293,16 @@ mod tests {
     fn every_row_fits_the_column_even_with_wide_characters() {
         let layout = Layout::new("日本語のテキストです", 7);
         for i in 0..layout.row_count() {
-            let w: usize = layout.row_text(i).chars().map(|c| c.width().unwrap_or(0)).sum();
-            assert!(w <= 7, "row {i} is {w} cells wide: {:?}", layout.row_text(i));
+            let w: usize = layout
+                .row_text(i)
+                .chars()
+                .map(|c| c.width().unwrap_or(0))
+                .sum();
+            assert!(
+                w <= 7,
+                "row {i} is {w} cells wide: {:?}",
+                layout.row_text(i)
+            );
         }
     }
 
@@ -285,8 +312,16 @@ mod tests {
     fn the_cursor_is_reported_on_the_wrapped_row_not_the_source_line() {
         let layout = Layout::new("hello there world", 11);
         assert_eq!(layout.position(0), (0, 0));
-        assert_eq!(layout.position(6), (1, 0), "the cursor after the break opens the second row");
-        assert_eq!(layout.position(17), (1, 11), "and the end of the draft is at the end of the last row");
+        assert_eq!(
+            layout.position(6),
+            (1, 0),
+            "the cursor after the break opens the second row"
+        );
+        assert_eq!(
+            layout.position(17),
+            (1, 11),
+            "and the end of the draft is at the end of the last row"
+        );
     }
 
     #[test]
@@ -299,8 +334,16 @@ mod tests {
     #[test]
     fn stepping_a_row_holds_the_column_and_clamps_to_a_shorter_row() {
         let layout = Layout::new("abcdef\nxy\nlonger", 20);
-        assert_eq!(layout.step_row(5, 1), Some(9), "column 5 clamps to the end of the two-character row");
-        assert_eq!(layout.step_row(0, -1), None, "there is no row above the first");
+        assert_eq!(
+            layout.step_row(5, 1),
+            Some(9),
+            "column 5 clamps to the end of the two-character row"
+        );
+        assert_eq!(
+            layout.step_row(0, -1),
+            None,
+            "there is no row above the first"
+        );
         assert_eq!(layout.step_row(13, 1), None, "and none below the last");
     }
 
@@ -323,7 +366,11 @@ mod tests {
     fn a_paste_is_normalized_rather_than_taken_literally() {
         assert_eq!(sanitize("a\r\nb\rc"), "a\nb\nc");
         assert_eq!(sanitize("a\tb"), "a    b");
-        assert_eq!(sanitize("a\x1b[31mb\x07"), "a[31mb", "escapes lose their control characters, not their text");
+        assert_eq!(
+            sanitize("a\x1b[31mb\x07"),
+            "a[31mb",
+            "escapes lose their control characters, not their text"
+        );
     }
 
     /// The ordinary paste — nothing to rewrite — must come back borrowed,
@@ -333,10 +380,20 @@ mod tests {
     /// have touched.
     #[test]
     fn a_paste_that_needs_no_rewriting_is_not_copied() {
-        assert!(matches!(sanitize("plain text\nover two lines"), Cow::Borrowed(_)));
+        assert!(matches!(
+            sanitize("plain text\nover two lines"),
+            Cow::Borrowed(_)
+        ));
         for altered in ["a\rb", "a\tb", "a\u{7}b", "a\u{1b}b", "a\u{85}b"] {
-            assert!(matches!(sanitize(altered), Cow::Owned(_)), "{altered:?} needs rewriting and must not be borrowed back");
-            assert_ne!(sanitize(altered), altered, "and the rewrite must actually change it");
+            assert!(
+                matches!(sanitize(altered), Cow::Owned(_)),
+                "{altered:?} needs rewriting and must not be borrowed back"
+            );
+            assert_ne!(
+                sanitize(altered),
+                altered,
+                "and the rewrite must actually change it"
+            );
         }
     }
 }

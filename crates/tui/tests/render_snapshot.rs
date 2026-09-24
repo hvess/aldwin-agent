@@ -40,36 +40,48 @@ const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 /// The ten frames of `Aldwin Agent TUI.dc.html`, by their letters, plus
 /// the states the design leaves to the product.
 const SCENES: [&str; 13] = [
-    "launch",      // A
-    "working",     // B
-    "details",     // C
-    "running",     // D
-    "question",    // E
-    "commands",    // F
-    "review",      // G
-    "selecting",   // H
-    "commented",   // I
-    "saved",       // J
-    "markdown",    // a table and a fence — ADR 0002
-    "failure",     // ADR 0009 §5: a sentence, no red
-    "long",        // an overflowing transcript
+    "launch",    // A
+    "working",   // B
+    "details",   // C
+    "running",   // D
+    "question",  // E
+    "commands",  // F
+    "review",    // G
+    "selecting", // H
+    "commented", // I
+    "saved",     // J
+    "markdown",  // a table and a fence — ADR 0002
+    "failure",   // ADR 0009 §5: a sentence, no red
+    "long",      // an overflowing transcript
 ];
 
 /// The catalogue the questions offer. Pinned, like the identity.
 fn catalogue() -> Vec<ProviderChoice> {
     vec![
         ProviderChoice {
-            id:      "anthropic".into(),
+            id: "anthropic".into(),
             purpose: "claude models · ANTHROPIC_API_KEY".into(),
-            models:  vec![
-                ModelChoice { id: "claude-sonnet-5".into(), purpose: "balanced; a good default".into(), context: 1_000_000 },
-                ModelChoice { id: "claude-opus-5".into(), purpose: "slower, deeper".into(), context: 1_000_000 },
+            models: vec![
+                ModelChoice {
+                    id: "claude-sonnet-5".into(),
+                    purpose: "balanced; a good default".into(),
+                    context: 1_000_000,
+                },
+                ModelChoice {
+                    id: "claude-opus-5".into(),
+                    purpose: "slower, deeper".into(),
+                    context: 1_000_000,
+                },
             ],
         },
         ProviderChoice {
-            id:      "openai".into(),
+            id: "openai".into(),
             purpose: "gpt models · OPENAI_API_KEY".into(),
-            models:  vec![ModelChoice { id: "gpt-5".into(), purpose: "balanced; a good default".into(), context: 400_000 }],
+            models: vec![ModelChoice {
+                id: "gpt-5".into(),
+                purpose: "balanced; a good default".into(),
+                context: 400_000,
+            }],
         },
     ]
 }
@@ -111,7 +123,11 @@ fn every_scene_renders_exactly_as_recorded() {
     if expected != out {
         let actual_path = std::env::temp_dir().join("aldwin-render.actual.snap");
         let _ = std::fs::write(&actual_path, &out);
-        panic!("{}\n\nfull output written to {}", first_difference(&expected, &out), actual_path.display());
+        panic!(
+            "{}\n\nfull output written to {}",
+            first_difference(&expected, &out),
+            actual_path.display()
+        );
     }
 }
 
@@ -187,10 +203,19 @@ fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
                     }
                     let glyph = cell.symbol().chars().next().unwrap();
                     if cell.fg == accent {
-                        assert!(!glyph.is_alphanumeric() || y >= 30, "{theme:?}/{scene_name} at ({x},{y}): {glyph:?} is prose in the accent");
+                        assert!(
+                            !glyph.is_alphanumeric() || y >= 30,
+                            "{theme:?}/{scene_name} at ({x},{y}): {glyph:?} is prose in the accent"
+                        );
                     }
-                    assert_ne!(cell.fg, del, "{theme:?}/{scene_name} at ({x},{y}): red outside a diff");
-                    assert_ne!(cell.fg, add, "{theme:?}/{scene_name} at ({x},{y}): green outside a diff");
+                    assert_ne!(
+                        cell.fg, del,
+                        "{theme:?}/{scene_name} at ({x},{y}): red outside a diff"
+                    );
+                    assert_ne!(
+                        cell.fg, add,
+                        "{theme:?}/{scene_name} at ({x},{y}): green outside a diff"
+                    );
                 }
             }
         }
@@ -205,7 +230,10 @@ fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
 fn every_conversation_scene_respects_the_three_cell_margins() {
     const MARGIN: usize = 3;
     for theme in [Theme::Dark, Theme::Light] {
-        for scene_name in SCENES.iter().filter(|s| !matches!(**s, "review" | "selecting" | "commented")) {
+        for scene_name in SCENES
+            .iter()
+            .filter(|s| !matches!(**s, "review" | "selecting" | "commented"))
+        {
             let mut app = app(theme);
             scene(scene_name, &mut app);
             let buffer = render(&mut app, 104, 32);
@@ -213,7 +241,10 @@ fn every_conversation_scene_respects_the_three_cell_margins() {
                 let first = (0..104u16).find(|x| !buffer[(*x, y)].symbol().trim().is_empty());
                 let Some(first) = first else { continue };
                 assert!(first as usize >= MARGIN, "{theme:?}/{scene_name} row {y}: content starts in cell {first}, inside the margin");
-                let last = (0..104u16).rev().find(|x| !buffer[(*x, y)].symbol().trim().is_empty()).unwrap();
+                let last = (0..104u16)
+                    .rev()
+                    .find(|x| !buffer[(*x, y)].symbol().trim().is_empty())
+                    .unwrap();
                 assert!(last as usize <= 103 - MARGIN, "{theme:?}/{scene_name} row {y}: content reaches cell {last}, inside the right margin");
             }
         }
@@ -233,7 +264,11 @@ fn nothing_inside_a_frame_is_stroked() {
             for y in 0..32u16 {
                 for x in 0..104u16 {
                     let cell = &buffer[(x, y)];
-                    assert!(!"─│┌┐└┘├┤┬┴┼╭╮╰╯┃║╔╗╚╝▁▔".contains(cell.symbol()), "{theme:?}/{scene_name} at {x},{y}: {:?} is a stroke", cell.symbol());
+                    assert!(
+                        !"─│┌┐└┘├┤┬┴┼╭╮╰╯┃║╔╗╚╝▁▔".contains(cell.symbol()),
+                        "{theme:?}/{scene_name} at {x},{y}: {:?} is a stroke",
+                        cell.symbol()
+                    );
                 }
             }
         }
@@ -254,7 +289,9 @@ fn no_cell_is_underlined() {
             for y in 0..32u16 {
                 for x in 0..104u16 {
                     assert!(
-                        !buffer[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED),
+                        !buffer[(x, y)]
+                            .modifier
+                            .contains(ratatui::style::Modifier::UNDERLINED),
                         "{theme:?}/{scene_name} at {x},{y}: {:?} is underlined",
                         buffer[(x, y)].symbol()
                     );
@@ -266,7 +303,9 @@ fn no_cell_is_underlined() {
 
 fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal.draw(|f| aldwin_tui::__preview_draw(f, app)).expect("draw");
+    terminal
+        .draw(|f| aldwin_tui::__preview_draw(f, app))
+        .expect("draw");
     terminal.backend().buffer().clone()
 }
 
@@ -275,21 +314,51 @@ fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
 }
 
 fn echo(app: &mut App) {
-    app.log.push(LogEntry::UserMessage { text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into() });
+    app.log.push(LogEntry::UserMessage {
+        text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into(),
+    });
 }
 
 fn work(open: bool) -> LogEntry {
-    let item = |verb: &str, target: &str, fact: &str| WorkItem { call_id: target.into(), verb: verb.into(), target: target.into(), fact: Some(fact.into()), failed: false };
-    LogEntry::Work { items: vec![item("Read", "src/gateway/mod.rs", "412 lines"), item("Read", "src/gateway/router.rs", "188 lines"), item("Searched", "tower::limit", "7 matches")], open }
+    let item = |verb: &str, target: &str, fact: &str| WorkItem {
+        call_id: target.into(),
+        verb: verb.into(),
+        target: target.into(),
+        fact: Some(fact.into()),
+        failed: false,
+    };
+    LogEntry::Work {
+        items: vec![
+            item("Read", "src/gateway/mod.rs", "412 lines"),
+            item("Read", "src/gateway/router.rs", "188 lines"),
+            item("Searched", "tower::limit", "7 matches"),
+        ],
+        open,
+    }
 }
 
 fn plan(states: [StepState; 3]) -> LogEntry {
-    let texts = ["Count requests per key", "Turn away requests over the limit", "Check that it works"];
-    LogEntry::Plan { steps: texts.iter().zip(states).map(|(t, s)| PlanStep { text: (*t).into(), state: s }).collect() }
+    let texts = [
+        "Count requests per key",
+        "Turn away requests over the limit",
+        "Check that it works",
+    ];
+    LogEntry::Plan {
+        steps: texts
+            .iter()
+            .zip(states)
+            .map(|(t, s)| PlanStep {
+                text: (*t).into(),
+                state: s,
+            })
+            .collect(),
+    }
 }
 
 fn changeset() -> Changeset {
-    let before: String = (1..=160).map(|i| format!("        .route(\"/v{i}/chat\", post(chat))\n")).collect();
+    let before: String = (1..=160)
+        .map(|i| format!("        .route(\"/v{i}/chat\", post(chat))\n"))
+        .collect();
     let after = before.replacen(
         "        .route(\"/v144/chat\", post(chat))\n",
         "        .layer(RateLimitLayer::new(\n            Quota::per_minute(100),\n            cfg.limit_store.clone(),\n        ))\n",
@@ -297,18 +366,35 @@ fn changeset() -> Changeset {
     );
     Changeset {
         files: vec![
-            ChangedFile { path: "src/gateway/limit.rs".into(), before: None, after: "pub struct Limit;\n".into() },
-            ChangedFile { path: "src/gateway/router.rs".into(), before: Some(before), after },
-            ChangedFile { path: "tests/limit.rs".into(), before: None, after: "#[test]\nfn limits() {}\n".into() },
+            ChangedFile {
+                path: "src/gateway/limit.rs".into(),
+                before: None,
+                after: "pub struct Limit;\n".into(),
+            },
+            ChangedFile {
+                path: "src/gateway/router.rs".into(),
+                before: Some(before),
+                after,
+            },
+            ChangedFile {
+                path: "tests/limit.rs".into(),
+                before: None,
+                after: "#[test]\nfn limits() {}\n".into(),
+            },
         ],
     }
 }
 
 fn open_review(app: &mut App) {
     echo(app);
-    app.log.push(LogEntry::AssistantText { text: "Each key gets 100 requests a minute; the rest are turned away before auth.".into() });
+    app.log.push(LogEntry::AssistantText {
+        text: "Each key gets 100 requests a minute; the rest are turned away before auth.".into(),
+    });
     app.status.context_used = Some(410_000);
-    app.apply_event(Event::ReviewRequested { review_id: "review-1".into(), changeset: changeset() });
+    app.apply_event(Event::ReviewRequested {
+        review_id: "review-1".into(),
+        changeset: changeset(),
+    });
     // The frame opens on the second file, with the first read.
     press(app, KeyCode::Tab, KeyModifiers::NONE);
     if let Some(r) = app.review_for_tests() {
@@ -321,10 +407,18 @@ fn scene(name: &str, app: &mut App) {
         "launch" => {}
         "working" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "Looking at how requests move through the gateway.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "Looking at how requests move through the gateway.".into(),
+            });
             app.log.push(work(false));
-            app.log.push(LogEntry::AssistantText { text: "Nothing limits requests yet. Adding a limit for each key.".into() });
-            app.log.push(plan([StepState::Done, StepState::Running, StepState::Pending]));
+            app.log.push(LogEntry::AssistantText {
+                text: "Nothing limits requests yet. Adding a limit for each key.".into(),
+            });
+            app.log.push(plan([
+                StepState::Done,
+                StepState::Running,
+                StepState::Pending,
+            ]));
             app.turn_active = true;
             app.status.context_used = Some(380_000);
         }
@@ -334,15 +428,22 @@ fn scene(name: &str, app: &mut App) {
         }
         "running" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "The limit is in place. Checking that it works.".into() });
-            app.log.push(plan([StepState::Done, StepState::Done, StepState::Running]));
-            app.log.push(LogEntry::AssistantText { text: "Running the tests. About ten seconds.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "The limit is in place. Checking that it works.".into(),
+            });
+            app.log
+                .push(plan([StepState::Done, StepState::Done, StepState::Running]));
+            app.log.push(LogEntry::AssistantText {
+                text: "Running the tests. About ten seconds.".into(),
+            });
             app.turn_active = true;
             app.status.context_used = Some(410_000);
         }
         "question" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "The limit works for every request that carries a key.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "The limit works for every request that carries a key.".into(),
+            });
             app.log.push(work(false));
             app.status.context_used = Some(440_000);
             app.apply_event(Event::QuestionAsked {
@@ -355,7 +456,9 @@ fn scene(name: &str, app: &mut App) {
             });
         }
         "commands" => {
-            app.log.push(LogEntry::AssistantText { text: "Done. Each key now gets 100 requests a minute, read from settings.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
+            });
             app.log.push(work(false));
             app.status.context_used = Some(440_000);
             press(app, KeyCode::Char('/'), KeyModifiers::NONE);
@@ -380,14 +483,25 @@ fn scene(name: &str, app: &mut App) {
         }
         "saved" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "Ready for you to review: rate limiting for the gateway.".into() });
-            app.apply_event(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files: vec!["a".into(), "b".into(), "c".into()], comments_resolved: 1 } });
-            app.log.push(LogEntry::AssistantText { text: "Done. Each key now gets 100 requests a minute, read from settings.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "Ready for you to review: rate limiting for the gateway.".into(),
+            });
+            app.apply_event(Event::ReviewClosed {
+                outcome: ReviewOutcome::Saved {
+                    files: vec!["a".into(), "b".into(), "c".into()],
+                    comments_resolved: 1,
+                },
+            });
+            app.log.push(LogEntry::AssistantText {
+                text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
+            });
             app.log.push(LogEntry::TurnBreak);
             app.status.context_used = Some(460_000);
         }
         "markdown" => {
-            app.log.push(LogEntry::UserMessage { text: "which providers are set up?".into() });
+            app.log.push(LogEntry::UserMessage {
+                text: "which providers are set up?".into(),
+            });
             app.log.push(LogEntry::AssistantText {
                 text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
             });
@@ -395,13 +509,17 @@ fn scene(name: &str, app: &mut App) {
         }
         "failure" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "Running the tests.".into() });
+            app.log.push(LogEntry::AssistantText {
+                text: "Running the tests.".into(),
+            });
             app.log.push(LogEntry::Failure { message: "The tests failed, 2 of 6.".into(), detail: Some("---- limit::rejects_over_quota stdout ----\nthread panicked at src/gateway/limit.rs:44".into()), open: true });
             app.log.push(LogEntry::TurnBreak);
         }
         "long" => {
             for i in 0..8 {
-                app.log.push(LogEntry::UserMessage { text: format!("message {i}") });
+                app.log.push(LogEntry::UserMessage {
+                    text: format!("message {i}"),
+                });
                 app.log.push(LogEntry::AssistantText { text: format!("reply {i} with a bit more text to see wrapping behavior across the pane width") });
                 app.log.push(LogEntry::TurnBreak);
             }
@@ -420,7 +538,11 @@ fn first_difference(expected: &str, actual: &str) -> String {
             return format!("render differs from tests/snapshots/render.snap at line {} (in {section}):\n  expected: {e}\n  actual:   {a}", i + 1);
         }
     }
-    format!("render differs from tests/snapshots/render.snap in length: expected {} lines, got {}", expected.lines().count(), actual.lines().count())
+    format!(
+        "render differs from tests/snapshots/render.snap in length: expected {} lines, got {}",
+        expected.lines().count(),
+        actual.lines().count()
+    )
 }
 
 /// One line per row: each cell as `symbol|fg|bg|modifiers`, cells joined

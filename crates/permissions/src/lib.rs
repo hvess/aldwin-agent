@@ -18,7 +18,7 @@
 mod engine;
 mod error;
 
-pub use engine::{Locks, LockScope, Outcome};
+pub use engine::{LockScope, Locks, Outcome};
 pub use error::PermissionError;
 
 // Re-exported so callers reason about one vocabulary: these are persistence

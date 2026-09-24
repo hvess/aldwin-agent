@@ -8,7 +8,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use thiserror::Error;
 
 use crate::config::ProviderConfig;
-use crate::retry::{self, backoff, is_retryable_status, should_retry, terminal_error, AttemptOutcome};
+use crate::retry::{
+    self, backoff, is_retryable_status, should_retry, terminal_error, AttemptOutcome,
+};
 use crate::wire::{self, Assembler, WireEvent};
 
 const PROVIDER_NAME: &str = "anthropic";
@@ -28,16 +30,18 @@ pub enum LlmClientInitError {
 /// V0 Anthropic client implementing core's `LlmClient`. No Anthropic wire
 /// type crosses this struct's public surface — see `wire.rs`.
 pub struct AnthropicClient {
-    http:         reqwest::Client,
-    config:       ProviderConfig,
-    headers:      HeaderMap,
-    endpoint:     String,
+    http: reqwest::Client,
+    config: ProviderConfig,
+    headers: HeaderMap,
+    endpoint: String,
     idle_timeout: std::time::Duration,
 }
 
 impl std::fmt::Debug for AnthropicClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnthropicClient").field("config", &self.config).finish_non_exhaustive()
+        f.debug_struct("AnthropicClient")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
     }
 }
 
@@ -46,20 +50,34 @@ impl AnthropicClient {
     /// missing var, surfacing the var name verbatim from the YAML (not a
     /// canonicalised form), per aldwin-llm.md's Pitfalls.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
-        let api_key = std::env::var(&config.api_key_env)
-            .map_err(|_| LlmClientInitError::MissingApiKeyEnv { var: config.api_key_env.clone() })?;
+        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
+            LlmClientInitError::MissingApiKeyEnv {
+                var: config.api_key_env.clone(),
+            }
+        })?;
 
         let mut headers = HeaderMap::new();
-        let key_value = HeaderValue::from_str(&api_key)
-            .map_err(|_| LlmClientInitError::InvalidApiKeyValue { var: config.api_key_env.clone() })?;
+        let key_value = HeaderValue::from_str(&api_key).map_err(|_| {
+            LlmClientInitError::InvalidApiKeyValue {
+                var: config.api_key_env.clone(),
+            }
+        })?;
         headers.insert("x-api-key", key_value);
-        headers.insert("anthropic-version", HeaderValue::from_static(wire::ANTHROPIC_VERSION));
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(wire::ANTHROPIC_VERSION),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
 
         // Single shared client (rustls + HTTP/2 via the crate's enabled
         // features, no native-tls competing backend) — cheap to clone,
         // expensive to construct, so built once here.
-        let http = reqwest::Client::builder().build().map_err(LlmClientInitError::HttpClient)?;
+        let http = reqwest::Client::builder()
+            .build()
+            .map_err(LlmClientInitError::HttpClient)?;
 
         // `base_url` is deliberately NOT consulted here: per provider.yaml's
         // own annotated comment ("base_url: only used when provider is
@@ -67,7 +85,13 @@ impl AnthropicClient {
         // is scoped to the OpenAI-compatible adapter. Honoring it here would
         // silently redirect Anthropic requests for anyone who has a leftover
         // base_url set while `provider: anthropic`.
-        Ok(Self { http, config, headers, endpoint: wire::ANTHROPIC_API_URL.to_string(), idle_timeout: retry::IDLE_TIMEOUT })
+        Ok(Self {
+            http,
+            config,
+            headers,
+            endpoint: wire::ANTHROPIC_API_URL.to_string(),
+            idle_timeout: retry::IDLE_TIMEOUT,
+        })
     }
 
     /// Test-only: points at a local fake server instead of the real
@@ -75,18 +99,38 @@ impl AnthropicClient {
     /// retry/SSE state machine can be exercised against controlled
     /// byte-level responses without a live API key or a real 60s wait.
     #[cfg(test)]
-    pub(crate) fn with_endpoint(config: ProviderConfig, api_key: &str, endpoint: String, idle_timeout: std::time::Duration) -> Self {
+    pub(crate) fn with_endpoint(
+        config: ProviderConfig,
+        api_key: &str,
+        endpoint: String,
+        idle_timeout: std::time::Duration,
+    ) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", HeaderValue::from_str(api_key).unwrap());
-        headers.insert("anthropic-version", HeaderValue::from_static(wire::ANTHROPIC_VERSION));
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(wire::ANTHROPIC_VERSION),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         let http = reqwest::Client::builder().build().unwrap();
-        Self { http, config, headers, endpoint, idle_timeout }
+        Self {
+            http,
+            config,
+            headers,
+            endpoint,
+            idle_timeout,
+        }
     }
 }
 
 impl LlmClient for AnthropicClient {
-    fn stream<'a>(&'a self, request: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+    fn stream<'a>(
+        &'a self,
+        request: LlmRequest<'a>,
+    ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
         let body = wire::build_request(&self.config, &request);
 
         Box::pin(try_stream! {
@@ -204,7 +248,12 @@ mod tests {
     }
 
     fn client_at(server: &test_server::FakeServer, idle_timeout: Duration) -> AnthropicClient {
-        AnthropicClient::with_endpoint(config(), "test-key", server.url("/v1/messages"), idle_timeout)
+        AnthropicClient::with_endpoint(
+            config(),
+            "test-key",
+            server.url("/v1/messages"),
+            idle_timeout,
+        )
     }
 
     fn empty_messages() -> Vec<Message> {
@@ -212,7 +261,13 @@ mod tests {
     }
 
     fn request<'a>(messages: &'a [Message], tools: &'a [ToolDefinition]) -> LlmRequest<'a> {
-        LlmRequest { model: "unused", system: "sys", tools, messages, cache_breakpoints: &[] }
+        LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools,
+            messages,
+            cache_breakpoints: &[],
+        }
     }
 
     fn success_sse() -> String {
@@ -245,7 +300,10 @@ data: {"type":"message_stop"}
         .concat()
     }
 
-    async fn collect(client: &AnthropicClient, messages: &[Message]) -> Vec<Result<LlmEvent, LlmError>> {
+    async fn collect(
+        client: &AnthropicClient,
+        messages: &[Message],
+    ) -> Vec<Result<LlmEvent, LlmError>> {
         client.stream(request(messages, &[])).collect().await
     }
 
@@ -255,56 +313,91 @@ data: {"type":"message_stop"}
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        assert!(events.iter().all(|e| e.is_ok()), "unexpected error: {:?}", events);
+        assert!(
+            events.iter().all(|e| e.is_ok()),
+            "unexpected error: {:?}",
+            events
+        );
 
-        let texts: Vec<_> = events.iter().filter_map(|e| match e {
-            Ok(LlmEvent::TextDelta { text }) => Some(text.clone()),
-            _ => None,
-        }).collect();
+        let texts: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(LlmEvent::TextDelta { text }) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(texts, vec!["Hello".to_string()]);
 
-        assert!(matches!(events.last(), Some(Ok(LlmEvent::StepEnded { .. }))));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(LlmEvent::StepEnded { .. }))
+        ));
     }
 
     #[tokio::test]
     async fn retryable_status_retries_then_succeeds() {
         let server = test_server::spawn(vec![
-            Canned::Status(503, r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#.to_string()),
+            Canned::Status(
+                503,
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#
+                    .to_string(),
+            ),
             Canned::Sse(success_sse()),
         ]);
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        let retries: Vec<_> = events.iter().filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))).collect();
+        let retries: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. })))
+            .collect();
         assert_eq!(retries.len(), 1);
-        assert!(matches!(events.last(), Some(Ok(LlmEvent::StepEnded { .. }))));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(LlmEvent::StepEnded { .. }))
+        ));
     }
 
     #[tokio::test]
     async fn non_retryable_status_is_terminal_without_retry() {
         let server = test_server::spawn(vec![Canned::Status(
             400,
-            r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}"#.to_string(),
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}"#
+                .to_string(),
         )]);
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        assert!(!events.iter().any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
         match events.last() {
-            Some(Err(LlmError::Provider { status: 400, message })) => assert_eq!(message, "bad request"),
+            Some(Err(LlmError::Provider {
+                status: 400,
+                message,
+            })) => assert_eq!(message, "bad request"),
             other => panic!("expected a terminal Provider(400) error, got {other:?}"),
         }
     }
 
     #[tokio::test]
     async fn idle_timeout_with_no_events_yet_retries_then_succeeds() {
-        let server = test_server::spawn(vec![Canned::SseThenStall(String::new()), Canned::Sse(success_sse())]);
+        let server = test_server::spawn(vec![
+            Canned::SseThenStall(String::new()),
+            Canned::Sse(success_sse()),
+        ]);
         let client = client_at(&server, Duration::from_millis(50));
 
         let events = collect(&client, &empty_messages()).await;
-        let retries: Vec<_> = events.iter().filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))).collect();
+        let retries: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. })))
+            .collect();
         assert_eq!(retries.len(), 1);
-        assert!(matches!(events.last(), Some(Ok(LlmEvent::StepEnded { .. }))));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(LlmEvent::StepEnded { .. }))
+        ));
     }
 
     #[tokio::test]
@@ -327,8 +420,13 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        assert!(!events.iter().any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
-        assert!(matches!(events.last(), Some(Err(LlmError::StreamInterrupted(_)))));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
+        assert!(matches!(
+            events.last(),
+            Some(Err(LlmError::StreamInterrupted(_)))
+        ));
     }
 
     #[tokio::test]
@@ -342,9 +440,18 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        let retries = events.iter().filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))).count();
-        assert_eq!(retries, 3, "3 retries + the 4th (final) failing attempt = MAX_ATTEMPTS");
-        assert!(matches!(events.last(), Some(Err(LlmError::Terminal { attempts: 4, .. }))));
+        let retries = events
+            .iter()
+            .filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. })))
+            .count();
+        assert_eq!(
+            retries, 3,
+            "3 retries + the 4th (final) failing attempt = MAX_ATTEMPTS"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(Err(LlmError::Terminal { attempts: 4, .. }))
+        ));
     }
 
     #[tokio::test]
@@ -353,7 +460,12 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let client = client_at(&server, Duration::from_secs(5));
 
         let events = collect(&client, &empty_messages()).await;
-        assert!(events.iter().any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
-        assert!(matches!(events.last(), Some(Ok(LlmEvent::StepEnded { .. }))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. }))));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(LlmEvent::StepEnded { .. }))
+        ));
     }
 }

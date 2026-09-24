@@ -27,16 +27,16 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
 
-use async_trait::async_trait;
 use aldwin_permissions::Class;
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
 use crate::error::ToolError;
-use aldwin_core::DispatchContext;
 use crate::paths::Workspace;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
 use crate::sandbox;
+use aldwin_core::DispatchContext;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const OUTPUT_CAP_BYTES: usize = 50 * 1024;
@@ -48,17 +48,17 @@ const OUTPUT_KEEP_BYTES: usize = OUTPUT_CAP_BYTES + 4;
 
 pub struct RunTool {
     descriptor: ToolDescriptor,
-    workspace:  Workspace,
+    workspace: Workspace,
 }
 
 /// One call's parsed input.
 struct RunArgs {
     program: String,
-    args:    Vec<String>,
-    class:   Class,
+    args: Vec<String>,
+    class: Class,
     timeout: u64,
     /// Working directory as the model wrote it, before containment.
-    cwd:     Option<String>,
+    cwd: Option<String>,
 }
 
 impl RunTool {
@@ -112,7 +112,10 @@ impl RunTool {
 }
 
 fn parse(input: &Value) -> Result<RunArgs, ToolError> {
-    let invalid = |message: &str| ToolError::InvalidInput { tool: "run".into(), message: message.into() };
+    let invalid = |message: &str| ToolError::InvalidInput {
+        tool: "run".into(),
+        message: message.into(),
+    };
 
     let program = input
         .get("program")
@@ -126,14 +129,20 @@ fn parse(input: &Value) -> Result<RunArgs, ToolError> {
     // a grant for a program called `git status` that no entry will ever match
     // — and, worse, from reading as though the argv split had happened.
     if program.split_whitespace().count() != 1 {
-        return Err(invalid("\"program\" names one program; put its arguments in \"args\""));
+        return Err(invalid(
+            "\"program\" names one program; put its arguments in \"args\"",
+        ));
     }
 
     let args = match input.get("args") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => items
             .iter()
-            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| invalid("every entry in \"args\" must be a string")))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid("every entry in \"args\" must be a string"))
+            })
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => return Err(invalid("\"args\" must be an array of strings")),
     };
@@ -141,7 +150,11 @@ fn parse(input: &Value) -> Result<RunArgs, ToolError> {
     let class = match input.get("class").and_then(Value::as_str) {
         Some("read") => Class::Read,
         Some("write") => Class::Write,
-        _ => return Err(invalid("\"class\" must be \"read\" or \"write\" — say what this call does")),
+        _ => {
+            return Err(invalid(
+                "\"class\" must be \"read\" or \"write\" — say what this call does",
+            ))
+        }
     };
 
     let timeout = input
@@ -150,9 +163,19 @@ fn parse(input: &Value) -> Result<RunArgs, ToolError> {
         .filter(|s| *s > 0)
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-    let cwd = input.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string);
+    let cwd = input
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
 
-    Ok(RunArgs { program, args, class, timeout, cwd })
+    Ok(RunArgs {
+        program,
+        args,
+        class,
+        timeout,
+        cwd,
+    })
 }
 
 /// Which of a call's arguments name a path we are pointing the program at,
@@ -186,13 +209,21 @@ fn path_like(arg: &str) -> Option<&str> {
         Some((key, value)) if !key.contains('/') => value,
         // `-C/elsewhere`, `-f/etc/x` — a value glued to a short flag. Skipping
         // every `-…` token let these through to `execve` unchecked.
-        _ if arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2 && arg.is_char_boundary(2) => &arg[2..],
+        _ if arg.starts_with('-')
+            && !arg.starts_with("--")
+            && arg.len() > 2
+            && arg.is_char_boundary(2) =>
+        {
+            &arg[2..]
+        }
         _ => arg,
     };
     if candidate.is_empty() || candidate.starts_with('-') {
         return None;
     }
-    let climbs = Path::new(candidate).components().any(|c| matches!(c, std::path::Component::ParentDir));
+    let climbs = Path::new(candidate)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
     if climbs || (candidate.starts_with('/') && first_component_exists(candidate)) {
         return Some(candidate);
     }
@@ -221,10 +252,19 @@ impl Tool for RunTool {
 
     fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
         let args = parse(input)?;
-        Ok(Some(PermissionRequest { program: args.program, class: args.class, argv: args.args }))
+        Ok(Some(PermissionRequest {
+            program: args.program,
+            class: args.class,
+            argv: args.args,
+        }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        _ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
         let args = parse(&input)?;
 
         // Containment first, before anything is spawned. The working
@@ -238,7 +278,9 @@ impl Tool for RunTool {
         };
         let roots = self.workspace.roots();
         for arg in &args.args {
-            let Some(candidate) = path_like(arg) else { continue };
+            let Some(candidate) = path_like(arg) else {
+                continue;
+            };
             if let Err(refusal) = self.workspace.resolve_against(&cwd, candidate) {
                 // `/dev/null`, `$TMPDIR` and the rest of the sandbox's
                 // incidental list are not an escape: the sandbox already
@@ -271,11 +313,15 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     // second root stayed writable under a read declaration would be a
     // read-only guarantee with a hole in exactly the place ADR 0007 widened.
     let plan = if confine {
-        Some(sandbox::ReadOnly::build(&workspace.roots()).map_err(|source| ToolError::SandboxUnavailable {
-            program: args.program.clone(),
-            args:    args.args.clone(),
-            source,
-        })?)
+        Some(
+            sandbox::ReadOnly::build(&workspace.roots()).map_err(|source| {
+                ToolError::SandboxUnavailable {
+                    program: args.program.clone(),
+                    args: args.args.clone(),
+                    source,
+                }
+            })?,
+        )
     } else {
         None
     };
@@ -320,8 +366,13 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     }
 
     let mut child = cmd.spawn().map_err(|source| match source.kind() {
-        std::io::ErrorKind::NotFound => ToolError::ProgramNotFound { program: args.program.clone() },
-        _ => ToolError::Io { path: PathBuf::from(&args.program), source },
+        std::io::ErrorKind::NotFound => ToolError::ProgramNotFound {
+            program: args.program.clone(),
+        },
+        _ => ToolError::Io {
+            path: PathBuf::from(&args.program),
+            source,
+        },
     })?;
 
     // `setsid` made the child its own group leader, so its pid is the group
@@ -352,19 +403,25 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     // id — from having been handed to something else.
     let mut group = KillGroupOnDrop(group);
 
-    let status = match tokio::time::timeout(std::time::Duration::from_secs(args.timeout), &mut run).await {
-        Ok(Ok(status)) => status,
-        Ok(Err(source)) => return Err(ToolError::Io { path: cwd.to_path_buf(), source }),
-        Err(_) => {
-            drop(group);
-            let out = take(&out_buf);
-            let err = take(&err_buf);
-            return Err(ToolError::Timeout {
-                seconds: args.timeout,
-                partial: render_partial(&out, &err),
-            });
-        }
-    };
+    let status =
+        match tokio::time::timeout(std::time::Duration::from_secs(args.timeout), &mut run).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(source)) => {
+                return Err(ToolError::Io {
+                    path: cwd.to_path_buf(),
+                    source,
+                })
+            }
+            Err(_) => {
+                drop(group);
+                let out = take(&out_buf);
+                let err = take(&err_buf);
+                return Err(ToolError::Timeout {
+                    seconds: args.timeout,
+                    partial: render_partial(&out, &err),
+                });
+            }
+        };
     // It exited on its own. Anything it deliberately left running stays.
     group.0 = None;
 
@@ -383,7 +440,7 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     if confine && !status.success() && looks_like_denial(&err, &status) {
         return Err(ToolError::ReadRefused {
             program: args.program.clone(),
-            args:    args.args.clone(),
+            args: args.args.clone(),
         });
     }
 
@@ -451,7 +508,10 @@ where
 }
 
 fn take(buf: &Mutex<Vec<u8>>) -> String {
-    let bytes = buf.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    let bytes = buf
+        .lock()
+        .map(|mut g| std::mem::take(&mut *g))
+        .unwrap_or_default();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -466,9 +526,16 @@ fn looks_like_denial(stderr: &str, status: &std::process::ExitStatus) -> bool {
         return true;
     }
     let lowered = stderr.to_lowercase();
-    ["permission denied", "read-only file system", "operation not permitted", "network is unreachable", "eacces", "eperm"]
-        .iter()
-        .any(|needle| lowered.contains(needle))
+    [
+        "permission denied",
+        "read-only file system",
+        "operation not permitted",
+        "network is unreachable",
+        "eacces",
+        "eperm",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
 }
 
 /// What a timed-out call reports: the elapsed budget *and* whatever the
@@ -490,7 +557,12 @@ fn render_partial(out: &str, err: &str) -> String {
 }
 
 fn render(status: &std::process::ExitStatus, out: &str, err: &str) -> String {
-    let mut body = format!("exit: {}\n", status.code().map_or("signal".to_string(), |c| c.to_string()));
+    let mut body = format!(
+        "exit: {}\n",
+        status
+            .code()
+            .map_or("signal".to_string(), |c| c.to_string())
+    );
     if !out.is_empty() {
         body.push_str("stdout:\n");
         body.push_str(&cap(out));
@@ -510,7 +582,10 @@ fn cap(text: &str) -> String {
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n[truncated at {OUTPUT_CAP_BYTES} bytes]\n", &text[..end])
+    format!(
+        "{}\n[truncated at {OUTPUT_CAP_BYTES} bytes]\n",
+        &text[..end]
+    )
 }
 
 #[cfg(test)]
@@ -543,16 +618,26 @@ mod tests {
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error_and_keeps_the_whole_output() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "ls", "args": ["no-such-entry"], "class": "write"}))
-            .await
-            .expect_err("a command that exits non-zero has not succeeded");
+        let err = call(
+            &tool,
+            json!({"program": "ls", "args": ["no-such-entry"], "class": "write"}),
+        )
+        .await
+        .expect_err("a command that exits non-zero has not succeeded");
 
         let ToolError::CommandFailed { output } = &err else {
             panic!("expected CommandFailed, got {err:?}");
         };
-        assert!(output.contains("exit: 2"), "the exit code survives: {output}");
+        assert!(
+            output.contains("exit: 2"),
+            "the exit code survives: {output}"
+        );
         assert!(output.contains("stderr:"), "and so does stderr: {output}");
-        assert_eq!(err.to_string(), *output, "Display carries the whole rendering, so nothing is lost");
+        assert_eq!(
+            err.to_string(),
+            *output,
+            "Display carries the whole rendering, so nothing is lost"
+        );
     }
 
     /// The other half: a command that succeeds must stay a success, with no
@@ -560,9 +645,12 @@ mod tests {
     #[tokio::test]
     async fn a_zero_exit_is_still_a_plain_success() {
         let (_d, tool) = tool();
-        let out = call(&tool, json!({"program": "ls", "args": ["-a"], "class": "write"}))
-            .await
-            .expect("a command that exits 0 succeeded");
+        let out = call(
+            &tool,
+            json!({"program": "ls", "args": ["-a"], "class": "write"}),
+        )
+        .await
+        .expect("a command that exits 0 succeeded");
         assert!(out.starts_with("exit: 0"), "{out}");
     }
 
@@ -573,9 +661,12 @@ mod tests {
     async fn a_program_that_reports_by_exit_code_still_carries_its_code() {
         let (dir, tool) = tool();
         std::fs::write(dir.path().join("haystack.txt"), "alpha\n").unwrap();
-        let err = call(&tool, json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "write"}))
-            .await
-            .expect_err("grep exits 1 on no match");
+        let err = call(
+            &tool,
+            json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "write"}),
+        )
+        .await
+        .expect_err("grep exits 1 on no match");
         assert!(err.to_string().contains("exit: 1"), "{err}");
     }
 
@@ -587,7 +678,9 @@ mod tests {
         let (_d, tool) = tool();
         let schema = &tool.descriptor().input_schema;
         let args = &schema["properties"]["args"];
-        let description = args["description"].as_str().expect("args carries a description");
+        let description = args["description"]
+            .as_str()
+            .expect("args carries a description");
         assert!(
             description.contains("Do not repeat the program"),
             "the schema has to say it, not only the prose: {description}"
@@ -599,7 +692,8 @@ mod tests {
         let (_d, tool) = tool();
         let request = tool
             .permission(&json!({"program": "git", "args": ["status", "--short"], "class": "read"}))
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
 
         assert_eq!(request.program, "git");
         assert_eq!(request.class, Class::Read);
@@ -619,7 +713,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(out.contains("hello && rm -rf everything"), "the operator must be inert text: {out}");
+        assert!(
+            out.contains("hello && rm -rf everything"),
+            "the operator must be inert text: {out}"
+        );
         assert!(dir.path().exists());
     }
 
@@ -630,10 +727,16 @@ mod tests {
     #[tokio::test]
     async fn a_path_argument_outside_the_workspace_is_refused_before_the_program_runs() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+        let err = call(
+            &tool,
+            json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
     }
 
     /// ...and the refusal names the roots, so the model can ask for one
@@ -641,23 +744,41 @@ mod tests {
     #[tokio::test]
     async fn the_refusal_names_the_reachable_roots() {
         let (dir, tool) = tool();
-        let err = call(&tool, json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}))
-            .await
-            .unwrap_err();
+        let err = call(
+            &tool,
+            json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&dir.path().canonicalize().unwrap().display().to_string()), "got {message}");
-        assert!(message.contains("permissions.yaml"), "it must name the real mechanism: {message}");
-        assert!(!message.contains("--root"), "there is no such flag: {message}");
+        assert!(
+            message.contains(&dir.path().canonicalize().unwrap().display().to_string()),
+            "got {message}"
+        );
+        assert!(
+            message.contains("permissions.yaml"),
+            "it must name the real mechanism: {message}"
+        );
+        assert!(
+            !message.contains("--root"),
+            "there is no such flag: {message}"
+        );
     }
 
     /// A relative argument that climbs out is caught by the same check.
     #[tokio::test]
     async fn a_relative_argument_that_climbs_out_is_refused() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "echo", "args": ["../../etc/passwd"], "class": "read"}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+        let err = call(
+            &tool,
+            json!({"program": "echo", "args": ["../../etc/passwd"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
     }
 
     /// Globs and flags are not paths and must not be mistaken for them —
@@ -668,14 +789,34 @@ mod tests {
         assert_eq!(path_like("--include=*.kts"), None);
         assert_eq!(path_like("-la"), None);
         assert_eq!(path_like("*/node_modules/*"), None);
-        assert_eq!(path_like("src/main.rs"), None, "relative and not climbing: the cwd already bounds it");
+        assert_eq!(
+            path_like("src/main.rs"),
+            None,
+            "relative and not climbing: the cwd already bounds it"
+        );
         assert_eq!(path_like("/etc/passwd"), Some("/etc/passwd"));
         assert_eq!(path_like("../../etc"), Some("../../etc"));
-        assert_eq!(path_like("--path=/etc"), Some("/etc"), "the value of a flag is still a path");
-        assert_eq!(path_like("-C/etc"), Some("/etc"), "so is a value glued to a short flag");
+        assert_eq!(
+            path_like("--path=/etc"),
+            Some("/etc"),
+            "the value of a flag is still a path"
+        );
+        assert_eq!(
+            path_like("-C/etc"),
+            Some("/etc"),
+            "so is a value glued to a short flag"
+        );
         assert_eq!(path_like("-f../../x"), Some("../../x"));
-        assert_eq!(path_like("/no-such-top-level-dir/p"), None, "a sed or grep pattern, not a path");
-        assert_eq!(path_like("of=/etc/passwd"), Some("/etc/passwd"), "`dd` spells its paths key=value");
+        assert_eq!(
+            path_like("/no-such-top-level-dir/p"),
+            None,
+            "a sed or grep pattern, not a path"
+        );
+        assert_eq!(
+            path_like("of=/etc/passwd"),
+            Some("/etc/passwd"),
+            "`dd` spells its paths key=value"
+        );
         assert_eq!(path_like("name=value"), None);
     }
 
@@ -685,10 +826,16 @@ mod tests {
     #[tokio::test]
     async fn a_climbing_value_behind_a_bare_key_is_contained_too() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "echo", "args": ["of=../../../../escaped"], "class": "write"}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+        let err = call(
+            &tool,
+            json!({"program": "echo", "args": ["of=../../../../escaped"], "class": "write"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
     }
 
     /// Audit: everything a program wrote was held until it exited and capped
@@ -700,7 +847,10 @@ mod tests {
         drain(&mut flood.as_slice(), &buf).await.unwrap();
 
         assert_eq!(buf.lock().unwrap().len(), OUTPUT_KEEP_BYTES);
-        assert!(cap(&take(&buf)).ends_with("bytes]\n"), "and the rendering still says it was cut");
+        assert!(
+            cap(&take(&buf)).ends_with("bytes]\n"),
+            "and the rendering still says it was cut"
+        );
     }
 
     /// Audit: only a timeout killed the group. A call dropped mid-run — the
@@ -711,11 +861,18 @@ mod tests {
         let marker = dir.path().join("still-alive");
         let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
         let input = json!({"program": "/bin/sh", "args": ["-c", script], "class": "write", "timeout_secs": 30});
-        let cancelled = tokio::time::timeout(std::time::Duration::from_secs(1), call(&tool, input)).await;
-        assert!(cancelled.is_err(), "the call should still have been running");
+        let cancelled =
+            tokio::time::timeout(std::time::Duration::from_secs(1), call(&tool, input)).await;
+        assert!(
+            cancelled.is_err(),
+            "the call should still have been running"
+        );
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        assert!(!marker.exists(), "the backgrounded grandchild outlived the cancelled call");
+        assert!(
+            !marker.exists(),
+            "the backgrounded grandchild outlived the cancelled call"
+        );
     }
 
     /// A second declared root is reachable, which is the half of ADR 0007
@@ -725,12 +882,18 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let sibling = tempfile::tempdir().unwrap();
         std::fs::write(sibling.path().join("notes.txt"), "hello from over here").unwrap();
-        let tool = RunTool::new(Workspace::with_roots(project.path(), vec![sibling.path().to_path_buf()]));
+        let tool = RunTool::new(Workspace::with_roots(
+            project.path(),
+            vec![sibling.path().to_path_buf()],
+        ));
 
         let target = sibling.path().join("notes.txt");
-        let out = call(&tool, json!({"program": "/bin/cat", "args": [target.to_str().unwrap()], "class": "read"}))
-            .await
-            .unwrap();
+        let out = call(
+            &tool,
+            json!({"program": "/bin/cat", "args": [target.to_str().unwrap()], "class": "read"}),
+        )
+        .await
+        .unwrap();
         assert!(out.contains("hello from over here"), "got {out}");
     }
 
@@ -743,9 +906,12 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/here.txt"), "found").unwrap();
 
-        let out = call(&tool, json!({"program": "/bin/cat", "args": ["here.txt"], "class": "read", "cwd": "sub"}))
-            .await
-            .unwrap();
+        let out = call(
+            &tool,
+            json!({"program": "/bin/cat", "args": ["here.txt"], "class": "read", "cwd": "sub"}),
+        )
+        .await
+        .unwrap();
         assert!(out.contains("found"), "got {out}");
     }
 
@@ -760,15 +926,21 @@ mod tests {
         let (dir, tool) = tool();
         std::fs::write(dir.path().join("haystack.txt"), "nothing of interest").unwrap();
 
-        let err = call(&tool, json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "read"}))
-            .await
-            .unwrap_err();
+        let err = call(
+            &tool,
+            json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
 
         assert!(
             !matches!(err, ToolError::ReadRefused { .. }),
             "a clean no-match must not read as a sandbox refusal: {err:?}"
         );
-        assert!(matches!(err, ToolError::CommandFailed { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ToolError::CommandFailed { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -776,9 +948,15 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
         let exit_one = std::process::ExitStatus::from_raw(1 << 8);
 
-        assert!(!looks_like_denial("", &exit_one), "grep's silent exit 1 is a result");
+        assert!(
+            !looks_like_denial("", &exit_one),
+            "grep's silent exit 1 is a result"
+        );
         assert!(!looks_like_denial("no such file or directory", &exit_one));
-        assert!(looks_like_denial("mkdir: cannot create directory: Read-only file system", &exit_one));
+        assert!(looks_like_denial(
+            "mkdir: cannot create directory: Read-only file system",
+            &exit_one
+        ));
         assert!(looks_like_denial("touch: /x: Permission denied", &exit_one));
 
         // Killed rather than exited: it did not choose its status.
@@ -807,7 +985,10 @@ mod tests {
         let message = err.to_string();
         assert!(matches!(err, ToolError::Timeout { .. }), "got {err:?}");
         assert!(message.contains("timed out"), "got {message}");
-        assert!(message.contains("progress-so-far"), "the partial output must survive: {message}");
+        assert!(
+            message.contains("progress-so-far"),
+            "the partial output must survive: {message}"
+        );
     }
 
     /// Audit: the sandbox exempts `/dev/null` for writes while containment
@@ -816,9 +997,12 @@ mod tests {
     async fn an_incidental_path_is_a_legitimate_argument() {
         let (dir, tool) = tool();
         std::fs::write(dir.path().join("h.txt"), "needle\n").unwrap();
-        let out = call(&tool, json!({"program": "grep", "args": ["needle", "h.txt", "/dev/null"], "class": "write"}))
-            .await
-            .unwrap();
+        let out = call(
+            &tool,
+            json!({"program": "grep", "args": ["needle", "h.txt", "/dev/null"], "class": "write"}),
+        )
+        .await
+        .unwrap();
         assert!(out.contains("needle"), "got {out}");
     }
 
@@ -827,10 +1011,16 @@ mod tests {
     #[tokio::test]
     async fn a_path_glued_to_a_short_flag_is_contained_too() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "grep", "args": ["-f/etc/hostname", "x"], "class": "write"}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+        let err = call(
+            &tool,
+            json!({"program": "grep", "args": ["-f/etc/hostname", "x"], "class": "write"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
     }
 
     /// Audit: output was lossy-decoded one 8 KiB read at a time, so a
@@ -843,7 +1033,12 @@ mod tests {
         text.push_str("tail");
         std::fs::write(dir.path().join("u.txt"), &text).unwrap();
 
-        let out = call(&tool, json!({"program": "/bin/cat", "args": ["u.txt"], "class": "write"})).await.unwrap();
+        let out = call(
+            &tool,
+            json!({"program": "/bin/cat", "args": ["u.txt"], "class": "write"}),
+        )
+        .await
+        .unwrap();
         assert!(out.contains("€tail"), "the character must arrive whole");
         assert!(!out.contains('\u{FFFD}'));
     }
@@ -854,9 +1049,12 @@ mod tests {
     async fn a_failed_read_says_it_ran_read_only() {
         let (dir, tool) = tool();
         std::fs::write(dir.path().join("h.txt"), "nothing").unwrap();
-        let err = call(&tool, json!({"program": "grep", "args": ["needle", "h.txt"], "class": "read"}))
-            .await
-            .unwrap_err();
+        let err = call(
+            &tool,
+            json!({"program": "grep", "args": ["needle", "h.txt"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("declared a read"), "got {err}");
     }
 
@@ -871,20 +1069,33 @@ mod tests {
         let _ = call(&tool, json!({"program": "/bin/sh", "args": ["-c", script], "class": "write", "timeout_secs": 1}))
             .await;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        assert!(!marker.exists(), "the backgrounded grandchild outlived the timeout");
+        assert!(
+            !marker.exists(),
+            "the backgrounded grandchild outlived the timeout"
+        );
     }
 
     #[tokio::test]
     async fn a_working_directory_outside_the_workspace_is_refused() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "/bin/pwd", "class": "read", "cwd": "/etc"})).await.unwrap_err();
-        assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "got {err:?}");
+        let err = call(
+            &tool,
+            json!({"program": "/bin/pwd", "class": "read", "cwd": "/etc"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn a_program_with_arguments_baked_into_it_is_refused() {
         let (_d, tool) = tool();
-        let err = tool.permission(&json!({"program": "git status", "class": "read"})).unwrap_err();
+        let err = tool
+            .permission(&json!({"program": "git status", "class": "read"}))
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
@@ -895,14 +1106,24 @@ mod tests {
         let (_d, tool) = tool();
         let err = tool.permission(&json!({"program": "ls"})).unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
-        let err = tool.permission(&json!({"program": "ls", "class": "edit"})).unwrap_err();
-        assert!(matches!(err, ToolError::InvalidInput { .. }), "edit is not a class a call may declare");
+        let err = tool
+            .permission(&json!({"program": "ls", "class": "edit"}))
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::InvalidInput { .. }),
+            "edit is not a class a call may declare"
+        );
     }
 
     #[tokio::test]
     async fn an_unknown_program_says_so_by_name() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"program": "no-such-program-anywhere", "class": "read"})).await.unwrap_err();
+        let err = call(
+            &tool,
+            json!({"program": "no-such-program-anywhere", "class": "read"}),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ToolError::ProgramNotFound { .. }), "{err:?}");
     }
 
@@ -918,9 +1139,12 @@ mod tests {
         let victim = dir.path().join("untouched.txt");
         std::fs::write(&victim, "original\n").unwrap();
 
-        let err = call(&tool, json!({"program": "/usr/bin/rm", "args": ["untouched.txt"], "class": "read"}))
-            .await
-            .unwrap_err();
+        let err = call(
+            &tool,
+            json!({"program": "/usr/bin/rm", "args": ["untouched.txt"], "class": "read"}),
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(err, ToolError::ReadRefused { .. }), "{err:?}");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n");
@@ -935,7 +1159,12 @@ mod tests {
         let victim = dir.path().join("doomed.txt");
         std::fs::write(&victim, "original\n").unwrap();
 
-        call(&tool, json!({"program": "/usr/bin/rm", "args": ["doomed.txt"], "class": "write"})).await.unwrap();
+        call(
+            &tool,
+            json!({"program": "/usr/bin/rm", "args": ["doomed.txt"], "class": "write"}),
+        )
+        .await
+        .unwrap();
         assert!(!victim.exists(), "a declared write is allowed to write");
     }
 
@@ -944,7 +1173,12 @@ mod tests {
         let (dir, tool) = tool();
         std::fs::write(dir.path().join("a.txt"), "contents\n").unwrap();
 
-        let out = call(&tool, json!({"program": "/usr/bin/cat", "args": ["a.txt"], "class": "read"})).await.unwrap();
+        let out = call(
+            &tool,
+            json!({"program": "/usr/bin/cat", "args": ["a.txt"], "class": "read"}),
+        )
+        .await
+        .unwrap();
         assert!(out.contains("contents"), "{out}");
     }
 }

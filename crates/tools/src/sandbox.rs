@@ -171,7 +171,10 @@ mod elsewhere {
 
     impl ReadOnly {
         pub fn build(_roots: &[PathBuf]) -> io::Result<Self> {
-            Err(io::Error::new(io::ErrorKind::Unsupported, availability_reason()))
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                availability_reason(),
+            ))
         }
 
         pub fn abi(&self) -> i32 {
@@ -211,20 +214,26 @@ mod tests {
     #[cfg(unix)]
     fn a_build_cache_that_is_a_symlink_out_of_its_root_is_not_exempt() {
         let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::Builder::new().tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let outside = tempfile::Builder::new()
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
         std::os::unix::fs::symlink(outside.path(), root.path().join("target")).unwrap();
         let roots = [root.path().canonicalize().unwrap()];
 
         assert!(!incidental_writes(&roots).contains(&roots[0].join("target")));
         let reached = outside.path().canonicalize().unwrap().join("victim");
-        assert!(!is_incidental(&reached, &roots), "a path outside the root must not read as incidental");
+        assert!(
+            !is_incidental(&reached, &roots),
+            "a path outside the root must not read as incidental"
+        );
     }
 
     #[test]
     #[cfg(unix)]
     fn a_build_cache_that_dangles_out_of_its_root_is_not_exempt() {
         let root = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("/nonexistent-aldwin-target", root.path().join("target")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent-aldwin-target", root.path().join("target"))
+            .unwrap();
         let roots = [root.path().canonicalize().unwrap()];
         assert!(!incidental_writes(&roots).contains(&roots[0].join("target")));
     }
@@ -233,9 +242,15 @@ mod tests {
     fn a_build_cache_inside_its_root_is_exempt_whether_or_not_it_exists_yet() {
         let root = tempfile::tempdir().unwrap();
         let roots = [root.path().canonicalize().unwrap()];
-        assert!(incidental_writes(&roots).contains(&roots[0].join("target")), "absent: kept");
+        assert!(
+            incidental_writes(&roots).contains(&roots[0].join("target")),
+            "absent: kept"
+        );
 
         std::fs::create_dir(roots[0].join("target")).unwrap();
-        assert!(incidental_writes(&roots).contains(&roots[0].join("target")), "present and real: kept");
+        assert!(
+            incidental_writes(&roots).contains(&roots[0].join("target")),
+            "present and real: kept"
+        );
     }
 }

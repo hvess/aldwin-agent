@@ -60,29 +60,48 @@ impl PlanTool {
 }
 
 fn invalid(message: impl Into<String>) -> ToolError {
-    ToolError::InvalidInput { tool: "plan".into(), message: message.into() }
+    ToolError::InvalidInput {
+        tool: "plan".into(),
+        message: message.into(),
+    }
 }
 
 fn parse(input: &Value) -> Result<Vec<PlanStep>, ToolError> {
-    let items = input.get("steps").and_then(Value::as_array).ok_or_else(|| invalid("missing \"steps\" array"))?;
+    let items = input
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("missing \"steps\" array"))?;
     if items.is_empty() {
         return Err(invalid("a plan has at least one step"));
     }
     if items.len() > MAX_STEPS {
-        return Err(invalid(format!("a plan has at most {MAX_STEPS} steps; fold the small ones together")));
+        return Err(invalid(format!(
+            "a plan has at most {MAX_STEPS} steps; fold the small ones together"
+        )));
     }
     items
         .iter()
         .map(|item| {
-            let text = item.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty())
+            let text = item
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
                 .ok_or_else(|| invalid("every step needs a non-empty \"text\""))?;
             let state = match item.get("state").and_then(Value::as_str) {
                 Some("pending") => StepState::Pending,
                 Some("running") => StepState::Running,
                 Some("done") => StepState::Done,
-                _ => return Err(invalid("every step needs a \"state\" of pending, running or done")),
+                _ => {
+                    return Err(invalid(
+                        "every step needs a \"state\" of pending, running or done",
+                    ))
+                }
             };
-            Ok(PlanStep { text: text.to_string(), state })
+            Ok(PlanStep {
+                text: text.to_string(),
+                state,
+            })
         })
         .collect()
 }
@@ -97,13 +116,23 @@ impl Tool for PlanTool {
         Ok(None)
     }
 
-    async fn call(&self, _call_id: &str, input: Value, ctx: &DispatchContext) -> Result<String, ToolError> {
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
         let steps = parse(&input)?;
-        let running = steps.iter().filter(|s| s.state == StepState::Running).count();
+        let running = steps
+            .iter()
+            .filter(|s| s.state == StepState::Running)
+            .count();
         let done = steps.iter().filter(|s| s.state == StepState::Done).count();
         let total = steps.len();
         ctx.plan_updated(steps).await;
-        Ok(format!("plan shown: {done} of {total} done, {running} running"))
+        Ok(format!(
+            "plan shown: {done} of {total} done, {running} running"
+        ))
     }
 }
 
@@ -124,7 +153,13 @@ mod tests {
         assert_eq!(out, "plan shown: 1 of 2 done, 1 running");
         match events.try_recv().unwrap() {
             Event::PlanUpdated { steps, .. } => {
-                assert_eq!(steps[0], PlanStep { text: "Count requests per key".into(), state: StepState::Done });
+                assert_eq!(
+                    steps[0],
+                    PlanStep {
+                        text: "Count requests per key".into(),
+                        state: StepState::Done
+                    }
+                );
                 assert_eq!(steps[1].state, StepState::Running);
             }
             other => panic!("{other:?}"),
@@ -135,11 +170,24 @@ mod tests {
     async fn a_malformed_plan_is_refused_and_shows_nothing() {
         let tool = PlanTool::new();
         let (ctx, mut events, _p) = dispatch_context();
-        for input in [json!({}), json!({"steps": []}), json!({"steps": [{"text": "", "state": "done"}]}), json!({"steps": [{"text": "x", "state": "soon"}]})] {
-            assert!(matches!(tool.call("c1", input, &ctx).await, Err(ToolError::InvalidInput { .. })));
+        for input in [
+            json!({}),
+            json!({"steps": []}),
+            json!({"steps": [{"text": "", "state": "done"}]}),
+            json!({"steps": [{"text": "x", "state": "soon"}]}),
+        ] {
+            assert!(matches!(
+                tool.call("c1", input, &ctx).await,
+                Err(ToolError::InvalidInput { .. })
+            ));
         }
-        let eight: Vec<Value> = (0..8).map(|i| json!({"text": format!("step {i}"), "state": "pending"})).collect();
-        assert!(matches!(tool.call("c1", json!({"steps": eight}), &ctx).await, Err(ToolError::InvalidInput { .. })));
+        let eight: Vec<Value> = (0..8)
+            .map(|i| json!({"text": format!("step {i}"), "state": "pending"}))
+            .collect();
+        assert!(matches!(
+            tool.call("c1", json!({"steps": eight}), &ctx).await,
+            Err(ToolError::InvalidInput { .. })
+        ));
         assert!(events.try_recv().is_err(), "nothing reached the screen");
     }
 }

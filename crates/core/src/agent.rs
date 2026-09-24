@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+#[allow(unused_imports)]
+use crate::types::{Answer, ReviewDecision};
 use crate::{
     client::{LlmClient, LlmRequest},
     dispatcher::{DispatchContext, PendingMap, PendingReply, ToolDispatcher},
@@ -12,15 +14,13 @@ use crate::{
     prompt,
     types::*,
 };
-#[allow(unused_imports)]
-use crate::types::{Answer, ReviewDecision};
 
 pub struct Agent<C, D> {
-    client:     C,
+    client: C,
     dispatcher: D,
-    log:        ConversationLog,
-    model:      String,
-    system:     String,
+    log: ConversationLog,
+    model: String,
+    system: String,
     // Pending questions (keyed by the `ask` call's id) and reviews (keyed by
     // their own id) — see `PendingReply`. Shared rather than owned
     // locally by `run` so `DispatchContext` — handed to a dispatch future
@@ -31,9 +31,9 @@ pub struct Agent<C, D> {
 
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     pub fn new(
-        client:             C,
-        dispatcher:         D,
-        model:              impl Into<String>,
+        client: C,
+        dispatcher: D,
+        model: impl Into<String>,
         additional_context: Option<&str>,
     ) -> Self {
         Self {
@@ -46,7 +46,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    pub fn log(&self) -> &ConversationLog { &self.log }
+    pub fn log(&self) -> &ConversationLog {
+        &self.log
+    }
 
     /// Write this session's records through to a transcript as well as to
     /// memory. Builder-style rather than a `new` argument because every
@@ -70,7 +72,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     fn resolve_answer(&self, call_id: &str, answer: Answer) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(call_id) {
-            Some(PendingReply::Answer(tx)) => { let _ = tx.send(answer); }
+            Some(PendingReply::Answer(tx)) => {
+                let _ = tx.send(answer);
+            }
             Some(other) => {
                 pending.insert(call_id.to_string(), other);
                 warn!("answer for {call_id}, which is awaiting a review decision");
@@ -83,7 +87,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     fn resolve_review(&self, review_id: &str, decision: ReviewDecision) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(review_id) {
-            Some(PendingReply::Review(tx)) => { let _ = tx.send(decision); }
+            Some(PendingReply::Review(tx)) => {
+                let _ = tx.send(decision);
+            }
             Some(other) => {
                 pending.insert(review_id.to_string(), other);
                 warn!("review decision for {review_id}, which is awaiting an answer");
@@ -98,27 +104,36 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     async fn on_mid_turn_command(&self, cmd: Command, events: &mpsc::Sender<Event>) -> bool {
         let discarded = match cmd {
             Command::Cancel => return true,
-            Command::Answer { call_id, answer } => { self.resolve_answer(&call_id, answer); None }
-            Command::ReviewDecision { review_id, decision } => { self.resolve_review(&review_id, decision); None }
-            Command::Submit { .. }  => Some("that message was not sent"),
-            Command::ClearHistory   => Some("the conversation was not cleared"),
-            Command::Resume { .. }  => Some("nothing was resumed"),
+            Command::Answer { call_id, answer } => {
+                self.resolve_answer(&call_id, answer);
+                None
+            }
+            Command::ReviewDecision {
+                review_id,
+                decision,
+            } => {
+                self.resolve_review(&review_id, decision);
+                None
+            }
+            Command::Submit { .. } => Some("that message was not sent"),
+            Command::ClearHistory => Some("the conversation was not cleared"),
+            Command::Resume { .. } => Some("nothing was resumed"),
         };
         // Said, not only logged: the TUI has already drawn the submission,
         // and a developer who sees it in the transcript assumes it arrived.
         if let Some(what) = discarded {
             warn!("command discarded mid-turn: {what}");
-            let _ = events.send(Event::Notice { message: format!("a turn is running; {what}") }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("a turn is running; {what}"),
+                })
+                .await;
         }
         false
     }
 
     /// Drive the agent. Returns when the command channel closes.
-    pub async fn run(
-        mut self,
-        mut commands: mpsc::Receiver<Command>,
-        events:       mpsc::Sender<Event>,
-    ) {
+    pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>) {
         while let Some(cmd) = commands.recv().await {
             match cmd {
                 Command::Submit { text } => {
@@ -130,22 +145,34 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     while let Some(text) = next.take() {
                         let turn_id = TurnId::next();
                         if !typed {
-                            let _ = events.send(Event::FollowUp { turn_id, text: text.clone() }).await;
+                            let _ = events
+                                .send(Event::FollowUp {
+                                    turn_id,
+                                    text: text.clone(),
+                                })
+                                .await;
                         }
                         typed = false;
                         self.log.append(LogRecord::TurnStarted { turn_id });
                         self.log.append(LogRecord::UserMessage { turn_id, text });
 
-                        let (reason, follow_up) = self.run_turn(turn_id, &events, &mut commands).await;
+                        let (reason, follow_up) =
+                            self.run_turn(turn_id, &events, &mut commands).await;
 
-                        self.log.append(LogRecord::TurnEnded { turn_id, reason: reason.clone() });
+                        self.log.append(LogRecord::TurnEnded {
+                            turn_id,
+                            reason: reason.clone(),
+                        });
                         let _ = events.send(Event::TurnEnded { turn_id, reason }).await;
                         next = follow_up;
                     }
                 }
 
                 Command::Answer { call_id, answer } => self.resolve_answer(&call_id, answer),
-                Command::ReviewDecision { review_id, decision } => self.resolve_review(&review_id, decision),
+                Command::ReviewDecision {
+                    review_id,
+                    decision,
+                } => self.resolve_review(&review_id, decision),
                 Command::Cancel => {} // no-op outside an active turn
 
                 Command::ClearHistory => {
@@ -170,8 +197,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     /// — which the caller starts a new turn with.
     async fn run_turn(
         &mut self,
-        turn_id:  TurnId,
-        events:   &mpsc::Sender<Event>,
+        turn_id: TurnId,
+        events: &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
     ) -> (TurnEndReason, Option<String>) {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
@@ -191,12 +218,21 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
             match result {
                 StepResult::EndTurn(outcome) => {
-                    self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
+                    self.log.append(LogRecord::StepBoundary {
+                        turn_id,
+                        step_id,
+                        outcome,
+                    });
                     // The model has stopped; anything staged is about to be
                     // left un-reviewed, so the dispatcher gets the moment to
                     // open the review (ADR 0009 §4). Still cancellable: the
                     // review is a wait on the developer like any other.
-                    let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
+                    let ctx = DispatchContext::new(
+                        turn_id,
+                        step_id,
+                        events.clone(),
+                        self.pending.clone(),
+                    );
                     let ending = self.dispatcher.turn_ending(&ctx);
                     return match self.await_or_cancel(ending, events, commands).await {
                         Ok(follow_up) => (TurnEndReason::EndTurn, follow_up),
@@ -207,29 +243,52 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     };
                 }
                 StepResult::ToolsDispatched { outcome, results } => {
-                    self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
+                    self.log.append(LogRecord::StepBoundary {
+                        turn_id,
+                        step_id,
+                        outcome,
+                    });
                     // Tool results go back as a user-role message (Anthropic convention).
                     let tool_result_blocks: Vec<ContentBlock> = results
                         .iter()
                         .map(|r| ContentBlock::ToolResult(r.clone()))
                         .collect();
-                    messages.push(Message { role: Role::User, content: tool_result_blocks });
+                    messages.push(Message {
+                        role: Role::User,
+                        content: tool_result_blocks,
+                    });
                     for result in results {
-                        self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
+                        self.log.append(LogRecord::ToolResult {
+                            turn_id,
+                            step_id,
+                            result,
+                        });
                     }
                 }
-                StepResult::ToolsAborted { outcome, results, reason } => {
+                StepResult::ToolsAborted {
+                    outcome,
+                    results,
+                    reason,
+                } => {
                     // Dispatch was cut short after ToolUse records were already
                     // logged. Close the step out in the shape of a completed
                     // round trip so no ToolUse is left without a ToolResult and
                     // a later replay of the log stays a valid request.
-                    self.log.append(LogRecord::StepBoundary { turn_id, step_id, outcome });
+                    self.log.append(LogRecord::StepBoundary {
+                        turn_id,
+                        step_id,
+                        outcome,
+                    });
                     for result in results {
-                        self.log.append(LogRecord::ToolResult { turn_id, step_id, result });
+                        self.log.append(LogRecord::ToolResult {
+                            turn_id,
+                            step_id,
+                            result,
+                        });
                     }
                     return (reason, None);
                 }
-                StepResult::Cancelled  => return (TurnEndReason::Cancelled, None),
+                StepResult::Cancelled => return (TurnEndReason::Cancelled, None),
                 StepResult::Error(msg) => return (TurnEndReason::Error(msg), None),
             }
         }
@@ -240,8 +299,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     /// ends instead.
     async fn await_or_cancel<T>(
         &self,
-        fut:      impl std::future::Future<Output = T>,
-        events:   &mpsc::Sender<Event>,
+        fut: impl std::future::Future<Output = T>,
+        events: &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
     ) -> std::result::Result<T, TurnEndReason> {
         tokio::pin!(fut);
@@ -267,16 +326,16 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
     async fn run_step(
         &mut self,
-        turn_id:   TurnId,
-        step_id:   StepId,
-        messages:  &mut Vec<Message>,
-        events:    &mpsc::Sender<Event>,
-        commands:  &mut mpsc::Receiver<Command>,
+        turn_id: TurnId,
+        step_id: StepId,
+        messages: &mut Vec<Message>,
+        events: &mpsc::Sender<Event>,
+        commands: &mut mpsc::Receiver<Command>,
     ) -> StepResult {
         let cache_breakpoints = cache_breakpoints(messages);
-        let tools             = self.dispatcher.definitions();
+        let tools = self.dispatcher.definitions();
 
-        let mut text_buf   = String::new();
+        let mut text_buf = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         // This step's assistant content, **in the order it arrived**. The
         // provider wants its blocks back as it emitted them; with interleaved
@@ -289,10 +348,10 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // `messages` at the end so the step's output can be pushed onto it.
         let stream_terminal: StepTerminal = {
             let request = LlmRequest {
-                model:             &self.model,
-                system:            &self.system,
-                tools:             &tools,
-                messages:          messages.as_slice(),
+                model: &self.model,
+                system: &self.system,
+                tools: &tools,
+                messages: messages.as_slice(),
                 cache_breakpoints: &cache_breakpoints,
             };
             let mut stream = self.client.stream(request);
@@ -373,14 +432,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // last interruption is already in `content`; what remains is the
         // trailing text.
         self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
-        let produced_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
+        let produced_text = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. }));
         if !content.is_empty() {
-            messages.push(Message { role: Role::Assistant, content });
+            messages.push(Message {
+                role: Role::Assistant,
+                content,
+            });
         }
 
         let outcome = match stream_terminal {
-            StepTerminal::Cancelled   => return StepResult::Cancelled,
-            StepTerminal::Error(msg)  => return StepResult::Error(msg),
+            StepTerminal::Cancelled => return StepResult::Cancelled,
+            StepTerminal::Error(msg) => return StepResult::Error(msg),
             StepTerminal::Ok(outcome) => outcome,
         };
 
@@ -402,7 +466,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             tool_calls.clear();
             let _ = events
                 .send(Event::Notice {
-                    message: format!("the reply stopped before {dropped} requested tool call(s) could run"),
+                    message: format!(
+                        "the reply stopped before {dropped} requested tool call(s) could run"
+                    ),
                 })
                 .await;
         }
@@ -412,7 +478,11 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // rejects it unless the assistant message in front of it carries the
         // matching ToolUse block — including on a step that produced no text.
         for call in &tool_calls {
-            self.log.append(LogRecord::ToolUse { turn_id, step_id, call: call.clone() });
+            self.log.append(LogRecord::ToolUse {
+                turn_id,
+                step_id,
+                call: call.clone(),
+            });
             push_assistant_block(messages, ContentBlock::ToolUse(call.clone()));
         }
 
@@ -432,23 +502,38 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         if tool_calls.is_empty() {
             return StepResult::EndTurn(outcome);
         }
-        match self.dispatch_tools(turn_id, step_id, tool_calls, events, commands).await {
+        match self
+            .dispatch_tools(turn_id, step_id, tool_calls, events, commands)
+            .await
+        {
             DispatchOutcome::Completed(results) => StepResult::ToolsDispatched { outcome, results },
-            DispatchOutcome::Aborted { results, reason } => {
-                StepResult::ToolsAborted { outcome, results, reason }
-            }
+            DispatchOutcome::Aborted { results, reason } => StepResult::ToolsAborted {
+                outcome,
+                results,
+                reason,
+            },
         }
     }
 
     /// Commits the text streamed so far as one block — to the log as it
     /// happens, so a crash mid-step cannot lose it and a replay of the log
     /// reproduces the same order.
-    fn flush_text(&self, turn_id: TurnId, step_id: StepId, text_buf: &mut String, content: &mut Vec<ContentBlock>) {
+    fn flush_text(
+        &self,
+        turn_id: TurnId,
+        step_id: StepId,
+        text_buf: &mut String,
+        content: &mut Vec<ContentBlock>,
+    ) {
         if text_buf.is_empty() {
             return;
         }
         let text = std::mem::take(text_buf);
-        self.log.append(LogRecord::AssistantMessage { turn_id, step_id, text: text.clone() });
+        self.log.append(LogRecord::AssistantMessage {
+            turn_id,
+            step_id,
+            text: text.clone(),
+        });
         content.push(ContentBlock::Text { text });
     }
 
@@ -459,10 +544,10 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     /// agent loop just awaits.
     async fn dispatch_tools(
         &self,
-        turn_id:  TurnId,
-        step_id:  StepId,
-        calls:    Vec<ToolCall>,
-        events:   &mpsc::Sender<Event>,
+        turn_id: TurnId,
+        step_id: StepId,
+        calls: Vec<ToolCall>,
+        events: &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
     ) -> DispatchOutcome {
         let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
@@ -475,25 +560,46 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         match self.await_or_cancel(before, events, commands).await {
             Ok(None) => {}
             Ok(Some(reason)) => {
-                let results: Vec<ToolResult> =
-                    calls.iter().map(|call| ToolResult { call_id: call.id.clone(), content: reason.clone(), is_error: true }).collect();
+                let results: Vec<ToolResult> = calls
+                    .iter()
+                    .map(|call| ToolResult {
+                        call_id: call.id.clone(),
+                        content: reason.clone(),
+                        is_error: true,
+                    })
+                    .collect();
                 for result in &results {
-                    let _ = events.send(Event::ToolCompleted { turn_id, step_id, result: result.clone() }).await;
+                    let _ = events
+                        .send(Event::ToolCompleted {
+                            turn_id,
+                            step_id,
+                            result: result.clone(),
+                        })
+                        .await;
                 }
                 return DispatchOutcome::Completed(results);
             }
-            Err(reason) => return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await,
+            Err(reason) => {
+                return self
+                    .abort_dispatch(turn_id, step_id, &calls, events, reason)
+                    .await
+            }
         }
 
         for call in &calls {
-            let _ = events.send(Event::ToolDispatched {
-                turn_id, step_id, call_id: call.id.clone(),
-            }).await;
+            let _ = events
+                .send(Event::ToolDispatched {
+                    turn_id,
+                    step_id,
+                    call_id: call.id.clone(),
+                })
+                .await;
         }
 
         // Drive all dispatch futures on the current task (cooperative).
         // Dispatcher impls use spawn_blocking internally for CPU-heavy work.
-        let futs: Vec<_> = calls.iter()
+        let futs: Vec<_> = calls
+            .iter()
             .map(|call| self.dispatcher.dispatch(call.clone(), &ctx))
             .collect();
         let joined = future::join_all(futs);
@@ -535,9 +641,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         &self,
         turn_id: TurnId,
         step_id: StepId,
-        calls:   &[ToolCall],
-        events:  &mpsc::Sender<Event>,
-        reason:  TurnEndReason,
+        calls: &[ToolCall],
+        events: &mpsc::Sender<Event>,
+        reason: TurnEndReason,
     ) -> DispatchOutcome {
         // A call whose dispatch future was mid-`ask` otherwise leaves a
         // dangling entry here — nothing resolves it once the future holding
@@ -555,11 +661,22 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             TurnEndReason::Cancelled => "cancelled",
             _ => "tool dispatch aborted",
         };
-        let results: Vec<ToolResult> = calls.iter()
-            .map(|call| ToolResult { call_id: call.id.clone(), content: message.into(), is_error: true })
+        let results: Vec<ToolResult> = calls
+            .iter()
+            .map(|call| ToolResult {
+                call_id: call.id.clone(),
+                content: message.into(),
+                is_error: true,
+            })
             .collect();
         for result in &results {
-            let _ = events.send(Event::ToolCompleted { turn_id, step_id, result: result.clone() }).await;
+            let _ = events
+                .send(Event::ToolCompleted {
+                    turn_id,
+                    step_id,
+                    result: result.clone(),
+                })
+                .await;
         }
         DispatchOutcome::Aborted { results, reason }
     }
@@ -579,12 +696,20 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 LogRecord::AssistantMessage { text, .. } => {
                     push_assistant_block(&mut messages, ContentBlock::Text { text: text.clone() });
                 }
-                LogRecord::Thinking { text, signature, .. } => {
-                    let block = ContentBlock::Thinking { text: text.clone(), signature: signature.clone() };
+                LogRecord::Thinking {
+                    text, signature, ..
+                } => {
+                    let block = ContentBlock::Thinking {
+                        text: text.clone(),
+                        signature: signature.clone(),
+                    };
                     push_assistant_block(&mut messages, block);
                 }
                 LogRecord::RedactedThinking { data, .. } => {
-                    push_assistant_block(&mut messages, ContentBlock::RedactedThinking { data: data.clone() });
+                    push_assistant_block(
+                        &mut messages,
+                        ContentBlock::RedactedThinking { data: data.clone() },
+                    );
                 }
                 LogRecord::ToolUse { call, .. } => {
                     push_assistant_block(&mut messages, ContentBlock::ToolUse(call.clone()));
@@ -594,11 +719,17 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     match messages.last_mut() {
                         Some(last)
                             if last.role == Role::User
-                                && matches!(last.content.first(), Some(ContentBlock::ToolResult(_))) =>
+                                && matches!(
+                                    last.content.first(),
+                                    Some(ContentBlock::ToolResult(_))
+                                ) =>
                         {
                             last.content.push(block);
                         }
-                        _ => messages.push(Message { role: Role::User, content: vec![block] }),
+                        _ => messages.push(Message {
+                            role: Role::User,
+                            content: vec![block],
+                        }),
                     }
                 }
                 LogRecord::TurnStarted { .. }
@@ -616,7 +747,10 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
     match messages.last_mut() {
         Some(last) if last.role == Role::Assistant => last.content.push(block),
-        _ => messages.push(Message { role: Role::Assistant, content: vec![block] }),
+        _ => messages.push(Message {
+            role: Role::Assistant,
+            content: vec![block],
+        }),
     }
 }
 
@@ -632,19 +766,33 @@ fn cache_breakpoints(messages: &[Message]) -> Vec<usize> {
 
 // ── Internal ─────────────────────────────────────────────────────────────────
 
-enum StepTerminal { Ok(StepOutcome), Cancelled, Error(String) }
+enum StepTerminal {
+    Ok(StepOutcome),
+    Cancelled,
+    Error(String),
+}
 
 enum StepResult {
     EndTurn(StepOutcome),
-    ToolsDispatched { outcome: StepOutcome, results: Vec<ToolResult> },
-    ToolsAborted { outcome: StepOutcome, results: Vec<ToolResult>, reason: TurnEndReason },
+    ToolsDispatched {
+        outcome: StepOutcome,
+        results: Vec<ToolResult>,
+    },
+    ToolsAborted {
+        outcome: StepOutcome,
+        results: Vec<ToolResult>,
+        reason: TurnEndReason,
+    },
     Cancelled,
     Error(String),
 }
 
 enum DispatchOutcome {
     Completed(Vec<ToolResult>),
-    Aborted { results: Vec<ToolResult>, reason: TurnEndReason },
+    Aborted {
+        results: Vec<ToolResult>,
+        reason: TurnEndReason,
+    },
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -657,8 +805,8 @@ enum DispatchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::client::LlmError;
+    use async_trait::async_trait;
     use futures::stream;
     use std::collections::VecDeque;
     use std::pin::Pin;
@@ -668,14 +816,17 @@ mod tests {
     /// step. Also records the `messages` slice it was called with, so a test
     /// can inspect exactly what a later step's request looked like.
     struct ScriptedClient {
-        scripts:       Mutex<VecDeque<Vec<LlmEvent>>>,
+        scripts: Mutex<VecDeque<Vec<LlmEvent>>>,
         // `Arc` so a test keeps a handle after `self` moves into the agent.
         seen_messages: Arc<Mutex<Vec<Vec<Message>>>>,
     }
 
     impl ScriptedClient {
         fn new(scripts: Vec<Vec<LlmEvent>>) -> Self {
-            Self { scripts: Mutex::new(scripts.into()), seen_messages: Arc::new(Mutex::new(Vec::new())) }
+            Self {
+                scripts: Mutex::new(scripts.into()),
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+            }
         }
 
         fn seen_messages_handle(&self) -> Arc<Mutex<Vec<Vec<Message>>>> {
@@ -688,8 +839,15 @@ mod tests {
             &'a self,
             request: LlmRequest<'a>,
         ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-            self.seen_messages.lock().unwrap().push(request.messages.to_vec());
-            let events = self.scripts.lock().unwrap().pop_front()
+            self.seen_messages
+                .lock()
+                .unwrap()
+                .push(request.messages.to_vec());
+            let events = self
+                .scripts
+                .lock()
+                .unwrap()
+                .pop_front()
                 .expect("ScriptedClient: no more scripted steps");
             Box::pin(stream::iter(events.into_iter().map(Ok)))
         }
@@ -703,7 +861,9 @@ mod tests {
             &'a self,
             _request: LlmRequest<'a>,
         ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-            let first = stream::iter(vec![Ok(LlmEvent::TextDelta { text: "partial".into() })]);
+            let first = stream::iter(vec![Ok(LlmEvent::TextDelta {
+                text: "partial".into(),
+            })]);
             Box::pin(first.chain(stream::pending()))
         }
     }
@@ -717,7 +877,11 @@ mod tests {
             &'a self,
             _request: LlmRequest<'a>,
         ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-            let call = ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) };
+            let call = ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                input: serde_json::json!({}),
+            };
             let first = stream::iter(vec![Ok(LlmEvent::ToolUseRequested { call })]);
             Box::pin(first.chain(stream::pending()))
         }
@@ -728,9 +892,15 @@ mod tests {
     #[async_trait]
     impl ToolDispatcher for EchoDispatcher {
         async fn dispatch(&self, call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
-            ToolResult { call_id: call.id, content: format!("ok:{}", call.name), is_error: false }
+            ToolResult {
+                call_id: call.id,
+                content: format!("ok:{}", call.name),
+                is_error: false,
+            }
         }
-        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
     }
 
     /// Never resolves — for exercising cancellation that lands while tools are
@@ -742,7 +912,9 @@ mod tests {
         async fn dispatch(&self, _call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
             future::pending().await
         }
-        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
     }
 
     /// Opens a review from `turn_ending` — for exercising the review round
@@ -752,17 +924,39 @@ mod tests {
     #[async_trait]
     impl ToolDispatcher for ReviewingDispatcher {
         async fn dispatch(&self, call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
-            ToolResult { call_id: call.id, content: "staged".into(), is_error: false }
+            ToolResult {
+                call_id: call.id,
+                content: "staged".into(),
+                is_error: false,
+            }
         }
-        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
         async fn turn_ending(&self, ctx: &DispatchContext) -> Option<String> {
-            let changeset = Changeset { files: vec![ChangedFile { path: "f.rs".into(), before: Some("a".into()), after: "b".into() }] };
+            let changeset = Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: Some("a".into()),
+                    after: "b".into(),
+                }],
+            };
             match ctx.review(changeset).await? {
                 ReviewDecision::Approve => {
-                    ctx.review_closed(ReviewOutcome::Saved { files: vec!["f.rs".into()], comments_resolved: 0 }).await;
+                    ctx.review_closed(ReviewOutcome::Saved {
+                        files: vec!["f.rs".into()],
+                        comments_resolved: 0,
+                    })
+                    .await;
                     None
                 }
-                ReviewDecision::Comment { comments } => Some(comments.into_iter().map(|c| c.text).collect::<Vec<_>>().join("\n")),
+                ReviewDecision::Comment { comments } => Some(
+                    comments
+                        .into_iter()
+                        .map(|c| c.text)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
                 ReviewDecision::Discard => None,
             }
         }
@@ -777,7 +971,9 @@ mod tests {
         async fn dispatch(&self, _call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
             panic!("a refused step must not dispatch")
         }
-        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
         async fn before_step(&self, _calls: &[ToolCall], _ctx: &DispatchContext) -> Option<String> {
             Some("the developer commented first".into())
         }
@@ -790,18 +986,34 @@ mod tests {
     #[async_trait]
     impl ToolDispatcher for AskingDispatcher {
         async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult {
-            let question = Question { question: "Limit anonymous requests too?".into(), detail: "why".into(), options: vec!["Yes".into(), "No".into(), "Chat about this".into()] };
+            let question = Question {
+                question: "Limit anonymous requests too?".into(),
+                detail: "why".into(),
+                options: vec!["Yes".into(), "No".into(), "Chat about this".into()],
+            };
             let answer = ctx.ask(call.id.clone(), question).await;
-            ToolResult { call_id: call.id, content: format!("{answer:?}"), is_error: false }
+            ToolResult {
+                call_id: call.id,
+                content: format!("{answer:?}"),
+                is_error: false,
+            }
         }
-        fn definitions(&self) -> Vec<ToolDefinition> { vec![] }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
     }
 
     fn outcome(stop_reason: StopReason) -> StepOutcome {
         StepOutcome {
             stop_reason,
-            usage: UsageStats { input_tokens: 0, output_tokens: 0 },
-            cache: CacheStats { cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            usage: UsageStats {
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+            cache: CacheStats {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            },
         }
     }
 
@@ -809,7 +1021,9 @@ mod tests {
     async fn simple_turn_completes_and_logs_cleanly() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::TextDelta { text: "hi".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
         ]]);
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
         let log = agent.log().clone();
@@ -818,10 +1032,17 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "hello".into(),
+            })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::EndTurn));
                 break;
             }
@@ -843,9 +1064,16 @@ mod tests {
     async fn a_thinking_only_step_is_neither_dropped_nor_silent() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::ThinkingStart,
-            LlmEvent::ThinkingDelta { text: "weighing it up".into() },
-            LlmEvent::ThinkingEnd { text: "weighing it up".into(), signature: "sig-1".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            LlmEvent::ThinkingDelta {
+                text: "weighing it up".into(),
+            },
+            LlmEvent::ThinkingEnd {
+                text: "weighing it up".into(),
+                signature: "sig-1".into(),
+            },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
         ]]);
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
         let log = agent.log().clone();
@@ -853,7 +1081,12 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "hello".into(),
+            })
+            .await
+            .unwrap();
 
         let mut noticed = false;
         loop {
@@ -867,7 +1100,8 @@ mod tests {
         // The thinking survived into the transcript...
         let snap = log.snapshot();
         assert!(
-            snap.iter().any(|r| matches!(r, LogRecord::Thinking { text, signature, .. }
+            snap.iter()
+                .any(|r| matches!(r, LogRecord::Thinking { text, signature, .. }
                                           if text == "weighing it up" && signature == "sig-1")),
             "thinking must be persisted: {snap:?}"
         );
@@ -881,18 +1115,33 @@ mod tests {
     /// or the provider rejects the next request.
     #[tokio::test]
     async fn thinking_goes_back_ahead_of_the_tool_call_it_preceded() {
-        let call = ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) };
+        let call = ToolCall {
+            id: "t1".into(),
+            name: "read".into(),
+            input: serde_json::json!({}),
+        };
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ThinkingStart,
-                LlmEvent::ThinkingEnd { text: "first, read it".into(), signature: "sig-1".into() },
-                LlmEvent::TextDelta { text: "Reading it now.".into() },
+                LlmEvent::ThinkingEnd {
+                    text: "first, read it".into(),
+                    signature: "sig-1".into(),
+                },
+                LlmEvent::TextDelta {
+                    text: "Reading it now.".into(),
+                },
                 LlmEvent::ToolUseRequested { call },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
             vec![
-                LlmEvent::TextDelta { text: "done".into() },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::TextDelta {
+                    text: "done".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
@@ -901,9 +1150,16 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "hello".into(),
+            })
+            .await
+            .unwrap();
         loop {
-            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
@@ -912,7 +1168,10 @@ mod tests {
         // shows up as history.
         let seen = seen_messages.lock().unwrap();
         let second = &seen[1];
-        let assistant = second.iter().find(|m| m.role == Role::Assistant).expect("an assistant message");
+        let assistant = second
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("an assistant message");
         assert!(
             matches!(assistant.content.first(), Some(ContentBlock::Thinking { signature, .. }) if signature == "sig-1"),
             "thinking must come first: {:?}",
@@ -932,16 +1191,33 @@ mod tests {
     async fn interleaved_blocks_keep_the_order_they_arrived_in() {
         let script = vec![
             LlmEvent::ThinkingStart,
-            LlmEvent::ThinkingEnd { text: "one".into(), signature: "s1".into() },
-            LlmEvent::TextDelta { text: "between".into() },
+            LlmEvent::ThinkingEnd {
+                text: "one".into(),
+                signature: "s1".into(),
+            },
+            LlmEvent::TextDelta {
+                text: "between".into(),
+            },
             LlmEvent::ThinkingStart,
-            LlmEvent::ThinkingEnd { text: "two".into(), signature: "s2".into() },
-            LlmEvent::TextDelta { text: "after".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            LlmEvent::ThinkingEnd {
+                text: "two".into(),
+                signature: "s2".into(),
+            },
+            LlmEvent::TextDelta {
+                text: "after".into(),
+            },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
         ];
         let client = ScriptedClient::new(vec![
             script,
-            vec![LlmEvent::TextDelta { text: "ok".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            vec![
+                LlmEvent::TextDelta { text: "ok".into() },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
+            ],
         ]);
         let seen_messages = client.seen_messages_handle();
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
@@ -950,9 +1226,14 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(64);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
         for text in ["first", "second"] {
-            cmd_tx.send(Command::Submit { text: text.into() }).await.unwrap();
+            cmd_tx
+                .send(Command::Submit { text: text.into() })
+                .await
+                .unwrap();
             loop {
-                if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+                if let Event::TurnEnded { .. } =
+                    ev_rx.recv().await.expect("agent dropped the event channel")
+                {
                     break;
                 }
             }
@@ -960,7 +1241,10 @@ mod tests {
 
         // The second turn's request is rebuilt from the log.
         let seen = seen_messages.lock().unwrap();
-        let assistant = seen[1].iter().find(|m| m.role == Role::Assistant).expect("an assistant message");
+        let assistant = seen[1]
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("an assistant message");
         let shape: Vec<&str> = assistant
             .content
             .iter()
@@ -980,7 +1264,9 @@ mod tests {
     async fn submitted_text_reaches_the_llm_exactly_once() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::TextDelta { text: "hi".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
         ]]);
         let seen_messages = client.seen_messages_handle();
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
@@ -989,28 +1275,49 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "ls -la".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "ls -la".into(),
+            })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
 
         let seen = seen_messages.lock().unwrap();
-        assert_eq!(seen.len(), 1, "expected one LlmClient::stream call for a single-step turn");
+        assert_eq!(
+            seen.len(),
+            1,
+            "expected one LlmClient::stream call for a single-step turn"
+        );
         let user_message_count = seen[0]
             .iter()
-            .filter(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::Text { text } if text == "ls -la")))
+            .filter(|m| {
+                m.role == Role::User
+                    && m.content
+                        .iter()
+                        .any(|c| matches!(c, ContentBlock::Text { text } if text == "ls -la"))
+            })
             .count();
-        assert_eq!(user_message_count, 1, "the submitted text must appear exactly once in the request sent to the LLM");
+        assert_eq!(
+            user_message_count, 1,
+            "the submitted text must appear exactly once in the request sent to the LLM"
+        );
     }
 
     #[tokio::test]
     async fn clear_history_wipes_the_log_and_notifies_the_tui() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::TextDelta { text: "hi".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
         ]]);
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
         let log = agent.log().clone();
@@ -1019,17 +1326,31 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "hello".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "hello".into(),
+            })
+            .await
+            .unwrap();
         loop {
-            if matches!(ev_rx.recv().await.expect("agent dropped the event channel"), Event::TurnEnded { .. }) {
+            if matches!(
+                ev_rx.recv().await.expect("agent dropped the event channel"),
+                Event::TurnEnded { .. }
+            ) {
                 break;
             }
         }
         assert!(!log.is_empty(), "the turn should have left records behind");
 
         cmd_tx.send(Command::ClearHistory).await.unwrap();
-        assert!(matches!(ev_rx.recv().await, Some(Event::HistoryCleared)), "ClearHistory must be acknowledged so the TUI can wipe its own rendered log");
-        assert!(log.is_empty(), "ClearHistory must wipe ConversationLog so the next turn starts from nothing");
+        assert!(
+            matches!(ev_rx.recv().await, Some(Event::HistoryCleared)),
+            "ClearHistory must be acknowledged so the TUI can wipe its own rendered log"
+        );
+        assert!(
+            log.is_empty(),
+            "ClearHistory must wipe ConversationLog so the next turn starts from nothing"
+        );
     }
 
     #[tokio::test]
@@ -1037,13 +1358,23 @@ mod tests {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
             vec![
-                LlmEvent::TextDelta { text: "done".into() },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::TextDelta {
+                    text: "done".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
         ]);
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
@@ -1053,7 +1384,10 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         let mut completed = false;
         loop {
@@ -1070,7 +1404,9 @@ mod tests {
 
         let snap = log.snapshot();
         assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
-        assert!(snap.iter().any(|r| matches!(r, LogRecord::ToolResult { .. })));
+        assert!(snap
+            .iter()
+            .any(|r| matches!(r, LogRecord::ToolResult { .. })));
         assert!(matches!(snap.last().unwrap(), LogRecord::TurnEnded { .. }));
     }
 
@@ -1083,13 +1419,21 @@ mod tests {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
             vec![
                 LlmEvent::TextDelta { text: "ok".into() },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
@@ -1102,7 +1446,10 @@ mod tests {
 
         let mut notices = Vec::new();
         for text in ["first", "second"] {
-            cmd_tx.send(Command::Submit { text: text.into() }).await.unwrap();
+            cmd_tx
+                .send(Command::Submit { text: text.into() })
+                .await
+                .unwrap();
             loop {
                 match ev_rx.recv().await.expect("agent dropped the event channel") {
                     Event::Notice { message } => notices.push(message),
@@ -1112,15 +1459,25 @@ mod tests {
             }
         }
 
-        assert!(!log.snapshot().iter().any(|r| matches!(r, LogRecord::ToolUse { .. })), "an undispatched call must not be logged");
+        assert!(
+            !log.snapshot()
+                .iter()
+                .any(|r| matches!(r, LogRecord::ToolUse { .. })),
+            "an undispatched call must not be logged"
+        );
         let seen = seen_messages.lock().unwrap();
         assert!(
-            !seen[1].iter().flat_map(|m| &m.content).any(|b| matches!(b, ContentBlock::ToolUse(_))),
+            !seen[1]
+                .iter()
+                .flat_map(|m| &m.content)
+                .any(|b| matches!(b, ContentBlock::ToolUse(_))),
             "the next request must not replay a tool_use that has no result: {:?}",
             seen[1]
         );
         assert!(
-            notices.iter().any(|m| m.contains("before 1 requested tool call(s) could run")),
+            notices
+                .iter()
+                .any(|m| m.contains("before 1 requested tool call(s) could run")),
             "a dropped call must be said out loud, not only logged: {notices:?}"
         );
     }
@@ -1131,7 +1488,9 @@ mod tests {
     async fn a_tool_use_stop_that_named_no_call_ends_the_turn() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::TextDelta { text: "hi".into() },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::ToolUse),
+            },
         ]]);
         let seen_messages = client.seen_messages_handle();
         let agent = Agent::new(client, EchoDispatcher, "test-model", None);
@@ -1139,15 +1498,24 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::EndTurn));
                 break;
             }
         }
-        assert_eq!(seen_messages.lock().unwrap().len(), 1, "no second step may be requested");
+        assert_eq!(
+            seen_messages.lock().unwrap().len(),
+            1,
+            "no second step may be requested"
+        );
     }
 
     /// The TUI draws a submission the moment it is typed, so one that core
@@ -1161,20 +1529,38 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
         loop {
-            if let Event::TextDelta { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TextDelta { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
         let before = log.len();
 
-        for cmd in [Command::Submit { text: "and another".into() }, Command::ClearHistory, Command::Resume { records: vec![] }] {
+        for cmd in [
+            Command::Submit {
+                text: "and another".into(),
+            },
+            Command::ClearHistory,
+            Command::Resume { records: vec![] },
+        ] {
             cmd_tx.send(cmd).await.unwrap();
             let event = ev_rx.recv().await.expect("agent dropped the event channel");
-            assert!(matches!(&event, Event::Notice { message } if message.starts_with("a turn is running")), "{event:?}");
+            assert!(
+                matches!(&event, Event::Notice { message } if message.starts_with("a turn is running")),
+                "{event:?}"
+            );
         }
-        assert_eq!(log.len(), before, "and the running turn's history is untouched");
+        assert_eq!(
+            log.len(),
+            before,
+            "and the running turn's history is untouched"
+        );
     }
 
     #[tokio::test]
@@ -1186,18 +1572,25 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         // Wait for the partial delta so cancel lands mid-step, not before the step starts.
         loop {
-            if let Event::TextDelta { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TextDelta { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::Cancelled));
                 break;
             }
@@ -1210,31 +1603,46 @@ mod tests {
         )));
         assert!(matches!(
             snap.last().unwrap(),
-            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+            LogRecord::TurnEnded {
+                reason: TurnEndReason::Cancelled,
+                ..
+            }
         ));
     }
 
     #[tokio::test]
     async fn cancel_after_tool_use_requested_leaves_no_orphaned_tool_use() {
-        let agent = Agent::new(StallingAfterToolUseClient, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(
+            StallingAfterToolUseClient,
+            EchoDispatcher,
+            "test-model",
+            None,
+        );
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         // Wait for the tool call to be requested so cancel lands after it, before StepEnded.
         loop {
-            if let Event::ToolUseRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::ToolUseRequested { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::Cancelled));
                 break;
             }
@@ -1246,7 +1654,10 @@ mod tests {
         assert!(!snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
         assert!(matches!(
             snap.last().unwrap(),
-            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+            LogRecord::TurnEnded {
+                reason: TurnEndReason::Cancelled,
+                ..
+            }
         ));
     }
 
@@ -1254,9 +1665,15 @@ mod tests {
     async fn cancel_during_tool_dispatch_ends_turn_cancelled_with_well_formed_log() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::ToolUseRequested {
-                call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                call: ToolCall {
+                    id: "t1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                },
             },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::ToolUse),
+            },
         ]]);
         let agent = Agent::new(client, StallingDispatcher, "test-model", None);
         let log = agent.log().clone();
@@ -1265,12 +1682,17 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         // Wait until the tool is actually dispatched (not merely requested) so
         // cancel lands while dispatch_tools is awaiting it, not before.
         loop {
-            if let Event::ToolDispatched { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::ToolDispatched { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
@@ -1296,13 +1718,22 @@ mod tests {
         // TurnEnded — an unresolved one would make a later replay of this log
         // an invalid request to the LLM (a dangling tool_use block).
         let snap = log.snapshot();
-        let tool_use_count = snap.iter().filter(|r| matches!(r, LogRecord::ToolUse { .. })).count();
-        let tool_result_count = snap.iter().filter(|r| matches!(r, LogRecord::ToolResult { .. })).count();
+        let tool_use_count = snap
+            .iter()
+            .filter(|r| matches!(r, LogRecord::ToolUse { .. }))
+            .count();
+        let tool_result_count = snap
+            .iter()
+            .filter(|r| matches!(r, LogRecord::ToolResult { .. }))
+            .count();
         assert_eq!(tool_use_count, 1);
         assert_eq!(tool_result_count, 1);
         assert!(matches!(
             snap.last().unwrap(),
-            LogRecord::TurnEnded { reason: TurnEndReason::Cancelled, .. }
+            LogRecord::TurnEnded {
+                reason: TurnEndReason::Cancelled,
+                ..
+            }
         ));
     }
 
@@ -1310,13 +1741,23 @@ mod tests {
         ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "edit".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "edit".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
             vec![
-                LlmEvent::TextDelta { text: "done".into() },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::TextDelta {
+                    text: "done".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
         ])
     }
@@ -1325,17 +1766,35 @@ mod tests {
     /// approve is answered with `ReviewClosed` before `TurnEnded`.
     #[tokio::test]
     async fn the_review_opens_at_the_end_of_the_turn_and_an_approve_closes_it() {
-        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, "test-model", None);
+        let agent = Agent::new(
+            one_edit_then_done(),
+            ReviewingDispatcher,
+            "test-model",
+            None,
+        );
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::ReviewRequested { review_id, changeset } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::ReviewRequested {
+                review_id,
+                changeset,
+            } = ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert_eq!(changeset.files[0].path, "f.rs");
-                cmd_tx.send(Command::ReviewDecision { review_id, decision: ReviewDecision::Approve }).await.unwrap();
+                cmd_tx
+                    .send(Command::ReviewDecision {
+                        review_id,
+                        decision: ReviewDecision::Approve,
+                    })
+                    .await
+                    .unwrap();
                 break;
             }
         }
@@ -1343,7 +1802,9 @@ mod tests {
         let mut closed = false;
         loop {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
-                Event::ReviewClosed { outcome: ReviewOutcome::Saved { files, .. } } => {
+                Event::ReviewClosed {
+                    outcome: ReviewOutcome::Saved { files, .. },
+                } => {
                     assert_eq!(files, vec!["f.rs".to_string()]);
                     closed = true;
                 }
@@ -1364,13 +1825,33 @@ mod tests {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "edit".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "edit".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
-            vec![LlmEvent::TextDelta { text: "ready".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            vec![
+                LlmEvent::TextDelta {
+                    text: "ready".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
+            ],
             // The follow-up turn.
-            vec![LlmEvent::TextDelta { text: "addressed".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            vec![
+                LlmEvent::TextDelta {
+                    text: "addressed".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
+            ],
         ]);
         let seen_messages = client.seen_messages_handle();
         let agent = Agent::new(client, ReviewingDispatcher, "test-model", None);
@@ -1379,7 +1860,10 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         let mut reviews = 0;
         let mut turns_ended = 0;
@@ -1388,17 +1872,32 @@ mod tests {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
                 Event::FollowUp { text, .. } => {
                     assert_eq!(text, "Use config");
-                    assert_eq!(turns_ended, 1, "announced after the first turn ends and before the second starts");
+                    assert_eq!(
+                        turns_ended, 1,
+                        "announced after the first turn ends and before the second starts"
+                    );
                     saw_follow_up = true;
                 }
                 Event::ReviewRequested { review_id, .. } => {
                     reviews += 1;
                     let decision = if reviews == 1 {
-                        ReviewDecision::Comment { comments: vec![ReviewComment { path: "f.rs".into(), lines: (1, 1), text: "Use config".into() }] }
+                        ReviewDecision::Comment {
+                            comments: vec![ReviewComment {
+                                path: "f.rs".into(),
+                                lines: (1, 1),
+                                text: "Use config".into(),
+                            }],
+                        }
                     } else {
                         ReviewDecision::Approve
                     };
-                    cmd_tx.send(Command::ReviewDecision { review_id, decision }).await.unwrap();
+                    cmd_tx
+                        .send(Command::ReviewDecision {
+                            review_id,
+                            decision,
+                        })
+                        .await
+                        .unwrap();
                 }
                 Event::TurnEnded { .. } => {
                     turns_ended += 1;
@@ -1409,17 +1908,32 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(reviews, 2, "the changeset stays staged and is reviewed again");
-        assert!(saw_follow_up, "the comment is announced before the turn it starts");
+        assert_eq!(
+            reviews, 2,
+            "the changeset stays staged and is reviewed again"
+        );
+        assert!(
+            saw_follow_up,
+            "the comment is announced before the turn it starts"
+        );
 
-        let turns = log.snapshot().iter().filter(|r| matches!(r, LogRecord::TurnStarted { .. })).count();
+        let turns = log
+            .snapshot()
+            .iter()
+            .filter(|r| matches!(r, LogRecord::TurnStarted { .. }))
+            .count();
         assert_eq!(turns, 2, "the comment started a second turn");
         assert!(
-            log.snapshot().iter().any(|r| matches!(r, LogRecord::UserMessage { text, .. } if text == "Use config")),
+            log.snapshot()
+                .iter()
+                .any(|r| matches!(r, LogRecord::UserMessage { text, .. } if text == "Use config")),
             "the comment is the second turn's user message"
         );
         let seen = seen_messages.lock().unwrap();
-        assert!(seen[2].iter().any(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::Text { text } if text == "Use config"))));
+        assert!(seen[2].iter().any(|m| m.role == Role::User
+            && m.content
+                .iter()
+                .any(|c| matches!(c, ContentBlock::Text { text } if text == "Use config"))));
     }
 
     /// `before_step`'s refusal answers every call in the step and dispatches
@@ -1428,11 +1942,30 @@ mod tests {
     async fn a_refused_step_answers_its_calls_without_dispatching_them() {
         let client = ScriptedClient::new(vec![
             vec![
-                LlmEvent::ToolUseRequested { call: ToolCall { id: "t1".into(), name: "run".into(), input: serde_json::json!({}) } },
-                LlmEvent::ToolUseRequested { call: ToolCall { id: "t2".into(), name: "run".into(), input: serde_json::json!({}) } },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "run".into(),
+                        input: serde_json::json!({}),
+                    },
+                },
+                LlmEvent::ToolUseRequested {
+                    call: ToolCall {
+                        id: "t2".into(),
+                        name: "run".into(),
+                        input: serde_json::json!({}),
+                    },
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
-            vec![LlmEvent::TextDelta { text: "ok".into() }, LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            vec![
+                LlmEvent::TextDelta { text: "ok".into() },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
+            ],
         ]);
         let agent = Agent::new(client, RefusingDispatcher, "test-model", None);
         let log = agent.log().clone();
@@ -1440,7 +1973,10 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         let mut answered = 0;
         loop {
@@ -1456,8 +1992,15 @@ mod tests {
             }
         }
         assert_eq!(answered, 2);
-        let results = log.snapshot().iter().filter(|r| matches!(r, LogRecord::ToolResult { .. })).count();
-        assert_eq!(results, 2, "the log still pairs every ToolUse with a ToolResult");
+        let results = log
+            .snapshot()
+            .iter()
+            .filter(|r| matches!(r, LogRecord::ToolResult { .. }))
+            .count();
+        assert_eq!(
+            results, 2,
+            "the log still pairs every ToolUse with a ToolResult"
+        );
     }
 
     #[tokio::test]
@@ -1465,23 +2008,42 @@ mod tests {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "ask".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "ask".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
-            vec![LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) }],
+            vec![LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            }],
         ]);
         let agent = Agent::new(client, AskingDispatcher, "test-model", None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::QuestionAsked { call_id, question } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::QuestionAsked { call_id, question } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert_eq!(question.options.len(), 3);
-                cmd_tx.send(Command::Answer { call_id, answer: Answer::Chose { index: 0 } }).await.unwrap();
+                cmd_tx
+                    .send(Command::Answer {
+                        call_id,
+                        answer: Answer::Chose { index: 0 },
+                    })
+                    .await
+                    .unwrap();
                 break;
             }
         }
@@ -1509,9 +2071,15 @@ mod tests {
     async fn cancel_during_a_pending_question_does_not_leak_its_entry() {
         let client = ScriptedClient::new(vec![vec![
             LlmEvent::ToolUseRequested {
-                call: ToolCall { id: "t1".into(), name: "ask".into(), input: serde_json::json!({}) },
+                call: ToolCall {
+                    id: "t1".into(),
+                    name: "ask".into(),
+                    input: serde_json::json!({}),
+                },
             },
-            LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::ToolUse),
+            },
         ]]);
         let agent = Agent::new(client, AskingDispatcher, "test-model", None);
         let pending = agent.pending.clone();
@@ -1519,47 +2087,73 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::QuestionAsked { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::QuestionAsked { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
-        assert_eq!(pending.lock().unwrap().len(), 1, "the pending question should be registered before cancel");
+        assert_eq!(
+            pending.lock().unwrap().len(),
+            1,
+            "the pending question should be registered before cancel"
+        );
 
         cmd_tx.send(Command::Cancel).await.unwrap();
 
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::Cancelled));
                 break;
             }
         }
-        assert!(pending.lock().unwrap().is_empty(), "abort_dispatch must clear dangling pending entries on cancel");
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "abort_dispatch must clear dangling pending entries on cancel"
+        );
     }
 
     /// The same for a review, which is keyed by its own id rather than a
     /// call's and so needs its own clearing.
     #[tokio::test]
     async fn cancel_during_a_pending_review_does_not_leak_its_entry() {
-        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, "test-model", None);
+        let agent = Agent::new(
+            one_edit_then_done(),
+            ReviewingDispatcher,
+            "test-model",
+            None,
+        );
         let pending = agent.pending.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::ReviewRequested { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::ReviewRequested { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
         assert_eq!(pending.lock().unwrap().len(), 1);
         cmd_tx.send(Command::Cancel).await.unwrap();
         loop {
-            if let Event::TurnEnded { reason, .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { reason, .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 assert!(matches!(reason, TurnEndReason::Cancelled));
                 break;
             }
@@ -1577,13 +2171,23 @@ mod tests {
         let client = ScriptedClient::new(vec![
             vec![
                 LlmEvent::ToolUseRequested {
-                    call: ToolCall { id: "t1".into(), name: "read".into(), input: serde_json::json!({}) },
+                    call: ToolCall {
+                        id: "t1".into(),
+                        name: "read".into(),
+                        input: serde_json::json!({}),
+                    },
                 },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::ToolUse) },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::ToolUse),
+                },
             ],
             vec![
-                LlmEvent::TextDelta { text: "done".into() },
-                LlmEvent::StepEnded { outcome: outcome(StopReason::EndTurn) },
+                LlmEvent::TextDelta {
+                    text: "done".into(),
+                },
+                LlmEvent::StepEnded {
+                    outcome: outcome(StopReason::EndTurn),
+                },
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
@@ -1593,26 +2197,49 @@ mod tests {
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
         tokio::spawn(agent.run(cmd_rx, ev_tx));
 
-        cmd_tx.send(Command::Submit { text: "go".into() }).await.unwrap();
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
 
         loop {
-            if let Event::TurnEnded { .. } = ev_rx.recv().await.expect("agent dropped the event channel") {
+            if let Event::TurnEnded { .. } =
+                ev_rx.recv().await.expect("agent dropped the event channel")
+            {
                 break;
             }
         }
 
         let seen = seen_messages.lock().unwrap();
-        assert_eq!(seen.len(), 2, "expected one LlmClient::stream call per step");
+        assert_eq!(
+            seen.len(),
+            2,
+            "expected one LlmClient::stream call per step"
+        );
         let second_request = &seen[1];
 
         let tool_use_idx = second_request
             .iter()
-            .position(|m| m.role == Role::Assistant && m.content.iter().any(|c| matches!(c, ContentBlock::ToolUse(call) if call.id == "t1")))
+            .position(|m| {
+                m.role == Role::Assistant
+                    && m.content
+                        .iter()
+                        .any(|c| matches!(c, ContentBlock::ToolUse(call) if call.id == "t1"))
+            })
             .expect("second step's request must include the assistant's tool_use block for t1");
         let tool_result_idx = second_request
             .iter()
-            .position(|m| m.role == Role::User && m.content.iter().any(|c| matches!(c, ContentBlock::ToolResult(r) if r.call_id == "t1")))
+            .position(|m| {
+                m.role == Role::User
+                    && m.content
+                        .iter()
+                        .any(|c| matches!(c, ContentBlock::ToolResult(r) if r.call_id == "t1"))
+            })
             .expect("second step's request must include the tool result for t1");
-        assert_eq!(tool_result_idx, tool_use_idx + 1, "tool_use must be immediately followed by its tool_result, with nothing in between");
+        assert_eq!(
+            tool_result_idx,
+            tool_use_idx + 1,
+            "tool_use must be immediately followed by its tool_result, with nothing in between"
+        );
     }
 }

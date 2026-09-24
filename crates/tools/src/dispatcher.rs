@@ -1,7 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use aldwin_core::{DispatchContext, Event, ReviewComment, ReviewDecision, ReviewOutcome, ToolCall, ToolDefinition, ToolResult};
+use aldwin_core::{
+    DispatchContext, Event, ReviewComment, ReviewDecision, ReviewOutcome, ToolCall, ToolDefinition,
+    ToolResult,
+};
 use aldwin_permissions::{Locks, Outcome};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -20,11 +23,11 @@ use crate::staging::Staging;
 /// re-declare from, not to the developer as a question.
 pub struct Dispatcher {
     registry: Registry,
-    locks:    Arc<Locks>,
-    staging:  Arc<Staging>,
+    locks: Arc<Locks>,
+    staging: Arc<Staging>,
     /// Serialises the review across the concurrent calls of a step and the
     /// turn's end, so one changeset is never reviewed twice at once.
-    review:   tokio::sync::Mutex<()>,
+    review: tokio::sync::Mutex<()>,
     /// Where a read cannot be enforced, the call runs unconfined and the
     /// developer is told so — once. Said at the first such call rather than
     /// at startup, so a session that never runs anything never hears it.
@@ -36,7 +39,14 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     pub fn new(registry: Registry, locks: Arc<Locks>, staging: Arc<Staging>) -> Self {
-        Self { registry, locks, staging, review: tokio::sync::Mutex::new(()), said_unconfined: AtomicBool::new(false), notices: None }
+        Self {
+            registry,
+            locks,
+            staging,
+            review: tokio::sync::Mutex::new(()),
+            said_unconfined: AtomicBool::new(false),
+            notices: None,
+        }
     }
 
     /// Where the dispatcher's own notices — today only the unconfined-run
@@ -52,7 +62,10 @@ impl Dispatcher {
     fn observes_disk(&self, calls: &[ToolCall]) -> bool {
         calls.iter().any(|call| {
             call.name == "run"
-                || self.registry.get(&call.name).is_some_and(|t| matches!(t.descriptor().source, ToolSource::Mcp { .. }))
+                || self
+                    .registry
+                    .get(&call.name)
+                    .is_some_and(|t| matches!(t.descriptor().source, ToolSource::Mcp { .. }))
         })
     }
 
@@ -67,15 +80,26 @@ impl Dispatcher {
             Some(ReviewDecision::Approve) => {
                 let written = self.staging.write_all().await;
                 for (path, why) in &written.skipped {
-                    let _ = ctx.review_closed(ReviewOutcome::Discarded { files: vec![path.clone()] }).await;
+                    let _ = ctx
+                        .review_closed(ReviewOutcome::Discarded {
+                            files: vec![path.clone()],
+                        })
+                        .await;
                     self.say(format!("{path} was not written: {why}")).await;
                 }
-                ctx.review_closed(ReviewOutcome::Saved { files: written.files, comments_resolved: written.comments_resolved }).await;
+                ctx.review_closed(ReviewOutcome::Saved {
+                    files: written.files,
+                    comments_resolved: written.comments_resolved,
+                })
+                .await;
                 Reviewed::Proceed
             }
             Some(ReviewDecision::Comment { comments }) => {
                 self.staging.note_comments(comments.len());
-                ctx.review_closed(ReviewOutcome::Commented { comments: comments.len() }).await;
+                ctx.review_closed(ReviewOutcome::Commented {
+                    comments: comments.len(),
+                })
+                .await;
                 Reviewed::Reason(render_comments(&comments))
             }
             // Said in the developer's voice: at the end of a turn this text
@@ -123,7 +147,11 @@ fn render_comments(comments: &[ReviewComment]) -> String {
             if c.path.is_empty() {
                 return c.text.clone();
             }
-            let lines = if c.lines.0 == c.lines.1 { format!("line {}", c.lines.0) } else { format!("lines {}–{}", c.lines.0, c.lines.1) };
+            let lines = if c.lines.0 == c.lines.1 {
+                format!("line {}", c.lines.0)
+            } else {
+                format!("lines {}–{}", c.lines.0, c.lines.1)
+            };
             format!("On {}, {lines}:\n{}", c.path, c.text)
         })
         .collect::<Vec<_>>()
@@ -140,8 +168,16 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         match tool.permission(&call.input) {
             Ok(None) => {}
             Ok(Some(request)) => {
-                if let Outcome::Locked { scope, .. } = self.locks.check(&request.program, request.class) {
-                    return error_result(&call.id, ToolError::Locked { program: request.program, where_it_lives: scope.where_it_lives() });
+                if let Outcome::Locked { scope, .. } =
+                    self.locks.check(&request.program, request.class)
+                {
+                    return error_result(
+                        &call.id,
+                        ToolError::Locked {
+                            program: request.program,
+                            where_it_lives: scope.where_it_lives(),
+                        },
+                    );
                 }
             }
             Err(e) => return error_result(&call.id, e),
@@ -158,7 +194,10 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
                     self.say(format!("Runs are not sandboxed on this system ({source}); a call declared a read runs with the tree writable."))
                         .await;
                 }
-                finish(&call.id, tool.call(&call.id, as_write(call.input), ctx).await)
+                finish(
+                    &call.id,
+                    tool.call(&call.id, as_write(call.input), ctx).await,
+                )
             }
             other => finish(&call.id, other),
         }
@@ -179,7 +218,9 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         match self.review(ctx).await {
             Reviewed::Proceed => None,
             Reviewed::Reason(text) => Some(text),
-            Reviewed::Gone => Some("the review was not answered; nothing was written and nothing ran".into()),
+            Reviewed::Gone => {
+                Some("the review was not answered; nothing was written and nothing ran".into())
+            }
         }
     }
 
@@ -198,20 +239,31 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
 /// in the input rather than beside it.
 fn as_write(mut input: serde_json::Value) -> serde_json::Value {
     if let Some(map) = input.as_object_mut() {
-        map.insert("class".to_string(), serde_json::Value::String("write".into()));
+        map.insert(
+            "class".to_string(),
+            serde_json::Value::String("write".into()),
+        );
     }
     input
 }
 
 fn finish(call_id: &str, outcome: Result<String, ToolError>) -> ToolResult {
     match outcome {
-        Ok(content) => ToolResult { call_id: call_id.to_string(), content, is_error: false },
+        Ok(content) => ToolResult {
+            call_id: call_id.to_string(),
+            content,
+            is_error: false,
+        },
         Err(e) => error_result(call_id, e),
     }
 }
 
 fn error_result(call_id: &str, err: ToolError) -> ToolResult {
-    ToolResult { call_id: call_id.to_string(), content: err.to_string(), is_error: true }
+    ToolResult {
+        call_id: call_id.to_string(),
+        content: err.to_string(),
+        is_error: true,
+    }
 }
 
 #[cfg(test)]
@@ -228,7 +280,7 @@ mod tests {
     /// way, and can be told its sandbox is missing.
     struct FakeRun {
         descriptor: ToolDescriptor,
-        calls:      std::sync::atomic::AtomicUsize,
+        calls: std::sync::atomic::AtomicUsize,
         no_sandbox: bool,
     }
 
@@ -239,22 +291,34 @@ mod tests {
         }
         fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
             Ok(Some(PermissionRequest {
-                program: input.get("program").and_then(Value::as_str).unwrap_or_default().to_string(),
-                class:   match input.get("class").and_then(Value::as_str) {
+                program: input
+                    .get("program")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                class: match input.get("class").and_then(Value::as_str) {
                     Some("write") => Class::Write,
                     _ => Class::Read,
                 },
                 argv: Vec::new(),
             }))
         }
-        async fn call(&self, _id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+        async fn call(
+            &self,
+            _id: &str,
+            input: Value,
+            _ctx: &DispatchContext,
+        ) -> Result<String, ToolError> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let declared = input.get("class").and_then(Value::as_str).unwrap_or("read");
             if self.no_sandbox && declared == "read" {
                 return Err(ToolError::SandboxUnavailable {
                     program: "x".into(),
-                    args:    Vec::new(),
-                    source:  std::io::Error::new(std::io::ErrorKind::Unsupported, "no enforcement here"),
+                    args: Vec::new(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "no enforcement here",
+                    ),
                 });
             }
             Ok(format!("ran as {declared}"))
@@ -263,8 +327,13 @@ mod tests {
 
     fn fake_run(name: &str, no_sandbox: bool) -> Arc<FakeRun> {
         Arc::new(FakeRun {
-            descriptor: ToolDescriptor { name: name.into(), description: "fake".into(), input_schema: json!({}), source: ToolSource::Builtin },
-            calls:      std::sync::atomic::AtomicUsize::new(0),
+            descriptor: ToolDescriptor {
+                name: name.into(),
+                description: "fake".into(),
+                input_schema: json!({}),
+                source: ToolSource::Builtin,
+            },
+            calls: std::sync::atomic::AtomicUsize::new(0),
             no_sandbox,
         })
     }
@@ -276,7 +345,11 @@ mod tests {
     }
 
     fn call_of(program: &str, class: &str) -> ToolCall {
-        ToolCall { id: "c1".into(), name: "run".into(), input: json!({"program": program, "class": class}) }
+        ToolCall {
+            id: "c1".into(),
+            name: "run".into(),
+            input: json!({"program": program, "class": class}),
+        }
     }
 
     fn dispatcher(registry: Registry, locks: Arc<Locks>) -> (Dispatcher, Arc<Staging>) {
@@ -289,7 +362,16 @@ mod tests {
         let (_d, locks) = locks();
         let (dispatcher, _) = dispatcher(Registry::new(), locks);
         let (ctx, _e, _p) = dispatch_context();
-        let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "nope".into(), input: json!({}) }, &ctx).await;
+        let result = dispatcher
+            .dispatch(
+                ToolCall {
+                    id: "c1".into(),
+                    name: "nope".into(),
+                    input: json!({}),
+                },
+                &ctx,
+            )
+            .await;
         assert!(result.is_error);
         assert!(result.content.contains("no such tool"));
     }
@@ -316,14 +398,24 @@ mod tests {
         let mut registry = Registry::new();
         registry.register(fake_run("run", false)).unwrap();
         let (_d, locks) = locks();
-        locks.config_for_tests().add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
+        locks
+            .config_for_tests()
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
+            .unwrap();
         let (dispatcher, _) = dispatcher(registry, locks);
         let (ctx, mut events, _p) = dispatch_context();
 
         let result = dispatcher.dispatch(call_of("curl", "read"), &ctx).await;
         assert!(result.is_error);
-        assert!(result.content.contains("permissions.yaml"), "{}", result.content);
-        assert!(events.try_recv().is_err(), "a lock offers no way to say yes");
+        assert!(
+            result.content.contains("permissions.yaml"),
+            "{}",
+            result.content
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "a lock offers no way to say yes"
+        );
     }
 
     /// ADR 0009 §3: where a read cannot be enforced the call runs unconfined
@@ -341,8 +433,14 @@ mod tests {
 
         let first = dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
         assert_eq!(first.content, "ran as write");
-        assert_eq!(tool.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "attempt, then the unconfined run");
-        assert!(matches!(notices.try_recv(), Ok(Event::Notice { message }) if message.contains("not sandboxed")));
+        assert_eq!(
+            tool.calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "attempt, then the unconfined run"
+        );
+        assert!(
+            matches!(notices.try_recv(), Ok(Event::Notice { message }) if message.contains("not sandboxed"))
+        );
 
         dispatcher.dispatch(call_of("ls", "read"), &ctx).await;
         assert!(notices.try_recv().is_err(), "said once");
@@ -355,17 +453,47 @@ mod tests {
         struct Outside(ToolDescriptor);
         #[async_trait]
         impl Tool for Outside {
-            fn descriptor(&self) -> &ToolDescriptor { &self.0 }
-            fn permission(&self, _: &Value) -> Result<Option<PermissionRequest>, ToolError> { Ok(None) }
-            async fn call(&self, _: &str, _: Value, _: &DispatchContext) -> Result<String, ToolError> { Ok("ran".into()) }
+            fn descriptor(&self) -> &ToolDescriptor {
+                &self.0
+            }
+            fn permission(&self, _: &Value) -> Result<Option<PermissionRequest>, ToolError> {
+                Ok(None)
+            }
+            async fn call(
+                &self,
+                _: &str,
+                _: Value,
+                _: &DispatchContext,
+            ) -> Result<String, ToolError> {
+                Ok("ran".into())
+            }
         }
         let mut registry = Registry::new();
-        registry.register(Arc::new(Outside(ToolDescriptor { name: "plan".into(), description: String::new(), input_schema: json!({}), source: ToolSource::Builtin }))).unwrap();
+        registry
+            .register(Arc::new(Outside(ToolDescriptor {
+                name: "plan".into(),
+                description: String::new(),
+                input_schema: json!({}),
+                source: ToolSource::Builtin,
+            })))
+            .unwrap();
         let (_d, locks) = locks();
-        locks.config_for_tests().add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("plan")).unwrap();
+        locks
+            .config_for_tests()
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("plan"))
+            .unwrap();
         let (dispatcher, _) = dispatcher(registry, locks);
         let (ctx, _e, _p) = dispatch_context();
-        let result = dispatcher.dispatch(ToolCall { id: "c1".into(), name: "plan".into(), input: json!({}) }, &ctx).await;
+        let result = dispatcher
+            .dispatch(
+                ToolCall {
+                    id: "c1".into(),
+                    name: "plan".into(),
+                    input: json!({}),
+                },
+                &ctx,
+            )
+            .await;
         assert!(!result.is_error);
     }
 
@@ -374,13 +502,28 @@ mod tests {
     async fn stage(staging: &Staging, dir: &tempfile::TempDir, name: &str, after: &str) {
         let path = dir.path().join(name);
         std::fs::write(&path, "before\n").unwrap();
-        staging.edit(path, name, |_| Ok(after.into())).await.unwrap();
+        staging
+            .edit(path, name, |_| Ok(after.into()))
+            .await
+            .unwrap();
     }
 
     /// Answers the next review with `decision`, returning the changeset shown.
-    async fn decide(events: &mut mpsc::Receiver<Event>, pending: &aldwin_core::PendingMap, decision: ReviewDecision) -> Changeset {
-        let Some(Event::ReviewRequested { review_id, changeset }) = events.recv().await else { panic!("expected a review") };
-        let Some(PendingReply::Review(tx)) = pending.lock().unwrap().remove(&review_id) else { panic!("no pending review") };
+    async fn decide(
+        events: &mut mpsc::Receiver<Event>,
+        pending: &aldwin_core::PendingMap,
+        decision: ReviewDecision,
+    ) -> Changeset {
+        let Some(Event::ReviewRequested {
+            review_id,
+            changeset,
+        }) = events.recv().await
+        else {
+            panic!("expected a review")
+        };
+        let Some(PendingReply::Review(tx)) = pending.lock().unwrap().remove(&review_id) else {
+            panic!("no pending review")
+        };
         tx.send(decision).unwrap();
         changeset
     }
@@ -390,7 +533,12 @@ mod tests {
         let (_d, locks) = locks();
         let (dispatcher, _) = dispatcher(Registry::new(), locks);
         let (ctx, mut events, _p) = dispatch_context();
-        assert_eq!(dispatcher.before_step(&[call_of("cargo", "write")], &ctx).await, None);
+        assert_eq!(
+            dispatcher
+                .before_step(&[call_of("cargo", "write")], &ctx)
+                .await,
+            None
+        );
         assert_eq!(dispatcher.turn_ending(&ctx).await, None);
         assert!(events.try_recv().is_err());
     }
@@ -404,7 +552,11 @@ mod tests {
         let (dispatcher, staging) = dispatcher(Registry::new(), locks);
         stage(&staging, &dir, "f.rs", "after\n").await;
         let (ctx, mut events, _p) = dispatch_context();
-        let reads = [ToolCall { id: "c1".into(), name: "read".into(), input: json!({}) }];
+        let reads = [ToolCall {
+            id: "c1".into(),
+            name: "read".into(),
+            input: json!({}),
+        }];
         assert_eq!(dispatcher.before_step(&reads, &ctx).await, None);
         assert!(events.try_recv().is_err());
     }
@@ -419,13 +571,26 @@ mod tests {
 
         let calls = [call_of("cargo", "write")];
         let step = dispatcher.before_step(&calls, &ctx);
-        let (outcome, shown) = tokio::join!(step, decide(&mut events, &pending, ReviewDecision::Approve));
+        let (outcome, shown) =
+            tokio::join!(step, decide(&mut events, &pending, ReviewDecision::Approve));
 
         assert_eq!(outcome, None, "approved: the run may proceed");
-        assert_eq!(shown.files, vec![ChangedFile { path: "f.rs".into(), before: Some("before\n".into()), after: "after\n".into() }]);
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "after\n");
+        assert_eq!(
+            shown.files,
+            vec![ChangedFile {
+                path: "f.rs".into(),
+                before: Some("before\n".into()),
+                after: "after\n".into()
+            }]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.rs")).unwrap(),
+            "after\n"
+        );
         assert!(staging.is_empty());
-        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files, comments_resolved: 0 } }) if files == vec!["f.rs".to_string()]));
+        assert!(
+            matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files, comments_resolved: 0 } }) if files == vec!["f.rs".to_string()])
+        );
     }
 
     #[tokio::test]
@@ -436,22 +601,51 @@ mod tests {
         stage(&staging, &dir, "f.rs", "after\n").await;
         let (ctx, mut events, pending) = dispatch_context();
 
-        let comments = vec![ReviewComment { path: "f.rs".into(), lines: (1, 2), text: "Use config".into() }];
+        let comments = vec![ReviewComment {
+            path: "f.rs".into(),
+            lines: (1, 2),
+            text: "Use config".into(),
+        }];
         let calls = [call_of("cargo", "write")];
         let step = dispatcher.before_step(&calls, &ctx);
-        let (outcome, _) = tokio::join!(step, decide(&mut events, &pending, ReviewDecision::Comment { comments }));
+        let (outcome, _) = tokio::join!(
+            step,
+            decide(&mut events, &pending, ReviewDecision::Comment { comments })
+        );
 
         assert_eq!(outcome.as_deref(), Some("On f.rs, lines 1–2:\nUse config"));
-        assert!(!staging.is_empty(), "the changeset waits for the next review");
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
-        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Commented { comments: 1 } })));
+        assert!(
+            !staging.is_empty(),
+            "the changeset waits for the next review"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.rs")).unwrap(),
+            "before\n"
+        );
+        assert!(matches!(
+            events.recv().await,
+            Some(Event::ReviewClosed {
+                outcome: ReviewOutcome::Commented { comments: 1 }
+            })
+        ));
 
         // The next approve reports the comment resolved.
         let (ctx, mut events, pending) = dispatch_context();
         let ending = dispatcher.turn_ending(&ctx);
-        let (outcome, _) = tokio::join!(ending, decide(&mut events, &pending, ReviewDecision::Approve));
+        let (outcome, _) = tokio::join!(
+            ending,
+            decide(&mut events, &pending, ReviewDecision::Approve)
+        );
         assert_eq!(outcome, None);
-        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Saved { comments_resolved: 1, .. } })));
+        assert!(matches!(
+            events.recv().await,
+            Some(Event::ReviewClosed {
+                outcome: ReviewOutcome::Saved {
+                    comments_resolved: 1,
+                    ..
+                }
+            })
+        ));
     }
 
     #[tokio::test]
@@ -463,12 +657,20 @@ mod tests {
         let (ctx, mut events, pending) = dispatch_context();
 
         let ending = dispatcher.turn_ending(&ctx);
-        let (outcome, _) = tokio::join!(ending, decide(&mut events, &pending, ReviewDecision::Discard));
+        let (outcome, _) = tokio::join!(
+            ending,
+            decide(&mut events, &pending, ReviewDecision::Discard)
+        );
 
         assert!(outcome.unwrap().contains("discarded"));
         assert!(staging.is_empty());
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
-        assert!(matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Discarded { files } }) if files == vec!["f.rs".to_string()]));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.rs")).unwrap(),
+            "before\n"
+        );
+        assert!(
+            matches!(events.recv().await, Some(Event::ReviewClosed { outcome: ReviewOutcome::Discarded { files } }) if files == vec!["f.rs".to_string()])
+        );
     }
 
     /// Nobody answers the review — the session is ending under it. A step's
@@ -482,28 +684,47 @@ mod tests {
         stage(&staging, &dir, "f.rs", "after\n").await;
 
         async fn walk_away(events: &mut mpsc::Receiver<Event>, pending: &aldwin_core::PendingMap) {
-            let Some(Event::ReviewRequested { review_id, .. }) = events.recv().await else { panic!("expected a review") };
+            let Some(Event::ReviewRequested { review_id, .. }) = events.recv().await else {
+                panic!("expected a review")
+            };
             drop(pending.lock().unwrap().remove(&review_id));
         }
 
         let (ctx, mut events, pending) = dispatch_context();
         let calls = [call_of("cargo", "write")];
-        let (outcome, _) = tokio::join!(dispatcher.before_step(&calls, &ctx), walk_away(&mut events, &pending));
+        let (outcome, _) = tokio::join!(
+            dispatcher.before_step(&calls, &ctx),
+            walk_away(&mut events, &pending)
+        );
         assert!(outcome.is_some(), "the step's calls are answered, not run");
 
         let (ctx, mut events, pending) = dispatch_context();
-        let (outcome, _) = tokio::join!(dispatcher.turn_ending(&ctx), walk_away(&mut events, &pending));
+        let (outcome, _) = tokio::join!(
+            dispatcher.turn_ending(&ctx),
+            walk_away(&mut events, &pending)
+        );
         assert_eq!(outcome, None, "no next turn");
 
         assert!(!staging.is_empty());
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "before\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.rs")).unwrap(),
+            "before\n"
+        );
     }
 
     #[test]
     fn comments_render_where_then_what_and_a_general_one_as_itself() {
-        let one = vec![ReviewComment { path: "a.rs".into(), lines: (4, 4), text: "x".into() }];
+        let one = vec![ReviewComment {
+            path: "a.rs".into(),
+            lines: (4, 4),
+            text: "x".into(),
+        }];
         assert_eq!(render_comments(&one), "On a.rs, line 4:\nx");
-        let general = vec![ReviewComment { path: String::new(), lines: (0, 0), text: "and rename it".into() }];
+        let general = vec![ReviewComment {
+            path: String::new(),
+            lines: (0, 0),
+            text: "and rename it".into(),
+        }];
         assert_eq!(render_comments(&general), "and rename it");
     }
 }

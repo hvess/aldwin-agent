@@ -4,7 +4,10 @@
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub async fn write_message<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> std::io::Result<()> {
+pub async fn write_message<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    value: &Value,
+) -> std::io::Result<()> {
     let body = serde_json::to_vec(value).expect("serde_json::Value always serialises");
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
     writer.write_all(header.as_bytes()).await?;
@@ -14,7 +17,9 @@ pub async fn write_message<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value)
 
 /// `Ok(None)` on a clean EOF before any header line — the normal way a
 /// language server's stdout ends when it exits.
-pub async fn read_message<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Value>> {
+pub async fn read_message<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<Value>> {
     let mut content_length: Option<usize> = None;
     let mut saw_any_line = false;
 
@@ -23,7 +28,10 @@ pub async fn read_message<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::R
         let n = reader.read_line(&mut line).await?;
         if n == 0 {
             return if saw_any_line {
-                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "EOF mid-headers"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "EOF mid-headers",
+                ))
             } else {
                 Ok(None)
             };
@@ -39,11 +47,16 @@ pub async fn read_message<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::R
         }
     }
 
-    let len = content_length
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "message had no Content-Length header"))?;
+    let len = content_length.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "message had no Content-Length header",
+        )
+    })?;
     let mut body = vec![0u8; len];
     reader.read_exact(&mut body).await?;
-    let value: Value = serde_json::from_slice(&body).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let value: Value = serde_json::from_slice(&body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     Ok(Some(value))
 }
 
@@ -73,8 +86,14 @@ mod tests {
         write_message(&mut client, &json!({"a": 1})).await.unwrap();
         write_message(&mut client, &json!({"b": 2})).await.unwrap();
 
-        assert_eq!(read_message(&mut server_reader).await.unwrap(), Some(json!({"a": 1})));
-        assert_eq!(read_message(&mut server_reader).await.unwrap(), Some(json!({"b": 2})));
+        assert_eq!(
+            read_message(&mut server_reader).await.unwrap(),
+            Some(json!({"a": 1}))
+        );
+        assert_eq!(
+            read_message(&mut server_reader).await.unwrap(),
+            Some(json!({"b": 2}))
+        );
     }
 
     #[tokio::test]

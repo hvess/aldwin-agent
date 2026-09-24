@@ -61,8 +61,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // The bottom band: what holds it decides its height, measured once.
     let bottom = chrome::Bottom::measure(app, area.width);
-    let [top_pad, body, bottom_area] =
-        Layout::vertical([Constraint::Length(BODY_PAD_ROWS), Constraint::Min(1), Constraint::Length(bottom.height())]).areas(area);
+    let [top_pad, body, bottom_area] = Layout::vertical([
+        Constraint::Length(BODY_PAD_ROWS),
+        Constraint::Min(1),
+        Constraint::Length(bottom.height()),
+    ])
+    .areas(area);
     let _ = top_pad;
 
     app.render_width = body.width;

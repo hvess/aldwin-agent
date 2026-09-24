@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
-use crate::paths::Workspace;
-use aldwin_core::DispatchContext;
 use crate::lsp::{self, LspClient};
+use crate::paths::Workspace;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use aldwin_core::DispatchContext;
 use aldwin_permissions::Class;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -26,9 +26,9 @@ enum Op {
 /// aldwin-tools.md. Servers spawn lazily per-language on first use and
 /// persist in `clients` for the tool's (i.e. the session's) lifetime.
 pub struct ExplainTool {
-    descriptor:   ToolDescriptor,
-    workspace:    Workspace,
-    clients:      tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
+    descriptor: ToolDescriptor,
+    workspace: Workspace,
+    clients: tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
 }
 
 impl ExplainTool {
@@ -76,22 +76,32 @@ impl ExplainTool {
         if let Some(client) = clients.get(server.language_id).filter(|c| !c.is_closed()) {
             return Ok(client.clone());
         }
-        let client = LspClient::spawn(server.command, server.args, &self.workspace.project_root()).await?;
+        let client =
+            LspClient::spawn(server.command, server.args, &self.workspace.project_root()).await?;
         clients.insert(server.language_id, client.clone());
         Ok(client)
     }
 }
 
 fn invalid(message: impl Into<String>) -> ToolError {
-    ToolError::InvalidInput { tool: "explain".into(), message: message.into() }
+    ToolError::InvalidInput {
+        tool: "explain".into(),
+        message: message.into(),
+    }
 }
 
 fn required_str<'a>(input: &'a Value, field: &'static str) -> Result<&'a str, ToolError> {
-    input.get(field).and_then(Value::as_str).ok_or_else(|| invalid(format!("missing {field:?} string field")))
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("missing {field:?} string field")))
 }
 
 fn required_u64(input: &Value, field: &'static str) -> Result<u64, ToolError> {
-    input.get(field).and_then(Value::as_u64).ok_or_else(|| invalid(format!("missing {field:?} integer field")))
+    input
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid(format!("missing {field:?} integer field")))
 }
 
 #[async_trait]
@@ -111,18 +121,33 @@ impl Tool for ExplainTool {
         } else {
             return Err(invalid("requires either \"path\" or \"query\""));
         };
-        Ok(Some(PermissionRequest { program: "explain".into(), class: Class::Read, argv: vec![subject] }))
+        Ok(Some(PermissionRequest {
+            program: "explain".into(),
+            class: Class::Read,
+            argv: vec![subject],
+        }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
-        let op_value = input.get("op").cloned().ok_or_else(|| invalid("missing \"op\" field"))?;
-        let op: Op = serde_json::from_value(op_value).map_err(|e| invalid(format!("invalid \"op\": {e}")))?;
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        _ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
+        let op_value = input
+            .get("op")
+            .cloned()
+            .ok_or_else(|| invalid("missing \"op\" field"))?;
+        let op: Op = serde_json::from_value(op_value)
+            .map_err(|e| invalid(format!("invalid \"op\": {e}")))?;
 
         if op == Op::WorkspaceSymbols {
             let query = required_str(&input, "query")?;
             let server = lsp::language_by_id("rust").expect("rust is always configured");
             let client = self.client_for(server).await?;
-            let result = client.request("workspace/symbol", json!({ "query": query })).await?;
+            let result = client
+                .request("workspace/symbol", json!({ "query": query }))
+                .await?;
             return Ok(format_symbols(result));
         }
 
@@ -130,12 +155,24 @@ impl Tool for ExplainTool {
         let line = required_u64(&input, "line")?;
         let character = required_u64(&input, "character")?;
         let path = self.workspace.resolve(path_str)?;
-        let server = lsp::language_for_path(&path).ok_or_else(|| invalid(format!("no language server configured for {}", path.display())))?;
+        let server = lsp::language_for_path(&path).ok_or_else(|| {
+            invalid(format!(
+                "no language server configured for {}",
+                path.display()
+            ))
+        })?;
         let client = self.client_for(server).await?;
 
         let uri = lsp::file_uri(&path);
-        let text = tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path: path.clone(), source })?;
-        client.sync_document(&uri, server.language_id, &text).await?;
+        let text = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|source| ToolError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        client
+            .sync_document(&uri, server.language_id, &text)
+            .await?;
 
         let position = json!({ "line": line, "character": character });
         let text_document = json!({ "uri": uri });
@@ -174,8 +211,8 @@ impl Tool for ExplainTool {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LocationOut {
-    path:      String,
-    line:      u64,
+    path: String,
+    line: u64,
     character: u64,
 }
 
@@ -198,7 +235,9 @@ fn location_from_value(item: &Value) -> Option<LocationOut> {
     } else {
         // LocationLink shape.
         let uri = obj.get("targetUri")?.as_str()?;
-        let range = obj.get("targetSelectionRange").or_else(|| obj.get("targetRange"))?;
+        let range = obj
+            .get("targetSelectionRange")
+            .or_else(|| obj.get("targetRange"))?;
         (uri, range)
     };
     let start = range.get("start")?;
@@ -206,14 +245,18 @@ fn location_from_value(item: &Value) -> Option<LocationOut> {
     // developer or model actually wants to read.
     let line = start.get("line")?.as_u64()? + 1;
     let character = start.get("character")?.as_u64()? + 1;
-    Some(LocationOut { path: lsp::path_from_uri(uri), line, character })
+    Some(LocationOut {
+        path: lsp::path_from_uri(uri),
+        line,
+        character,
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SymbolOut {
-    name:      String,
-    path:      String,
-    line:      u64,
+    name: String,
+    path: String,
+    line: u64,
     character: u64,
 }
 
@@ -229,7 +272,12 @@ fn format_symbols(result: Value) -> String {
             let name = obj.get("name")?.as_str()?.to_string();
             let location = obj.get("location")?;
             let loc = location_from_value(location)?;
-            Some(SymbolOut { name, path: loc.path, line: loc.line, character: loc.character })
+            Some(SymbolOut {
+                name,
+                path: loc.path,
+                line: loc.line,
+                character: loc.character,
+            })
         })
         .collect();
     serde_json::to_string(&symbols).unwrap_or_else(|_| "[]".to_string())
@@ -241,15 +289,28 @@ struct HoverOut {
 }
 
 fn format_hover(result: Value) -> String {
-    let signature = if result.is_null() { String::new() } else { extract_hover_text(result.get("contents").unwrap_or(&Value::Null)) };
-    serde_json::to_string(&HoverOut { signature }).unwrap_or_else(|_| r#"{"signature":""}"#.to_string())
+    let signature = if result.is_null() {
+        String::new()
+    } else {
+        extract_hover_text(result.get("contents").unwrap_or(&Value::Null))
+    };
+    serde_json::to_string(&HoverOut { signature })
+        .unwrap_or_else(|_| r#"{"signature":""}"#.to_string())
 }
 
 fn extract_hover_text(contents: &Value) -> String {
     match contents {
         Value::String(s) => s.clone(),
-        Value::Object(o) => o.get("value").and_then(Value::as_str).unwrap_or_default().to_string(),
-        Value::Array(items) => items.iter().map(extract_hover_text).collect::<Vec<_>>().join("\n---\n"),
+        Value::Object(o) => o
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        Value::Array(items) => items
+            .iter()
+            .map(extract_hover_text)
+            .collect::<Vec<_>>()
+            .join("\n---\n"),
         _ => String::new(),
     }
 }
@@ -261,16 +322,27 @@ mod tests {
     #[test]
     fn permission_target_prefers_path_then_query() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let by_path = tool.permission(&json!({"path": "src/main.rs"})).unwrap().unwrap();
+        let by_path = tool
+            .permission(&json!({"path": "src/main.rs"}))
+            .unwrap()
+            .unwrap();
         assert_eq!(by_path.argv, vec!["src/main.rs".to_string()]);
         assert_eq!(by_path.class, Class::Read);
-        assert_eq!(tool.permission(&json!({"query": "MyStruct"})).unwrap().unwrap().argv, vec!["MyStruct".to_string()]);
+        assert_eq!(
+            tool.permission(&json!({"query": "MyStruct"}))
+                .unwrap()
+                .unwrap()
+                .argv,
+            vec!["MyStruct".to_string()]
+        );
         assert!(tool.permission(&json!({})).is_err());
     }
 
     #[test]
     fn format_locations_normalises_single_location() {
-        let out = format_locations(json!({"uri": "file:///a.rs", "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 8}}}));
+        let out = format_locations(
+            json!({"uri": "file:///a.rs", "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 8}}}),
+        );
         let parsed: Vec<LocationOut> = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].path, "/a.rs");
@@ -298,7 +370,8 @@ mod tests {
 
     #[test]
     fn format_hover_extracts_markup_content() {
-        let out = format_hover(json!({"contents": {"kind": "markdown", "value": "fn foo() -> i32"}}));
+        let out =
+            format_hover(json!({"contents": {"kind": "markdown", "value": "fn foo() -> i32"}}));
         let parsed: HoverOut = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.signature, "fn foo() -> i32");
     }
@@ -325,14 +398,24 @@ mod tests {
     #[tokio::test]
     async fn missing_op_is_invalid_input() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let err = tool.call("c1", json!({}), &crate::test_support::dispatch_context().0).await.unwrap_err();
+        let err = tool
+            .call("c1", json!({}), &crate::test_support::dispatch_context().0)
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
     #[tokio::test]
     async fn definition_without_path_is_invalid_input() {
         let tool = ExplainTool::new(Workspace::new("."));
-        let err = tool.call("c1", json!({"op": "definition", "line": 0, "character": 0}), &crate::test_support::dispatch_context().0).await.unwrap_err();
+        let err = tool
+            .call(
+                "c1",
+                json!({"op": "definition", "line": 0, "character": 0}),
+                &crate::test_support::dispatch_context().0,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
@@ -340,7 +423,11 @@ mod tests {
     async fn unconfigured_language_is_invalid_input_not_an_lsp_error() {
         let tool = ExplainTool::new(Workspace::new("."));
         let err = tool
-            .call("c1", json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}), &crate::test_support::dispatch_context().0)
+            .call(
+                "c1",
+                json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}),
+                &crate::test_support::dispatch_context().0,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
@@ -356,9 +443,17 @@ mod tests {
     #[ignore]
     async fn real_rust_analyzer_resolves_a_definition() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), "pub fn callee() -> i32 { 1 }\npub fn caller() -> i32 { callee() }\n").unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn callee() -> i32 { 1 }\npub fn caller() -> i32 { callee() }\n",
+        )
+        .unwrap();
 
         let tool = ExplainTool::new(Workspace::new(dir.path()));
 
@@ -367,11 +462,18 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let out = tool
-                .call("c1", json!({"op": "definition", "path": "src/lib.rs", "line": 1, "character": 25}), &crate::test_support::dispatch_context().0)
+                .call(
+                    "c1",
+                    json!({"op": "definition", "path": "src/lib.rs", "line": 1, "character": 25}),
+                    &crate::test_support::dispatch_context().0,
+                )
                 .await
                 .unwrap();
             let parsed: Vec<LocationOut> = serde_json::from_str(&out).unwrap();
-            if parsed.iter().any(|l| l.path.ends_with("src/lib.rs") && l.line == 1) {
+            if parsed
+                .iter()
+                .any(|l| l.path.ends_with("src/lib.rs") && l.line == 1)
+            {
                 break;
             }
             if std::time::Instant::now() > deadline {

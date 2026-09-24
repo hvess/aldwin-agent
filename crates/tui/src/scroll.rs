@@ -19,14 +19,18 @@ pub(crate) const WHEEL_ROWS: usize = 3;
 /// aldwin-tui.md's Conversation Log scroll behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollState {
-    pub offset:          usize,
-    pub following:        bool,
+    pub offset: usize,
+    pub following: bool,
     pub viewport_height: usize,
 }
 
 impl Default for ScrollState {
     fn default() -> Self {
-        Self { offset: 0, following: true, viewport_height: 10 }
+        Self {
+            offset: 0,
+            following: true,
+            viewport_height: 10,
+        }
     }
 }
 
@@ -109,7 +113,10 @@ mod tests {
 
     #[test]
     fn follows_new_content_by_default() {
-        let mut s = ScrollState { viewport_height: 5, ..Default::default() };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            ..Default::default()
+        };
         s.on_content_grew(3);
         assert_eq!(s.offset, 0); // fewer entries than the viewport
         s.on_content_grew(10);
@@ -119,7 +126,11 @@ mod tests {
 
     #[test]
     fn scrolling_up_disengages_following() {
-        let mut s = ScrollState { viewport_height: 5, offset: 5, following: true };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 5,
+            following: true,
+        };
         s.line_up();
         assert!(!s.following);
         assert_eq!(s.offset, 4);
@@ -127,7 +138,11 @@ mod tests {
 
     #[test]
     fn scrolling_to_the_bottom_reengages_following() {
-        let mut s = ScrollState { viewport_height: 5, offset: 0, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 0,
+            following: false,
+        };
         for _ in 0..5 {
             s.line_down(10);
         }
@@ -137,7 +152,11 @@ mod tests {
 
     #[test]
     fn end_key_jumps_to_bottom_and_reengages_following() {
-        let mut s = ScrollState { viewport_height: 5, offset: 0, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 0,
+            following: false,
+        };
         s.jump_to_bottom(20);
         assert!(s.following);
         assert_eq!(s.offset, 15);
@@ -145,21 +164,36 @@ mod tests {
 
     #[test]
     fn once_disengaged_new_content_does_not_move_the_viewport() {
-        let mut s = ScrollState { viewport_height: 5, offset: 2, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 2,
+            following: false,
+        };
         s.on_content_grew(10);
-        assert_eq!(s.offset, 2, "must not auto-scroll while the developer has scrolled up");
+        assert_eq!(
+            s.offset, 2,
+            "must not auto-scroll while the developer has scrolled up"
+        );
     }
 
     #[test]
     fn viewport_height_change_repins_a_following_viewport_to_the_new_bottom() {
-        let mut s = ScrollState { viewport_height: 5, offset: 5, following: true };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 5,
+            following: true,
+        };
         s.set_viewport_height(3, 10);
         assert_eq!(s.offset, 7);
     }
 
     #[test]
     fn viewport_height_change_leaves_a_disengaged_offset_alone() {
-        let mut s = ScrollState { viewport_height: 5, offset: 2, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 2,
+            following: false,
+        };
         s.set_viewport_height(3, 10);
         assert_eq!(s.offset, 2);
     }
@@ -170,24 +204,42 @@ mod tests {
     /// nothing on screen and no fast way back.
     #[test]
     fn a_disengaged_offset_past_the_new_end_is_pulled_back_to_it() {
-        let mut s = ScrollState { viewport_height: 3, offset: 7, following: false };
+        let mut s = ScrollState {
+            viewport_height: 3,
+            offset: 7,
+            following: false,
+        };
         s.set_viewport_height(8, 10);
-        assert_eq!(s.offset, 2, "the last row must stay reachable when the viewport grows under a scrolled-up offset");
-        assert!(!s.following, "clamping is not the same as jumping to the bottom — following stays off");
+        assert_eq!(
+            s.offset, 2,
+            "the last row must stay reachable when the viewport grows under a scrolled-up offset"
+        );
+        assert!(
+            !s.following,
+            "clamping is not the same as jumping to the bottom — following stays off"
+        );
     }
 
     /// Same clamp, driven by content rather than by size: `/clear` and a
     /// history rewrite both shrink the log out from under an offset.
     #[test]
     fn a_disengaged_offset_past_a_shrunken_log_is_pulled_back_to_it() {
-        let mut s = ScrollState { viewport_height: 5, offset: 40, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 40,
+            following: false,
+        };
         s.set_viewport_height(5, 10);
         assert_eq!(s.offset, 5);
     }
 
     #[test]
     fn page_up_and_down_move_by_a_viewport_less_two_rows_of_overlap() {
-        let mut s = ScrollState { viewport_height: 5, offset: 20, following: false };
+        let mut s = ScrollState {
+            viewport_height: 5,
+            offset: 20,
+            following: false,
+        };
         s.page_up();
         assert_eq!(s.offset, 17);
         s.page_down(30);
@@ -198,7 +250,11 @@ mod tests {
     /// that a page is two rows or fewer, paging still has to move.
     #[test]
     fn paging_a_tiny_viewport_still_advances() {
-        let mut s = ScrollState { viewport_height: 1, offset: 4, following: false };
+        let mut s = ScrollState {
+            viewport_height: 1,
+            offset: 4,
+            following: false,
+        };
         s.page_up();
         assert_eq!(s.offset, 3);
     }

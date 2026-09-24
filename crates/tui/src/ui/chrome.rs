@@ -31,7 +31,7 @@ const CARET_LEN: u16 = 1;
 /// and used for everything downstream of that measurement.
 pub(super) struct Composer {
     layout: draft::Layout,
-    width:  u16,
+    width: u16,
 }
 
 impl Composer {
@@ -44,7 +44,10 @@ impl Composer {
             .saturating_sub(CARET_LEN)
             .saturating_sub(reserve)
             .max(1);
-        Self { layout: draft::Layout::new(input, width as usize), width }
+        Self {
+            layout: draft::Layout::new(input, width as usize),
+            width,
+        }
     }
 
     pub(super) fn height(&self) -> u16 {
@@ -67,9 +70,16 @@ pub(super) enum Bottom {
 impl Bottom {
     pub(super) fn measure(app: &App, width: u16) -> Self {
         match &app.mode {
-            Mode::Question(asking) => Bottom::Question { rows: question::panel_rows(asking, width) },
-            Mode::Commands(menu) => Bottom::Commands { rows: menu.list.rows.len() as u16, composer: Composer::new(&app.input, width, 0) },
-            Mode::Conversation | Mode::Review(_) => Bottom::Field(Composer::new(&app.input, width, 0)),
+            Mode::Question(asking) => Bottom::Question {
+                rows: question::panel_rows(asking, width),
+            },
+            Mode::Commands(menu) => Bottom::Commands {
+                rows: menu.list.rows.len() as u16,
+                composer: Composer::new(&app.input, width, 0),
+            },
+            Mode::Conversation | Mode::Review(_) => {
+                Bottom::Field(Composer::new(&app.input, width, 0))
+            }
         }
     }
 
@@ -96,8 +106,13 @@ impl Bottom {
                 draw_footer(frame, footer, app);
             }
             Bottom::Question { rows } => {
-                let [panel, _, footer, _] =
-                    Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).areas(area);
+                let [panel, _, footer, _] = Layout::vertical([
+                    Constraint::Length(rows),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .areas(area);
                 if let Mode::Question(asking) = &app.mode {
                     question::draw_panel(frame, panel, asking, app.theme.palette());
                 }
@@ -128,7 +143,7 @@ impl Bottom {
 /// Grey until it can run.
 pub(super) struct Action {
     pub label: String,
-    pub key:   &'static str,
+    pub key: &'static str,
     pub ready: bool,
 }
 
@@ -143,20 +158,38 @@ impl Action {
 /// column, then the draft, with an optional action flush right. An empty
 /// field is the `›` and the caret and nothing else — no placeholder in any
 /// state. In the commands mode the draft is the `/` and the filter.
-pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer, action: Option<Action>) {
+pub(super) fn draw_field(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    composer: &Composer,
+    action: Option<Action>,
+) {
     let pal = app.theme.palette();
     let field = Style::default().bg(pal.field);
-    let inner = Rect { x: area.x + MARGIN_X as u16, width: area.width.saturating_sub(MARGIN_X as u16 * 2), ..area };
+    let inner = Rect {
+        x: area.x + MARGIN_X as u16,
+        width: area.width.saturating_sub(MARGIN_X as u16 * 2),
+        ..area
+    };
     frame.render_widget(Block::new().style(field), inner);
 
-    let prompt = |glyph: &str| Span::styled(format!("{glyph:<width$}", width = MARK_COL), Style::default().fg(pal.accent).bg(pal.field));
+    let prompt = |glyph: &str| {
+        Span::styled(
+            format!("{glyph:<width$}", width = MARK_COL),
+            Style::default().fg(pal.accent).bg(pal.field),
+        )
+    };
 
     // The commands mode: `/` in the mark column like the `›` it replaces,
     // whatever was typed after it on the body column, the caret after that.
     if let Mode::Commands(menu) = &app.mode {
         let line = Line::from(vec![
             prompt("/"),
-            Span::styled(menu.filter.clone(), Style::default().fg(pal.label).bg(pal.field)),
+            Span::styled(
+                menu.filter.clone(),
+                Style::default().fg(pal.label).bg(pal.field),
+            ),
             caret(pal, app.tick),
         ]);
         frame.render_widget(Paragraph::new(line).style(field), inner);
@@ -165,7 +198,14 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
 
     let action_spans = action.as_ref().map(|a| {
         let fg = if a.ready { pal.accent } else { pal.label3 };
-        vec![Span::styled(format!("{}  ", a.label), Style::default().fg(fg).bg(pal.field)), Span::styled(a.key, Style::default().fg(fg).bg(pal.field)), Span::styled(" ", field)]
+        vec![
+            Span::styled(
+                format!("{}  ", a.label),
+                Style::default().fg(fg).bg(pal.field),
+            ),
+            Span::styled(a.key, Style::default().fg(fg).bg(pal.field)),
+            Span::styled(" ", field),
+        ]
     });
     let action_width = action.as_ref().map_or(0, Action::width);
 
@@ -174,7 +214,9 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
         let mut spans = vec![prompt("›"), caret(pal, app.tick)];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         if let Some(action) = action_spans {
-            let gap = (inner.width as usize).saturating_sub(used).saturating_sub(action_width as usize);
+            let gap = (inner.width as usize)
+                .saturating_sub(used)
+                .saturating_sub(action_width as usize);
             spans.push(Span::styled(" ".repeat(gap), field));
             spans.extend(action);
         }
@@ -196,8 +238,22 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
     let mut lines: Vec<Line<'static>> = (top..(top + height).min(layout.row_count()))
         .map(|i| {
             let text = layout.row_text(i);
-            let mut line = if i == cursor_row { caret_row(&text, cursor_col, ctx, app.tick) } else { Line::from(Span::styled(text, Style::default().fg(pal.label).bg(pal.field))) };
-            line.spans.insert(0, if i == 0 { prompt("›") } else { Span::styled(" ".repeat(MARK_COL), field) });
+            let mut line = if i == cursor_row {
+                caret_row(&text, cursor_col, ctx, app.tick)
+            } else {
+                Line::from(Span::styled(
+                    text,
+                    Style::default().fg(pal.label).bg(pal.field),
+                ))
+            };
+            line.spans.insert(
+                0,
+                if i == 0 {
+                    prompt("›")
+                } else {
+                    Span::styled(" ".repeat(MARK_COL), field)
+                },
+            );
             line
         })
         .collect();
@@ -209,14 +265,22 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
         let room = (inner.width as usize).saturating_sub(used);
         if let Some(action) = action_spans {
             if room >= GROUP_GAP + action_width as usize {
-                first.spans.push(Span::styled(" ".repeat(room - action_width as usize), field));
+                first.spans.push(Span::styled(
+                    " ".repeat(room - action_width as usize),
+                    field,
+                ));
                 first.spans.extend(action);
             }
         } else if layout.row_count() > 1 {
             let count = format!("{} lines ", layout.row_count());
             if room >= GROUP_GAP + count.width() {
-                first.spans.push(Span::styled(" ".repeat(room - count.width()), field));
-                first.spans.push(Span::styled(count, Style::default().fg(pal.label2).bg(pal.field)));
+                first
+                    .spans
+                    .push(Span::styled(" ".repeat(room - count.width()), field));
+                first.spans.push(Span::styled(
+                    count,
+                    Style::default().fg(pal.label2).bg(pal.field),
+                ));
             }
         }
     }
@@ -257,7 +321,11 @@ fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
         // Mid-text the caret takes the cell of the character it sits on.
         Some(c) => {
             let on = (tick / 9).is_multiple_of(2);
-            let s = if on { Style::default().fg(pal.field).bg(pal.label) } else { style };
+            let s = if on {
+                Style::default().fg(pal.field).bg(pal.label)
+            } else {
+                style
+            };
             out.push(Span::styled(c.to_string(), s));
             if let Some(pad) = c.width().map(|w| w.saturating_sub(1)).filter(|&p| p > 0) {
                 out.push(Span::styled(" ".repeat(pad), style));
@@ -274,7 +342,7 @@ fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
 /// A footer key: glyph, two spaces, verb.
 pub(super) struct KeyHint {
     pub glyph: &'static str,
-    pub verb:  &'static str,
+    pub verb: &'static str,
 }
 
 impl KeyHint {
@@ -297,28 +365,47 @@ enum Status {
 struct Footer {
     status: Status,
     /// The keys of the moment, after the status word.
-    keys:   Vec<KeyHint>,
+    keys: Vec<KeyHint>,
     /// `/  Commands`: not a key of the moment but the way to everything
     /// else, and frame A sets it apart — right-flush, one group gap before
     /// the context bar.
-    aside:  Option<KeyHint>,
+    aside: Option<KeyHint>,
 }
 
 impl Footer {
     fn new(status: Status, keys: Vec<KeyHint>) -> Self {
-        Self { status, keys, aside: None }
+        Self {
+            status,
+            keys,
+            aside: None,
+        }
     }
 }
 
 fn footer_state(app: &App) -> Footer {
-    let details = || if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") };
+    let details = || {
+        if app.details_open {
+            KeyHint::new("Space", "Hide Details")
+        } else {
+            KeyHint::new("Space", "Show Details")
+        }
+    };
     match &app.mode {
-        Mode::Question(_) => Footer::new(Status::Waiting, vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")]),
-        Mode::Commands(_) => Footer::new(Status::Ready, vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")]),
+        Mode::Question(_) => Footer::new(
+            Status::Waiting,
+            vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")],
+        ),
+        Mode::Commands(_) => Footer::new(
+            Status::Ready,
+            vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")],
+        ),
         // Shift and Tab are words, as Space is: the glyph table has no mark
         // for either, and "if it is not in the table, do not draw one."
         Mode::Review(r) if r.keys_shown => {
-            let mut keys = vec![KeyHint::new("↑↓", "Scroll"), KeyHint::new("Shift ↑↓", "Select")];
+            let mut keys = vec![
+                KeyHint::new("↑↓", "Scroll"),
+                KeyHint::new("Shift ↑↓", "Select"),
+            ];
             if r.file().has_folds() {
                 keys.push(KeyHint::new("Space", "Show All Lines"));
             }
@@ -338,26 +425,54 @@ fn footer_state(app: &App) -> Footer {
             }
             Footer::new(Status::Working, keys)
         }
-        Mode::Conversation if app.answering.is_some() => Footer::new(Status::Waiting, vec![KeyHint::new("↩", "Send")]),
-        Mode::Conversation if !app.input.is_empty() => Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")]),
+        Mode::Conversation if app.answering.is_some() => {
+            Footer::new(Status::Waiting, vec![KeyHint::new("↩", "Send")])
+        }
+        Mode::Conversation if !app.input.is_empty() => {
+            Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
+        }
         // Frame J: after a turn that saved, the footer is the context bar
         // alone — `↺  Undo` is not offered (baseline `frame-j-offers-undo`)
         // and nothing takes its place.
         Mode::Conversation if just_saved(app) => Footer::new(Status::None, Vec::new()),
         Mode::Conversation => {
-            let keys = if has_details(app) { vec![details()] } else { Vec::new() };
-            Footer { status: Status::Ready, keys, aside: Some(KeyHint::new("/", "Commands")) }
+            let keys = if has_details(app) {
+                vec![details()]
+            } else {
+                Vec::new()
+            };
+            Footer {
+                status: Status::Ready,
+                keys,
+                aside: Some(KeyHint::new("/", "Commands")),
+            }
         }
     }
 }
 
 /// The last turn ended in an approve: it holds a `Saved` review row.
 fn just_saved(app: &App) -> bool {
-    app.this_turn().iter().any(|e| matches!(e, LogEntry::Review { outcome: ReviewOutcome::Saved { .. } }))
+    app.this_turn().iter().any(|e| {
+        matches!(
+            e,
+            LogEntry::Review {
+                outcome: ReviewOutcome::Saved { .. }
+            }
+        )
+    })
 }
 
 fn has_details(app: &App) -> bool {
-    app.this_turn().iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
+    app.this_turn().iter().any(|e| {
+        matches!(
+            e,
+            LogEntry::Work { .. }
+                | LogEntry::Failure {
+                    detail: Some(_),
+                    ..
+                }
+        )
+    })
 }
 
 /// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
@@ -365,21 +480,42 @@ fn has_details(app: &App) -> bool {
 /// flush right.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
-    let Footer { status, keys, aside } = footer_state(app);
+    let Footer {
+        status,
+        keys,
+        aside,
+    } = footer_state(app);
     let dim = Style::default().fg(pal.label2);
     // Every footer glyph is `label2`, as every footer in frames A–J draws
     // it: the accent is for the action at the field's right edge, which is
     // the one that is ready, not for a key the footer merely names.
-    let group = |key: KeyHint| vec![Span::styled(key.glyph, dim), Span::styled(format!("  {}", key.verb), dim)];
+    let group = |key: KeyHint| {
+        vec![
+            Span::styled(key.glyph, dim),
+            Span::styled(format!("  {}", key.verb), dim),
+        ]
+    };
 
     let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
     match status {
-        Status::Ready => groups.push(vec![Span::raw(" ".repeat(MARK_COL)), Span::styled("Ready", dim)]),
-        Status::Waiting => groups.push(vec![Span::raw(" ".repeat(MARK_COL)), Span::styled("Waiting for you", dim)]),
+        Status::Ready => groups.push(vec![
+            Span::raw(" ".repeat(MARK_COL)),
+            Span::styled("Ready", dim),
+        ]),
+        Status::Waiting => groups.push(vec![
+            Span::raw(" ".repeat(MARK_COL)),
+            Span::styled("Waiting for you", dim),
+        ]),
         Status::Working => {
             // The dot blinks with the tick, as the caret does — the one
             // thing the design animates besides it.
-            groups.push(vec![Span::styled(format!("{:<width$}", "●", width = MARK_COL), Style::default().fg(pal.amber)), Span::styled("Working…", dim)])
+            groups.push(vec![
+                Span::styled(
+                    format!("{:<width$}", "●", width = MARK_COL),
+                    Style::default().fg(pal.amber),
+                ),
+                Span::styled("Working…", dim),
+            ])
         }
         Status::None => groups.push(vec![Span::raw(" ".repeat(MARK_COL))]),
     }
@@ -410,7 +546,8 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(aside) = aside {
         let aside = group(aside);
-        let fits = span_w(&left) + GROUP_GAP + span_w(&aside) + GROUP_GAP + span_w(&bar) <= width.saturating_sub(MARGIN_X * 2);
+        let fits = span_w(&left) + GROUP_GAP + span_w(&aside) + GROUP_GAP + span_w(&bar)
+            <= width.saturating_sub(MARGIN_X * 2);
         if fits {
             right.extend(aside);
             right.push(Span::raw(" ".repeat(GROUP_GAP)));
@@ -418,10 +555,16 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     right.extend(bar);
     let right_w = span_w(&right);
-    let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(right_w);
+    let budget = width
+        .saturating_sub(MARGIN_X * 2)
+        .saturating_sub(GROUP_GAP)
+        .saturating_sub(right_w);
     let left = truncate_spans(left, budget);
     let used: usize = left.iter().map(|s| s.content.width()).sum();
-    let gap = width.saturating_sub(MARGIN_X * 2).saturating_sub(used).saturating_sub(right_w);
+    let gap = width
+        .saturating_sub(MARGIN_X * 2)
+        .saturating_sub(used)
+        .saturating_sub(right_w);
 
     let mut line = vec![Span::raw(" ".repeat(MARGIN_X))];
     line.extend(left);
@@ -441,29 +584,63 @@ pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'stati
     for colour in colours.iter().take(GAUGE_SEGMENTS) {
         spans.push(Span::styled("━", Style::default().fg(*colour)));
     }
-    spans.push(Span::styled(format!(" {pct}%"), Style::default().fg(pal.label2)));
+    spans.push(Span::styled(
+        format!(" {pct}%"),
+        Style::default().fg(pal.label2),
+    ));
     spans
 }
 
 /// The comment field, two rows in place of the field while a selection is
 /// being commented on: the selection label on `--select`, the draft on
 /// `--field`, both with the accent `▎` edge.
-pub(super) fn draw_comment_field(frame: &mut Frame, area: Rect, app: &App, lines: &str, location: &str, draft: &str, cursor: usize) {
+pub(super) fn draw_comment_field(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    lines: &str,
+    location: &str,
+    draft: &str,
+    cursor: usize,
+) {
     let pal = app.theme.palette();
-    let inner = Rect { x: area.x + MARGIN_X as u16, width: area.width.saturating_sub(MARGIN_X as u16 * 2), ..area };
-    let [label_row, draft_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let inner = Rect {
+        x: area.x + MARGIN_X as u16,
+        width: area.width.saturating_sub(MARGIN_X as u16 * 2),
+        ..area
+    };
+    let [label_row, draft_row] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
     let on_select = Style::default().bg(pal.select);
     let edge = |bg: Color| Span::styled("▎", Style::default().fg(pal.accent).bg(bg));
     let left = vec![
         edge(pal.select),
-        Span::styled("Commenting on ", Style::default().fg(pal.label).bg(pal.select)),
-        Span::styled(lines.to_string(), Style::default().fg(pal.label).bg(pal.select).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("  {location}"), Style::default().fg(pal.label2).bg(pal.select)),
+        Span::styled(
+            "Commenting on ",
+            Style::default().fg(pal.label).bg(pal.select),
+        ),
+        Span::styled(
+            lines.to_string(),
+            Style::default()
+                .fg(pal.label)
+                .bg(pal.select)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {location}"),
+            Style::default().fg(pal.label2).bg(pal.select),
+        ),
     ];
-    let right = vec![Span::styled("esc ", Style::default().fg(pal.label2).bg(pal.select))];
+    let right = vec![Span::styled(
+        "esc ",
+        Style::default().fg(pal.label2).bg(pal.select),
+    )];
     frame.render_widget(Block::new().style(on_select), label_row);
-    frame.render_widget(Paragraph::new(justify(left, right, inner.width as usize, pal.select)).style(on_select), label_row);
+    frame.render_widget(
+        Paragraph::new(justify(left, right, inner.width as usize, pal.select)).style(on_select),
+        label_row,
+    );
 
     let on_field = Style::default().bg(pal.field);
     frame.render_widget(Block::new().style(on_field), draft_row);
@@ -471,19 +648,36 @@ pub(super) fn draw_comment_field(frame: &mut Frame, area: Rect, app: &App, lines
     let mut row = caret_row(draft, cursor, ctx, app.tick);
     row.spans.insert(0, edge(pal.field));
     let used: usize = row.spans.iter().map(|s| s.content.width()).sum();
-    let gap = (inner.width as usize).saturating_sub(used).saturating_sub(2);
+    let gap = (inner.width as usize)
+        .saturating_sub(used)
+        .saturating_sub(2);
     row.spans.push(Span::styled(" ".repeat(gap), on_field));
-    row.spans.push(Span::styled("↩ ", Style::default().fg(pal.accent).bg(pal.field)));
+    row.spans.push(Span::styled(
+        "↩ ",
+        Style::default().fg(pal.accent).bg(pal.field),
+    ));
     frame.render_widget(Paragraph::new(row).style(on_field), draft_row);
 }
 
-fn justify(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize, bg: Color) -> Line<'static> {
+fn justify(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+    bg: Color,
+) -> Line<'static> {
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let right_w: usize = right.iter().map(|s| s.content.width()).sum();
-    let left = if left_w + right_w + 1 > width { truncate_spans(left, width.saturating_sub(right_w + 1)) } else { left };
+    let left = if left_w + right_w + 1 > width {
+        truncate_spans(left, width.saturating_sub(right_w + 1))
+    } else {
+        left
+    };
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let mut spans = left;
-    spans.push(Span::styled(" ".repeat(width.saturating_sub(left_w).saturating_sub(right_w)), Style::default().bg(bg)));
+    spans.push(Span::styled(
+        " ".repeat(width.saturating_sub(left_w).saturating_sub(right_w)),
+        Style::default().bg(bg),
+    ));
     spans.extend(right);
     Line::from(spans)
 }

@@ -47,34 +47,43 @@ impl std::fmt::Display for SessionId {
 }
 
 impl TurnId {
-    pub fn next() -> Self { Self(NEXT_TURN.fetch_add(1, Ordering::Relaxed)) }
+    pub fn next() -> Self {
+        Self(NEXT_TURN.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 impl StepId {
-    pub fn next() -> Self { Self(NEXT_STEP.fetch_add(1, Ordering::Relaxed)) }
+    pub fn next() -> Self {
+        Self(NEXT_STEP.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Role { User, Assistant }
+pub enum Role {
+    User,
+    Assistant,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
-    pub id:    String,
-    pub name:  String,
+    pub id: String,
+    pub name: String,
     pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub call_id:  String,
-    pub content:  String,
+    pub call_id: String,
+    pub content: String,
     pub is_error: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text       { text: String },
+    Text {
+        text: String,
+    },
     /// An extended-thinking block, kept verbatim with the signature the
     /// provider stamped it with.
     ///
@@ -86,48 +95,59 @@ pub enum ContentBlock {
     /// was a thinking block used to reach the developer as a blank turn
     /// (14,096 tokens spent, nothing rendered, "Continue" typed by hand).
     /// See ADR 0006.
-    Thinking   { text: String, signature: String },
+    Thinking {
+        text: String,
+        signature: String,
+    },
     /// Thinking the provider encrypted rather than showed. Opaque to us and
     /// echoed back untouched, for the same wire-correctness reason as
     /// `Thinking` — there is nothing here to render.
-    RedactedThinking { data: String },
-    ToolUse    (ToolCall),
-    ToolResult (ToolResult),
+    RedactedThinking {
+        data: String,
+    },
+    ToolUse(ToolCall),
+    ToolResult(ToolResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
-    pub role:    Role,
+    pub role: Role,
     pub content: Vec<ContentBlock>,
 }
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
-        Self { role: Role::User, content: vec![ContentBlock::Text { text: text.into() }] }
+        Self {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: text.into() }],
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
-    pub name:         String,
-    pub description:  String,
+    pub name: String,
+    pub description: String,
     pub input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageStats {
-    pub input_tokens:  u32,
+    pub input_tokens: u32,
     pub output_tokens: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheStats {
     pub cache_creation_input_tokens: u32,
-    pub cache_read_input_tokens:     u32,
+    pub cache_read_input_tokens: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StopReason { EndTurn, ToolUse }
+pub enum StopReason {
+    EndTurn,
+    ToolUse,
+}
 
 // ── The plan, a question, and a review (ADR 0009) ───────────────────────────
 
@@ -145,7 +165,7 @@ pub enum StepState {
 /// advances these; the TUI draws them as the design's `PlanStep` rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanStep {
-    pub text:  String,
+    pub text: String,
     pub state: StepState,
 }
 
@@ -156,8 +176,8 @@ pub struct PlanStep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     pub question: String,
-    pub detail:   String,
-    pub options:  Vec<String>,
+    pub detail: String,
+    pub options: Vec<String>,
 }
 
 /// The developer's answer to a [`Question`]: the option they chose, or —
@@ -174,9 +194,9 @@ pub enum Answer {
 /// edit to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
-    pub path:   String,
+    pub path: String,
     pub before: Option<String>,
-    pub after:  String,
+    pub after: String,
 }
 
 /// Everything a turn's edits have staged and nothing has written yet.
@@ -188,10 +208,10 @@ pub struct Changeset {
 /// A comment left on a run of lines in the review, on the *after* side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewComment {
-    pub path:  String,
+    pub path: String,
     /// Inclusive, 1-based line numbers in the file as it would be written.
     pub lines: (usize, usize),
-    pub text:  String,
+    pub text: String,
 }
 
 /// What the developer decided at a review.
@@ -211,17 +231,24 @@ pub enum ReviewDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewOutcome {
-    Saved { files: Vec<String>, comments_resolved: usize },
-    Commented { comments: usize },
-    Discarded { files: Vec<String> },
+    Saved {
+        files: Vec<String>,
+        comments_resolved: usize,
+    },
+    Commented {
+        comments: usize,
+    },
+    Discarded {
+        files: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryInfo {
     pub provider: String,
-    pub status:   Option<u16>,
-    pub message:  String,
-    pub attempt:  u32,
+    pub status: Option<u16>,
+    pub message: String,
+    pub attempt: u32,
 }
 
 #[cfg(test)]

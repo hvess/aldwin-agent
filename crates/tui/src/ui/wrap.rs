@@ -45,9 +45,9 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
     // largest allocation count in a streamed reply's re-render.
     #[derive(Clone, Copy)]
     struct Grapheme {
-        ch:       char,
-        style:    Style,
-        width:    usize,
+        ch: char,
+        style: Style,
+        width: usize,
         is_space: bool,
     }
 
@@ -55,7 +55,8 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         return vec![line];
     }
 
-    let mut graphemes: Vec<Grapheme> = Vec::with_capacity(line.spans.iter().map(|s| s.content.len()).sum());
+    let mut graphemes: Vec<Grapheme> =
+        Vec::with_capacity(line.spans.iter().map(|s| s.content.len()).sum());
     for span in &line.spans {
         let style = span.style;
         for ch in span.content.chars() {
@@ -64,13 +65,25 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
                 // for it, so left in place it deleted a Go or Makefile
                 // line's indentation outright. Expanded to the same four
                 // spaces `draft::sanitize` gives a typed one.
-                '\t' => graphemes.extend([Grapheme { ch: ' ', style, width: 1, is_space: true }; TAB_WIDTH]),
+                '\t' => graphemes.extend(
+                    [Grapheme {
+                        ch: ' ',
+                        style,
+                        width: 1,
+                        is_space: true,
+                    }; TAB_WIDTH],
+                ),
                 // Any other control character is dropped: ratatui skips it
                 // too, but `UnicodeWidthStr` counts it as one cell, so
                 // `Row::assemble` measured a cell nothing drew and left the
                 // row's fill one cell short of its right edge.
                 ch if ch.is_control() => {}
-                ch => graphemes.push(Grapheme { ch, style, width: ch.width().unwrap_or(0), is_space: ch.is_whitespace() }),
+                ch => graphemes.push(Grapheme {
+                    ch,
+                    style,
+                    width: ch.width().unwrap_or(0),
+                    is_space: ch.is_whitespace(),
+                }),
             }
         }
     }
@@ -89,7 +102,10 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
     // introduces at a row break gets dropped, so a hand-indented prose line
     // keeps its indentation.
     if graphemes[0].is_space {
-        let end = graphemes.iter().position(|g| !g.is_space).unwrap_or(graphemes.len());
+        let end = graphemes
+            .iter()
+            .position(|g| !g.is_space)
+            .unwrap_or(graphemes.len());
         row_width = graphemes[..end].iter().map(|g| g.width).sum();
         row.extend_from_slice(&graphemes[..end]);
         i = end;
@@ -154,7 +170,10 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
             let mut spans: Vec<Span<'static>> = Vec::new();
             // Consecutive characters of one style become one span.
             for run in row[..end].chunk_by(|a, b| a.style == b.style) {
-                spans.push(Span::styled(run.iter().map(|g| g.ch).collect::<String>(), run[0].style));
+                spans.push(Span::styled(
+                    run.iter().map(|g| g.ch).collect::<String>(),
+                    run[0].style,
+                ));
             }
             Line::from(spans)
         })

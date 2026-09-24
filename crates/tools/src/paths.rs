@@ -41,7 +41,9 @@ impl Workspace {
     pub fn with_roots(project_root: impl Into<PathBuf>, extra: Vec<PathBuf>) -> Self {
         let project_root = project_root.into();
         let canonical_project = project_root.canonicalize().unwrap_or(project_root);
-        let workspace = Self { roots: Arc::new(RwLock::new(vec![canonical_project])) };
+        let workspace = Self {
+            roots: Arc::new(RwLock::new(vec![canonical_project])),
+        };
         workspace.set_extra_roots(extra);
         workspace
     }
@@ -116,14 +118,28 @@ impl Workspace {
     ///
     /// The **normalized** path is what is returned and used for I/O, so what
     /// was checked in (1) is what gets opened.
-    pub(crate) fn resolve_against(&self, base: &Path, path_str: &str) -> Result<PathBuf, ToolError> {
+    pub(crate) fn resolve_against(
+        &self,
+        base: &Path,
+        path_str: &str,
+    ) -> Result<PathBuf, ToolError> {
         let candidate = Path::new(path_str);
-        let joined = if candidate.is_absolute() { candidate.to_path_buf() } else { base.join(candidate) };
-        let escapes = || ToolError::PathEscapesWorkspace { path: path_str.to_string(), roots: self.describe() };
+        let joined = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            base.join(candidate)
+        };
+        let escapes = || ToolError::PathEscapesWorkspace {
+            path: path_str.to_string(),
+            roots: self.describe(),
+        };
 
         let normalized = normalize_lexically(&joined);
         let canonical =
-            canonicalize_existing_prefix(&normalized).map_err(|source| ToolError::Io { path: joined.clone(), source })?;
+            canonicalize_existing_prefix(&normalized).map_err(|source| ToolError::Io {
+                path: joined.clone(),
+                source,
+            })?;
         if !self.contains(&canonical) {
             return Err(escapes());
         }
@@ -143,7 +159,11 @@ impl Workspace {
 
     /// How the roots read in a message to the developer or the model.
     pub(crate) fn describe(&self) -> String {
-        self.read_roots().iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
+        self.read_roots()
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -151,7 +171,11 @@ impl Workspace {
 /// callers that need to compare it against something other than the roots.
 pub(crate) fn resolved_form(base: &Path, path_str: &str) -> Option<PathBuf> {
     let candidate = Path::new(path_str);
-    let joined = if candidate.is_absolute() { candidate.to_path_buf() } else { base.join(candidate) };
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        base.join(candidate)
+    };
     canonicalize_existing_prefix(&normalize_lexically(&joined)).ok()
 }
 
@@ -175,7 +199,9 @@ fn canonicalize_existing_prefix(path: &Path) -> std::io::Result<PathBuf> {
                 return Ok(canonical);
             }
             Err(err) => {
-                let Some(parent) = ancestor.parent() else { return Err(err) };
+                let Some(parent) = ancestor.parent() else {
+                    return Err(err);
+                };
                 if let Some(name) = ancestor.file_name() {
                     tail.push(name);
                 }
@@ -296,7 +322,10 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.path().join("out")).unwrap();
 
         let ws = Workspace::new(root.path());
-        assert!(matches!(ws.resolve("out/x").unwrap_err(), ToolError::PathEscapesWorkspace { .. }));
+        assert!(matches!(
+            ws.resolve("out/x").unwrap_err(),
+            ToolError::PathEscapesWorkspace { .. }
+        ));
     }
 
     /// A symlink that stays inside the workspace must not be rejected as a
@@ -322,7 +351,10 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.path().join("out")).unwrap();
 
         let ws = Workspace::new(root.path());
-        assert!(matches!(ws.resolve("out/new_file.rs").unwrap_err(), ToolError::PathEscapesWorkspace { .. }));
+        assert!(matches!(
+            ws.resolve("out/new_file.rs").unwrap_err(),
+            ToolError::PathEscapesWorkspace { .. }
+        ));
     }
 
     /// Audit finding: roots are canonical, and the old lexical pre-check
@@ -355,7 +387,10 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("d"), root.path().join("out")).unwrap();
 
         let ws = Workspace::new(root.path());
-        assert!(matches!(ws.resolve("out/../secret").unwrap_err(), ToolError::PathEscapesWorkspace { .. }));
+        assert!(matches!(
+            ws.resolve("out/../secret").unwrap_err(),
+            ToolError::PathEscapesWorkspace { .. }
+        ));
     }
 
     /// `/reload-config` replaces the extra roots through one clone and every
@@ -367,12 +402,19 @@ mod tests {
         let ws = Workspace::new(project.path());
         let held_by_a_tool = ws.clone();
 
-        let dropped = ws.set_extra_roots(vec![sibling.path().to_path_buf(), PathBuf::from("/nope/not/here")]);
+        let dropped = ws.set_extra_roots(vec![
+            sibling.path().to_path_buf(),
+            PathBuf::from("/nope/not/here"),
+        ]);
         assert_eq!(dropped, vec![PathBuf::from("/nope/not/here")]);
         assert_eq!(held_by_a_tool.roots().len(), 2);
 
         ws.set_extra_roots(vec![]);
-        assert_eq!(held_by_a_tool.roots().len(), 1, "the project root is never replaced");
+        assert_eq!(
+            held_by_a_tool.roots().len(),
+            1,
+            "the project root is never replaced"
+        );
     }
 
     #[test]

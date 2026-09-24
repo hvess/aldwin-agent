@@ -68,11 +68,11 @@ pub fn test_counts(output: &str) -> (u32, u32, u32) {
 }
 
 pub struct Run<'a> {
-    pub goal:     &'a str,
-    pub focus:    &'a str,
-    pub commit:   &'a str,
+    pub goal: &'a str,
+    pub focus: &'a str,
+    pub commit: &'a str,
     pub outcomes: &'a [Outcome],
-    pub frames:   Option<&'a Path>,
+    pub frames: Option<&'a Path>,
     pub captured: usize,
 }
 
@@ -80,7 +80,9 @@ pub struct Run<'a> {
 /// a clippy diagnostic is full of `&`, `<` and `>`, and one unescaped `<`
 /// silently swallows the rest of a cell.
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
@@ -105,7 +107,11 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
     out.push_str("<h2>Stages 0&ndash;4 &middot; deterministic</h2>");
     out.push_str("<table><tr><th>stage</th><th>result</th><th>measured</th></tr>");
     for outcome in run.outcomes {
-        let (class, word) = if outcome.passed { ("ok", "ok") } else { ("bad", "FAIL") };
+        let (class, word) = if outcome.passed {
+            ("ok", "ok")
+        } else {
+            ("bad", "FAIL")
+        };
         // A failure's detail is a tool diagnostic, often many lines; the table
         // takes its first line and the section below takes the rest.
         let measured = outcome.detail.lines().next().unwrap_or("");
@@ -116,12 +122,19 @@ pub fn write(dir: &Path, run: &Run) -> Result<std::path::PathBuf> {
         ));
     }
     out.push_str("</table>");
-    out.push_str(&format!("<p class=\"count\">{passed} of {} stages passed.</p>", run.outcomes.len()));
+    out.push_str(&format!(
+        "<p class=\"count\">{passed} of {} stages passed.</p>",
+        run.outcomes.len()
+    ));
 
     if !failures.is_empty() {
         out.push_str("<h3>Issues</h3>");
         for outcome in failures {
-            out.push_str(&format!("<p><strong>{}</strong></p><pre>{}</pre>", esc(outcome.stage), esc(outcome.detail.trim_end())));
+            out.push_str(&format!(
+                "<p><strong>{}</strong></p><pre>{}</pre>",
+                esc(outcome.stage),
+                esc(outcome.detail.trim_end())
+            ));
         }
     }
 
@@ -157,10 +170,10 @@ pub struct Finding {
     /// Optional so a hand-written file stays valid, but the judge is asked
     /// for it: a finding that cannot name its source is not a finding.
     #[serde(default)]
-    pub source:   String,
-    pub design:   String,
-    pub frame:    String,
-    pub frames:   String,
+    pub source: String,
+    pub design: String,
+    pub frame: String,
+    pub frames: String,
 }
 
 /// What the skill hands back from stage 5.
@@ -172,18 +185,18 @@ pub struct Finding {
 /// judge's uncertainty from reading as a defect.
 #[derive(serde::Deserialize)]
 pub struct Stage5 {
-    pub iteration:      u32,
-    pub findings:       Vec<Finding>,
+    pub iteration: u32,
+    pub findings: Vec<Finding>,
     /// Anything the judge confirmed matches, one line each.
     #[serde(default)]
-    pub matches:        Vec<String>,
+    pub matches: Vec<String>,
     /// Places the design disagrees with itself. Candidates for
     /// `baseline.json`; they do not score.
     #[serde(default)]
     pub contradictions: Vec<String>,
     /// What the judge could not resolve. They do not score either.
     #[serde(default)]
-    pub questions:      Vec<String>,
+    pub questions: Vec<String>,
 }
 
 /// The score stage 5 must reach. 100 means no finding of any severity: a
@@ -230,19 +243,32 @@ fn severity(f: &Finding) -> &'static str {
 pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     let text = std::fs::read_to_string(report)?;
     let start = text.find(STAGE5_MARKER).ok_or_else(|| {
-        std::io::Error::other(format!("{} has no {STAGE5_MARKER} — already filled in?", report.display()))
+        std::io::Error::other(format!(
+            "{} has no {STAGE5_MARKER} — already filled in?",
+            report.display()
+        ))
     })?;
     // The placeholder paragraph the marker introduces runs to the next
     // `</p>`; everything after that is the page's own closing tags.
-    let end = text[start..].find("</p>").map(|i| start + i + 4).unwrap_or(start + STAGE5_MARKER.len());
+    let end = text[start..]
+        .find("</p>")
+        .map(|i| start + i + 4)
+        .unwrap_or(start + STAGE5_MARKER.len());
 
     let value = score(&stage5.findings);
     let counts = |s: &str| stage5.findings.iter().filter(|f| severity(f) == s).count();
     let (blocking, major, minor) = (counts("blocking"), counts("major"), counts("minor"));
-    let verdict = if value >= THRESHOLD { ("ok", "passes") } else { ("bad", "does not pass") };
+    let verdict = if value >= THRESHOLD {
+        ("ok", "passes")
+    } else {
+        ("bad", "does not pass")
+    };
 
     let mut out = String::new();
-    out.push_str(&format!("<p><strong>Iteration {}.</strong></p>", stage5.iteration));
+    out.push_str(&format!(
+        "<p><strong>Iteration {}.</strong></p>",
+        stage5.iteration
+    ));
     out.push_str(&format!(
         "<p class=\"count\">Score <strong class=\"{}\">{value}</strong> — \
          100 &minus; (25 &times; {blocking} blocking) &minus; (15 &times; {major} major) &minus; (5 &times; {minor} minor). \
@@ -281,7 +307,10 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
         }
         out.push_str("</ul>");
     };
-    section("Contradictions — the design against itself, not scored", &stage5.contradictions);
+    section(
+        "Contradictions — the design against itself, not scored",
+        &stage5.contradictions,
+    );
     section("Questions — unresolved, not scored", &stage5.questions);
     section("Confirmed matching", &stage5.matches);
 

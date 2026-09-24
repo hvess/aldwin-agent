@@ -7,11 +7,15 @@ use std::path::Path;
 
 pub struct LanguageServer {
     pub language_id: &'static str,
-    pub command:      &'static str,
-    pub args:         &'static [&'static str],
+    pub command: &'static str,
+    pub args: &'static [&'static str],
 }
 
-const RUST: LanguageServer = LanguageServer { language_id: "rust", command: "rust-analyzer", args: &[] };
+const RUST: LanguageServer = LanguageServer {
+    language_id: "rust",
+    command: "rust-analyzer",
+    args: &[],
+};
 
 pub fn language_for_path(path: &Path) -> Option<&'static LanguageServer> {
     match path.extension().and_then(|e| e.to_str()) {

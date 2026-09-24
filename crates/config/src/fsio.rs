@@ -25,21 +25,30 @@ pub fn read_versioned<T: DeserializeOwned>(
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(ConfigError::Io { path: path.to_path_buf(), source: e }),
+        Err(e) => {
+            return Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            })
+        }
     };
 
-    let probe: VersionOnly = serde_yaml_ng::from_str(&text)
-        .map_err(|e| ConfigError::Parse { path: path.to_path_buf(), source: e })?;
+    let probe: VersionOnly = serde_yaml_ng::from_str(&text).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     if probe.version != expected_version {
         return Err(ConfigError::UnknownVersion {
-            path:     path.to_path_buf(),
-            found:    probe.version,
+            path: path.to_path_buf(),
+            found: probe.version,
             expected: expected_version,
         });
     }
 
-    let value: T = serde_yaml_ng::from_str(&text)
-        .map_err(|e| ConfigError::Parse { path: path.to_path_buf(), source: e })?;
+    let value: T = serde_yaml_ng::from_str(&text).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     Ok(Some(value))
 }
 
@@ -49,20 +58,33 @@ pub fn read_versioned<T: DeserializeOwned>(
 /// directory if it doesn't exist yet — the first write into a scope is what
 /// materialises `<project>/.aldwin/` or `~/.aldwin/`.
 pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
-    let dir = path.parent().expect("config domain paths always have a parent directory");
-    fs::create_dir_all(dir).map_err(|e| ConfigError::Io { path: dir.to_path_buf(), source: e })?;
+    let dir = path
+        .parent()
+        .expect("config domain paths always have a parent directory");
+    fs::create_dir_all(dir).map_err(|e| ConfigError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
 
     let mut tmp = tempfile::Builder::new()
         .prefix(".tmp-")
         .tempfile_in(dir)
-        .map_err(|e| ConfigError::Io { path: dir.to_path_buf(), source: e })?;
+        .map_err(|e| ConfigError::Io {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
 
     tmp.write_all(text.as_bytes())
         .and_then(|_| tmp.as_file().sync_all())
-        .map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })?;
+        .map_err(|e| ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
-    tmp.persist(path)
-        .map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e.error })?;
+    tmp.persist(path).map_err(|e| ConfigError::Io {
+        path: path.to_path_buf(),
+        source: e.error,
+    })?;
     Ok(())
 }
 
@@ -75,8 +97,14 @@ pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
 /// drop a domain's explanation the first time anything is persisted to it
 /// (one permission grant is enough). The annotated text is a standing tour
 /// of the format, not a one-time greeting.
-pub fn write_atomic_with_header<T: Serialize>(path: &Path, header: &str, value: &T) -> Result<(), ConfigError> {
-    let body = serde_yaml_ng::to_string(value)
-        .map_err(|e| ConfigError::Serialize { path: path.to_path_buf(), source: e })?;
+pub fn write_atomic_with_header<T: Serialize>(
+    path: &Path,
+    header: &str,
+    value: &T,
+) -> Result<(), ConfigError> {
+    let body = serde_yaml_ng::to_string(value).map_err(|e| ConfigError::Serialize {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     write_atomic_text(path, &format!("{header}{body}"))
 }

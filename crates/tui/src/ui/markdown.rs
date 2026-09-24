@@ -51,7 +51,10 @@ pub(super) fn split_code_fences(text: &str) -> Vec<Segment> {
                     body.push_str(line);
                     body.push('\n');
                 }
-                segments.push(Segment::Code { lang: lang.trim().to_string(), body });
+                segments.push(Segment::Code {
+                    lang: lang.trim().to_string(),
+                    body,
+                });
             }
             None => {
                 prose.push_str(line);
@@ -103,7 +106,7 @@ enum Align {
 struct Table {
     header: Vec<String>,
     aligns: Vec<Align>,
-    rows:   Vec<Vec<String>>,
+    rows: Vec<Vec<String>>,
 }
 
 /// One table cell, already through the inline pass — so it is measured at
@@ -139,7 +142,14 @@ fn parse_table(lines: &[&str]) -> Option<(Table, usize)> {
         rows.push(cells);
         consumed += 1;
     }
-    Some((Table { header, aligns, rows }, consumed))
+    Some((
+        Table {
+            header,
+            aligns,
+            rows,
+        },
+        consumed,
+    ))
 }
 
 /// Splits one `| a | b |` row into trimmed cells, or `None` if the line
@@ -239,11 +249,25 @@ fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     // `label`, not weight 600: the design spends emphasis on the review
     // title, a file path, a question and "Aldwin", and ADR 0002 gives the
     // header its tone only.
-    let header: Vec<Cell> = table.header.iter().map(|cell| parse_inline(cell, Style::default().fg(pal.label), ctx)).collect();
+    let header: Vec<Cell> = table
+        .header
+        .iter()
+        .map(|cell| parse_inline(cell, Style::default().fg(pal.label), ctx))
+        .collect();
     let body: Vec<Vec<Cell>> = table
         .rows
         .iter()
-        .map(|row| (0..columns).map(|i| parse_inline(row.get(i).map(String::as_str).unwrap_or(""), Style::default().fg(pal.label), ctx)).collect())
+        .map(|row| {
+            (0..columns)
+                .map(|i| {
+                    parse_inline(
+                        row.get(i).map(String::as_str).unwrap_or(""),
+                        Style::default().fg(pal.label),
+                        ctx,
+                    )
+                })
+                .collect()
+        })
         .collect();
 
     let widths = column_widths(&header, &body, ctx.width as usize);
@@ -251,7 +275,10 @@ fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     lines.push(rule_line(['┌', '┬', '┐'], &widths, ctx));
     lines.push(row_line(&header, &widths, &table.aligns, ctx));
     lines.push(rule_line(['├', '┼', '┤'], &widths, ctx));
-    lines.extend(body.iter().map(|row| row_line(row, &widths, &table.aligns, ctx)));
+    lines.extend(
+        body.iter()
+            .map(|row| row_line(row, &widths, &table.aligns, ctx)),
+    );
     lines.push(rule_line(['└', '┴', '┘'], &widths, ctx));
     lines
 }
@@ -269,7 +296,10 @@ fn rule_line(corners: [char; 3], widths: &[usize], ctx: Ctx) -> Line<'static> {
         rule.extend(std::iter::repeat_n('─', width + 2 * CELL_PAD));
     }
     rule.push(right);
-    Line::from(truncate_spans(vec![Span::styled(rule, Style::default().fg(ctx.pal.label3))], ctx.width as usize))
+    Line::from(truncate_spans(
+        vec![Span::styled(rule, Style::default().fg(ctx.pal.label3))],
+        ctx.width as usize,
+    ))
 }
 
 /// Each column as wide as its widest *rendered* cell, then shrunk — widest
@@ -293,7 +323,9 @@ fn column_widths(header: &[Cell], body: &[Vec<Cell>], avail: usize) -> Vec<usize
         // `max_by_key` yields the *last* maximum, so tied columns give up
         // cells right to left — the leftmost column is the one that names
         // the row, and it is the last that should lose its text.
-        let Some((i, _)) = widths.iter().enumerate().max_by_key(|(_, w)| **w) else { break };
+        let Some((i, _)) = widths.iter().enumerate().max_by_key(|(_, w)| **w) else {
+            break;
+        };
         if widths[i] <= 1 {
             // Every column is down to a single cell and it still does not
             // fit; `row_line` truncates the assembled row rather than
@@ -366,7 +398,10 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     }
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
-        let mut spans = vec![Span::styled(format!("{indent}▎ "), Style::default().fg(pal.label3))];
+        let mut spans = vec![Span::styled(
+            format!("{indent}▎ "),
+            Style::default().fg(pal.label3),
+        )];
         spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC), ctx));
         return Line::from(spans);
     }
@@ -397,7 +432,8 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
 fn intraword(before: &str, rest: &str) -> bool {
     let previous = before.chars().last();
     let following = rest[1..].chars().next();
-    matches!(previous, Some(c) if c.is_alphanumeric()) && matches!(following, Some(c) if c.is_alphanumeric())
+    matches!(previous, Some(c) if c.is_alphanumeric())
+        && matches!(following, Some(c) if c.is_alphanumeric())
 }
 
 /// Recursive-descent inline pass: `**bold**`, `*italic*`/`_italic_`,
@@ -426,21 +462,32 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
                 //
                 // Exactly the span's own cells: no padding cell either
                 // side, so nothing after it shifts off its column.
-                spans.push(Span::styled(stripped[..end].to_string(), Style::default().fg(ctx.pal.label).bg(ctx.pal.tint)));
+                spans.push(Span::styled(
+                    stripped[..end].to_string(),
+                    Style::default().fg(ctx.pal.label).bg(ctx.pal.tint),
+                ));
                 rest = &stripped[end + 1..];
                 continue;
             }
         } else if let Some(stripped) = rest.strip_prefix("**") {
             if let Some(end) = stripped.find("**") {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::BOLD), ctx));
+                spans.extend(parse_inline(
+                    &stripped[..end],
+                    base.add_modifier(Modifier::BOLD),
+                    ctx,
+                ));
                 rest = &stripped[end + 2..];
                 continue;
             }
         } else if let Some(stripped) = rest.strip_prefix("~~") {
             if let Some(end) = stripped.find("~~") {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::CROSSED_OUT), ctx));
+                spans.extend(parse_inline(
+                    &stripped[..end],
+                    base.add_modifier(Modifier::CROSSED_OUT),
+                    ctx,
+                ));
                 rest = &stripped[end + 2..];
                 continue;
             }
@@ -449,7 +496,11 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
             let stripped = &rest[1..];
             if let Some(end) = stripped.find(delim) {
                 flush(&mut buf, base, &mut spans);
-                spans.extend(parse_inline(&stripped[..end], base.add_modifier(Modifier::ITALIC), ctx));
+                spans.extend(parse_inline(
+                    &stripped[..end],
+                    base.add_modifier(Modifier::ITALIC),
+                    ctx,
+                ));
                 rest = &stripped[end + 1..];
                 continue;
             }
@@ -460,7 +511,10 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
                 // underline, which would be a stroke.
                 spans.push(Span::styled(label.to_string(), base));
                 if !url.is_empty() && url != label {
-                    spans.push(Span::styled(format!(" ({url})"), Style::default().fg(ctx.pal.label3)));
+                    spans.push(Span::styled(
+                        format!(" ({url})"),
+                        Style::default().fg(ctx.pal.label3),
+                    ));
                 }
                 rest = remainder;
                 continue;
@@ -521,7 +575,9 @@ fn parse_ordered(line: &str) -> Option<(String, &str)> {
 /// counts) and nothing else — CommonMark's thematic break.
 fn is_hr(line: &str) -> bool {
     let mut marks = line.chars().filter(|c| !c.is_whitespace());
-    let Some(first) = marks.next().filter(|c| matches!(c, '-' | '*' | '_')) else { return false };
+    let Some(first) = marks.next().filter(|c| matches!(c, '-' | '*' | '_')) else {
+        return false;
+    };
     let mut count = 1;
     marks.all(|c| {
         count += 1;

@@ -38,7 +38,10 @@ pub(super) fn lines(app: &App) -> Vec<Line<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(MARK_COLS + 3);
         spans.push(Span::raw(" ".repeat(BODY_X)));
         for (top, bottom) in row {
-            spans.push(Span::styled(MARK_CELL.to_string(), Style::default().fg(*top).bg(*bottom)));
+            spans.push(Span::styled(
+                MARK_CELL.to_string(),
+                Style::default().fg(*top).bg(*bottom),
+            ));
         }
         if let Some(fact) = r.checked_sub(offset).and_then(|i| facts.get(i)) {
             spans.push(Span::raw(" ".repeat(BODY_X)));
@@ -56,14 +59,27 @@ fn facts(app: &App) -> Vec<Vec<Span<'static>>> {
     let label = |s: &str| Span::styled(column(s, FACT_COL), Style::default().fg(pal.label2));
     let value = |s: String| Span::styled(s, Style::default().fg(pal.label));
     let status = &app.status;
-    let model = if status.model_name.is_empty() { "not set".to_string() } else { status.model_name.clone() };
+    let model = if status.model_name.is_empty() {
+        "not set".to_string()
+    } else {
+        status.model_name.clone()
+    };
     vec![
         vec![
-            Span::styled("Aldwin", Style::default().fg(pal.label).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {}", status.version), Style::default().fg(pal.label2)),
+            Span::styled(
+                "Aldwin",
+                Style::default().fg(pal.label).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", status.version),
+                Style::default().fg(pal.label2),
+            ),
         ],
         vec![label("Project"), value(status.project.clone())],
-        vec![label("Branch"), value(status.branch.clone().unwrap_or_else(|| "none".into()))],
+        vec![
+            label("Branch"),
+            value(status.branch.clone().unwrap_or_else(|| "none".into())),
+        ],
         vec![label("Model"), value(model)],
     ]
 }

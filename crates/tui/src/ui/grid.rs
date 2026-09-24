@@ -22,10 +22,14 @@ use crate::palette::Palette;
 /// the previous system; in this one the echoed prompt sits on its own
 /// ground with a `›`, and the agent's prose needs no name.
 pub(super) use crate::tokens::{
-    BODY_X, COMMAND_COL, DETAIL_COL, FACT_COL, GROUP_GAP, GUTTER_LN, MARGIN_X, MARK_COL, NUMBER_COL, PANE_GAP, SIGN_COL, TREE_W,
+    BODY_X, COMMAND_COL, DETAIL_COL, FACT_COL, GROUP_GAP, GUTTER_LN, MARGIN_X, MARK_COL,
+    NUMBER_COL, PANE_GAP, SIGN_COL, TREE_W,
 };
 
-const _: () = assert!(BODY_X == MARGIN_X + MARK_COL, "layout.css states --body-x as margin + mark column");
+const _: () = assert!(
+    BODY_X == MARGIN_X + MARK_COL,
+    "layout.css states --body-x as margin + mark column"
+);
 
 /// The two facts every line builder in `ui` needs and neither of which it
 /// can derive on its own: which theme's colours to draw in, and how many
@@ -37,7 +41,7 @@ const _: () = assert!(BODY_X == MARGIN_X + MARK_COL, "layout.css states --body-x
 /// been visible.
 #[derive(Clone, Copy)]
 pub(super) struct Ctx<'a> {
-    pub pal:   &'a Palette,
+    pub pal: &'a Palette,
     /// Cells available to whatever is being built — the *column's* width,
     /// not necessarily the frame's.
     pub width: u16,
@@ -149,7 +153,11 @@ pub(super) fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<
 /// what is left after the left group and one space, so the line is never
 /// longer than `width`. The left group is never cut here, because it is
 /// what identifies the row.
-pub(super) fn justified(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
+pub(super) fn justified(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Line<'static> {
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let room = width.saturating_sub(left_w).saturating_sub(1);
     let right = truncate_spans(right, room);

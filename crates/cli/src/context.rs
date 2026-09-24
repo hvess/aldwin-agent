@@ -21,7 +21,11 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     let mut sections = vec![format!("Working directory: {}", cwd.display())];
 
     if roots.len() > 1 {
-        let extra: Vec<String> = roots.iter().skip(1).map(|r| r.display().to_string()).collect();
+        let extra: Vec<String> = roots
+            .iter()
+            .skip(1)
+            .map(|r| r.display().to_string())
+            .collect();
         sections.push(format!(
             "Also reachable (declared in .aldwin/permissions.yaml): {}\nEvery other path is out of reach for every tool, run included.",
             extra.join(", ")
@@ -57,9 +61,13 @@ fn platform_facts() -> String {
     // from the OS — a Mac with gnu-sed installed is GNU. GNU answers
     // `--version`; BSD sed has no such flag and fails.
     match program_version("sed", &["--version"]) {
-        Some(version) if version.contains("GNU") => facts.push("sed: GNU (in-place edit is `sed -i`)".to_string()),
+        Some(version) if version.contains("GNU") => {
+            facts.push("sed: GNU (in-place edit is `sed -i`)".to_string())
+        }
         Some(_) => {}
-        None if which("sed") => facts.push("sed: BSD (in-place edit is `sed -i ''`, not `sed -i`)".to_string()),
+        None if which("sed") => {
+            facts.push("sed: BSD (in-place edit is `sed -i ''`, not `sed -i`)".to_string())
+        }
         None => {}
     }
     facts.join("\n")
@@ -67,18 +75,27 @@ fn platform_facts() -> String {
 
 /// Whether `program` is on PATH at all.
 fn which(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
 /// First line of `<program> <args>`, or `None` if it cannot be run or fails. Best
 /// effort: a missing program is a fact we simply do not state.
 fn program_version(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).output().ok()?;
+    let output = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().next().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string)
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -102,7 +119,10 @@ mod tests {
         assert!(out.contains("sed:"));
         // Which flavour depends on the `sed` on PATH, not on the OS — that is
         // the point — so assert only that a detected one is described usably.
-        assert!(out.contains("sed -i"), "the fact must say how to edit in place: {out}");
+        assert!(
+            out.contains("sed -i"),
+            "the fact must say how to edit in place: {out}"
+        );
     }
 
     /// A second root is named, because "outside the project root" was a
@@ -111,7 +131,10 @@ mod tests {
     fn names_every_reachable_root_when_more_than_one_is_declared() {
         let out = build(
             Path::new("/some/project"),
-            &[PathBuf::from("/some/project"), PathBuf::from("/other/checkout")],
+            &[
+                PathBuf::from("/some/project"),
+                PathBuf::from("/other/checkout"),
+            ],
             &[],
         );
         assert!(out.contains("/other/checkout"));
@@ -120,7 +143,11 @@ mod tests {
 
     #[test]
     fn a_single_root_adds_no_reachability_section() {
-        let out = build(Path::new("/some/project"), &[PathBuf::from("/some/project")], &[]);
+        let out = build(
+            Path::new("/some/project"),
+            &[PathBuf::from("/some/project")],
+            &[],
+        );
         assert!(!out.contains("Also reachable"));
     }
 

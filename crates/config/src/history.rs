@@ -39,24 +39,24 @@ pub const HISTORY_VERSION: u32 = 1;
 /// the one thing an append-only file should never do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionHeader {
-    pub version:    u32,
+    pub version: u32,
     /// Unix epoch seconds. Rendered by the picker; never parsed back.
     pub started_at: u64,
-    pub cwd:        String,
-    pub model:      String,
+    pub cwd: String,
+    pub model: String,
 }
 
 /// One row of what `/resume` lists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
-    pub id:         SessionId,
+    pub id: SessionId,
     pub started_at: u64,
     /// First user message, trimmed to one line — see [`derive_title`].
-    pub title:      String,
+    pub title: String,
     /// Number of *completed* turns — what a resume would actually restore,
     /// since [`load`] drops a turn with no `TurnEnded`. Counting started
     /// turns instead would promise a turn back that resume then drops.
-    pub turns:      usize,
+    pub turns: usize,
 }
 
 /// How much of a first user message becomes a title.
@@ -104,9 +104,15 @@ impl HistoryStore {
     /// it is what lets a session that cannot write history say so at startup
     /// rather than at the first committed record.
     pub fn create(dir: &Path, id: &SessionId, header: &SessionHeader) -> Result<Self, ConfigError> {
-        fs::create_dir_all(dir).map_err(|e| ConfigError::Io { path: dir.to_path_buf(), source: e })?;
+        fs::create_dir_all(dir).map_err(|e| ConfigError::Io {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
         let line = serde_json::to_string(header).expect("SessionHeader is always serialisable");
-        Ok(Self { path: transcript_path(dir, id), sink: Mutex::new(Sink::Pending(line)) })
+        Ok(Self {
+            path: transcript_path(dir, id),
+            sink: Mutex::new(Sink::Pending(line)),
+        })
     }
 
     /// Create the file and write the header — the deferred half of
@@ -129,8 +135,14 @@ impl HistoryStore {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options.open(path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })?;
-        writeln!(file, "{header}").map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })?;
+        let mut file = options.open(path).map_err(|e| ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        writeln!(file, "{header}").map_err(|e| ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         Ok(file)
     }
 
@@ -148,8 +160,15 @@ impl HistoryStore {
     /// skips both. So the line is closed first.
     pub fn reopen(dir: &Path, id: &SessionId) -> Result<Self, ConfigError> {
         let path = transcript_path(dir, id);
-        let io = |e| ConfigError::Io { path: path.clone(), source: e };
-        let mut file = OpenOptions::new().read(true).append(true).open(&path).map_err(io)?;
+        let io = |e| ConfigError::Io {
+            path: path.clone(),
+            source: e,
+        };
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&path)
+            .map_err(io)?;
         if file.metadata().map_err(io)?.len() > 0 {
             let mut last = [0u8; 1];
             file.seek(SeekFrom::End(-1)).map_err(io)?;
@@ -158,10 +177,15 @@ impl HistoryStore {
                 file.write_all(b"\n").map_err(io)?;
             }
         }
-        Ok(Self { path, sink: Mutex::new(Sink::Open(file)) })
+        Ok(Self {
+            path,
+            sink: Mutex::new(Sink::Open(file)),
+        })
     }
 
-    pub fn path(&self) -> &Path { &self.path }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 
     /// Append one record, creating the transcript if this is the first.
     /// `Err` on the first failure only; every call after that is a silent
@@ -178,7 +202,9 @@ impl HistoryStore {
                 }
             }
         }
-        let Sink::Open(file) = &mut *guard else { return Ok(()) };
+        let Sink::Open(file) = &mut *guard else {
+            return Ok(());
+        };
 
         let line = serde_json::to_string(record).expect("LogRecord is always serialisable");
         match writeln!(file, "{line}") {
@@ -187,7 +213,10 @@ impl HistoryStore {
                 // Drop the handle so the next record short-circuits above
                 // rather than retrying a write that just failed.
                 *guard = Sink::Off;
-                Err(ConfigError::Io { path: self.path.clone(), source: e })
+                Err(ConfigError::Io {
+                    path: self.path.clone(),
+                    source: e,
+                })
             }
         }
     }
@@ -206,7 +235,9 @@ impl HistoryStore {
 /// their history. A missing directory is an empty list, not an error — it is
 /// the normal "nothing recorded here yet" state.
 pub fn list(dir: &Path) -> Vec<SessionSummary> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
 
     let mut sessions: Vec<SessionSummary> = entries
         .flatten()
@@ -240,7 +271,10 @@ pub fn list(dir: &Path) -> Vec<SessionSummary> {
 /// half a turn is worse than none.
 pub fn load(dir: &Path, id: &SessionId) -> Result<Vec<LogRecord>, ConfigError> {
     let path = transcript_path(dir, id);
-    let file = File::open(&path).map_err(|e| ConfigError::Io { path: path.clone(), source: e })?;
+    let file = File::open(&path).map_err(|e| ConfigError::Io {
+        path: path.clone(),
+        source: e,
+    })?;
 
     let mut records = Vec::new();
     let mut turn = Vec::new();
@@ -285,7 +319,13 @@ fn project_slug(project_root: &Path) -> String {
         .unwrap_or("project");
     let safe: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
 
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -310,7 +350,9 @@ fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
     for record in lines.filter_map(|l| serde_json::from_str::<LogRecord>(&l).ok()) {
         match record {
             LogRecord::TurnEnded { .. } => turns += 1,
-            LogRecord::UserMessage { text, .. } if title.is_none() => title = Some(derive_title(&text)),
+            LogRecord::UserMessage { text, .. } if title.is_none() => {
+                title = Some(derive_title(&text))
+            }
             _ => {}
         }
     }
@@ -338,7 +380,11 @@ fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
 /// model: filing is not what the developer's tokens are for. If the result
 /// reads badly in a list, the fix is the list.
 fn derive_title(text: &str) -> String {
-    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let first = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if first.chars().count() <= TITLE_MAX {
         first.to_string()
     } else {
@@ -354,15 +400,30 @@ mod tests {
     use tempfile::tempdir;
 
     fn header() -> SessionHeader {
-        SessionHeader { version: HISTORY_VERSION, started_at: 1_700_000_000, cwd: "/tmp/p".into(), model: "m".into() }
+        SessionHeader {
+            version: HISTORY_VERSION,
+            started_at: 1_700_000_000,
+            cwd: "/tmp/p".into(),
+            model: "m".into(),
+        }
     }
 
     fn turn(n: u64, text: &str) -> Vec<LogRecord> {
         vec![
             LogRecord::TurnStarted { turn_id: TurnId(n) },
-            LogRecord::UserMessage { turn_id: TurnId(n), text: text.into() },
-            LogRecord::AssistantMessage { turn_id: TurnId(n), step_id: StepId(n), text: "sure".into() },
-            LogRecord::TurnEnded { turn_id: TurnId(n), reason: TurnEndReason::EndTurn },
+            LogRecord::UserMessage {
+                turn_id: TurnId(n),
+                text: text.into(),
+            },
+            LogRecord::AssistantMessage {
+                turn_id: TurnId(n),
+                step_id: StepId(n),
+                text: "sure".into(),
+            },
+            LogRecord::TurnEnded {
+                turn_id: TurnId(n),
+                reason: TurnEndReason::EndTurn,
+            },
         ]
     }
 
@@ -397,7 +458,11 @@ mod tests {
         raw.push_str("{\"type\":\"turn_star");
         fs::write(&path, raw).unwrap();
 
-        assert_eq!(load(dir.path(), &id).unwrap(), records, "the intact turn survives the torn tail");
+        assert_eq!(
+            load(dir.path(), &id).unwrap(),
+            records,
+            "the intact turn survives the torn tail"
+        );
     }
 
     /// Verify for Step 3, and the reason the truncation rule exists: a
@@ -414,20 +479,33 @@ mod tests {
             store.append(record).unwrap();
         }
         // A second turn that got as far as calling a tool and then died.
-        store.append(&LogRecord::TurnStarted { turn_id: TurnId(2) }).unwrap();
-        store.append(&LogRecord::UserMessage { turn_id: TurnId(2), text: "second".into() }).unwrap();
+        store
+            .append(&LogRecord::TurnStarted { turn_id: TurnId(2) })
+            .unwrap();
+        store
+            .append(&LogRecord::UserMessage {
+                turn_id: TurnId(2),
+                text: "second".into(),
+            })
+            .unwrap();
         store
             .append(&LogRecord::ToolUse {
                 turn_id: TurnId(2),
                 step_id: StepId(2),
-                call:    ToolCall { id: "c1".into(), name: "read".into(), input: serde_json::json!({}) },
+                call: ToolCall {
+                    id: "c1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                },
             })
             .unwrap();
 
         let loaded = load(dir.path(), &id).unwrap();
         assert_eq!(loaded, finished, "the half-turn is dropped whole");
         assert!(
-            !loaded.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })),
+            !loaded
+                .iter()
+                .any(|r| matches!(r, LogRecord::ToolUse { .. })),
             "no tool call survives without its result"
         );
     }
@@ -437,10 +515,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let id = SessionId("0000000004-1".into());
         let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
-        store.append(&LogRecord::TurnStarted { turn_id: TurnId(1) }).unwrap();
-        store.append(&LogRecord::UserMessage { turn_id: TurnId(1), text: "hi".into() }).unwrap();
+        store
+            .append(&LogRecord::TurnStarted { turn_id: TurnId(1) })
+            .unwrap();
+        store
+            .append(&LogRecord::UserMessage {
+                turn_id: TurnId(1),
+                text: "hi".into(),
+            })
+            .unwrap();
 
-        assert!(load(dir.path(), &id).unwrap().is_empty(), "half a turn is worse than none");
+        assert!(
+            load(dir.path(), &id).unwrap().is_empty(),
+            "half a turn is worse than none"
+        );
     }
 
     /// Verify for Step 2: history must never be able to fail a turn, so the
@@ -451,7 +539,8 @@ mod tests {
         let blocked = dir.path().join("wall");
         fs::write(&blocked, "not a directory").unwrap();
 
-        let result = HistoryStore::create(&blocked.join("history"), &SessionId("x".into()), &header());
+        let result =
+            HistoryStore::create(&blocked.join("history"), &SessionId("x".into()), &header());
         assert!(matches!(result, Err(ConfigError::Io { .. })));
     }
 
@@ -463,7 +552,15 @@ mod tests {
             ("0000000020-1", 1_700_000_020, "newer question"),
         ] {
             let id = SessionId(id.into());
-            let store = HistoryStore::create(dir.path(), &id, &SessionHeader { started_at, ..header() }).unwrap();
+            let store = HistoryStore::create(
+                dir.path(),
+                &id,
+                &SessionHeader {
+                    started_at,
+                    ..header()
+                },
+            )
+            .unwrap();
             for record in turn(1, text) {
                 store.append(&record).unwrap();
             }
@@ -485,7 +582,10 @@ mod tests {
         let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
         drop(store);
 
-        assert!(!transcript_path(dir.path(), &id).exists(), "no transcript for a session with no records");
+        assert!(
+            !transcript_path(dir.path(), &id).exists(),
+            "no transcript for a session with no records"
+        );
         assert!(list(dir.path()).is_empty());
     }
 
@@ -507,14 +607,24 @@ mod tests {
         // Started, never finished — neither listed nor resumable.
         let unfinished = SessionId("0000000080-1".into());
         let store = HistoryStore::create(dir.path(), &unfinished, &header()).unwrap();
-        store.append(&LogRecord::TurnStarted { turn_id: TurnId(2) }).unwrap();
-        store.append(&LogRecord::UserMessage { turn_id: TurnId(2), text: "cut off".into() }).unwrap();
+        store
+            .append(&LogRecord::TurnStarted { turn_id: TurnId(2) })
+            .unwrap();
+        store
+            .append(&LogRecord::UserMessage {
+                turn_id: TurnId(2),
+                text: "cut off".into(),
+            })
+            .unwrap();
         drop(store);
 
         for id in [&finished, &unfinished] {
             let listed = list(dir.path()).iter().any(|s| s.id == *id);
             let resumable = !load(dir.path(), id).unwrap().is_empty();
-            assert_eq!(listed, resumable, "{id} is listed={listed} but resumable={resumable}");
+            assert_eq!(
+                listed, resumable,
+                "{id} is listed={listed} but resumable={resumable}"
+            );
         }
         assert_eq!(list(dir.path()).len(), 1);
     }
@@ -529,7 +639,10 @@ mod tests {
         let line = serde_json::to_string(&header()).unwrap();
         fs::write(transcript_path(dir.path(), &id), format!("{line}\n")).unwrap();
 
-        assert!(list(dir.path()).is_empty(), "a session with no completed turn is not a session to resume");
+        assert!(
+            list(dir.path()).is_empty(),
+            "a session with no completed turn is not a session to resume"
+        );
     }
 
     /// The count has to be what resume restores, not what was attempted —
@@ -545,12 +658,21 @@ mod tests {
                 store.append(&record).unwrap();
             }
         }
-        store.append(&LogRecord::TurnStarted { turn_id: TurnId(3) }).unwrap();
+        store
+            .append(&LogRecord::TurnStarted { turn_id: TurnId(3) })
+            .unwrap();
         drop(store);
 
         let listed = &list(dir.path())[0];
         assert_eq!(listed.turns, 2, "the third turn never finished");
-        assert_eq!(load(dir.path(), &id).unwrap().iter().filter(|r| matches!(r, LogRecord::TurnEnded { .. })).count(), 2);
+        assert_eq!(
+            load(dir.path(), &id)
+                .unwrap()
+                .iter()
+                .filter(|r| matches!(r, LogRecord::TurnEnded { .. }))
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -561,7 +683,10 @@ mod tests {
         for record in turn(1, "readable") {
             store.append(&record).unwrap();
         }
-        let future = SessionHeader { version: HISTORY_VERSION + 1, ..header() };
+        let future = SessionHeader {
+            version: HISTORY_VERSION + 1,
+            ..header()
+        };
         HistoryStore::create(dir.path(), &SessionId("0000000040-1".into()), &future).unwrap();
 
         let sessions = list(dir.path());
@@ -591,7 +716,11 @@ mod tests {
         }
         drop(store);
 
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "one conversation is one file");
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "one conversation is one file"
+        );
         let loaded = load(dir.path(), &id).unwrap();
         assert_eq!(loaded.len(), 8);
         assert_eq!(list(dir.path())[0].turns, 2);
@@ -608,12 +737,18 @@ mod tests {
         for record in turn(1, "first") {
             store.append(&record).unwrap();
         }
-        store.append(&LogRecord::TurnStarted { turn_id: TurnId(2) }).unwrap();
+        store
+            .append(&LogRecord::TurnStarted { turn_id: TurnId(2) })
+            .unwrap();
         store
             .append(&LogRecord::ToolUse {
                 turn_id: TurnId(2),
                 step_id: StepId(2),
-                call:    ToolCall { id: "c1".into(), name: "read".into(), input: serde_json::json!({}) },
+                call: ToolCall {
+                    id: "c1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                },
             })
             .unwrap();
         drop(store);
@@ -629,8 +764,15 @@ mod tests {
         }
         drop(store);
 
-        let expected: Vec<LogRecord> = turn(1, "first").into_iter().chain(turn(2, "again")).collect();
-        assert_eq!(load(dir.path(), &id).unwrap(), expected, "the torn line must not swallow the record after it");
+        let expected: Vec<LogRecord> = turn(1, "first")
+            .into_iter()
+            .chain(turn(2, "again"))
+            .collect();
+        assert_eq!(
+            load(dir.path(), &id).unwrap(),
+            expected,
+            "the torn line must not swallow the record after it"
+        );
         assert_eq!(list(dir.path())[0].turns, 2);
     }
 
@@ -645,6 +787,10 @@ mod tests {
     #[test]
     fn a_project_slug_is_filesystem_safe() {
         let slug = project_slug(Path::new("/home/dev/my project (v2)"));
-        assert!(slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'), "{slug}");
+        assert!(
+            slug.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{slug}"
+        );
     }
 }

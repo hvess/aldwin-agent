@@ -20,17 +20,17 @@ use crate::error::ToolError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Staged {
     /// The path as the model named it — what the review shows.
-    pub rel:    String,
+    pub rel: String,
     /// The file as it was on disk when first staged; `None` for a file that
     /// did not exist. Re-checked at write time: a file that moved underneath
     /// the review is not overwritten (`Staging::write_all`).
     pub before: Option<String>,
-    pub after:  String,
+    pub after: String,
 }
 
 #[derive(Default)]
 struct Inner {
-    files:            BTreeMap<PathBuf, Staged>,
+    files: BTreeMap<PathBuf, Staged>,
     /// Comments left at the last review of this changeset, and not yet
     /// reported as resolved. Counted so the Saved row can say how many the
     /// approve closed.
@@ -76,7 +76,12 @@ impl Staging {
         let on_disk = match tokio::fs::read_to_string(&resolved).await {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(source) => return Err(ToolError::Io { path: resolved, source }),
+            Err(source) => {
+                return Err(ToolError::Io {
+                    path: resolved,
+                    source,
+                })
+            }
         };
         let mut inner = self.lock();
         let (before, current) = match inner.files.get(&resolved) {
@@ -84,7 +89,14 @@ impl Staging {
             None => (on_disk.clone(), on_disk),
         };
         let after = change(current.as_deref())?;
-        inner.files.insert(resolved, Staged { rel: rel.to_string(), before, after });
+        inner.files.insert(
+            resolved,
+            Staged {
+                rel: rel.to_string(),
+                before,
+                after,
+            },
+        );
         Ok(())
     }
 
@@ -95,7 +107,11 @@ impl Staging {
             files: inner
                 .files
                 .values()
-                .map(|s| ChangedFile { path: s.rel.clone(), before: s.before.clone(), after: s.after.clone() })
+                .map(|s| ChangedFile {
+                    path: s.rel.clone(),
+                    before: s.before.clone(),
+                    after: s.after.clone(),
+                })
                 .collect(),
         }
     }
@@ -115,9 +131,16 @@ impl Staging {
     pub async fn write_all(&self) -> Written {
         let (files, comments) = {
             let mut inner = self.lock();
-            (std::mem::take(&mut inner.files), std::mem::take(&mut inner.pending_comments))
+            (
+                std::mem::take(&mut inner.files),
+                std::mem::take(&mut inner.pending_comments),
+            )
         };
-        let mut written = Written { files: Vec::new(), comments_resolved: comments, skipped: Vec::new() };
+        let mut written = Written {
+            files: Vec::new(),
+            comments_resolved: comments,
+            skipped: Vec::new(),
+        };
         for (resolved, staged) in files {
             let now = match tokio::fs::read_to_string(&resolved).await {
                 Ok(text) => Some(text),
@@ -128,7 +151,9 @@ impl Staging {
                 }
             };
             if now != staged.before {
-                written.skipped.push((staged.rel, "changed on disk since it was staged".into()));
+                written
+                    .skipped
+                    .push((staged.rel, "changed on disk since it was staged".into()));
                 continue;
             }
             if let Some(parent) = resolved.parent() {
@@ -149,7 +174,10 @@ impl Staging {
     pub fn discard(&self) -> Vec<String> {
         let mut inner = self.lock();
         inner.pending_comments = 0;
-        std::mem::take(&mut inner.files).into_values().map(|s| s.rel).collect()
+        std::mem::take(&mut inner.files)
+            .into_values()
+            .map(|s| s.rel)
+            .collect()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -160,9 +188,9 @@ impl Staging {
 /// What an approve did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Written {
-    pub files:             Vec<String>,
+    pub files: Vec<String>,
     pub comments_resolved: usize,
-    pub skipped:           Vec<(String, String)>,
+    pub skipped: Vec<(String, String)>,
 }
 
 #[cfg(test)]
@@ -177,9 +205,18 @@ mod tests {
         std::fs::write(&path, "old\n").unwrap();
         let staging = Staging::new();
 
-        staging.edit(path.clone(), "f.rs", |cur| Ok(cur.unwrap().replace("old", "new"))).await.unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |cur| {
+                Ok(cur.unwrap().replace("old", "new"))
+            })
+            .await
+            .unwrap();
 
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n", "nothing on disk changes");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "old\n",
+            "nothing on disk changes"
+        );
         assert_eq!(staging.current(&path).as_deref(), Some("new\n"));
         let cs = staging.changeset();
         assert_eq!(cs.files.len(), 1);
@@ -193,10 +230,24 @@ mod tests {
         let path = dir.path().join("f.rs");
         std::fs::write(&path, "a\nb\n").unwrap();
         let staging = Staging::new();
-        staging.edit(path.clone(), "f.rs", |cur| Ok(cur.unwrap().replace("a", "A"))).await.unwrap();
-        staging.edit(path.clone(), "f.rs", |cur| Ok(cur.unwrap().replace("b", "B"))).await.unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |cur| {
+                Ok(cur.unwrap().replace("a", "A"))
+            })
+            .await
+            .unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |cur| {
+                Ok(cur.unwrap().replace("b", "B"))
+            })
+            .await
+            .unwrap();
         assert_eq!(staging.current(&path).as_deref(), Some("A\nB\n"));
-        assert_eq!(staging.changeset().files[0].before.as_deref(), Some("a\nb\n"), "before is the disk, not the first edit");
+        assert_eq!(
+            staging.changeset().files[0].before.as_deref(),
+            Some("a\nb\n"),
+            "before is the disk, not the first edit"
+        );
     }
 
     #[tokio::test]
@@ -204,12 +255,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("new/limit.rs");
         let staging = Staging::new();
-        staging.edit(path.clone(), "new/limit.rs", |cur| { assert!(cur.is_none()); Ok("fn x() {}\n".into()) }).await.unwrap();
+        staging
+            .edit(path.clone(), "new/limit.rs", |cur| {
+                assert!(cur.is_none());
+                Ok("fn x() {}\n".into())
+            })
+            .await
+            .unwrap();
         assert_eq!(staging.changeset().files[0].before, None);
 
         let written = staging.write_all().await;
         assert_eq!(written.files, vec!["new/limit.rs".to_string()]);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn x() {}\n", "approve creates the directory and the file");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn x() {}\n",
+            "approve creates the directory and the file"
+        );
         assert!(staging.is_empty());
     }
 
@@ -219,7 +280,10 @@ mod tests {
         let path = dir.path().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
         let staging = Staging::new();
-        staging.edit(path.clone(), "f.rs", |_| Ok("new\n".into())).await.unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
+            .await
+            .unwrap();
         staging.note_comments(2);
 
         let written = staging.write_all().await;
@@ -236,7 +300,10 @@ mod tests {
         let path = dir.path().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
         let staging = Staging::new();
-        staging.edit(path.clone(), "f.rs", |_| Ok("new\n".into())).await.unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
+            .await
+            .unwrap();
         std::fs::write(&path, "someone else\n").unwrap();
 
         let written = staging.write_all().await;
@@ -251,7 +318,10 @@ mod tests {
         let path = dir.path().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
         let staging = Staging::new();
-        staging.edit(path.clone(), "f.rs", |_| Ok("new\n".into())).await.unwrap();
+        staging
+            .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
+            .await
+            .unwrap();
         assert_eq!(staging.discard(), vec!["f.rs".to_string()]);
         assert!(staging.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");

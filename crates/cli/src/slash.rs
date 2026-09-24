@@ -74,7 +74,7 @@ pub trait ModelSwitch: Send + Sync {
 pub struct Session {
     /// `provider/model`, as [`qualified`] renders it — what the next turn
     /// will actually run on.
-    model:  String,
+    model: String,
     switch: Box<dyn ModelSwitch>,
     /// Run after a successful `/reload-config`, for state that does not share
     /// the `Config` handle and so does not see the reload on its own — today,
@@ -87,7 +87,11 @@ pub type AfterReload = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
 impl Session {
     pub fn new(model: String, switch: Box<dyn ModelSwitch>) -> Self {
-        Self { model, switch, after_reload: None }
+        Self {
+            model,
+            switch,
+            after_reload: None,
+        }
     }
 
     pub fn with_after_reload(mut self, hook: AfterReload) -> Self {
@@ -102,13 +106,15 @@ impl Session {
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
 async fn intercept(
-    command:  Command,
-    config:   &Config,
-    session:  &mut Session,
-    history:  Option<&Arc<History>>,
-    events:   &mpsc::Sender<Event>,
+    command: Command,
+    config: &Config,
+    session: &mut Session,
+    history: Option<&Arc<History>>,
+    events: &mpsc::Sender<Event>,
 ) -> Intercepted {
-    let Command::Submit { text } = &command else { return Intercepted::Forward(command) };
+    let Command::Submit { text } = &command else {
+        return Intercepted::Forward(command);
+    };
     let Some(rest) = text.trim_start().strip_prefix('/') else {
         if let Some(history) = history {
             history.turn_submitted();
@@ -125,7 +131,11 @@ async fn intercept(
     };
     match (name, arg) {
         ("help", None) => {
-            let _ = events.send(Event::Notice { message: HELP_TEXT.into() }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: HELP_TEXT.into(),
+                })
+                .await;
             Intercepted::Handled
         }
         ("reload-config", None) => {
@@ -144,7 +154,11 @@ async fn intercept(
         ("clear", None) => {
             if let Some(history) = history {
                 if history.turn_in_flight() {
-                    let _ = events.send(Event::Notice { message: TURN_IN_FLIGHT.into() }).await;
+                    let _ = events
+                        .send(Event::Notice {
+                            message: TURN_IN_FLIGHT.into(),
+                        })
+                        .await;
                     return Intercepted::Handled;
                 }
                 history.seal_and_open_new();
@@ -173,7 +187,11 @@ async fn intercept(
             None => Intercepted::Handled,
         },
         _ => {
-            let _ = events.send(Event::Notice { message: format!("There is no /{rest} command. Type / for the list.") }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("There is no /{rest} command. Type / for the list."),
+                })
+                .await;
             Intercepted::Handled
         }
     }
@@ -193,9 +211,17 @@ async fn intercept(
 ///
 /// What is deliberately *not* restored: anything staged. A resumed session
 /// starts with an empty changeset; the review it left open is gone.
-async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events: &mpsc::Sender<Event>) -> Option<Command> {
+async fn handle_resume(
+    arg: Option<&str>,
+    history: Option<&Arc<History>>,
+    events: &mpsc::Sender<Event>,
+) -> Option<Command> {
     let Some(history) = history else {
-        let _ = events.send(Event::Notice { message: "history is off for this session; there is nothing to resume".into() }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: "history is off for this session; there is nothing to resume".into(),
+            })
+            .await;
         return None;
     };
 
@@ -210,7 +236,11 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
     };
 
     if history.turn_in_flight() {
-        let _ = events.send(Event::Notice { message: TURN_IN_FLIGHT.into() }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: TURN_IN_FLIGHT.into(),
+            })
+            .await;
         return None;
     }
 
@@ -219,14 +249,22 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
     // by the ones already in the log, and the writer would be pointed at the
     // file it is already writing.
     if history.is_current(&id) {
-        let _ = events.send(Event::Notice { message: "that is the session you are in".into() }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: "that is the session you are in".into(),
+            })
+            .await;
         return None;
     }
 
     let records = match aldwin_config::load_session(history.dir(), &id) {
         Ok(records) => records,
         Err(e) => {
-            let _ = events.send(Event::Notice { message: format!("cannot read session {arg}: {e} ({RESUME_USAGE})") }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("cannot read session {arg}: {e} ({RESUME_USAGE})"),
+                })
+                .await;
             return None;
         }
     };
@@ -236,18 +274,31 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
     // the session with nothing, which is `/clear` wearing a disguise.
     if records.is_empty() {
         let _ = events
-            .send(Event::Notice { message: format!("session {arg} has no completed turns to resume") })
+            .send(Event::Notice {
+                message: format!("session {arg} has no completed turns to resume"),
+            })
             .await;
         return None;
     }
 
     if let Err(e) = history.continue_session(&id) {
-        let _ = events.send(Event::Notice { message: format!("cannot continue session {arg}: {e}") }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: format!("cannot continue session {arg}: {e}"),
+            })
+            .await;
         return None;
     }
 
-    let turns = records.iter().filter(|r| matches!(r, aldwin_core::LogRecord::TurnStarted { .. })).count();
-    let _ = events.send(Event::Notice { message: format!("resumed session {arg} — {turns} turn(s) restored") }).await;
+    let turns = records
+        .iter()
+        .filter(|r| matches!(r, aldwin_core::LogRecord::TurnStarted { .. }))
+        .count();
+    let _ = events
+        .send(Event::Notice {
+            message: format!("resumed session {arg} — {turns} turn(s) restored"),
+        })
+        .await;
     Some(Command::Resume { records })
 }
 
@@ -262,12 +313,20 @@ async fn handle_resume(arg: Option<&str>, history: Option<&Arc<History>>, events
 async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<Event>) {
     let Some(arg) = arg else {
         let current = config.global_tui().theme.unwrap_or_else(|| "dark".into());
-        let _ = events.send(Event::Notice { message: format!("current theme: {current} (usage: /theme light|dark)") }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: format!("current theme: {current} (usage: /theme light|dark)"),
+            })
+            .await;
         return;
     };
     let normalized = arg.to_ascii_lowercase();
     if !VALID_THEMES.contains(&normalized.as_str()) {
-        let _ = events.send(Event::Notice { message: format!("unknown theme {arg:?} (usage: /theme light|dark)") }).await;
+        let _ = events
+            .send(Event::Notice {
+                message: format!("unknown theme {arg:?} (usage: /theme light|dark)"),
+            })
+            .await;
         return;
     }
 
@@ -275,11 +334,19 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
     tui.theme = Some(normalized.clone());
     match config.set_tui(tui) {
         Ok(()) => {
-            let _ = events.send(Event::Notice { message: format!("theme set to {normalized}") }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("theme set to {normalized}"),
+                })
+                .await;
             let _ = events.send(Event::ThemeChanged { theme: normalized }).await;
         }
         Err(e) => {
-            let _ = events.send(Event::Notice { message: format!("failed to save theme: {e}") }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("failed to save theme: {e}"),
+                })
+                .await;
         }
     }
 }
@@ -335,7 +402,12 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// being told no. And the notice names what the *next turn* will run on,
 /// which is now the same thing the top bar and status line show — they read
 /// `Event::ModelChanged`, sent below.
-async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session, events: &mpsc::Sender<Event>) {
+async fn handle_model(
+    arg: Option<&str>,
+    config: &Config,
+    session: &mut Session,
+    events: &mpsc::Sender<Event>,
+) {
     // Whichever scope actually supplies the setting is the one that gets
     // written: writing global while a project `provider.yaml` shadows it
     // would report a change the next start would ignore.
@@ -366,7 +438,9 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
 
     // Split on the first `/` only, and a bare provider name means the same
     // as `provider/` — see this function's own doc comment for both rules.
-    let (head, tail) = arg.split_once('/').map_or((arg, ""), |(head, tail)| (head, tail.trim()));
+    let (head, tail) = arg
+        .split_once('/')
+        .map_or((arg, ""), |(head, tail)| (head, tail.trim()));
     let next = match named_provider(head) {
         Some(p) => {
             // A leading `/` cannot reach here (`head` would be empty and name
@@ -376,7 +450,9 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
             // `/model anthropic` on `anthropic/claude-opus-5` would quietly
             // drop you back to the catalogue's default.
             let model = match tail {
-                "" if known.map(|c| c.id) == Some(p.id) => current.as_ref().map(|c| c.model.as_str()),
+                "" if known.map(|c| c.id) == Some(p.id) => {
+                    current.as_ref().map(|c| c.model.as_str())
+                }
                 "" => None,
                 model => Some(model),
             };
@@ -389,7 +465,11 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
             return;
         }
         None => match &current {
-            Some(current) => aldwin_config::ProviderConfig { version: aldwin_config::PROVIDER_VERSION, model: arg.to_string(), ..current.clone() },
+            Some(current) => aldwin_config::ProviderConfig {
+                version: aldwin_config::PROVIDER_VERSION,
+                model: arg.to_string(),
+                ..current.clone()
+            },
             None => {
                 let ids = aldwin_llm::provider_ids().join(", ");
                 let message = format!("no provider is configured, so a bare model id has nowhere to go; say which provider runs it: /model provider/{arg} (providers: {ids})");
@@ -421,14 +501,19 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // What the session would actually run on, resolved the same way startup
     // resolves it — the file just chosen over the layer below it.
     let resolved = match scope {
-        aldwin_config::Scope::Project => aldwin_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next)),
+        aldwin_config::Scope::Project => {
+            aldwin_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next))
+        }
         aldwin_config::Scope::Global => aldwin_llm::resolve(None, &next),
     };
 
     // Before the write, not after: a provider the session cannot actually
     // reach must not be left on disk for the next start to fail on.
     if let Err(e) = session.switch.switch(&resolved) {
-        let message = format!("cannot switch to {now}: {e} · this session is still on {}, and nothing was saved", session.model);
+        let message = format!(
+            "cannot switch to {now}: {e} · this session is still on {}, and nothing was saved",
+            session.model
+        );
         let _ = events.send(Event::Notice { message }).await;
         return;
     }
@@ -441,7 +526,13 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
         Ok(()) => format!("now on {now} · saved to {where_}"),
         // The swap already happened, so the session really is on the new
         // model — it is only the next start that will not be.
-        Err(e) => format!("now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}", current.as_ref().map_or_else(|| "nothing".to_string(), |c| qualified(c, aldwin_llm::identify(c)))),
+        Err(e) => format!(
+            "now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}",
+            current.as_ref().map_or_else(
+                || "nothing".to_string(),
+                |c| qualified(c, aldwin_llm::identify(c))
+            )
+        ),
     };
     let _ = events.send(Event::Notice { message }).await;
     session.model = now;
@@ -449,8 +540,14 @@ async fn handle_model(arg: Option<&str>, config: &Config, session: &mut Session,
     // started with in `StatusInfo::model_name`, and the picker matches the
     // provider half against catalogue ids separately.
     let identified = aldwin_llm::identify(&next);
-    let context_window = identified.and_then(|p| p.models.iter().find(|m| m.id == next.model)).map(|m| m.context);
-    let changed = Event::ModelChanged { provider: identified.map(|p| p.id.to_string()), model: next.model.clone(), context_window };
+    let context_window = identified
+        .and_then(|p| p.models.iter().find(|m| m.id == next.model))
+        .map(|m| m.context);
+    let changed = Event::ModelChanged {
+        provider: identified.map(|p| p.id.to_string()),
+        model: next.model.clone(),
+        context_window,
+    };
     let _ = events.send(changed).await;
 }
 
@@ -491,16 +588,22 @@ fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
 /// what is on disk, so confirming the current row writes nothing at all.
 pub(crate) fn catalogue_provider_config(
     provider: &aldwin_llm::Provider,
-    model:    Option<&str>,
-    current:  Option<&aldwin_config::ProviderConfig>,
+    model: Option<&str>,
+    current: Option<&aldwin_config::ProviderConfig>,
 ) -> aldwin_config::ProviderConfig {
-    let on_this_provider = current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
+    let on_this_provider =
+        current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
     aldwin_config::ProviderConfig {
-        version:                  aldwin_config::PROVIDER_VERSION,
-        provider:                 provider.kind,
-        model:                    model.unwrap_or_else(|| provider.default_model()).to_string(),
-        base_url:                 provider.base_url.map(String::from),
-        api_key_env:              on_this_provider.map_or_else(|| provider.api_key_env.to_string(), |c| c.api_key_env.clone()),
+        version: aldwin_config::PROVIDER_VERSION,
+        provider: provider.kind,
+        model: model
+            .unwrap_or_else(|| provider.default_model())
+            .to_string(),
+        base_url: provider.base_url.map(String::from),
+        api_key_env: on_this_provider.map_or_else(
+            || provider.api_key_env.to_string(),
+            |c| c.api_key_env.clone(),
+        ),
         extended_thinking_budget: current.and_then(|c| c.extended_thinking_budget),
     }
 }
@@ -508,7 +611,10 @@ pub(crate) fn catalogue_provider_config(
 /// `provider/model` when the endpoint is one the catalogue knows, and the
 /// bare model id when the developer has pointed `provider.yaml` at an
 /// endpoint of their own — naming a provider there would be a guess.
-pub(crate) fn qualified(config: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::Provider>) -> String {
+pub(crate) fn qualified(
+    config: &aldwin_config::ProviderConfig,
+    known: Option<&aldwin_llm::Provider>,
+) -> String {
     match known {
         Some(p) => format!("{}/{}", p.id, config.model),
         None => config.model.clone(),
@@ -517,10 +623,18 @@ pub(crate) fn qualified(config: &aldwin_config::ProviderConfig, known: Option<&a
 
 /// What the bare `/model` reports: where the developer stands, what else
 /// that provider offers, and every provider there is.
-fn describe(current: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::Provider>) -> String {
+fn describe(
+    current: &aldwin_config::ProviderConfig,
+    known: Option<&aldwin_llm::Provider>,
+) -> String {
     let mut out = format!("model: {}", qualified(current, known));
     if let Some(p) = known {
-        let others: Vec<&str> = p.models.iter().map(|m| m.id).filter(|id| *id != current.model).collect();
+        let others: Vec<&str> = p
+            .models
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| *id != current.model)
+            .collect();
         if !others.is_empty() {
             out.push_str(&format!(" · known {} models: {}", p.id, others.join(", ")));
         }
@@ -528,9 +642,18 @@ fn describe(current: &aldwin_config::ProviderConfig, known: Option<&aldwin_llm::
         // An endpoint the catalogue has never seen — say so rather than
         // silently reporting a bare model id as though it were the whole
         // answer.
-        out.push_str(&format!(" · at {}", current.base_url.as_deref().unwrap_or("the provider's default endpoint")));
+        out.push_str(&format!(
+            " · at {}",
+            current
+                .base_url
+                .as_deref()
+                .unwrap_or("the provider's default endpoint")
+        ));
     }
-    out.push_str(&format!(" · providers: {}", aldwin_llm::provider_ids().join(", ")));
+    out.push_str(&format!(
+        " · providers: {}",
+        aldwin_llm::provider_ids().join(", ")
+    ));
     out.push_str(&format!(" ({MODEL_USAGE})"));
     out
 }
@@ -541,7 +664,11 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
         // (Arc-backed) Config handle, so reload_all()'s in-place mutation
         // is visible on its very next check.
         Ok(()) => {
-            let _ = events.send(Event::Notice { message: "Config reloaded.".into() }).await;
+            let _ = events
+                .send(Event::Notice {
+                    message: "Config reloaded.".into(),
+                })
+                .await;
             // The permissions header promises an edit to the file is picked
             // up here. `roots:` was the one key for which that was not true.
             if let Some(message) = session.after_reload.as_ref().and_then(|hook| hook()) {
@@ -549,8 +676,16 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
             }
         }
         Err(failures) => {
-            let detail = failures.iter().map(|f| format!("{}: {}", f.path.display(), f.error)).collect::<Vec<_>>().join("; ");
-            let _ = events.send(Event::Notice { message: format!("reload failed ({detail}); previous config retained") }).await;
+            let detail = failures
+                .iter()
+                .map(|f| format!("{}: {}", f.path.display(), f.error))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let _ = events
+                .send(Event::Notice {
+                    message: format!("reload failed ({detail}); previous config retained"),
+                })
+                .await;
         }
     }
 }
@@ -596,7 +731,7 @@ mod tests {
     /// resolved configs available to assert on afterwards.
     #[derive(Clone, Default)]
     struct FakeSwitch {
-        seen:       Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>,
+        seen: Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>,
         /// Set to stand in for the one failure a real swap has: a provider
         /// whose `api_key_env` is not exported.
         fails_with: Option<String>,
@@ -637,17 +772,36 @@ mod tests {
     /// the channel its notices arrive on — the sender is the one the history
     /// reports failures on, so a test reads notices from both paths in one
     /// place.
-    fn recorded_history(text: &str) -> (tempfile::TempDir, Arc<History>, SessionId, mpsc::Sender<Event>, mpsc::Receiver<Event>) {
+    fn recorded_history(
+        text: &str,
+    ) -> (
+        tempfile::TempDir,
+        Arc<History>,
+        SessionId,
+        mpsc::Sender<Event>,
+        mpsc::Receiver<Event>,
+    ) {
         use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel(8);
-        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history =
+            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(1) },
-            LogRecord::UserMessage { turn_id: TurnId(1), text: text.into() },
-            LogRecord::AssistantMessage { turn_id: TurnId(1), step_id: aldwin_core::StepId(1), text: "sure".into() },
-            LogRecord::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn },
+            LogRecord::UserMessage {
+                turn_id: TurnId(1),
+                text: text.into(),
+            },
+            LogRecord::AssistantMessage {
+                turn_id: TurnId(1),
+                step_id: aldwin_core::StepId(1),
+                text: "sure".into(),
+            },
+            LogRecord::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::EndTurn,
+            },
         ] {
             aldwin_core::RecordSink::append(history.as_ref(), &record);
         }
@@ -656,7 +810,14 @@ mod tests {
         history.seal_and_open_new();
         // The recorded one, not whichever is newest — `seal_and_open_new`
         // just made a newer, empty one.
-        let id = SessionId(history.resumable().into_iter().find(|s| s.turns > 0).expect("the recorded session").id);
+        let id = SessionId(
+            history
+                .resumable()
+                .into_iter()
+                .find(|s| s.turns > 0)
+                .expect("the recorded session")
+                .id,
+        );
         (dir, history, id, tx, rx)
     }
 
@@ -674,7 +835,9 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (_dir, history, id, events, _rx) = recorded_history("the question I asked");
 
-        let cmd = Command::Submit { text: format!("/resume {id}") };
+        let cmd = Command::Submit {
+            text: format!("/resume {id}"),
+        };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         let Intercepted::Forward(Command::Resume { records }) = result else {
@@ -695,12 +858,17 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (dir, history, id, events, _rx) = recorded_history("first");
 
-        let cmd = Command::Submit { text: format!("/resume {id}") };
+        let cmd = Command::Submit {
+            text: format!("/resume {id}"),
+        };
         intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(2) },
-            LogRecord::TurnEnded { turn_id: TurnId(2), reason: TurnEndReason::EndTurn },
+            LogRecord::TurnEnded {
+                turn_id: TurnId(2),
+                reason: TurnEndReason::EndTurn,
+            },
         ] {
             aldwin_core::RecordSink::append(history.as_ref(), &record);
         }
@@ -709,7 +877,10 @@ mod tests {
             .into_iter()
             .find(|s| s.id == id.0)
             .expect("still listed");
-        assert_eq!(resumed.turns, 2, "the new turn landed in the resumed file, not a fork");
+        assert_eq!(
+            resumed.turns, 2,
+            "the new turn landed in the resumed file, not a fork"
+        );
     }
 
     #[tokio::test]
@@ -717,12 +888,20 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (_dir, history, _id, events, mut rx) = recorded_history("first");
 
-        let cmd = Command::Submit { text: "/resume 0000000000-0-0".into() };
+        let cmd = Command::Submit {
+            text: "/resume 0000000000-0-0".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
-        assert!(matches!(result, Intercepted::Handled), "nothing reaches core");
+        assert!(
+            matches!(result, Intercepted::Handled),
+            "nothing reaches core"
+        );
         let notices = drain(&mut rx);
-        assert!(notices.iter().any(|m| m.contains("cannot read session")), "{notices:?}");
+        assert!(
+            notices.iter().any(|m| m.contains("cannot read session")),
+            "{notices:?}"
+        );
     }
 
     /// A transcript whose first turn never finished loads as nothing, and
@@ -738,17 +917,27 @@ mod tests {
         // Another process's transcript, as a crash leaves it. Its id is taken
         // from the handle: an unfinished session is not listed, which is the
         // point of `an_unfinished_session_is_not_listed` below.
-        let crashed = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
-        aldwin_core::RecordSink::append(crashed.as_ref(), &LogRecord::TurnStarted { turn_id: TurnId(1) });
+        let crashed =
+            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        aldwin_core::RecordSink::append(
+            crashed.as_ref(),
+            &LogRecord::TurnStarted { turn_id: TurnId(1) },
+        );
         let id = crashed.current();
-        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history =
+            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
 
-        let cmd = Command::Submit { text: format!("/resume {id}") };
+        let cmd = Command::Submit {
+            text: format!("/resume {id}"),
+        };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
-        assert!(notices.iter().any(|m| m.contains("no completed turns")), "{notices:?}");
+        assert!(
+            notices.iter().any(|m| m.contains("no completed turns")),
+            "{notices:?}"
+        );
     }
 
     #[tokio::test]
@@ -756,14 +945,20 @@ mod tests {
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        let history = History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history =
+            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
 
-        let cmd = Command::Submit { text: "/resume".into() };
+        let cmd = Command::Submit {
+            text: "/resume".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
-        assert!(notices.iter().any(|m| m.contains("no past sessions")), "{notices:?}");
+        assert!(
+            notices.iter().any(|m| m.contains("no past sessions")),
+            "{notices:?}"
+        );
     }
 
     /// History off entirely — the session runs, and `/resume` says why it
@@ -773,12 +968,17 @@ mod tests {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
 
-        let cmd = Command::Submit { text: "/resume anything".into() };
+        let cmd = Command::Submit {
+            text: "/resume anything".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
 
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
-        assert!(notices.iter().any(|m| m.contains("history is off")), "{notices:?}");
+        assert!(
+            notices.iter().any(|m| m.contains("history is off")),
+            "{notices:?}"
+        );
     }
 
     /// Step 6: `/clear` seals the transcript and opens a new one on the way
@@ -789,9 +989,21 @@ mod tests {
         let (dir, history, _id, events, _rx) = recorded_history("before");
         let before = crate::history::session_choices(dir.path()).len();
 
-        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), Some(&history), &events).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/clear".into(),
+            },
+            &cfg,
+            &mut session(),
+            Some(&history),
+            &events,
+        )
+        .await;
 
-        assert!(matches!(result, Intercepted::Forward(Command::ClearHistory)), "core still wipes its log");
+        assert!(
+            matches!(result, Intercepted::Forward(Command::ClearHistory)),
+            "core still wipes its log"
+        );
         assert!(
             crate::history::session_choices(dir.path()).len() >= before,
             "clearing does not delete the record it seals"
@@ -807,20 +1019,57 @@ mod tests {
         let writing = history.current();
 
         // Submitted, and core has logged nothing yet.
-        let sent = intercept(Command::Submit { text: "hello".into() }, &cfg, &mut session(), Some(&history), &events).await;
+        let sent = intercept(
+            Command::Submit {
+                text: "hello".into(),
+            },
+            &cfg,
+            &mut session(),
+            Some(&history),
+            &events,
+        )
+        .await;
         assert!(matches!(sent, Intercepted::Forward(Command::Submit { .. })));
 
         for text in ["/clear".to_string(), format!("/resume {id}")] {
-            let result = intercept(Command::Submit { text: text.clone() }, &cfg, &mut session(), Some(&history), &events).await;
-            assert!(matches!(result, Intercepted::Handled), "{text} must not reach core mid-turn");
+            let result = intercept(
+                Command::Submit { text: text.clone() },
+                &cfg,
+                &mut session(),
+                Some(&history),
+                &events,
+            )
+            .await;
+            assert!(
+                matches!(result, Intercepted::Handled),
+                "{text} must not reach core mid-turn"
+            );
             assert_eq!(drain(&mut rx), [TURN_IN_FLIGHT]);
-            assert!(history.is_current(&writing), "{text} moved the writer under a running turn");
+            assert!(
+                history.is_current(&writing),
+                "{text} moved the writer under a running turn"
+            );
         }
 
-        let ended = aldwin_core::LogRecord::TurnEnded { turn_id: aldwin_core::TurnId(9), reason: aldwin_core::TurnEndReason::EndTurn };
+        let ended = aldwin_core::LogRecord::TurnEnded {
+            turn_id: aldwin_core::TurnId(9),
+            reason: aldwin_core::TurnEndReason::EndTurn,
+        };
         aldwin_core::RecordSink::append(history.as_ref(), &ended);
-        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), Some(&history), &events).await;
-        assert!(matches!(result, Intercepted::Forward(Command::ClearHistory)), "and works again once the turn has ended");
+        let result = intercept(
+            Command::Submit {
+                text: "/clear".into(),
+            },
+            &cfg,
+            &mut session(),
+            Some(&history),
+            &events,
+        )
+        .await;
+        assert!(
+            matches!(result, Intercepted::Forward(Command::ClearHistory)),
+            "and works again once the turn has ended"
+        );
     }
 
     /// The picker never offers it, but a typed id can still name it.
@@ -830,12 +1079,17 @@ mod tests {
         let (_dir, history, _id, events, mut rx) = recorded_history("first");
         let current = history.current();
 
-        let cmd = Command::Submit { text: format!("/resume {current}") };
+        let cmd = Command::Submit {
+            text: format!("/resume {current}"),
+        };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
         assert!(matches!(result, Intercepted::Handled));
         let notices = drain(&mut rx);
-        assert!(notices.iter().any(|m| m.contains("the session you are in")), "{notices:?}");
+        assert!(
+            notices.iter().any(|m| m.contains("the session you are in")),
+            "{notices:?}"
+        );
     }
 
     /// The session being written is not a row in its own list.
@@ -858,7 +1112,11 @@ mod tests {
         // `recorded_history` sealed and opened a fresh session that has said
         // nothing — exactly the state a launch-and-quit leaves.
         let sessions = history.resumable();
-        assert_eq!(sessions.len(), 1, "only the session with a completed turn: {sessions:?}");
+        assert_eq!(
+            sessions.len(),
+            1,
+            "only the session with a completed turn: {sessions:?}"
+        );
         assert_eq!(sessions[0].title, "said something");
     }
 
@@ -873,25 +1131,37 @@ mod tests {
     async fn non_slash_input_passes_through_unchanged() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let cmd = Command::Submit { text: "hello".into() };
+        let cmd = Command::Submit {
+            text: "hello".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
-        assert!(matches!(result, Intercepted::Forward(Command::Submit { text }) if text == "hello"));
+        assert!(
+            matches!(result, Intercepted::Forward(Command::Submit { text }) if text == "hello")
+        );
     }
 
     #[tokio::test]
     async fn non_submit_commands_pass_through_unchanged() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let cmd = Command::Answer { call_id: "call-1".into(), answer: aldwin_core::Answer::Chose { index: 0 } };
+        let cmd = Command::Answer {
+            call_id: "call-1".into(),
+            answer: aldwin_core::Answer::Chose { index: 0 },
+        };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
-        assert!(matches!(result, Intercepted::Forward(Command::Answer { .. })));
+        assert!(matches!(
+            result,
+            Intercepted::Forward(Command::Answer { .. })
+        ));
     }
 
     #[tokio::test]
     async fn unknown_slash_command_is_rejected_and_never_forwarded() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let cmd = Command::Submit { text: "/nope".into() };
+        let cmd = Command::Submit {
+            text: "/nope".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
@@ -904,12 +1174,31 @@ mod tests {
     async fn help_lists_every_known_command() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/help".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/help".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
             Some(Event::Notice { message }) => {
-                for command in ["/help", "/clear", "/quit", "/model", "/reload-config", "/theme"] {
-                    assert!(message.contains(command), "help text missing {command}: {message}");
+                for command in [
+                    "/help",
+                    "/clear",
+                    "/quit",
+                    "/model",
+                    "/reload-config",
+                    "/theme",
+                ] {
+                    assert!(
+                        message.contains(command),
+                        "help text missing {command}: {message}"
+                    );
                 }
             }
             other => panic!("expected a Notice, got {other:?}"),
@@ -920,7 +1209,16 @@ mod tests {
     async fn exit_is_recognised_as_the_quit_command() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/exit".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/exit".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Quit));
     }
 
@@ -928,7 +1226,16 @@ mod tests {
     async fn clear_is_translated_and_forwarded_to_core_not_handled_locally() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/clear".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/clear".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(
             matches!(result, Intercepted::Forward(Command::ClearHistory)),
             "core owns ConversationLog, so /clear must reach it as ClearHistory rather than being swallowed like /help"
@@ -940,14 +1247,28 @@ mod tests {
     async fn quit_and_exit_both_leave() {
         let (_project, _global, cfg) = config();
         let (tx, _rx) = mpsc::channel(8);
-        assert!(matches!(intercept(Command::Submit { text: "/quit".into() }, &cfg, &mut session(), None, &tx).await, Intercepted::Quit));
+        assert!(matches!(
+            intercept(
+                Command::Submit {
+                    text: "/quit".into()
+                },
+                &cfg,
+                &mut session(),
+                None,
+                &tx
+            )
+            .await,
+            Intercepted::Quit
+        ));
     }
 
     #[tokio::test]
     async fn reload_config_success_emits_a_notice() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let cmd = Command::Submit { text: "/reload-config".into() };
+        let cmd = Command::Submit {
+            text: "/reload-config".into(),
+        };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
@@ -972,11 +1293,16 @@ mod tests {
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
 
         let (tx, mut rx) = mpsc::channel(8);
-        let cmd = Command::Submit { text: "/reload-config".into() };
+        let cmd = Command::Submit {
+            text: "/reload-config".into(),
+        };
         intercept(cmd, &config, &mut session(), None, &tx).await;
 
         match rx.recv().await {
-            Some(Event::Notice { message }) => assert!(message.contains(&bad_path.display().to_string()), "message was: {message}"),
+            Some(Event::Notice { message }) => assert!(
+                message.contains(&bad_path.display().to_string()),
+                "message was: {message}"
+            ),
             other => panic!("expected a Notice, got {other:?}"),
         }
         assert!(rx.try_recv().is_err());
@@ -986,20 +1312,44 @@ mod tests {
     async fn theme_with_no_argument_reports_the_current_default() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/theme".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
-            Some(Event::Notice { message }) => assert!(message.contains("current theme: dark"), "message was: {message}"),
+            Some(Event::Notice { message }) => assert!(
+                message.contains("current theme: dark"),
+                "message was: {message}"
+            ),
             other => panic!("expected a Notice, got {other:?}"),
         }
-        assert!(rx.try_recv().is_err(), "no-argument /theme must not persist or emit ThemeChanged");
+        assert!(
+            rx.try_recv().is_err(),
+            "no-argument /theme must not persist or emit ThemeChanged"
+        );
     }
 
     #[tokio::test]
     async fn theme_light_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/theme light".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Handled));
 
         assert!(matches!(rx.recv().await, Some(Event::Notice { .. })));
@@ -1007,17 +1357,32 @@ mod tests {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "light"),
             other => panic!("expected ThemeChanged, got {other:?}"),
         }
-        assert_eq!(cfg.global_tui().theme.as_deref(), Some("light"), "the choice must survive the next launch too, not just this session");
+        assert_eq!(
+            cfg.global_tui().theme.as_deref(),
+            Some("light"),
+            "the choice must survive the next launch too, not just this session"
+        );
     }
 
     #[tokio::test]
     async fn theme_argument_is_case_insensitive() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme LIGHT".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/theme LIGHT".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
-            Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "light", "must normalize to lowercase"),
+            Some(Event::ThemeChanged { theme }) => {
+                assert_eq!(theme, "light", "must normalize to lowercase")
+            }
             other => panic!("expected ThemeChanged, got {other:?}"),
         }
     }
@@ -1028,7 +1393,16 @@ mod tests {
     async fn a_tab_separates_a_command_from_its_argument() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme\tlight".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/theme\tlight".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(notice(&mut rx).await.contains("theme set to light"));
     }
 
@@ -1036,11 +1410,29 @@ mod tests {
     async fn theme_back_to_dark_persists_and_emits_theme_changed() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/theme light".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/theme light".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         let _ = rx.recv().await;
         let _ = rx.recv().await;
 
-        intercept(Command::Submit { text: "/theme dark".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/theme dark".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         let _ = rx.recv().await; // Notice
         match rx.recv().await {
             Some(Event::ThemeChanged { theme }) => assert_eq!(theme, "dark"),
@@ -1053,14 +1445,32 @@ mod tests {
     async fn theme_invalid_value_is_rejected_not_persisted_and_no_theme_changed_sent() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/theme neon".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/theme neon".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Handled));
         match rx.recv().await {
-            Some(Event::Notice { message }) => assert!(message.contains("neon"), "message was: {message}"),
+            Some(Event::Notice { message }) => {
+                assert!(message.contains("neon"), "message was: {message}")
+            }
             other => panic!("expected a Notice, got {other:?}"),
         }
-        assert!(rx.try_recv().is_err(), "an invalid theme must not emit ThemeChanged");
-        assert_eq!(cfg.global_tui().theme, None, "an invalid theme must not be persisted");
+        assert!(
+            rx.try_recv().is_err(),
+            "an invalid theme must not emit ThemeChanged"
+        );
+        assert_eq!(
+            cfg.global_tui().theme,
+            None,
+            "an invalid theme must not be persisted"
+        );
     }
 
     /// Every `/model` test needs a provider already on disk — the session
@@ -1071,11 +1481,11 @@ mod tests {
             .set_provider(
                 scope,
                 aldwin_config::ProviderConfig {
-                    version:                  aldwin_config::PROVIDER_VERSION,
-                    provider:                 p.kind,
-                    model:                    p.default_model().into(),
-                    base_url:                 p.base_url.map(String::from),
-                    api_key_env:              p.api_key_env.into(),
+                    version: aldwin_config::PROVIDER_VERSION,
+                    provider: p.kind,
+                    model: p.default_model().into(),
+                    base_url: p.base_url.map(String::from),
+                    api_key_env: p.api_key_env.into(),
                     extended_thinking_budget: None,
                 },
             )
@@ -1100,14 +1510,32 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), None, &tx).await;
+        let result = intercept(
+            Command::Submit {
+                text: "/model".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         assert!(matches!(result, Intercepted::Handled));
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("model: anthropic/claude-sonnet-5"), "{message}");
-        assert!(message.contains("providers: anthropic"), "the bare form has to say what it would accept: {message}");
+        assert!(
+            message.contains("model: anthropic/claude-sonnet-5"),
+            "{message}"
+        );
+        assert!(
+            message.contains("providers: anthropic"),
+            "the bare form has to say what it would accept: {message}"
+        );
         assert!(message.contains(MODEL_USAGE), "{message}");
-        assert!(rx.try_recv().is_err(), "no-argument /model must not persist anything");
+        assert!(
+            rx.try_recv().is_err(),
+            "no-argument /model must not persist anything"
+        );
     }
 
     /// A bare model id keeps the provider — the common case, and the one
@@ -1117,13 +1545,26 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("anthropic/claude-opus-5"), "{message}");
         let saved = cfg.global_provider().unwrap();
         assert_eq!(saved.model, "claude-opus-5");
-        assert_eq!(saved.provider, aldwin_config::ProviderKind::Anthropic, "the provider must be untouched");
+        assert_eq!(
+            saved.provider,
+            aldwin_config::ProviderKind::Anthropic,
+            "the provider must be untouched"
+        );
     }
 
     /// The change is what the session runs on from here — the client is
@@ -1135,11 +1576,26 @@ mod tests {
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("now on anthropic/claude-opus-5"), "{message}");
-        assert!(!message.contains("Restart"), "nothing needs restarting any more: {message}");
+        assert!(
+            message.contains("now on anthropic/claude-opus-5"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("Restart"),
+            "nothing needs restarting any more: {message}"
+        );
 
         let built = seen.lock().unwrap().clone();
         assert_eq!(built.len(), 1, "the client is rebuilt exactly once");
@@ -1147,10 +1603,25 @@ mod tests {
         assert_eq!(built[0].kind, aldwin_config::ProviderKind::Anthropic);
 
         match rx.recv().await {
-            Some(Event::ModelChanged { provider, model, context_window }) => {
-                assert_eq!(model, "claude-opus-5", "the card shows the bare model id, as it did at startup");
-                assert_eq!(provider.as_deref(), Some("anthropic"), "the question opens on the row it belongs to");
-                assert_eq!(context_window, Some(1_000_000), "the context bar needs the window");
+            Some(Event::ModelChanged {
+                provider,
+                model,
+                context_window,
+            }) => {
+                assert_eq!(
+                    model, "claude-opus-5",
+                    "the card shows the bare model id, as it did at startup"
+                );
+                assert_eq!(
+                    provider.as_deref(),
+                    Some("anthropic"),
+                    "the question opens on the row it belongs to"
+                );
+                assert_eq!(
+                    context_window,
+                    Some(1_000_000),
+                    "the context bar needs the window"
+                );
             }
             other => panic!("expected ModelChanged, got {other:?}"),
         }
@@ -1164,16 +1635,41 @@ mod tests {
     async fn a_client_that_cannot_be_built_leaves_the_session_and_the_file_alone() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
-        let switch = FakeSwitch { fails_with: Some("GOOGLE_API_KEY is not set".into()), ..Default::default() };
+        let switch = FakeSwitch {
+            fails_with: Some("GOOGLE_API_KEY is not set".into()),
+            ..Default::default()
+        };
         let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model google/gemini-2.5-flash".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("GOOGLE_API_KEY is not set"), "the reason has to survive verbatim: {message}");
-        assert!(message.contains("still on anthropic/claude-sonnet-5"), "{message}");
-        assert!(rx.try_recv().is_err(), "a failed swap must not tell the bars anything changed");
-        assert_eq!(cfg.global_provider().unwrap().model, "claude-sonnet-5", "nothing may be written on a failed swap");
+        assert!(
+            message.contains("GOOGLE_API_KEY is not set"),
+            "the reason has to survive verbatim: {message}"
+        );
+        assert!(
+            message.contains("still on anthropic/claude-sonnet-5"),
+            "{message}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a failed swap must not tell the bars anything changed"
+        );
+        assert_eq!(
+            cfg.global_provider().unwrap().model,
+            "claude-sonnet-5",
+            "nothing may be written on a failed swap"
+        );
     }
 
     /// The developer's own model answer is what gets written — the
@@ -1184,7 +1680,10 @@ mod tests {
         let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
         let chosen = catalogue_provider_config(anthropic, Some("claude-opus-5"), None);
         assert_eq!(chosen.model, "claude-opus-5");
-        assert_eq!(chosen.api_key_env, anthropic.api_key_env, "the endpoint and key still come from the provider row");
+        assert_eq!(
+            chosen.api_key_env, anthropic.api_key_env,
+            "the endpoint and key still come from the provider row"
+        );
 
         let unasked = catalogue_provider_config(anthropic, None, None);
         assert_eq!(unasked.model, anthropic.default_model());
@@ -1195,13 +1694,23 @@ mod tests {
     #[test]
     fn an_unchanged_answer_compares_equal_to_what_is_already_configured() {
         let google = aldwin_llm::provider("google").expect("a catalogue provider");
-        let current = aldwin_config::ProviderConfig { extended_thinking_budget: Some(4_000), ..catalogue_provider_config(google, Some("gemini-2.5-flash"), None) };
+        let current = aldwin_config::ProviderConfig {
+            extended_thinking_budget: Some(4_000),
+            ..catalogue_provider_config(google, Some("gemini-2.5-flash"), None)
+        };
         let confirmed = catalogue_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
-        assert_eq!(confirmed, current, "the thinking budget travels with it, so an unchanged answer is byte-identical");
+        assert_eq!(
+            confirmed, current,
+            "the thinking budget travels with it, so an unchanged answer is byte-identical"
+        );
 
         let moved = catalogue_provider_config(google, Some("gemini-2.5-pro"), Some(&current));
         assert_ne!(moved, current);
-        assert_eq!(moved.extended_thinking_budget, Some(4_000), "a preference of the developer's survives the move");
+        assert_eq!(
+            moved.extended_thinking_budget,
+            Some(4_000),
+            "a preference of the developer's survives the move"
+        );
     }
 
     /// A key variable the developer chose is part of how they reach their
@@ -1211,10 +1720,17 @@ mod tests {
     #[test]
     fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
         let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
-        let current = aldwin_config::ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..catalogue_provider_config(anthropic, Some("claude-sonnet-5"), None) };
+        let current = aldwin_config::ProviderConfig {
+            api_key_env: "ANTHROPIC_KEY_WORK".into(),
+            ..catalogue_provider_config(anthropic, Some("claude-sonnet-5"), None)
+        };
 
-        let same_provider = catalogue_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
-        assert_eq!(same_provider.api_key_env, "ANTHROPIC_KEY_WORK", "the developer's own variable is how they reach this provider");
+        let same_provider =
+            catalogue_provider_config(anthropic, Some("claude-opus-5"), Some(&current));
+        assert_eq!(
+            same_provider.api_key_env, "ANTHROPIC_KEY_WORK",
+            "the developer's own variable is how they reach this provider"
+        );
         assert_eq!(same_provider.model, "claude-opus-5");
 
         // A different provider is a different endpoint with a different
@@ -1232,15 +1748,32 @@ mod tests {
     async fn a_chosen_key_variable_survives_a_qualified_model_change_on_the_same_provider() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
-        let custom = aldwin_config::ProviderConfig { api_key_env: "ANTHROPIC_KEY_WORK".into(), ..cfg.global_provider().unwrap() };
-        cfg.set_provider(aldwin_config::Scope::Global, custom).unwrap();
+        let custom = aldwin_config::ProviderConfig {
+            api_key_env: "ANTHROPIC_KEY_WORK".into(),
+            ..cfg.global_provider().unwrap()
+        };
+        cfg.set_provider(aldwin_config::Scope::Global, custom)
+            .unwrap();
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model anthropic/claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model anthropic/claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
 
         let _ = notice(&mut rx).await;
-        assert_eq!(seen.lock().unwrap()[0].api_key_env, "ANTHROPIC_KEY_WORK", "the client is rebuilt on the key the developer exports");
+        assert_eq!(
+            seen.lock().unwrap()[0].api_key_env,
+            "ANTHROPIC_KEY_WORK",
+            "the client is rebuilt on the key the developer exports"
+        );
         let saved = cfg.global_provider().unwrap();
         assert_eq!(saved.api_key_env, "ANTHROPIC_KEY_WORK");
         assert_eq!(saved.model, "claude-opus-5");
@@ -1253,15 +1786,33 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model google/gemini-2.5-flash".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("google/gemini-2.5-flash"), "{message}");
         let saved = cfg.global_provider().unwrap();
-        assert_eq!(saved.provider, aldwin_config::ProviderKind::OpenaiCompatible);
+        assert_eq!(
+            saved.provider,
+            aldwin_config::ProviderKind::OpenaiCompatible
+        );
         assert_eq!(saved.model, "gemini-2.5-flash");
         assert_eq!(saved.api_key_env, "GOOGLE_API_KEY");
-        assert_eq!(saved.base_url, aldwin_llm::provider("google").unwrap().base_url.map(String::from));
+        assert_eq!(
+            saved.base_url,
+            aldwin_llm::provider("google")
+                .unwrap()
+                .base_url
+                .map(String::from)
+        );
     }
 
     /// A provider named with no model takes that provider's default, so the
@@ -1271,10 +1822,22 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model google/".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model google/".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let _ = notice(&mut rx).await;
-        assert_eq!(cfg.global_provider().unwrap().model, aldwin_llm::provider("google").unwrap().default_model());
+        assert_eq!(
+            cfg.global_provider().unwrap().model,
+            aldwin_llm::provider("google").unwrap().default_model()
+        );
     }
 
     /// Everything past the *first* slash is the model, so a model id that
@@ -1284,7 +1847,16 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model deepseek/vendor/some-model".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model deepseek/vendor/some-model".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
@@ -1302,13 +1874,28 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model openai".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("openai/gpt-5"), "{message}");
         let saved = cfg.global_provider().unwrap();
-        assert_eq!(saved.model, aldwin_llm::provider("openai").unwrap().default_model());
-        assert_eq!(saved.api_key_env, "OPENAI_API_KEY", "the endpoint and key must move with the name");
+        assert_eq!(
+            saved.model,
+            aldwin_llm::provider("openai").unwrap().default_model()
+        );
+        assert_eq!(
+            saved.api_key_env, "OPENAI_API_KEY",
+            "the endpoint and key must move with the name"
+        );
     }
 
     /// Naming the provider you are already on keeps the model you are on.
@@ -1323,12 +1910,33 @@ mod tests {
         // session as much as about the file.
         let mut session = session();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
         let _ = notice(&mut rx).await;
 
-        intercept(Command::Submit { text: "/model anthropic".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model anthropic".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
         let message = notice(&mut rx).await;
-        assert!(message.contains("already on anthropic/claude-opus-5"), "{message}");
+        assert!(
+            message.contains("already on anthropic/claude-opus-5"),
+            "{message}"
+        );
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
     }
 
@@ -1339,12 +1947,30 @@ mod tests {
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model openai".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model openai".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         let _ = notice(&mut rx).await;
         let bare = cfg.global_provider().unwrap();
 
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
-        intercept(Command::Submit { text: "/model openai/".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model openai/".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
         let _ = notice(&mut rx).await;
         assert_eq!(cfg.global_provider().unwrap(), bare);
     }
@@ -1356,12 +1982,27 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model Google/Gemini-2.5-Flash".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model Google/Gemini-2.5-Flash".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let _ = notice(&mut rx).await;
         let saved = cfg.global_provider().unwrap();
-        assert_eq!(saved.api_key_env, "GOOGLE_API_KEY", "GOOGLE must resolve to the google row");
-        assert_eq!(saved.model, "Gemini-2.5-Flash", "the model id must survive verbatim");
+        assert_eq!(
+            saved.api_key_env, "GOOGLE_API_KEY",
+            "GOOGLE must resolve to the google row"
+        );
+        assert_eq!(
+            saved.model, "Gemini-2.5-Flash",
+            "the model id must survive verbatim"
+        );
     }
 
     /// A mistyped provider is rejected rather than written as part of a
@@ -1371,12 +2012,25 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gogle/gemini-2.5-pro".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model gogle/gemini-2.5-pro".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("unknown provider \"gogle\""), "{message}");
         assert!(message.contains("known: anthropic"), "{message}");
-        assert_eq!(cfg.global_provider().unwrap().model, "claude-sonnet-5", "nothing may be written on a rejection");
+        assert_eq!(
+            cfg.global_provider().unwrap().model,
+            "claude-sonnet-5",
+            "nothing may be written on a rejection"
+        );
     }
 
     /// Writing global while a project `provider.yaml` shadows it would
@@ -1387,12 +2041,28 @@ mod tests {
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         with_provider(&cfg, aldwin_config::Scope::Project, "google");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model gemini-2.5-flash".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model gemini-2.5-flash".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("this project's provider.yaml"), "{message}");
+        assert!(
+            message.contains("this project's provider.yaml"),
+            "{message}"
+        );
         assert_eq!(cfg.project_provider().unwrap().model, "gemini-2.5-flash");
-        assert_eq!(cfg.global_provider().unwrap().model, "claude-sonnet-5", "the shadowed scope must be left alone");
+        assert_eq!(
+            cfg.global_provider().unwrap().model,
+            "claude-sonnet-5",
+            "the shadowed scope must be left alone"
+        );
     }
 
     /// Setting what is already set says so instead of reporting a change
@@ -1402,11 +2072,26 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model anthropic/claude-sonnet-5".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
-        assert!(message.contains("already on anthropic/claude-sonnet-5"), "{message}");
-        assert!(!message.contains("Restart"), "nothing changed, so nothing needs restarting: {message}");
+        assert!(
+            message.contains("already on anthropic/claude-sonnet-5"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("Restart"),
+            "nothing changed, so nothing needs restarting: {message}"
+        );
     }
 
     /// The file and the session can disagree — `/reload-config` picks up a
@@ -1423,12 +2108,31 @@ mod tests {
         session.model = "anthropic/claude-opus-5".into();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model anthropic/claude-sonnet-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
-        assert!(!message.contains("already on"), "the session is not on it, whatever the file says: {message}");
-        assert!(message.contains("now on anthropic/claude-sonnet-5"), "{message}");
-        assert_eq!(seen.lock().unwrap().len(), 1, "the client is rebuilt, which is the whole point of the command here");
+        assert!(
+            !message.contains("already on"),
+            "the session is not on it, whatever the file says: {message}"
+        );
+        assert!(
+            message.contains("now on anthropic/claude-sonnet-5"),
+            "{message}"
+        );
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "the client is rebuilt, which is the whole point of the command here"
+        );
         assert_eq!(session.model, "anthropic/claude-sonnet-5");
     }
 
@@ -1443,22 +2147,57 @@ mod tests {
         let (mut session, seen) = recording_session();
         let (tx, mut rx) = mpsc::channel(8);
 
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
-        assert!(notice(&mut rx).await.contains("now on anthropic/claude-opus-5"));
+        intercept(
+            Command::Submit {
+                text: "/model claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
+        assert!(notice(&mut rx)
+            .await
+            .contains("now on anthropic/claude-opus-5"));
         let _ = rx.recv().await; // ModelChanged
 
-        intercept(Command::Submit { text: "/model lumo/lumo-max".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model lumo/lumo-max".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
         assert!(notice(&mut rx).await.contains("now on lumo/lumo-max"));
         let _ = rx.recv().await; // ModelChanged
 
         let built = seen.lock().unwrap().clone();
-        assert_eq!(built.iter().map(|c| c.model.as_str()).collect::<Vec<_>>(), ["claude-opus-5", "lumo-max"]);
+        assert_eq!(
+            built.iter().map(|c| c.model.as_str()).collect::<Vec<_>>(),
+            ["claude-opus-5", "lumo-max"]
+        );
 
         // And a third that cannot be built names the *second* as where the
         // session still is.
-        let switch = FakeSwitch { fails_with: Some("no key".into()), ..Default::default() };
+        let switch = FakeSwitch {
+            fails_with: Some("no key".into()),
+            ..Default::default()
+        };
         session = Session::new(session.model.clone(), Box::new(switch));
-        intercept(Command::Submit { text: "/model anthropic/claude-sonnet-5".into() }, &cfg, &mut session, None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model anthropic/claude-sonnet-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
         let message = notice(&mut rx).await;
         assert!(message.contains("still on lumo/lumo-max"), "{message}");
     }
@@ -1471,22 +2210,37 @@ mod tests {
         cfg.set_provider(
             aldwin_config::Scope::Global,
             aldwin_config::ProviderConfig {
-                version:                  aldwin_config::PROVIDER_VERSION,
-                provider:                 aldwin_config::ProviderKind::OpenaiCompatible,
-                model:                    "qwen3-coder".into(),
-                base_url:                 Some("http://localhost:8000/v1/chat/completions".into()),
-                api_key_env:              "VLLM_API_KEY".into(),
+                version: aldwin_config::PROVIDER_VERSION,
+                provider: aldwin_config::ProviderKind::OpenaiCompatible,
+                model: "qwen3-coder".into(),
+                base_url: Some("http://localhost:8000/v1/chat/completions".into()),
+                api_key_env: "VLLM_API_KEY".into(),
                 extended_thinking_budget: None,
             },
         )
         .unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model".into() }, &cfg, &mut session(), None, &tx).await;
+        intercept(
+            Command::Submit {
+                text: "/model".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
 
         let message = notice(&mut rx).await;
         assert!(message.contains("model: qwen3-coder"), "{message}");
-        assert!(message.contains("http://localhost:8000/v1/chat/completions"), "{message}");
-        assert!(!message.contains("model: lumo/"), "a local endpoint must not be labelled with someone else's name: {message}");
+        assert!(
+            message.contains("http://localhost:8000/v1/chat/completions"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("model: lumo/"),
+            "a local endpoint must not be labelled with someone else's name: {message}"
+        );
     }
 
     /// ADR 0009 §6: a session can start with nothing configured, and `/model
@@ -1496,13 +2250,36 @@ mod tests {
     async fn with_nothing_configured_a_qualified_model_configures_the_global_file() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        intercept(Command::Submit { text: "/model claude-opus-5".into() }, &cfg, &mut session(), None, &tx).await;
-        assert!(notice(&mut rx).await.contains("no provider is configured"), "a bare model id has nowhere to go");
+        intercept(
+            Command::Submit {
+                text: "/model claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session(),
+            None,
+            &tx,
+        )
+        .await;
+        assert!(
+            notice(&mut rx).await.contains("no provider is configured"),
+            "a bare model id has nowhere to go"
+        );
         assert!(cfg.global_provider().is_err());
 
         let (mut session, seen) = recording_session();
-        intercept(Command::Submit { text: "/model anthropic/claude-opus-5".into() }, &cfg, &mut session, None, &tx).await;
-        assert!(notice(&mut rx).await.contains("now on anthropic/claude-opus-5"));
+        intercept(
+            Command::Submit {
+                text: "/model anthropic/claude-opus-5".into(),
+            },
+            &cfg,
+            &mut session,
+            None,
+            &tx,
+        )
+        .await;
+        assert!(notice(&mut rx)
+            .await
+            .contains("now on anthropic/claude-opus-5"));
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
         assert_eq!(seen.lock().unwrap().len(), 1, "the client is built on it");
     }
@@ -1514,15 +2291,33 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), None, event_tx));
+        let handle = tokio::spawn(run_interceptor(
+            tui_rx,
+            forward_tx,
+            cfg,
+            session(),
+            None,
+            event_tx,
+        ));
 
-        tui_tx.send(Command::Submit { text: "/nope".into() }).await.unwrap();
-        tui_tx.send(Command::Submit { text: "hi".into() }).await.unwrap();
+        tui_tx
+            .send(Command::Submit {
+                text: "/nope".into(),
+            })
+            .await
+            .unwrap();
+        tui_tx
+            .send(Command::Submit { text: "hi".into() })
+            .await
+            .unwrap();
         drop(tui_tx); // simulates the TUI exiting
 
         assert!(matches!(event_rx.recv().await, Some(Event::Notice { .. })));
         assert!(matches!(forward_rx.recv().await, Some(Command::Submit { text }) if text == "hi"));
-        assert!(forward_rx.recv().await.is_none(), "forward sender must be dropped once incoming closes");
+        assert!(
+            forward_rx.recv().await.is_none(),
+            "forward sender must be dropped once incoming closes"
+        );
         handle.await.unwrap();
     }
 
@@ -1538,14 +2333,31 @@ mod tests {
         let (forward_tx, mut forward_rx) = mpsc::channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(8);
 
-        let handle = tokio::spawn(run_interceptor(tui_rx, forward_tx, cfg, session(), None, event_tx));
+        let handle = tokio::spawn(run_interceptor(
+            tui_rx,
+            forward_tx,
+            cfg,
+            session(),
+            None,
+            event_tx,
+        ));
 
-        tui_tx.send(Command::Submit { text: "/exit".into() }).await.unwrap();
+        tui_tx
+            .send(Command::Submit {
+                text: "/exit".into(),
+            })
+            .await
+            .unwrap();
 
         // The interceptor task ends on its own — no need to drop tui_tx.
         handle.await.unwrap();
-        assert!(forward_rx.recv().await.is_none(), "forward must be dropped so the core's command channel closes");
-        assert!(event_rx.recv().await.is_none(), "events must be dropped, not left open, on quit");
+        assert!(
+            forward_rx.recv().await.is_none(),
+            "forward must be dropped so the core's command channel closes"
+        );
+        assert!(
+            event_rx.recv().await.is_none(),
+            "events must be dropped, not left open, on quit"
+        );
     }
 }
-

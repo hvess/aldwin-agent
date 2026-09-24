@@ -27,7 +27,9 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::chrome::{self, Action, Composer};
-use super::grid::{elide, justified, Ctx, BODY_X, GUTTER_LN, MARGIN_X, MARK_COL, PANE_GAP, SIGN_COL, TREE_W};
+use super::grid::{
+    elide, justified, Ctx, BODY_X, GUTTER_LN, MARGIN_X, MARK_COL, PANE_GAP, SIGN_COL, TREE_W,
+};
 use super::question;
 use crate::app::{App, Asking};
 use crate::list::{List, ListRow};
@@ -67,14 +69,29 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width as usize;
     let right = "Nothing is saved until you approve";
     let title_line = justified(
-        vec![Span::raw(" ".repeat(BODY_X)), Span::styled(elide(&title, width.saturating_sub(BODY_X + MARGIN_X + right.width() + 2)), Style::default().fg(pal.label).add_modifier(Modifier::BOLD))],
-        vec![Span::styled(right, Style::default().fg(pal.label2)), Span::raw(" ".repeat(MARGIN_X))],
+        vec![
+            Span::raw(" ".repeat(BODY_X)),
+            Span::styled(
+                elide(
+                    &title,
+                    width.saturating_sub(BODY_X + MARGIN_X + right.width() + 2),
+                ),
+                Style::default().fg(pal.label).add_modifier(Modifier::BOLD),
+            ),
+        ],
+        vec![
+            Span::styled(right, Style::default().fg(pal.label2)),
+            Span::raw(" ".repeat(MARGIN_X)),
+        ],
         width,
     );
     frame.render_widget(Paragraph::new(title_line), title_row);
     // Frame G: the summary is `padding: 0 5ch`, the prose column.
     let prose = Ctx::new(pal, area.width).body().width as usize;
-    let summary_line = Line::from(vec![Span::raw(" ".repeat(BODY_X)), Span::styled(elide(&summary, prose), Style::default().fg(pal.label2))]);
+    let summary_line = Line::from(vec![
+        Span::raw(" ".repeat(BODY_X)),
+        Span::styled(elide(&summary, prose), Style::default().fg(pal.label2)),
+    ]);
     frame.render_widget(Paragraph::new(summary_line), summary_row);
 
     // Two panes.
@@ -103,7 +120,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         (None, true) => {
             let draft = review.comment.clone().unwrap_or_default();
             let (lines, location) = review.selection_label().unwrap_or_default();
-            chrome::draw_comment_field(frame, field_area, app, &lines, &location, &draft.text, draft.cursor);
+            chrome::draw_comment_field(
+                frame,
+                field_area,
+                app,
+                &lines,
+                &location,
+                &draft.text,
+                draft.cursor,
+            );
         }
         (None, false) => {
             let action = action_for(review);
@@ -119,9 +144,20 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
 fn action_for(review: &Review) -> Action {
     let comments = review.comment_count();
     if comments > 0 {
-        Action { label: format!("Send {comments} {}", if comments == 1 { "Comment" } else { "Comments" }), key: "⌃↩", ready: true }
+        Action {
+            label: format!(
+                "Send {comments} {}",
+                if comments == 1 { "Comment" } else { "Comments" }
+            ),
+            key: "⌃↩",
+            ready: true,
+        }
     } else {
-        Action { label: "Approve".into(), key: "⌃↩", ready: review.all_read() }
+        Action {
+            label: "Approve".into(),
+            key: "⌃↩",
+            ready: review.all_read(),
+        }
     }
 }
 
@@ -129,10 +165,14 @@ fn action_for(review: &Review) -> Action {
 /// trailing stop.
 fn review_title(app: &App) -> String {
     let text = app.log.iter().rev().find_map(|e| match e {
-        crate::log::LogEntry::UserMessage { text } if !text.trim_start().starts_with('/') => Some(text.lines().next().unwrap_or("").trim().to_string()),
+        crate::log::LogEntry::UserMessage { text } if !text.trim_start().starts_with('/') => {
+            Some(text.lines().next().unwrap_or("").trim().to_string())
+        }
         _ => None,
     });
-    text.unwrap_or_else(|| "Changes".into()).trim_end_matches(['.', '!']).to_string()
+    text.unwrap_or_else(|| "Changes".into())
+        .trim_end_matches(['.', '!'])
+        .to_string()
 }
 
 /// The agent's last sentence before the review opened.
@@ -156,9 +196,13 @@ fn discard_asking(review: &Review) -> Asking {
     let n = review.files.len();
     let files = format!("Discard {n} {}", if n == 1 { "file" } else { "files" });
     Asking {
-        question: Question { question: "Discard these changes?".into(), detail: "Nothing has been written. The agent is told.".into(), options: vec!["Keep reviewing".into(), files.clone()] },
-        list:     List::new(vec![ListRow::new("Keep reviewing"), ListRow::new(files)]),
-        asker:    crate::app::Asker::Session,
+        question: Question {
+            question: "Discard these changes?".into(),
+            detail: "Nothing has been written. The agent is told.".into(),
+            options: vec!["Keep reviewing".into(), files.clone()],
+        },
+        list: List::new(vec![ListRow::new("Keep reviewing"), ListRow::new(files)]),
+        asker: crate::app::Asker::Session,
     }
 }
 
@@ -172,14 +216,21 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
     let fill = |spans: Vec<Span<'static>>, bg| {
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let mut spans = spans;
-        spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), Style::default().bg(bg)));
+        spans.push(Span::styled(
+            " ".repeat(width.saturating_sub(used)),
+            Style::default().bg(bg),
+        ));
         Line::from(spans)
     };
 
     let mut lines: Vec<Line<'static>> = vec![fill(vec![], pal.tint)];
     let mut dots = vec![Span::styled(" ".repeat(MARGIN_X), on_tint)];
     for file in &review.files {
-        let (glyph, fg) = if file.read { ("●", pal.accent) } else { ("○", pal.label3) };
+        let (glyph, fg) = if file.read {
+            ("●", pal.accent)
+        } else {
+            ("○", pal.label3)
+        };
         dots.push(Span::styled(glyph, Style::default().fg(fg).bg(pal.tint)));
     }
     lines.push(fill(dots, pal.tint));
@@ -192,17 +243,35 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
             None => (String::new(), file.path.clone()),
         };
         if last_dir.as_deref() != Some(dir.as_str()) && !dir.is_empty() {
-            lines.push(fill(vec![Span::styled(" ".repeat(MARGIN_X), on_tint), Span::styled(elide(&dir, width.saturating_sub(MARGIN_X + 1)), Style::default().fg(pal.label3).bg(pal.tint))], pal.tint));
+            lines.push(fill(
+                vec![
+                    Span::styled(" ".repeat(MARGIN_X), on_tint),
+                    Span::styled(
+                        elide(&dir, width.saturating_sub(MARGIN_X + 1)),
+                        Style::default().fg(pal.label3).bg(pal.tint),
+                    ),
+                ],
+                pal.tint,
+            ));
             last_dir = Some(dir);
         }
         let current = i == review.current;
         let bg = if current { pal.field } else { pal.tint };
-        let (glyph, glyph_fg) = if current { ("›", pal.accent) } else if file.read { ("✓", pal.label3) } else { (" ", pal.label3) };
+        let (glyph, glyph_fg) = if current {
+            ("›", pal.accent)
+        } else if file.read {
+            ("✓", pal.label3)
+        } else {
+            (" ", pal.label3)
+        };
         let name_fg = if current { pal.label } else { pal.label2 };
         let mut spans = vec![
             Span::styled(format!(" {glyph} "), Style::default().fg(glyph_fg).bg(bg)),
             Span::styled(" ".repeat(MARK_COL), Style::default().bg(bg)),
-            Span::styled(elide(&name, width.saturating_sub(MARGIN_X + MARK_COL + 8)), Style::default().fg(name_fg).bg(bg)),
+            Span::styled(
+                elide(&name, width.saturating_sub(MARGIN_X + MARK_COL + 8)),
+                Style::default().fg(name_fg).bg(bg),
+            ),
         ];
         if file.added {
             spans.push(Span::styled(" +", Style::default().fg(pal.add).bg(bg)));
@@ -211,7 +280,9 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
         if comments > 0 {
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
             let tag = format!("◆ {comments}");
-            let gap = width.saturating_sub(used).saturating_sub(tag.width() + MARK_COL);
+            let gap = width
+                .saturating_sub(used)
+                .saturating_sub(tag.width() + MARK_COL);
             spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
             spans.push(Span::styled(tag, Style::default().fg(pal.accent).bg(bg)));
         }
@@ -224,17 +295,31 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
 /// right, a blank row, then the rows. Returns where the rows landed — the
 /// scroll it settled on, and the rect a click is measured against — and
 /// whether the last row was on screen.
-fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palette::Palette) -> (Pane, bool) {
+fn draw_diff(
+    frame: &mut Frame,
+    area: Rect,
+    review: &Review,
+    pal: &crate::palette::Palette,
+) -> (Pane, bool) {
     let file = review.file();
     let width = area.width as usize;
     let ctx = Ctx::new(pal, area.width);
 
     let header = justified(
-        vec![Span::styled(elide(&file.path, width.saturating_sub(12)), Style::default().fg(pal.label).add_modifier(Modifier::BOLD))],
+        vec![Span::styled(
+            elide(&file.path, width.saturating_sub(12)),
+            Style::default().fg(pal.label).add_modifier(Modifier::BOLD),
+        )],
         vec![
-            Span::styled(format!("+{}", file.added_lines), Style::default().fg(pal.add)),
+            Span::styled(
+                format!("+{}", file.added_lines),
+                Style::default().fg(pal.add),
+            ),
             Span::raw(" "),
-            Span::styled(format!("−{}", file.removed_lines), Style::default().fg(pal.del)),
+            Span::styled(
+                format!("−{}", file.removed_lines),
+                Style::default().fg(pal.del),
+            ),
         ],
         width,
     );
@@ -246,7 +331,12 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
     let selection = review.selection();
     // A comment rides at the end of the *last* line of its range, once —
     // frame `I` puts `◆ Use config` on 145 of a 144–145 comment.
-    let comment_for = |line: usize| file.comments.iter().find(|c| c.lines.1 == line).map(|c| c.text.clone());
+    let comment_for = |line: usize| {
+        file.comments
+            .iter()
+            .find(|c| c.lines.1 == line)
+            .map(|c| c.text.clone())
+    };
 
     for (i, row) in rows.iter().enumerate().skip(top).take(pane) {
         let selected = selection.is_some_and(|(a, b)| a <= i && i <= b);
@@ -254,7 +344,13 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
     }
     let saw_bottom = top + pane >= rows.len();
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
-    let rows_at = Pane { x: area.x, y: area.y + 3, width: area.width, height: pane as u16, top };
+    let rows_at = Pane {
+        x: area.x,
+        y: area.y + 3,
+        width: area.width,
+        height: pane as u16,
+        top,
+    };
     (rows_at, saw_bottom)
 }
 
@@ -262,37 +358,88 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
 /// row's own ground. Every number is `label3`, as frames G–I draw them.
 /// Selected rows take the accent `▎` in the first cell, a 4-cell number and
 /// `label` code. A comment rides at the end in accent, `◆ text`.
-fn diff_row(row: &DiffRow, selected: bool, comment_for: impl Fn(usize) -> Option<String>, ctx: Ctx) -> Line<'static> {
+fn diff_row(
+    row: &DiffRow,
+    selected: bool,
+    comment_for: impl Fn(usize) -> Option<String>,
+    ctx: Ctx,
+) -> Line<'static> {
     let pal = ctx.pal;
     let width = ctx.width as usize;
     let (bg, sign, sign_fg, code, code_fg, number) = match row {
-        DiffRow::Fold { len, .. } => (pal.win, "", pal.label3, format!("⋯  {len} lines"), pal.label3, String::new()),
-        DiffRow::Context { line, text } => (pal.win, "", pal.label3, text.clone(), pal.label2, line.to_string()),
-        DiffRow::Add { line, text } => (pal.addrow, "+", pal.add, text.clone(), pal.addcode, line.to_string()),
-        DiffRow::Del { text, .. } => (pal.delrow, "−", pal.del, text.clone(), pal.delcode, String::new()),
+        DiffRow::Fold { len, .. } => (
+            pal.win,
+            "",
+            pal.label3,
+            format!("⋯  {len} lines"),
+            pal.label3,
+            String::new(),
+        ),
+        DiffRow::Context { line, text } => (
+            pal.win,
+            "",
+            pal.label3,
+            text.clone(),
+            pal.label2,
+            line.to_string(),
+        ),
+        DiffRow::Add { line, text } => (
+            pal.addrow,
+            "+",
+            pal.add,
+            text.clone(),
+            pal.addcode,
+            line.to_string(),
+        ),
+        DiffRow::Del { text, .. } => (
+            pal.delrow,
+            "−",
+            pal.del,
+            text.clone(),
+            pal.delcode,
+            String::new(),
+        ),
     };
     let number_fg = pal.label3;
     let mut spans: Vec<Span<'static>> = Vec::new();
     if selected {
         spans.push(Span::styled("▎", Style::default().fg(pal.accent).bg(bg)));
-        spans.push(Span::styled(format!("{number:>width$}", width = GUTTER_LN - 1), Style::default().fg(number_fg).bg(bg)));
+        spans.push(Span::styled(
+            format!("{number:>width$}", width = GUTTER_LN - 1),
+            Style::default().fg(number_fg).bg(bg),
+        ));
     } else {
-        spans.push(Span::styled(format!("{number:>width$}", width = GUTTER_LN), Style::default().fg(number_fg).bg(bg)));
+        spans.push(Span::styled(
+            format!("{number:>width$}", width = GUTTER_LN),
+            Style::default().fg(number_fg).bg(bg),
+        ));
     }
-    spans.push(Span::styled(format!("{sign:^width$}", width = SIGN_COL), Style::default().fg(sign_fg).bg(bg)));
-    let comment = row.anchor().and_then(&comment_for).filter(|_| !matches!(row, DiffRow::Fold { .. } | DiffRow::Del { .. }));
+    spans.push(Span::styled(
+        format!("{sign:^width$}", width = SIGN_COL),
+        Style::default().fg(sign_fg).bg(bg),
+    ));
+    let comment = row
+        .anchor()
+        .and_then(&comment_for)
+        .filter(|_| !matches!(row, DiffRow::Fold { .. } | DiffRow::Del { .. }));
     let code_fg = if selected { pal.label } else { code_fg };
     // "The code is never broken up": the code takes what it needs first,
     // and the comment rides in what is left — elided, or dropped when there
     // is not even room for its glyph.
     let room = width.saturating_sub(GUTTER_LN + SIGN_COL);
-    spans.push(Span::styled(elide(&code.replace('\t', "    "), room), Style::default().fg(code_fg).bg(bg)));
+    spans.push(Span::styled(
+        elide(&code.replace('\t', "    "), room),
+        Style::default().fg(code_fg).bg(bg),
+    ));
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     let free = width.saturating_sub(used);
     match comment.filter(|_| free >= 2 + 3) {
         Some(c) => {
             let tag = elide(&format!("◆ {c} "), free - 2);
-            spans.push(Span::styled(" ".repeat(free - tag.width()), Style::default().bg(bg)));
+            spans.push(Span::styled(
+                " ".repeat(free - tag.width()),
+                Style::default().bg(bg),
+            ));
             spans.push(Span::styled(tag, Style::default().fg(pal.accent).bg(bg)));
         }
         None => spans.push(Span::styled(" ".repeat(free), Style::default().bg(bg))),

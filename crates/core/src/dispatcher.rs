@@ -6,7 +6,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     event::Event,
-    types::{Answer, Changeset, PlanStep, Question, ReviewDecision, ReviewOutcome, StepId, ToolCall, ToolResult, TurnId},
+    types::{
+        Answer, Changeset, PlanStep, Question, ReviewDecision, ReviewOutcome, StepId, ToolCall,
+        ToolResult, TurnId,
+    },
 };
 
 /// Implementors live in aldwin-tools. A tool that needs the developer — the
@@ -66,13 +69,23 @@ static NEXT_REVIEW: AtomicU64 = AtomicU64::new(1);
 pub struct DispatchContext {
     turn_id: TurnId,
     step_id: StepId,
-    events:  mpsc::Sender<Event>,
+    events: mpsc::Sender<Event>,
     pending: PendingMap,
 }
 
 impl DispatchContext {
-    pub(crate) fn new(turn_id: TurnId, step_id: StepId, events: mpsc::Sender<Event>, pending: PendingMap) -> Self {
-        Self { turn_id, step_id, events, pending }
+    pub(crate) fn new(
+        turn_id: TurnId,
+        step_id: StepId,
+        events: mpsc::Sender<Event>,
+        pending: PendingMap,
+    ) -> Self {
+        Self {
+            turn_id,
+            step_id,
+            events,
+            pending,
+        }
     }
 
     /// Lets a `ToolDispatcher` implementor (aldwin-tools) build a real
@@ -82,7 +95,12 @@ impl DispatchContext {
     /// `Agent`'s run loop has no `Command` handler draining it, so a round
     /// trip would hang forever.
     #[cfg(any(test, feature = "test-util"))]
-    pub fn for_testing(turn_id: TurnId, step_id: StepId, events: mpsc::Sender<Event>, pending: PendingMap) -> Self {
+    pub fn for_testing(
+        turn_id: TurnId,
+        step_id: StepId,
+        events: mpsc::Sender<Event>,
+        pending: PendingMap,
+    ) -> Self {
         Self::new(turn_id, step_id, events, pending)
     }
 
@@ -91,8 +109,14 @@ impl DispatchContext {
     /// before an answer arrives.
     pub async fn ask(&self, call_id: String, question: Question) -> Option<Answer> {
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().expect("pending lock poisoned").insert(call_id.clone(), PendingReply::Answer(tx));
-        let _ = self.events.send(Event::QuestionAsked { call_id, question }).await;
+        self.pending
+            .lock()
+            .expect("pending lock poisoned")
+            .insert(call_id.clone(), PendingReply::Answer(tx));
+        let _ = self
+            .events
+            .send(Event::QuestionAsked { call_id, question })
+            .await;
         rx.await.ok()
     }
 
@@ -102,8 +126,17 @@ impl DispatchContext {
     pub async fn review(&self, changeset: Changeset) -> Option<ReviewDecision> {
         let review_id = format!("review-{}", NEXT_REVIEW.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().expect("pending lock poisoned").insert(review_id.clone(), PendingReply::Review(tx));
-        let _ = self.events.send(Event::ReviewRequested { review_id, changeset }).await;
+        self.pending
+            .lock()
+            .expect("pending lock poisoned")
+            .insert(review_id.clone(), PendingReply::Review(tx));
+        let _ = self
+            .events
+            .send(Event::ReviewRequested {
+                review_id,
+                changeset,
+            })
+            .await;
         rx.await.ok()
     }
 
@@ -120,12 +153,21 @@ impl DispatchContext {
 
     /// Announce the plan as it now stands.
     pub async fn plan_updated(&self, steps: Vec<PlanStep>) {
-        let _ = self.events.send(Event::PlanUpdated { turn_id: self.turn_id, steps }).await;
+        let _ = self
+            .events
+            .send(Event::PlanUpdated {
+                turn_id: self.turn_id,
+                steps,
+            })
+            .await;
     }
 
     /// Drops every review entry — a review is not a call, so the abort path
     /// cannot find it by call id.
     pub(crate) fn clear_reviews(pending: &PendingMap) {
-        pending.lock().expect("pending lock poisoned").retain(|_, reply| !matches!(reply, PendingReply::Review(_)));
+        pending
+            .lock()
+            .expect("pending lock poisoned")
+            .retain(|_, reply| !matches!(reply, PendingReply::Review(_)));
     }
 }

@@ -18,10 +18,14 @@ use crate::slash;
 /// Whichever client `provider_config` selects, built the same way at
 /// startup and on every `/model` after it — so a model swapped into a
 /// running session is reached exactly as one chosen at launch would be.
-fn build_client(config: aldwin_llm::ProviderConfig) -> Result<Arc<dyn LlmClient>, aldwin_llm::LlmClientInitError> {
+fn build_client(
+    config: aldwin_llm::ProviderConfig,
+) -> Result<Arc<dyn LlmClient>, aldwin_llm::LlmClientInitError> {
     Ok(match config.kind {
         ProviderKind::Anthropic => Arc::new(aldwin_llm::AnthropicClient::new(config)?),
-        ProviderKind::OpenaiCompatible => Arc::new(aldwin_llm::OpenAiCompatibleClient::new(config)?),
+        ProviderKind::OpenaiCompatible => {
+            Arc::new(aldwin_llm::OpenAiCompatibleClient::new(config)?)
+        }
     })
 }
 
@@ -32,10 +36,13 @@ fn build_client(config: aldwin_llm::ProviderConfig) -> Result<Arc<dyn LlmClient>
 struct Unconfigured;
 
 impl LlmClient for Unconfigured {
-    fn stream<'a>(&'a self, _: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+    fn stream<'a>(
+        &'a self,
+        _: LlmRequest<'a>,
+    ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
         Box::pin(futures::stream::iter([Err(LlmError::Terminal {
             attempts: 0,
-            message:  "no model is configured yet — pick one with /model".into(),
+            message: "no model is configured yet — pick one with /model".into(),
         })]))
     }
 }
@@ -63,7 +70,10 @@ impl ClientHandle {
 }
 
 impl LlmClient for ClientHandle {
-    fn stream<'a>(&'a self, request: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+    fn stream<'a>(
+        &'a self,
+        request: LlmRequest<'a>,
+    ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
         // Resolved once, when the request starts, and held by the stream
         // for as long as it runs: a swap landing mid-turn cannot pull the
         // client out from under a request already in flight.
@@ -99,9 +109,17 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
     aldwin_llm::PROVIDERS
         .iter()
         .map(|p| aldwin_tui::ProviderChoice {
-            id:      p.id.to_string(),
+            id: p.id.to_string(),
             purpose: p.purpose.to_string(),
-            models:  p.models.iter().map(|m| aldwin_tui::ModelChoice { id: m.id.to_string(), purpose: m.purpose.to_string(), context: m.context }).collect(),
+            models: p
+                .models
+                .iter()
+                .map(|m| aldwin_tui::ModelChoice {
+                    id: m.id.to_string(),
+                    purpose: m.purpose.to_string(),
+                    context: m.context,
+                })
+                .collect(),
         })
         .collect()
 }
@@ -111,7 +129,11 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
 /// need no permission (ADR 0009 §1); the old stdin prompt for each one is
 /// gone with the rest of the asking.
 fn context_files(cwd: &Path) -> Vec<PathBuf> {
-    ["CLAUDE.md", "AGENTS.md"].iter().map(|f| cwd.join(f)).filter(|p| p.is_file()).collect()
+    ["CLAUDE.md", "AGENTS.md"]
+        .iter()
+        .map(|f| cwd.join(f))
+        .filter(|p| p.is_file())
+        .collect()
 }
 
 /// The startup sequence from aldwin-cli.md, in order:
@@ -133,7 +155,9 @@ pub async fn run() -> Result<(), StartupError> {
     let config = Config::open(&cwd)?;
     match config.init_global_if_empty()? {
         InitOutcome::Created | InitOutcome::AlreadyPresent => {}
-        InitOutcome::PartiallyPresent { missing } => return Err(StartupError::PartiallyPresentGlobalConfig { missing }),
+        InitOutcome::PartiallyPresent { missing } => {
+            return Err(StartupError::PartiallyPresentGlobalConfig { missing })
+        }
     }
 
     // `theme` is global-only — resolved once, before anything draws.
@@ -152,9 +176,17 @@ pub async fn run() -> Result<(), StartupError> {
             let provider_config = aldwin_llm::resolve(project_provider.as_ref(), global);
             let model_name = provider_config.model.clone();
             let session_model = slash::qualified(effective, aldwin_llm::identify(effective));
-            (ClientHandle::new(build_client(provider_config)?), model_name, session_model)
+            (
+                ClientHandle::new(build_client(provider_config)?),
+                model_name,
+                session_model,
+            )
         }
-        _ => (ClientHandle::new(Arc::new(Unconfigured)), String::new(), String::new()),
+        _ => (
+            ClientHandle::new(Arc::new(Unconfigured)),
+            String::new(),
+            String::new(),
+        ),
     };
 
     // Reach: the project root, plus whatever `.aldwin/permissions.yaml`
@@ -178,11 +210,20 @@ pub async fn run() -> Result<(), StartupError> {
     // session from starting, or stop any other server's tools registering.
     for failure in register_mcp_tools(mcp_bridge, &mut registry).await {
         match failure.tool {
-            Some(tool) => tracing::warn!("MCP server {:?}: tool {tool:?} not registered: {}", failure.server, failure.error),
-            None => tracing::warn!("MCP server {:?}: no tools registered: {}", failure.server, failure.error),
+            Some(tool) => tracing::warn!(
+                "MCP server {:?}: tool {tool:?} not registered: {}",
+                failure.server,
+                failure.error
+            ),
+            None => tracing::warn!(
+                "MCP server {:?}: no tools registered: {}",
+                failure.server,
+                failure.error
+            ),
         }
     }
-    let dispatcher = Dispatcher::new(registry, locks.clone(), staging).with_notices(event_tx.clone());
+    let dispatcher =
+        Dispatcher::new(registry, locks.clone(), staging).with_notices(event_tx.clone());
 
     // This session's transcript. `None` when the history directory cannot be
     // written — the session then runs without one, having said so once.
@@ -196,14 +237,20 @@ pub async fn run() -> Result<(), StartupError> {
     };
     let sessions = history.as_ref().map(|h| h.resumable()).unwrap_or_default();
 
-    let agent = Agent::new(client.clone(), dispatcher, model_name.clone(), Some(additional_context.as_str()));
+    let agent = Agent::new(
+        client.clone(),
+        dispatcher,
+        model_name.clone(),
+        Some(additional_context.as_str()),
+    );
     let agent = match history.clone() {
         Some(history) => agent.with_sink(history),
         None => agent,
     };
     let session_state = {
         let (config, cwd, workspace) = (config.clone(), cwd.clone(), workspace.clone());
-        slash::Session::new(session_model, Box::new(client)).with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
+        slash::Session::new(session_model, Box::new(client))
+            .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
     };
 
     // Said once, at the top of the session: reach wider than the project,
@@ -215,12 +262,22 @@ pub async fn run() -> Result<(), StartupError> {
         let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
     }
 
-    let interceptor = tokio::spawn(slash::run_interceptor(tui_cmd_rx, agent_cmd_tx, config.clone(), session_state, history, event_tx.clone()));
+    let interceptor = tokio::spawn(slash::run_interceptor(
+        tui_cmd_rx,
+        agent_cmd_tx,
+        config.clone(),
+        session_state,
+        history,
+        event_tx.clone(),
+    ));
     let agent_task = tokio::spawn(agent.run(agent_cmd_rx, event_tx));
 
     let session = aldwin_tui::SessionProvider {
-        catalogue:        catalogue_choices(),
-        current_provider: effective_provider.as_ref().and_then(|p| aldwin_llm::identify(p)).map(|p| p.id.to_string()),
+        catalogue: catalogue_choices(),
+        current_provider: effective_provider
+            .as_ref()
+            .and_then(|p| aldwin_llm::identify(p))
+            .map(|p| p.id.to_string()),
         sessions,
     };
     let tui_result = aldwin_tui::run(event_rx, tui_cmd_tx, model_name, theme, session).await;
@@ -234,7 +291,12 @@ pub async fn run() -> Result<(), StartupError> {
 /// A project-scope server entry replaces a global one of the same name
 /// entirely (see aldwin-config's annotated mcp.yaml).
 fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
-    let mut by_name: BTreeMap<String, McpServer> = config.global_mcp().servers.into_iter().map(|s| (s.name.clone(), s)).collect();
+    let mut by_name: BTreeMap<String, McpServer> = config
+        .global_mcp()
+        .servers
+        .into_iter()
+        .map(|s| (s.name.clone(), s))
+        .collect();
     for server in config.project_mcp().servers {
         by_name.insert(server.name.clone(), server);
     }
@@ -264,20 +326,45 @@ fn stale_keys_notice(locks: &Locks) -> Option<String> {
 /// Called at startup and again after `/reload-config`. A relative root
 /// resolves against the project root.
 fn apply_roots(config: &Config, cwd: &Path, workspace: &aldwin_tools::Workspace) -> Option<String> {
-    let declared: Vec<PathBuf> =
-        config.project_permissions().roots.iter().map(|r| if r.is_absolute() { r.clone() } else { cwd.join(r) }).collect();
+    let declared: Vec<PathBuf> = config
+        .project_permissions()
+        .roots
+        .iter()
+        .map(|r| {
+            if r.is_absolute() {
+                r.clone()
+            } else {
+                cwd.join(r)
+            }
+        })
+        .collect();
     let dropped = workspace.set_extra_roots(declared);
-    let extra: Vec<String> = workspace.roots().iter().skip(1).map(|r| r.display().to_string()).collect();
+    let extra: Vec<String> = workspace
+        .roots()
+        .iter()
+        .skip(1)
+        .map(|r| r.display().to_string())
+        .collect();
 
     let mut parts = Vec::new();
     if !extra.is_empty() {
-        parts.push(format!("Tools can also reach {} (roots in .aldwin/permissions.yaml).", extra.join(", ")));
+        parts.push(format!(
+            "Tools can also reach {} (roots in .aldwin/permissions.yaml).",
+            extra.join(", ")
+        ));
     }
     if !dropped.is_empty() {
         let names: Vec<String> = dropped.iter().map(|r| r.display().to_string()).collect();
-        parts.push(format!("Ignored roots that do not exist: {}.", names.join(", ")));
+        parts.push(format!(
+            "Ignored roots that do not exist: {}.",
+            names.join(", ")
+        ));
     }
-    if parts.is_empty() { None } else { Some(parts.join(" ")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
 }
 
 #[cfg(test)]
@@ -286,7 +373,14 @@ mod tests {
     use aldwin_config::McpTransport;
 
     fn server(name: &str, command: &str) -> McpServer {
-        McpServer { name: name.into(), transport: McpTransport::Stdio { command: command.into(), args: vec![] }, env: Default::default() }
+        McpServer {
+            name: name.into(),
+            transport: McpTransport::Stdio {
+                command: command.into(),
+                args: vec![],
+            },
+            env: Default::default(),
+        }
     }
 
     #[test]
@@ -295,26 +389,54 @@ mod tests {
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
 
-        config.add_mcp_server(aldwin_config::Scope::Global, server("fs", "global-fs-server")).unwrap();
-        config.add_mcp_server(aldwin_config::Scope::Project, server("fs", "project-fs-server")).unwrap();
-        config.add_mcp_server(aldwin_config::Scope::Global, server("other", "other-server")).unwrap();
+        config
+            .add_mcp_server(
+                aldwin_config::Scope::Global,
+                server("fs", "global-fs-server"),
+            )
+            .unwrap();
+        config
+            .add_mcp_server(
+                aldwin_config::Scope::Project,
+                server("fs", "project-fs-server"),
+            )
+            .unwrap();
+        config
+            .add_mcp_server(
+                aldwin_config::Scope::Global,
+                server("other", "other-server"),
+            )
+            .unwrap();
 
         let merged = merged_mcp_servers(&config);
         assert_eq!(merged.len(), 2);
         let fs = merged.iter().find(|s| s.name == "fs").unwrap();
-        assert!(matches!(&fs.transport, McpTransport::Stdio { command, .. } if command == "project-fs-server"));
+        assert!(
+            matches!(&fs.transport, McpTransport::Stdio { command, .. } if command == "project-fs-server")
+        );
     }
 
     struct NamedClient(&'static str);
 
     impl LlmClient for NamedClient {
-        fn stream<'a>(&'a self, _: LlmRequest<'a>) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-            Box::pin(futures::stream::iter([Ok(LlmEvent::TextDelta { text: self.0.into() })]))
+        fn stream<'a>(
+            &'a self,
+            _: LlmRequest<'a>,
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            Box::pin(futures::stream::iter([Ok(LlmEvent::TextDelta {
+                text: self.0.into(),
+            })]))
         }
     }
 
     async fn stream_text(handle: &ClientHandle) -> String {
-        let request = LlmRequest { model: "m", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "m",
+            system: "s",
+            tools: &[],
+            messages: &[],
+            cache_breakpoints: &[],
+        };
         let mut text = String::new();
         let mut stream = handle.stream(request);
         while let Some(Ok(LlmEvent::TextDelta { text: delta })) = stream.next().await {
@@ -334,7 +456,13 @@ mod tests {
     #[tokio::test]
     async fn a_swap_does_not_reach_a_request_already_in_flight() {
         let handle = ClientHandle::new(Arc::new(NamedClient("first")));
-        let request = LlmRequest { model: "m", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "m",
+            system: "s",
+            tools: &[],
+            messages: &[],
+            cache_breakpoints: &[],
+        };
         let mut in_flight = handle.stream(request);
         handle.store(Arc::new(NamedClient("second")));
         let mut text = String::new();
@@ -349,10 +477,18 @@ mod tests {
     #[tokio::test]
     async fn an_unconfigured_session_answers_with_how_to_configure_it() {
         let handle = ClientHandle::new(Arc::new(Unconfigured));
-        let request = LlmRequest { model: "", system: "s", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "",
+            system: "s",
+            tools: &[],
+            messages: &[],
+            cache_breakpoints: &[],
+        };
         let mut stream = handle.stream(request);
         match stream.next().await {
-            Some(Err(LlmError::Terminal { message, .. })) => assert!(message.contains("/model"), "{message}"),
+            Some(Err(LlmError::Terminal { message, .. })) => {
+                assert!(message.contains("/model"), "{message}")
+            }
             other => panic!("expected the unconfigured error, got {other:?}"),
         }
     }
@@ -363,17 +499,19 @@ mod tests {
         const ABSENT: &str = "ALDWIN_SWAP_TEST_KEY_NEVER_SET";
         std::env::set_var(KEY, "not-a-real-key");
         let config = |key: &str| aldwin_llm::ProviderConfig {
-            kind:                     ProviderKind::Anthropic,
-            model:                    "a-model".into(),
-            api_key_env:              key.to_string(),
-            base_url:                 None,
+            kind: ProviderKind::Anthropic,
+            model: "a-model".into(),
+            api_key_env: key.to_string(),
+            base_url: None,
             extended_thinking_budget: 1_000,
         };
         let handle = ClientHandle::new(Arc::new(NamedClient("the session's own")));
-        let error = slash::ModelSwitch::switch(&handle, &config(ABSENT)).expect_err("no key is exported for this one");
+        let error = slash::ModelSwitch::switch(&handle, &config(ABSENT))
+            .expect_err("no key is exported for this one");
         assert!(error.contains(ABSENT), "{error}");
         assert_eq!(stream_text(&handle).await, "the session's own");
-        slash::ModelSwitch::switch(&handle, &config(KEY)).expect("a client that builds replaces the one in place");
+        slash::ModelSwitch::switch(&handle, &config(KEY))
+            .expect("a client that builds replaces the one in place");
     }
 
     /// Every catalogue row reaches the TUI with its models and their context
@@ -384,7 +522,14 @@ mod tests {
         assert_eq!(choices.len(), aldwin_llm::PROVIDERS.len());
         for (choice, provider) in choices.iter().zip(aldwin_llm::PROVIDERS) {
             assert_eq!(choice.id, provider.id);
-            assert_eq!(choice.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), provider.models.iter().map(|m| m.id).collect::<Vec<_>>());
+            assert_eq!(
+                choice
+                    .models
+                    .iter()
+                    .map(|m| m.id.as_str())
+                    .collect::<Vec<_>>(),
+                provider.models.iter().map(|m| m.id).collect::<Vec<_>>()
+            );
             assert!(choice.models.iter().all(|m| m.context > 0));
         }
     }
@@ -394,7 +539,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(context_files(dir.path()).is_empty());
         std::fs::write(dir.path().join("AGENTS.md"), "notes").unwrap();
-        assert_eq!(context_files(dir.path()), vec![dir.path().join("AGENTS.md")]);
+        assert_eq!(
+            context_files(dir.path()),
+            vec![dir.path().join("AGENTS.md")]
+        );
     }
 
     #[test]
@@ -404,10 +552,17 @@ mod tests {
         let config = Config::open_at(project.path(), global.path()).unwrap();
         let locks = Locks::new(config.clone());
         assert_eq!(stale_keys_notice(&locks), None);
-        config.ensure_permissions(aldwin_config::Scope::Project).unwrap();
-        config.set_default_rung(aldwin_config::Scope::Project, aldwin_config::Rung::Write).unwrap();
+        config
+            .ensure_permissions(aldwin_config::Scope::Project)
+            .unwrap();
+        config
+            .set_default_rung(aldwin_config::Scope::Project, aldwin_config::Rung::Write)
+            .unwrap();
         let notice = stale_keys_notice(&locks).expect("a notice");
-        assert!(notice.contains("permissions.yaml") && notice.contains("deny:"), "{notice}");
+        assert!(
+            notice.contains("permissions.yaml") && notice.contains("deny:"),
+            "{notice}"
+        );
     }
 
     #[test]
@@ -424,11 +579,21 @@ mod tests {
         let workspace = aldwin_tools::Workspace::new(project.path());
         assert_eq!(apply_roots(&config, project.path(), &workspace), None);
 
-        std::fs::write(&file, format!("version: 2\nroots:\n- {}\n- ../no-such-dir\n", sibling.path().display())).unwrap();
+        std::fs::write(
+            &file,
+            format!(
+                "version: 2\nroots:\n- {}\n- ../no-such-dir\n",
+                sibling.path().display()
+            ),
+        )
+        .unwrap();
         config.reload_all().unwrap();
         let notice = apply_roots(&config, project.path(), &workspace).expect("a notice");
         assert_eq!(workspace.roots().len(), 2);
-        assert!(notice.contains(&sibling.path().canonicalize().unwrap().display().to_string()), "{notice}");
+        assert!(
+            notice.contains(&sibling.path().canonicalize().unwrap().display().to_string()),
+            "{notice}"
+        );
         assert!(notice.contains("no-such-dir"), "{notice}");
     }
 }

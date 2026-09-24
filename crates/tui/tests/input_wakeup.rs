@@ -41,7 +41,11 @@ fn the_event_loop_never_polls_terminal_input_with_a_no_op_waker() {
     let source = include_str!("../src/run.rs");
     // Only the code matters; the module's own prose explains the trap by
     // name and must stay free to do so.
-    let code: String = source.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let code: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     for forbidden in ["now_or_never", "EventStream"] {
         assert!(
@@ -52,5 +56,8 @@ fn the_event_loop_never_polls_terminal_input_with_a_no_op_waker() {
              `try_recv` instead."
         );
     }
-    assert!(code.contains("try_recv"), "run.rs should drain already-arrived terminal input with `try_recv`");
+    assert!(
+        code.contains("try_recv"),
+        "run.rs should drain already-arrived terminal input with `try_recv`"
+    );
 }

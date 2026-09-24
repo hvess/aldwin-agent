@@ -10,10 +10,10 @@ use std::io::{Error, ErrorKind, Read, Result};
 use std::path::Path;
 
 pub struct Image {
-    pub width:  u32,
+    pub width: u32,
     pub height: u32,
-    bpp:        usize,
-    data:       Vec<u8>,
+    bpp: usize,
+    data: Vec<u8>,
 }
 
 impl Image {
@@ -67,7 +67,8 @@ pub fn decode(path: &Path) -> Result<Image> {
     let mut idat = Vec::new();
     let mut off = 8;
     while off + 8 <= bytes.len() {
-        let len = u32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]) as usize;
+        let len = u32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+            as usize;
         let kind = &bytes[off + 4..off + 8];
         let body = &bytes[off + 8..(off + 8 + len).min(bytes.len())];
         match kind {
@@ -93,9 +94,17 @@ pub fn decode(path: &Path) -> Result<Image> {
         let filter = raw[line];
         let src = &raw[line + 1..line + 1 + stride];
         for x in 0..stride {
-            let a = if x >= bpp { data[y * stride + x - bpp] } else { 0 };
+            let a = if x >= bpp {
+                data[y * stride + x - bpp]
+            } else {
+                0
+            };
             let b = if y > 0 { data[(y - 1) * stride + x] } else { 0 };
-            let c = if x >= bpp && y > 0 { data[(y - 1) * stride + x - bpp] } else { 0 };
+            let c = if x >= bpp && y > 0 {
+                data[(y - 1) * stride + x - bpp]
+            } else {
+                0
+            };
             let v = src[x];
             data[y * stride + x] = match filter {
                 0 => v,
@@ -103,16 +112,30 @@ pub fn decode(path: &Path) -> Result<Image> {
                 2 => v.wrapping_add(b),
                 3 => v.wrapping_add((((a as u16) + (b as u16)) / 2) as u8),
                 4 => v.wrapping_add(paeth(a, b, c)),
-                other => return Err(Error::new(ErrorKind::InvalidData, format!("unknown PNG filter {other}"))),
+                other => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        format!("unknown PNG filter {other}"),
+                    ))
+                }
             };
         }
     }
-    Ok(Image { width, height, bpp, data })
+    Ok(Image {
+        width,
+        height,
+        bpp,
+        data,
+    })
 }
 
 fn paeth(a: u8, b: u8, c: u8) -> u8 {
     let p = a as i16 + b as i16 - c as i16;
-    let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+    let (pa, pb, pc) = (
+        (p - a as i16).abs(),
+        (p - b as i16).abs(),
+        (p - c as i16).abs(),
+    );
     if pa <= pb && pa <= pc {
         a
     } else if pb <= pc {
@@ -128,7 +151,10 @@ pub fn encode(path: &Path, width: u32, height: u32, rgb: &[u8]) -> Result<()> {
 
     let stride = width as usize * 3;
     if rgb.len() != stride * height as usize {
-        return Err(Error::new(ErrorKind::InvalidInput, "RGB buffer does not match the image size"));
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "RGB buffer does not match the image size",
+        ));
     }
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     for y in 0..height as usize {
@@ -165,7 +191,11 @@ fn crc32(previous: u32, bytes: &[u8]) -> u32 {
     for &byte in bytes {
         crc ^= byte as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     crc ^ 0xffff_ffff
@@ -180,12 +210,16 @@ mod tests {
         // IEND has no body, so its CRC is a constant of the format.
         let mut out = Vec::new();
         chunk(&mut out, b"IEND", &[]);
-        assert_eq!(out, [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+        assert_eq!(
+            out,
+            [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]
+        );
     }
 
     #[test]
     fn an_encoded_image_decodes_to_the_same_pixels() {
-        let path = std::env::temp_dir().join(format!("aldwin-review-png-{}.png", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aldwin-review-png-{}.png", std::process::id()));
         let rgb: Vec<u8> = (0..3 * 5 * 3).map(|i| i as u8 * 5).collect();
         encode(&path, 3, 5, &rgb).expect("encodes");
         let image = decode(&path);
@@ -195,7 +229,8 @@ mod tests {
 
     #[test]
     fn a_truncated_image_is_an_error_rather_than_a_panic() {
-        let path = std::env::temp_dir().join(format!("aldwin-review-short-{}.png", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aldwin-review-short-{}.png", std::process::id()));
         encode(&path, 3, 5, &[0; 45]).expect("encodes");
         // Claim one more row than the data holds.
         let mut bytes = std::fs::read(&path).unwrap();

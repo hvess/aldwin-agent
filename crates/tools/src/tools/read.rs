@@ -14,8 +14,8 @@ use aldwin_permissions::Class;
 /// so the model reads back what it wrote, otherwise the disk.
 pub struct ReadTool {
     descriptor: ToolDescriptor,
-    workspace:  Workspace,
-    staging:    Arc<Staging>,
+    workspace: Workspace,
+    staging: Arc<Staging>,
 }
 
 impl ReadTool {
@@ -44,7 +44,10 @@ fn path_arg(input: &Value) -> Result<String, ToolError> {
         .get("path")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| ToolError::InvalidInput { tool: "read".into(), message: "missing \"path\" string field".into() })
+        .ok_or_else(|| ToolError::InvalidInput {
+            tool: "read".into(),
+            message: "missing \"path\" string field".into(),
+        })
 }
 
 #[async_trait]
@@ -56,16 +59,27 @@ impl Tool for ReadTool {
     /// `read` is a read whatever it is pointed at — the class is a property
     /// of the tool here, not something a caller declares.
     fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(Some(PermissionRequest { program: "read".into(), class: Class::Read, argv: vec![path_arg(input)?] }))
+        Ok(Some(PermissionRequest {
+            program: "read".into(),
+            class: Class::Read,
+            argv: vec![path_arg(input)?],
+        }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        _ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
         let path_str = path_arg(&input)?;
         let path = self.workspace.resolve(&path_str)?;
         if let Some(staged) = self.staging.current(&path) {
             return Ok(staged);
         }
-        tokio::fs::read_to_string(&path).await.map_err(|source| ToolError::Io { path, source })
+        tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|source| ToolError::Io { path, source })
     }
 }
 
@@ -77,7 +91,10 @@ mod tests {
 
     fn tool(dir: &tempfile::TempDir) -> (ReadTool, Arc<Staging>) {
         let staging = Arc::new(Staging::new());
-        (ReadTool::new(Workspace::new(dir.path()), staging.clone()), staging)
+        (
+            ReadTool::new(Workspace::new(dir.path()), staging.clone()),
+            staging,
+        )
     }
 
     #[tokio::test]
@@ -86,7 +103,12 @@ mod tests {
         std::fs::write(dir.path().join("hello.txt"), "hi there").unwrap();
         let (tool, _) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
-        assert_eq!(tool.call("c1", json!({"path": "hello.txt"}), &ctx).await.unwrap(), "hi there");
+        assert_eq!(
+            tool.call("c1", json!({"path": "hello.txt"}), &ctx)
+                .await
+                .unwrap(),
+            "hi there"
+        );
     }
 
     #[tokio::test]
@@ -95,9 +117,19 @@ mod tests {
         let path = dir.path().join("hello.txt");
         std::fs::write(&path, "hi there").unwrap();
         let (tool, staging) = tool(&dir);
-        staging.edit(path.canonicalize().unwrap(), "hello.txt", |_| Ok("hi, staged".into())).await.unwrap();
+        staging
+            .edit(path.canonicalize().unwrap(), "hello.txt", |_| {
+                Ok("hi, staged".into())
+            })
+            .await
+            .unwrap();
         let (ctx, _e, _p) = dispatch_context();
-        assert_eq!(tool.call("c1", json!({"path": "hello.txt"}), &ctx).await.unwrap(), "hi, staged");
+        assert_eq!(
+            tool.call("c1", json!({"path": "hello.txt"}), &ctx)
+                .await
+                .unwrap(),
+            "hi, staged"
+        );
     }
 
     #[tokio::test]
@@ -106,8 +138,14 @@ mod tests {
         let (tool, _) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
         for path in ["/etc/passwd", "../../../../etc/passwd"] {
-            let err = tool.call("c1", json!({"path": path}), &ctx).await.unwrap_err();
-            assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }), "{path}");
+            let err = tool
+                .call("c1", json!({"path": path}), &ctx)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ToolError::PathEscapesWorkspace { .. }),
+                "{path}"
+            );
         }
     }
 
@@ -116,15 +154,24 @@ mod tests {
         let dir = tempdir().unwrap();
         let (tool, _) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
-        let err = tool.call("c1", json!({"path": "missing.txt"}), &ctx).await.unwrap_err();
+        let err = tool
+            .call("c1", json!({"path": "missing.txt"}), &ctx)
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::Io { .. }));
     }
 
     #[test]
     fn the_permission_request_is_always_a_read_of_the_given_path() {
         let (tool, _) = tool(&tempdir().unwrap());
-        assert!(matches!(tool.permission(&json!({})), Err(ToolError::InvalidInput { .. })));
-        let request = tool.permission(&json!({"path": "./src/main.rs"})).unwrap().unwrap();
+        assert!(matches!(
+            tool.permission(&json!({})),
+            Err(ToolError::InvalidInput { .. })
+        ));
+        let request = tool
+            .permission(&json!({"path": "./src/main.rs"}))
+            .unwrap()
+            .unwrap();
         assert_eq!(request.program, "read");
         assert_eq!(request.class, Class::Read);
         assert_eq!(request.argv, vec!["./src/main.rs".to_string()]);

@@ -11,11 +11,11 @@ pub const DEFAULT_THINKING_BUDGET: u32 = 10_000;
 /// [`resolve`]; never round-trips back to YAML.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderConfig {
-    pub kind:                     ProviderKind,
-    pub model:                    String,
-    pub api_key_env:              String,
+    pub kind: ProviderKind,
+    pub model: String,
+    pub api_key_env: String,
     /// V0.5 — only used by the OpenAI-compatible adapter (`OpenAiCompatibleClient`).
-    pub base_url:                 Option<String>,
+    pub base_url: Option<String>,
     pub extended_thinking_budget: u32,
 }
 
@@ -24,13 +24,18 @@ pub struct ProviderConfig {
 /// `api_key_env` — aldwin-config's schema makes a project file all-or-
 /// nothing for those, since they're not `Option`), but the two optional
 /// fields overlay individually, falling back to global's value.
-pub fn resolve(project: Option<&aldwin_config::ProviderConfig>, global: &aldwin_config::ProviderConfig) -> ProviderConfig {
+pub fn resolve(
+    project: Option<&aldwin_config::ProviderConfig>,
+    global: &aldwin_config::ProviderConfig,
+) -> ProviderConfig {
     let required_source = project.unwrap_or(global);
     ProviderConfig {
-        kind:        required_source.provider,
-        model:       required_source.model.clone(),
+        kind: required_source.provider,
+        model: required_source.model.clone(),
         api_key_env: required_source.api_key_env.clone(),
-        base_url:    project.and_then(|p| p.base_url.clone()).or_else(|| global.base_url.clone()),
+        base_url: project
+            .and_then(|p| p.base_url.clone())
+            .or_else(|| global.base_url.clone()),
         extended_thinking_budget: project
             .and_then(|p| p.extended_thinking_budget)
             .or(global.extended_thinking_budget)

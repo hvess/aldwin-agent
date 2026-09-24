@@ -112,16 +112,22 @@ impl Rung {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantEntry {
     pub program: String,
-    pub class:   Option<Class>,
+    pub class: Option<Class>,
 }
 
 impl GrantEntry {
     pub fn program(program: impl Into<String>) -> Self {
-        Self { program: program.into(), class: None }
+        Self {
+            program: program.into(),
+            class: None,
+        }
     }
 
     pub fn classed(program: impl Into<String>, class: Class) -> Self {
-        Self { program: program.into(), class: Some(class) }
+        Self {
+            program: program.into(),
+            class: Some(class),
+        }
     }
 
     /// Whether this *allow* entry lets a call of `class` on `program` run.
@@ -170,13 +176,23 @@ impl<'de> Deserialize<'de> for GrantEntry {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
         match RawEntry::deserialize(d)? {
-            RawEntry::Program(p) if p.is_empty() => Err(D::Error::custom("a grant entry needs a program name")),
-            RawEntry::Program(p) => Ok(Self { program: p, class: None }),
+            RawEntry::Program(p) if p.is_empty() => {
+                Err(D::Error::custom("a grant entry needs a program name"))
+            }
+            RawEntry::Program(p) => Ok(Self {
+                program: p,
+                class: None,
+            }),
             RawEntry::Classed(map) if map.len() == 1 => {
                 let (program, class) = map.into_iter().next().expect("length checked");
-                Ok(Self { program, class: Some(class) })
+                Ok(Self {
+                    program,
+                    class: Some(class),
+                })
             }
-            RawEntry::Classed(_) => Err(D::Error::custom("a grant entry names one program: `git: read`, not several")),
+            RawEntry::Classed(_) => Err(D::Error::custom(
+                "a grant entry names one program: `git: read`, not several",
+            )),
         }
     }
 }
@@ -222,7 +238,13 @@ pub struct PermissionsConfig {
 
 impl PermissionsConfig {
     pub fn empty() -> Self {
-        Self { version: PERMISSIONS_VERSION, default: None, allow: vec![], deny: vec![], roots: vec![] }
+        Self {
+            version: PERMISSIONS_VERSION,
+            default: None,
+            allow: vec![],
+            deny: vec![],
+            roots: vec![],
+        }
     }
 }
 
@@ -263,8 +285,14 @@ impl ProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum McpTransport {
-    Stdio { command: String, #[serde(default)] args: Vec<String> },
-    Http { url: String },
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    Http {
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,7 +315,10 @@ pub struct McpConfig {
 
 impl McpConfig {
     pub fn empty() -> Self {
-        Self { version: MCP_VERSION, servers: vec![] }
+        Self {
+            version: MCP_VERSION,
+            servers: vec![],
+        }
     }
 }
 
@@ -308,7 +339,12 @@ pub struct TuiConfig {
 
 impl TuiConfig {
     pub fn empty() -> Self {
-        Self { version: TUI_VERSION, theme: None, layout: None, keybinds: BTreeMap::new() }
+        Self {
+            version: TUI_VERSION,
+            theme: None,
+            layout: None,
+            keybinds: BTreeMap::new(),
+        }
     }
 }
 
@@ -323,6 +359,9 @@ pub struct ContextFilesConfig {
 
 impl ContextFilesConfig {
     pub fn empty() -> Self {
-        Self { version: CONTEXT_FILES_VERSION, approved: vec![] }
+        Self {
+            version: CONTEXT_FILES_VERSION,
+            approved: vec![],
+        }
     }
 }

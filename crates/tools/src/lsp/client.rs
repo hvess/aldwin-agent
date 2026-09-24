@@ -14,7 +14,11 @@ use super::protocol::{read_message, write_message};
 #[derive(Debug, thiserror::Error)]
 pub enum LspError {
     #[error("failed to spawn language server {command:?}: {source}")]
-    Spawn { command: String, #[source] source: std::io::Error },
+    Spawn {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("language server exited or its stdio closed")]
     Closed,
     #[error("language server returned error {code}: {message}")]
@@ -55,7 +59,13 @@ const _: () = assert!(RETRY_ATTEMPTS > 1, "a single attempt is not a retry polic
 /// so widening it is a deliberate edit to a documented rule rather than a
 /// tweak to a match arm.
 fn is_retriable(err: &LspError) -> bool {
-    matches!(err, LspError::Rpc { code: CONTENT_MODIFIED, .. })
+    matches!(
+        err,
+        LspError::Rpc {
+            code: CONTENT_MODIFIED,
+            ..
+        }
+    )
 }
 
 /// Requests awaiting an answer. `None` once the reader has seen the server's
@@ -71,21 +81,21 @@ type PendingMap = Arc<Mutex<Option<HashMap<i64, oneshot::Sender<Result<Value, Ls
 /// already in the model's context is not worth saving.
 struct Synced {
     version: i64,
-    text:    String,
+    text: String,
 }
 
 struct Inner {
-    stdin:   tokio::sync::Mutex<tokio::process::ChildStdin>,
+    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     next_id: AtomicI64,
     pending: PendingMap,
     // A `tokio::sync::Mutex`, not `std::sync::Mutex`: `sync_document` must
     // hold this lock across its notify `.await` (a check-then-insert split
     // across the await let two concurrent calls on the same URI both see
     // "not yet opened" and both send `didOpen` — a protocol violation).
-    synced:  tokio::sync::Mutex<HashMap<String, Synced>>,
+    synced: tokio::sync::Mutex<HashMap<String, Synced>>,
     // Kept alive so `kill_on_drop` fires when the last `LspClient` clone is
     // dropped — the safety net under the graceful `shutdown()` handshake.
-    _child:  tokio::process::Child,
+    _child: tokio::process::Child,
 }
 
 /// A single language server's JSON-RPC connection over stdio. Cheap to
@@ -101,9 +111,16 @@ impl LspClient {
     /// against `root`, and returns once the server has acknowledged it.
     pub async fn spawn(command: &str, args: &[&str], root: &Path) -> Result<Self, LspError> {
         let mut cmd = tokio::process::Command::new(command);
-        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|source| LspError::Spawn { command: command.to_string(), source })?;
+        let mut child = cmd.spawn().map_err(|source| LspError::Spawn {
+            command: command.to_string(),
+            source,
+        })?;
         let stdin = child.stdin.take().expect("stdin is piped above");
         let stdout = child.stdout.take().expect("stdout is piped above");
 
@@ -120,7 +137,10 @@ impl LspClient {
         let client = Self { inner };
 
         let root_uri = file_uri(root);
-        let workspace_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("workspace");
+        let workspace_name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
         let init_params = json!({
             "processId": std::process::id(),
             "rootUri": root_uri,
@@ -145,7 +165,12 @@ impl LspClient {
     /// Holds the lock across the `notify` `.await` so two concurrent calls
     /// for the same URI (e.g. `definition` and `hover` dispatched in the same
     /// step) can't both observe "not yet opened" and both send `didOpen`.
-    pub async fn sync_document(&self, uri: &str, language_id: &str, text: &str) -> Result<(), LspError> {
+    pub async fn sync_document(
+        &self,
+        uri: &str,
+        language_id: &str,
+        text: &str,
+    ) -> Result<(), LspError> {
         let mut synced = self.inner.synced.lock().await;
         let version = match synced.get(uri) {
             Some(sent) if sent.text == text => return Ok(()),
@@ -167,14 +192,24 @@ impl LspClient {
                 1
             }
         };
-        synced.insert(uri.to_string(), Synced { version, text: text.to_string() });
+        synced.insert(
+            uri.to_string(),
+            Synced {
+                version,
+                text: text.to_string(),
+            },
+        );
         Ok(())
     }
 
     /// Whether the server's stdout has ended. Nothing heals on the same
     /// connection after that; the caller's recovery is a fresh `spawn`.
     pub fn is_closed(&self) -> bool {
-        self.inner.pending.lock().expect("pending lock poisoned").is_none()
+        self.inner
+            .pending
+            .lock()
+            .expect("pending lock poisoned")
+            .is_none()
     }
 
     /// Sends one request and waits for its response, re-sending it while the
@@ -210,13 +245,25 @@ impl LspClient {
     async fn request_once(&self, method: &str, params: &Value) -> Result<Value, LspError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        match self.inner.pending.lock().expect("pending lock poisoned").as_mut() {
+        match self
+            .inner
+            .pending
+            .lock()
+            .expect("pending lock poisoned")
+            .as_mut()
+        {
             Some(pending) => pending.insert(id, tx),
             None => return Err(LspError::Closed),
         };
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         if let Err(e) = self.write(&message).await {
-            if let Some(pending) = self.inner.pending.lock().expect("pending lock poisoned").as_mut() {
+            if let Some(pending) = self
+                .inner
+                .pending
+                .lock()
+                .expect("pending lock poisoned")
+                .as_mut()
+            {
                 pending.remove(&id);
             }
             return Err(e);
@@ -236,7 +283,9 @@ impl LspClient {
 
     async fn write(&self, message: &Value) -> Result<(), LspError> {
         let mut stdin = self.inner.stdin.lock().await;
-        write_message(&mut *stdin, message).await.map_err(LspError::Io)
+        write_message(&mut *stdin, message)
+            .await
+            .map_err(LspError::Io)
     }
 
     /// Graceful LSP shutdown: `shutdown` request, then `exit` notification.
@@ -272,16 +321,31 @@ fn spawn_reader(stdout: tokio::process::ChildStdout, pending: PendingMap) {
 /// definition/references/hover/implementation/workspace-symbol flow works
 /// without a client that does.
 fn dispatch_incoming(message: Value, pending: &PendingMap) {
-    let Value::Object(mut obj) = message else { return };
-    let Some(id) = obj.get("id").and_then(Value::as_i64) else { return };
+    let Value::Object(mut obj) = message else {
+        return;
+    };
+    let Some(id) = obj.get("id").and_then(Value::as_i64) else {
+        return;
+    };
     if !obj.contains_key("result") && !obj.contains_key("error") {
         return; // a server->client request, not a response to one of ours
     }
 
-    let Some(tx) = pending.lock().expect("pending lock poisoned").as_mut().and_then(|p| p.remove(&id)) else { return };
+    let Some(tx) = pending
+        .lock()
+        .expect("pending lock poisoned")
+        .as_mut()
+        .and_then(|p| p.remove(&id))
+    else {
+        return;
+    };
     let result = if let Some(error) = obj.get("error") {
         let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         Err(LspError::Rpc { code, message })
     } else {
         Ok(obj.remove("result").unwrap_or(Value::Null))
@@ -307,7 +371,9 @@ pub fn file_uri(path: &Path) -> String {
 /// The path a `file://` URI names, percent-decoded. Anything else comes back
 /// as it arrived.
 pub fn path_from_uri(uri: &str) -> String {
-    let Some(encoded) = uri.strip_prefix("file://") else { return uri.to_string() };
+    let Some(encoded) = uri.strip_prefix("file://") else {
+        return uri.to_string();
+    };
     let bytes = encoded.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -342,12 +408,18 @@ mod tests {
     /// for as long as the backoff runs.
     #[test]
     fn only_content_modified_is_retried() {
-        assert!(is_retriable(&LspError::Rpc { code: CONTENT_MODIFIED, message: "content modified".into() }));
+        assert!(is_retriable(&LspError::Rpc {
+            code: CONTENT_MODIFIED,
+            message: "content modified".into()
+        }));
 
         // Every other code says something about the request itself, so
         // re-sending it unchanged can only reproduce the same answer.
         for code in [-32700, -32600, -32601, -32602, -32603, -32802, -32803, 0, 1] {
-            let err = LspError::Rpc { code, message: "other".into() };
+            let err = LspError::Rpc {
+                code,
+                message: "other".into(),
+            };
             assert!(!is_retriable(&err), "code {code} must not be retried");
         }
 
@@ -355,7 +427,9 @@ mod tests {
         // or a broken pipe will not heal by asking again on the same
         // connection, and `spawn` is where that is recovered.
         assert!(!is_retriable(&LspError::Closed));
-        assert!(!is_retriable(&LspError::Io(std::io::Error::other("broken pipe"))));
+        assert!(!is_retriable(&LspError::Io(std::io::Error::other(
+            "broken pipe"
+        ))));
     }
 
     /// Five attempts at 100ms doubling is ~1.5s of waiting in the worst
@@ -373,10 +447,19 @@ mod tests {
         assert_eq!(total, Duration::from_millis(1500));
     }
 
-    const FAKE_SERVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_lsp_server.py");
+    const FAKE_SERVER: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/fake_lsp_server.py"
+    );
 
     async fn hover(client: &LspClient, uri: &str) -> Value {
-        client.request("textDocument/hover", json!({ "textDocument": { "uri": uri } })).await.unwrap()
+        client
+            .request(
+                "textDocument/hover",
+                json!({ "textDocument": { "uri": uri } }),
+            )
+            .await
+            .unwrap()
     }
 
     /// The server answers from the copy it was sent, not from disk. The
@@ -384,15 +467,23 @@ mod tests {
     /// position was resolved against the text from before it.
     #[tokio::test]
     async fn a_document_that_changed_is_sent_again_and_one_that_did_not_is_not() {
-        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/")).await.unwrap();
+        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/"))
+            .await
+            .unwrap();
         let uri = "file:///a.rs";
 
         client.sync_document(uri, "rust", "before").await.unwrap();
         client.sync_document(uri, "rust", "before").await.unwrap();
-        assert_eq!(hover(&client, uri).await, json!({"contents": "before", "opens": 1, "changes": 0}));
+        assert_eq!(
+            hover(&client, uri).await,
+            json!({"contents": "before", "opens": 1, "changes": 0})
+        );
 
         client.sync_document(uri, "rust", "after").await.unwrap();
-        assert_eq!(hover(&client, uri).await, json!({"contents": "after", "opens": 1, "changes": 1}));
+        assert_eq!(
+            hover(&client, uri).await,
+            json!({"contents": "after", "opens": 1, "changes": 1})
+        );
         client.shutdown().await;
     }
 
@@ -401,13 +492,22 @@ mod tests {
     /// registered after that had nobody left to answer it.
     #[tokio::test]
     async fn a_server_that_has_exited_reads_as_closed_and_later_requests_do_not_hang() {
-        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/")).await.unwrap();
+        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/"))
+            .await
+            .unwrap();
         assert!(!client.is_closed());
 
         assert!(client.request("test/die", Value::Null).await.is_err());
-        assert!(client.is_closed(), "the caller needs to see this to respawn");
+        assert!(
+            client.is_closed(),
+            "the caller needs to see this to respawn"
+        );
 
-        let later = tokio::time::timeout(Duration::from_secs(5), client.request("textDocument/hover", json!({}))).await;
+        let later = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.request("textDocument/hover", json!({})),
+        )
+        .await;
         assert!(later.expect("must not wait on a dead server").is_err());
     }
 
@@ -418,7 +518,11 @@ mod tests {
         assert_eq!(uri, "file:///home/dev/my%20project/src/na%C3%AFve.rs");
         assert_eq!(path_from_uri(&uri), path.to_str().unwrap());
         assert_eq!(path_from_uri("untitled:Untitled-1"), "untitled:Untitled-1");
-        assert_eq!(path_from_uri("file:///a%2"), "/a%2", "a truncated escape is kept, not dropped");
+        assert_eq!(
+            path_from_uri("file:///a%2"),
+            "/a%2",
+            "a truncated escape is kept, not dropped"
+        );
     }
 
     /// Gated the way `llm/tests/live_lumo.rs` gates its live-API tests:
@@ -432,11 +536,17 @@ mod tests {
     #[ignore = "spawns real rust-analyzer; needs it on PATH"]
     async fn spawns_and_initializes_a_real_language_server() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
 
-        let client = LspClient::spawn("rust-analyzer", &[], dir.path()).await.expect("rust-analyzer must be on PATH for this test");
+        let client = LspClient::spawn("rust-analyzer", &[], dir.path())
+            .await
+            .expect("rust-analyzer must be on PATH for this test");
         client.shutdown().await;
     }
 }

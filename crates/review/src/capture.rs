@@ -48,11 +48,17 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
     let cell = loop {
         let now = display.winsize()?;
         if now.0 > 0 && now.1 > 0 && now == previous {
-            break Cell { w: W / now.0 as u32, h: H / now.1 as u32 };
+            break Cell {
+                w: W / now.0 as u32,
+                h: H / now.1 as u32,
+            };
         }
         previous = now;
         if Instant::now() > deadline {
-            return Err(Error::new(ErrorKind::TimedOut, "foot never sized its pty; is the font installed?"));
+            return Err(Error::new(
+                ErrorKind::TimedOut,
+                "foot never sized its pty; is the font installed?",
+            ));
         }
         sleep(Duration::from_millis(100));
     };
@@ -62,11 +68,11 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
 }
 
 pub struct Frame {
-    pub path:    PathBuf,
-    pub grid:    PathBuf,
-    pub scene:   String,
-    pub size:    Size,
-    pub theme:   Theme,
+    pub path: PathBuf,
+    pub grid: PathBuf,
+    pub scene: String,
+    pub size: Size,
+    pub theme: Theme,
     /// How many cells the parser and the frame were checked to agree on.
     pub checked: usize,
 }
@@ -91,7 +97,9 @@ pub fn capture(
     keys: &[Vec<u8>],
     run_dir: &Path,
 ) -> Result<Frame> {
-    let outcome = take_frame(comp, binary, baseline, cell, scene_name, size, theme, quiet_for, keys, run_dir);
+    let outcome = take_frame(
+        comp, binary, baseline, cell, scene_name, size, theme, quiet_for, keys, run_dir,
+    );
     let _ = comp.clear();
     outcome
 }
@@ -122,14 +130,21 @@ fn take_frame(
     // make progress at all. It must outlive the capture: dropping it early
     // takes the provider down mid-conversation, and the app reports a
     // connection error it is entirely right about.
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
     let guard = runtime.enter();
     let server = fake::spawn(std::mem::take(&mut script.replies));
     let endpoint = fake::endpoint(&server);
     drop(guard);
 
     let prepared = scene::seed(&script, theme, &work, &endpoint)?;
-    let typed = if keys.is_empty() { prepared.keys.clone() } else { keys.to_vec() };
+    let typed = if keys.is_empty() {
+        prepared.keys.clone()
+    } else {
+        keys.to_vec()
+    };
 
     comp.clear()?;
     comp.set_mode(px_w, px_h)?;
@@ -144,7 +159,10 @@ fn take_frame(
     let mut proxy = Proxy::start(comp, &baseline.font, cols as u16, rows as u16, command)?;
     proxy.wait_quiet(quiet_for, Duration::from_secs(20))?;
     if !proxy.app_running() {
-        return Err(Error::other(format!("{} exited before it could be captured", binary.display())));
+        return Err(Error::other(format!(
+            "{} exited before it could be captured",
+            binary.display()
+        )));
     }
 
     // Keys go in one at a time, each waited out, so a scene arrives at the
@@ -180,7 +198,10 @@ fn take_frame(
             continue;
         }
         prev = before.clone();
-        comp.exec(&format!("grim {}", shell_quote(&path.display().to_string())))?;
+        comp.exec(&format!(
+            "grim {}",
+            shell_quote(&path.display().to_string())
+        ))?;
         wait_for_png(&path)?;
         if proxy.grid().fingerprint() == before.fingerprint() {
             grid = Some(before);
@@ -193,7 +214,9 @@ fn take_frame(
 
     let (w, h) = png::size(&path)?;
     if (w, h) != (px_w, px_h) {
-        return Err(Error::other(format!("frame is {w}×{h}, asked for {px_w}×{px_h} — capture invariant failed")));
+        return Err(Error::other(format!(
+            "frame is {w}×{h}, asked for {px_w}×{px_h} — capture invariant failed"
+        )));
     }
 
     // Written before the cross-check, not after: when the two disagree the
@@ -216,7 +239,14 @@ fn take_frame(
     // else does.
     drop(proxy);
 
-    Ok(Frame { path, grid: grid_path, scene: scene_name.to_string(), size, theme, checked })
+    Ok(Frame {
+        path,
+        grid: grid_path,
+        scene: scene_name.to_string(),
+        size,
+        theme,
+        checked,
+    })
 }
 
 /// Whether `now` is the hidden half of the caret's blink, judged against
@@ -226,8 +256,12 @@ fn take_frame(
 /// the field runs straight through it; shown, it is not. Nothing blinking,
 /// or a blinking cell at column 0 with no left to compare, reads as shown.
 fn caret_hidden(prev: &Grid, now: &Grid) -> bool {
-    let mut blinking = now.cells().filter(|&(r, c, cell)| c > 0 && cell.effective().1 != prev.get(r, c).effective().1).peekable();
-    blinking.peek().is_some() && blinking.all(|(r, c, cell)| cell.effective().1 == now.get(r, c - 1).effective().1)
+    let mut blinking = now
+        .cells()
+        .filter(|&(r, c, cell)| c > 0 && cell.effective().1 != prev.get(r, c).effective().1)
+        .peekable();
+    blinking.peek().is_some()
+        && blinking.all(|(r, c, cell)| cell.effective().1 == now.get(r, c - 1).effective().1)
 }
 
 fn wait_for_png(path: &Path) -> Result<()> {
@@ -249,7 +283,10 @@ fn wait_for_png(path: &Path) -> Result<()> {
         }
         sleep(Duration::from_millis(100));
     }
-    Err(Error::new(ErrorKind::TimedOut, format!("grim wrote no frame at {}", path.display())))
+    Err(Error::new(
+        ErrorKind::TimedOut,
+        format!("grim wrote no frame at {}", path.display()),
+    ))
 }
 
 #[cfg(test)]
@@ -261,7 +298,12 @@ mod tests {
     /// the caret cell on `ground`, then more field.
     fn field(caret_ground: &str) -> Grid {
         let mut vt = Vt::new(12, 1);
-        vt.feed(format!("\x1b[48;2;37;40;44m\u{203a} \x1b[48;2;{caret_ground}m \x1b[48;2;37;40;44m     ").as_bytes());
+        vt.feed(
+            format!(
+                "\x1b[48;2;37;40;44m\u{203a} \x1b[48;2;{caret_ground}m \x1b[48;2;37;40;44m     "
+            )
+            .as_bytes(),
+        );
         vt.grid().clone()
     }
 

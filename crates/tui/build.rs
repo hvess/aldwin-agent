@@ -25,7 +25,13 @@ fn main() {
     // `:(top)` makes the pathspec repo-root-relative rather than relative
     // to this crate's directory, which is where a build script runs.
     let dirty = Command::new("git")
-        .args(["status", "--porcelain", "--", ":(top)", ":(top,exclude)target"])
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            ":(top)",
+            ":(top,exclude)target",
+        ])
         .output()
         .ok()
         .filter(|out| out.status.success())
@@ -47,8 +53,14 @@ fn main() {
     // there is no ref to follow and `HEAD` alone is the right trigger.
     let git = std::path::Path::new("../../.git");
     println!("cargo:rerun-if-changed={}", git.join("HEAD").display());
-    println!("cargo:rerun-if-changed={}", git.join("packed-refs").display());
-    if let Some(reference) = std::fs::read_to_string(git.join("HEAD")).ok().and_then(|h| h.strip_prefix("ref: ").map(|r| r.trim().to_string())) {
+    println!(
+        "cargo:rerun-if-changed={}",
+        git.join("packed-refs").display()
+    );
+    if let Some(reference) = std::fs::read_to_string(git.join("HEAD"))
+        .ok()
+        .and_then(|h| h.strip_prefix("ref: ").map(|r| r.trim().to_string()))
+    {
         println!("cargo:rerun-if-changed={}", git.join(reference).display());
     }
 }

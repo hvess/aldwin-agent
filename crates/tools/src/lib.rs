@@ -39,12 +39,30 @@ pub use tools::{AskTool, EditTool, ExplainTool, PlanTool, ReadTool, RunTool, CHA
 /// writes into and `read` reads through.
 pub fn builtin_registry(workspace: Workspace, staging: std::sync::Arc<Staging>) -> Registry {
     let mut registry = Registry::new();
-    registry.register(std::sync::Arc::new(ReadTool::new(workspace.clone(), staging.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(EditTool::new(workspace.clone(), staging))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(RunTool::new(workspace.clone()))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(ExplainTool::new(workspace))).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(PlanTool::new())).expect("built-in names are unique");
-    registry.register(std::sync::Arc::new(AskTool::new())).expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(ReadTool::new(
+            workspace.clone(),
+            staging.clone(),
+        )))
+        .expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(EditTool::new(
+            workspace.clone(),
+            staging,
+        )))
+        .expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(RunTool::new(workspace.clone())))
+        .expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(ExplainTool::new(workspace)))
+        .expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(PlanTool::new()))
+        .expect("built-in names are unique");
+    registry
+        .register(std::sync::Arc::new(AskTool::new()))
+        .expect("built-in names are unique");
     registry
 }
 
@@ -57,6 +75,9 @@ mod tests {
         let registry = builtin_registry(Workspace::new("."), std::sync::Arc::new(Staging::new()));
         let mut names: Vec<String> = registry.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
-        assert_eq!(names, ["ask", "edit", "explain", "plan", "read", "run"].map(String::from));
+        assert_eq!(
+            names,
+            ["ask", "edit", "explain", "plan", "read", "run"].map(String::from)
+        );
     }
 }

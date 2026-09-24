@@ -10,11 +10,11 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionChoice {
     /// What `/resume <id>` is composed with.
-    pub id:    String,
+    pub id: String,
     /// First user message, one line — what the developer will recognise the
     /// session by.
     pub title: String,
     /// When it started, already formatted (`2026-09-20 18:11`).
-    pub when:  String,
+    pub when: String,
     pub turns: usize,
 }

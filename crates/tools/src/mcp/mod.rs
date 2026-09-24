@@ -17,8 +17,8 @@ use crate::registry::Registry;
 #[derive(Debug)]
 pub struct McpRegistrationFailure {
     pub server: String,
-    pub tool:   Option<String>,
-    pub error:  ToolError,
+    pub tool: Option<String>,
+    pub error: ToolError,
 }
 
 /// Enumerates every configured server's tools and registers them.
@@ -38,26 +38,47 @@ pub struct McpRegistrationFailure {
 /// starting at all." A namespaced double-collision (two servers advertising
 /// the identical name) is likewise recorded and skipped, not fatal to the
 /// rest of the batch.
-pub async fn register_mcp_tools(bridge: Arc<McpBridge>, registry: &mut Registry) -> Vec<McpRegistrationFailure> {
+pub async fn register_mcp_tools(
+    bridge: Arc<McpBridge>,
+    registry: &mut Registry,
+) -> Vec<McpRegistrationFailure> {
     let mut failures = Vec::new();
 
     for server in bridge.server_names() {
         let tools = match bridge.list_tools(&server).await {
             Ok(tools) => tools,
             Err(error) => {
-                failures.push(McpRegistrationFailure { server, tool: None, error: error.into() });
+                failures.push(McpRegistrationFailure {
+                    server,
+                    tool: None,
+                    error: error.into(),
+                });
                 continue;
             }
         };
 
         for remote in tools {
             let bare_name = remote.name.to_string();
-            let candidate = Arc::new(McpTool::new(bridge.clone(), server.clone(), bare_name.clone(), &remote));
+            let candidate = Arc::new(McpTool::new(
+                bridge.clone(),
+                server.clone(),
+                bare_name.clone(),
+                &remote,
+            ));
             if registry.register(candidate).is_err() {
                 let namespaced = format!("{server}:{bare_name}");
-                let candidate = Arc::new(McpTool::new(bridge.clone(), server.clone(), namespaced, &remote));
+                let candidate = Arc::new(McpTool::new(
+                    bridge.clone(),
+                    server.clone(),
+                    namespaced,
+                    &remote,
+                ));
                 if let Err(error) = registry.register(candidate) {
-                    failures.push(McpRegistrationFailure { server: server.clone(), tool: Some(bare_name), error });
+                    failures.push(McpRegistrationFailure {
+                        server: server.clone(),
+                        tool: Some(bare_name),
+                        error,
+                    });
                 }
             }
         }
@@ -73,8 +94,18 @@ mod tests {
     use aldwin_config::{McpServer, McpTransport};
 
     fn fake_server(name: &str) -> McpServer {
-        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp_server.py");
-        McpServer { name: name.into(), transport: McpTransport::Stdio { command: "python3".into(), args: vec![script.into()] }, env: Default::default() }
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fake_mcp_server.py"
+        );
+        McpServer {
+            name: name.into(),
+            transport: McpTransport::Stdio {
+                command: "python3".into(),
+                args: vec![script.into()],
+            },
+            env: Default::default(),
+        }
     }
 
     #[tokio::test]
@@ -88,7 +119,10 @@ mod tests {
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
-        let mut registry = crate::builtin_registry(crate::Workspace::new("."), std::sync::Arc::new(crate::Staging::new()));
+        let mut registry = crate::builtin_registry(
+            crate::Workspace::new("."),
+            std::sync::Arc::new(crate::Staging::new()),
+        );
         // Alias one built-in's registered name to "echo" indirectly isn't
         // possible without changing a built-in's name, so instead prove the
         // mechanism directly: pre-register something under "echo" the same
@@ -97,15 +131,25 @@ mod tests {
         struct Stub(ToolDescriptor);
         #[async_trait::async_trait]
         impl Tool for Stub {
-            fn descriptor(&self) -> &ToolDescriptor { &self.0 }
-            fn permission(&self, _input: &serde_json::Value) -> Result<Option<crate::registry::PermissionRequest>, ToolError> {
+            fn descriptor(&self) -> &ToolDescriptor {
+                &self.0
+            }
+            fn permission(
+                &self,
+                _input: &serde_json::Value,
+            ) -> Result<Option<crate::registry::PermissionRequest>, ToolError> {
                 Ok(Some(crate::registry::PermissionRequest {
                     program: "stub".into(),
-                    class:   aldwin_permissions::Class::Write,
-                    argv:    Vec::new(),
+                    class: aldwin_permissions::Class::Write,
+                    argv: Vec::new(),
                 }))
             }
-            async fn call(&self, _call_id: &str, _input: serde_json::Value, _ctx: &aldwin_core::DispatchContext) -> Result<String, ToolError> {
+            async fn call(
+                &self,
+                _call_id: &str,
+                _input: serde_json::Value,
+                _ctx: &aldwin_core::DispatchContext,
+            ) -> Result<String, ToolError> {
                 Ok(String::new())
             }
         }
@@ -119,14 +163,27 @@ mod tests {
             .unwrap();
 
         assert!(register_mcp_tools(bridge, &mut registry).await.is_empty());
-        assert!(registry.get("fake:echo").is_some(), "should fall back to the namespaced name");
+        assert!(
+            registry.get("fake:echo").is_some(),
+            "should fall back to the namespaced name"
+        );
         // The pre-registered "echo" is untouched — built-ins win unprefixed.
-        assert_eq!(registry.get("echo").unwrap().descriptor().source, ToolSource::Builtin);
+        assert_eq!(
+            registry.get("echo").unwrap().descriptor().source,
+            ToolSource::Builtin
+        );
     }
 
     #[tokio::test]
     async fn one_broken_server_does_not_stop_another_healthy_ones_tools_from_registering() {
-        let broken = McpServer { name: "broken".into(), transport: McpTransport::Stdio { command: "does-not-exist-xyz".into(), args: vec![] }, env: Default::default() };
+        let broken = McpServer {
+            name: "broken".into(),
+            transport: McpTransport::Stdio {
+                command: "does-not-exist-xyz".into(),
+                args: vec![],
+            },
+            env: Default::default(),
+        };
         let bridge = Arc::new(McpBridge::new(vec![broken, fake_server("fake")]));
         let mut registry = Registry::new();
 
@@ -134,6 +191,9 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].server, "broken");
         assert!(failures[0].tool.is_none());
-        assert!(registry.get("echo").is_some(), "the healthy server's tool must still register");
+        assert!(
+            registry.get("echo").is_some(),
+            "the healthy server's tool must still register"
+        );
     }
 }

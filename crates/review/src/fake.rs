@@ -30,7 +30,9 @@ pub fn text(reply: &str) -> Canned {
         let escaped = serde_json::to_string(&chunk).expect("a string is always serialisable");
         body.push_str(&format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{escaped}}},\"finish_reason\":null}}]}}\n\n"));
     }
-    body.push_str("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n");
+    body.push_str(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    );
     body.push_str("data: [DONE]\n\n");
     Canned::Sse(body)
 }
@@ -81,7 +83,9 @@ pub fn tool_calls(calls: &[(&str, &str, serde_json::Value)]) -> Canned {
     body.push_str(&format!(
         "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{encoded}]}},\"finish_reason\":null}}]}}\n\n"
     ));
-    body.push_str("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n");
+    body.push_str(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    );
     body.push_str("data: [DONE]\n\n");
     Canned::Sse(body)
 }

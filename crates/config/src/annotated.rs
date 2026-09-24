@@ -15,7 +15,7 @@
 
 macro_rules! permissions_header {
     () => {
-"\
+        "\
 # Aldwin permissions — one scope layer. Reads and runs need no permission;
 # every edit is reviewed before it is written; this file is where you lock a
 # program out, and where you widen what the tools may reach.
@@ -90,7 +90,7 @@ pub const PROVIDER_HEADER: &str = "\
 
 macro_rules! mcp_header {
     () => {
-"\
+        "\
 # Aldwin MCP server registry.
 # Each entry under servers needs a unique name and one of:
 #   kind: stdio, command: <path>, args: [...]
@@ -107,7 +107,7 @@ pub const MCP: &str = concat!(mcp_header!(), "version: 1\nservers: []\n");
 
 macro_rules! tui_header {
     () => {
-"\
+        "\
 # Aldwin TUI preferences (global only — there is no project-scope tui.yaml).
 # theme, layout, and keybinds are all optional; omit whatever you don't want
 # to override.
@@ -133,7 +133,11 @@ mod tests {
         // The first-launch file states `ask` outright rather than leaving the
         // field absent: it is a teaching file, and the one rung that grants
         // nothing is the one worth showing a developer written down.
-        assert_eq!(permissions, PermissionsConfig::empty(), "a fresh file states neither a rung nor an allow list (ADR 0009)");
+        assert_eq!(
+            permissions,
+            PermissionsConfig::empty(),
+            "a fresh file states neither a rung nor an allow list (ADR 0009)"
+        );
 
         let mcp: McpConfig = serde_yaml_ng::from_str(MCP).unwrap();
         assert_eq!(mcp, McpConfig::empty());
@@ -146,20 +150,42 @@ mod tests {
     /// it pins that whoever changes how they are built keeps it that way.
     #[test]
     fn a_headers_own_comment_block_matches_the_full_constants_leading_text() {
-        for (header, full) in [(PERMISSIONS_HEADER, PERMISSIONS), (MCP_HEADER, MCP), (TUI_HEADER, TUI)] {
+        for (header, full) in [
+            (PERMISSIONS_HEADER, PERMISSIONS),
+            (MCP_HEADER, MCP),
+            (TUI_HEADER, TUI),
+        ] {
             assert!(full.starts_with(header), "header text has drifted from the full constant's own leading comment block:\nheader: {header:?}\nfull:   {full:?}");
         }
     }
 
     #[test]
     fn header_plus_a_freshly_serialized_empty_value_still_parses() {
-        let permissions_text = format!("{PERMISSIONS_HEADER}{}", serde_yaml_ng::to_string(&PermissionsConfig::empty()).unwrap());
-        assert_eq!(serde_yaml_ng::from_str::<PermissionsConfig>(&permissions_text).unwrap(), PermissionsConfig::empty());
+        let permissions_text = format!(
+            "{PERMISSIONS_HEADER}{}",
+            serde_yaml_ng::to_string(&PermissionsConfig::empty()).unwrap()
+        );
+        assert_eq!(
+            serde_yaml_ng::from_str::<PermissionsConfig>(&permissions_text).unwrap(),
+            PermissionsConfig::empty()
+        );
 
-        let mcp_text = format!("{MCP_HEADER}{}", serde_yaml_ng::to_string(&McpConfig::empty()).unwrap());
-        assert_eq!(serde_yaml_ng::from_str::<McpConfig>(&mcp_text).unwrap(), McpConfig::empty());
+        let mcp_text = format!(
+            "{MCP_HEADER}{}",
+            serde_yaml_ng::to_string(&McpConfig::empty()).unwrap()
+        );
+        assert_eq!(
+            serde_yaml_ng::from_str::<McpConfig>(&mcp_text).unwrap(),
+            McpConfig::empty()
+        );
 
-        let tui_text = format!("{TUI_HEADER}{}", serde_yaml_ng::to_string(&TuiConfig::empty()).unwrap());
-        assert_eq!(serde_yaml_ng::from_str::<TuiConfig>(&tui_text).unwrap(), TuiConfig::empty());
+        let tui_text = format!(
+            "{TUI_HEADER}{}",
+            serde_yaml_ng::to_string(&TuiConfig::empty()).unwrap()
+        );
+        assert_eq!(
+            serde_yaml_ng::from_str::<TuiConfig>(&tui_text).unwrap(),
+            TuiConfig::empty()
+        );
     }
 }

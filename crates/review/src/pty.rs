@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub struct Pty {
-    master:     OwnedFd,
+    master: OwnedFd,
     slave_path: PathBuf,
 }
 
@@ -43,7 +43,8 @@ impl Pty {
             if libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) != 0 {
                 return Err(Error::last_os_error());
             }
-            let slave_path = PathBuf::from(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned());
+            let slave_path =
+                PathBuf::from(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned());
 
             let mut tio: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(fd, &mut tio) == 0 {
@@ -83,7 +84,12 @@ impl Pty {
     /// Set the window size, which also delivers `SIGWINCH` to the foreground
     /// process group — how a resize reaches the app.
     pub fn set_winsize(&self, cols: u16, rows: u16) -> Result<()> {
-        let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
         // SAFETY: ws outlives the call.
         if unsafe { libc::ioctl(self.master_fd(), libc::TIOCSWINSZ, &ws) } < 0 {
             return Err(Error::last_os_error());
@@ -100,7 +106,10 @@ impl Pty {
     /// which is exactly the layer this harness exists to exercise — behaves
     /// differently or not at all.
     pub fn attach_as_controlling(&self, command: &mut Command) -> Result<std::process::Child> {
-        let slave = std::fs::OpenOptions::new().read(true).write(true).open(&self.slave_path)?;
+        let slave = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.slave_path)?;
         let slave_fd = slave.as_raw_fd();
 
         unsafe {

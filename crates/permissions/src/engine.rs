@@ -53,11 +53,17 @@ impl Locks {
     pub fn check(&self, program: &str, declared: Class) -> Outcome {
         let project = self.config.project_permissions();
         if let Some(rule) = project.deny.iter().find(|e| e.denies(program, declared)) {
-            return Outcome::Locked { scope: LockScope::Project, rule: rule.clone() };
+            return Outcome::Locked {
+                scope: LockScope::Project,
+                rule: rule.clone(),
+            };
         }
         let global = self.config.global_permissions();
         if let Some(rule) = global.deny.iter().find(|e| e.denies(program, declared)) {
-            return Outcome::Locked { scope: LockScope::Global, rule: rule.clone() };
+            return Outcome::Locked {
+                scope: LockScope::Global,
+                rule: rule.clone(),
+            };
         }
         Outcome::Allow
     }
@@ -65,9 +71,20 @@ impl Locks {
     /// Every lock in force, nearest scope first — what a developer glancing
     /// at "what can this agent not do" is asking.
     pub fn all(&self) -> Vec<(LockScope, GrantEntry)> {
-        let mut out: Vec<(LockScope, GrantEntry)> =
-            self.config.project_permissions().deny.into_iter().map(|e| (LockScope::Project, e)).collect();
-        out.extend(self.config.global_permissions().deny.into_iter().map(|e| (LockScope::Global, e)));
+        let mut out: Vec<(LockScope, GrantEntry)> = self
+            .config
+            .project_permissions()
+            .deny
+            .into_iter()
+            .map(|e| (LockScope::Project, e))
+            .collect();
+        out.extend(
+            self.config
+                .global_permissions()
+                .deny
+                .into_iter()
+                .map(|e| (LockScope::Global, e)),
+        );
         out
     }
 
@@ -121,13 +138,40 @@ mod tests {
     #[test]
     fn a_deny_is_a_lock_at_every_class_above_it() {
         let (_p, _g, l) = locks();
-        l.config.add_grant(Scope::Project, GrantList::Deny, GrantEntry::classed("git", Class::Write)).unwrap();
+        l.config
+            .add_grant(
+                Scope::Project,
+                GrantList::Deny,
+                GrantEntry::classed("git", Class::Write),
+            )
+            .unwrap();
 
-        assert_eq!(l.check("git", Class::Read), Outcome::Allow, "a write deny leaves reads alone");
-        assert!(matches!(l.check("git", Class::Write), Outcome::Locked { scope: LockScope::Project, .. }));
+        assert_eq!(
+            l.check("git", Class::Read),
+            Outcome::Allow,
+            "a write deny leaves reads alone"
+        );
+        assert!(matches!(
+            l.check("git", Class::Write),
+            Outcome::Locked {
+                scope: LockScope::Project,
+                ..
+            }
+        ));
 
-        l.config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
-        assert!(matches!(l.check("curl", Class::Read), Outcome::Locked { scope: LockScope::Global, .. }), "a bare program deny locks every class");
+        l.config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
+            .unwrap();
+        assert!(
+            matches!(
+                l.check("curl", Class::Read),
+                Outcome::Locked {
+                    scope: LockScope::Global,
+                    ..
+                }
+            ),
+            "a bare program deny locks every class"
+        );
     }
 
     /// An allow used to outrank the rung and a deny outranked both. With no
@@ -136,9 +180,20 @@ mod tests {
     #[test]
     fn a_stale_allow_does_not_lift_a_lock() {
         let (_p, _g, l) = locks();
-        l.config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("curl", Class::Write)).unwrap();
-        l.config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
-        assert!(matches!(l.check("curl", Class::Write), Outcome::Locked { .. }));
+        l.config
+            .add_grant(
+                Scope::Project,
+                GrantList::Allow,
+                GrantEntry::classed("curl", Class::Write),
+            )
+            .unwrap();
+        l.config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
+            .unwrap();
+        assert!(matches!(
+            l.check("curl", Class::Write),
+            Outcome::Locked { .. }
+        ));
     }
 
     /// The nearest lock is the one named, so the refusal points at the file
@@ -146,9 +201,19 @@ mod tests {
     #[test]
     fn the_nearest_scope_is_the_one_named() {
         let (_p, _g, l) = locks();
-        l.config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rm")).unwrap();
-        l.config.add_grant(Scope::Project, GrantList::Deny, GrantEntry::program("rm")).unwrap();
-        assert!(matches!(l.check("rm", Class::Read), Outcome::Locked { scope: LockScope::Project, .. }));
+        l.config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rm"))
+            .unwrap();
+        l.config
+            .add_grant(Scope::Project, GrantList::Deny, GrantEntry::program("rm"))
+            .unwrap();
+        assert!(matches!(
+            l.check("rm", Class::Read),
+            Outcome::Locked {
+                scope: LockScope::Project,
+                ..
+            }
+        ));
         assert_eq!(l.all().len(), 2);
     }
 
@@ -159,8 +224,14 @@ mod tests {
         let (_p, _g, l) = locks();
         assert!(l.stale_keys().is_empty());
         l.config.ensure_permissions(Scope::Project).unwrap();
-        l.config.set_default_rung(Scope::Project, Rung::Write).unwrap();
+        l.config
+            .set_default_rung(Scope::Project, Rung::Write)
+            .unwrap();
         assert_eq!(l.stale_keys(), vec![LockScope::Project]);
-        assert_eq!(l.check("anything", Class::Write), Outcome::Allow, "the rung neither allows nor denies now");
+        assert_eq!(
+            l.check("anything", Class::Write),
+            Outcome::Allow,
+            "the rung neither allows nor denies now"
+        );
     }
 }

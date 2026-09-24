@@ -23,10 +23,10 @@ pub enum ToolSource {
 /// through `register_mcp_tools`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {
-    pub name:         String,
-    pub description:  String,
+    pub name: String,
+    pub description: String,
     pub input_schema: Value,
-    pub source:       ToolSource,
+    pub source: ToolSource,
 }
 
 /// What a call is asking to do, for the lock: a program, the class the
@@ -44,8 +44,8 @@ pub struct ToolDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionRequest {
     pub program: String,
-    pub class:   Class,
-    pub argv:    Vec<String>,
+    pub class: Class,
+    pub argv: Vec<String>,
 }
 
 /// One concrete tool. `permission` and `call` are split so the dispatcher
@@ -59,7 +59,12 @@ pub trait Tool: Send + Sync {
 
     fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError>;
 
-    async fn call(&self, call_id: &str, input: Value, ctx: &DispatchContext) -> Result<String, ToolError>;
+    async fn call(
+        &self,
+        call_id: &str,
+        input: Value,
+        ctx: &DispatchContext,
+    ) -> Result<String, ToolError>;
 }
 
 /// In-process map of name -> tool. Single source for both core's
@@ -91,7 +96,10 @@ impl Registry {
 
     /// Read-only listing for the TUI's Registry View.
     pub fn descriptors(&self) -> Vec<ToolDescriptor> {
-        self.tools.values().map(|t| t.descriptor().clone()).collect()
+        self.tools
+            .values()
+            .map(|t| t.descriptor().clone())
+            .collect()
     }
 
     /// What core's `ToolDispatcher::definitions` needs — just the surface
@@ -102,8 +110,8 @@ impl Registry {
             .map(|t| {
                 let d = t.descriptor();
                 aldwin_core::ToolDefinition {
-                    name:         d.name.clone(),
-                    description:  d.description.clone(),
+                    name: d.name.clone(),
+                    description: d.description.clone(),
                     input_schema: d.input_schema.clone(),
                 }
             })
@@ -124,19 +132,28 @@ mod tests {
             &self.0
         }
         fn permission(&self, _input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-            Ok(Some(PermissionRequest { program: "stub".into(), class: Class::Read, argv: Vec::new() }))
+            Ok(Some(PermissionRequest {
+                program: "stub".into(),
+                class: Class::Read,
+                argv: Vec::new(),
+            }))
         }
-        async fn call(&self, _call_id: &str, _input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+        async fn call(
+            &self,
+            _call_id: &str,
+            _input: Value,
+            _ctx: &DispatchContext,
+        ) -> Result<String, ToolError> {
             Ok("ok".into())
         }
     }
 
     fn stub(name: &str) -> Arc<dyn Tool> {
         Arc::new(StubTool(ToolDescriptor {
-            name:         name.into(),
-            description:  "stub".into(),
+            name: name.into(),
+            description: "stub".into(),
             input_schema: json!({}),
-            source:       ToolSource::Builtin,
+            source: ToolSource::Builtin,
         }))
     }
 

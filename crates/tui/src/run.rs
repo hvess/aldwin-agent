@@ -6,8 +6,8 @@ use aldwin_core::{Command, Event};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
@@ -19,8 +19,8 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::app::{App, ProviderChoice};
-use crate::resume::SessionChoice;
 use crate::palette::Theme;
+use crate::resume::SessionChoice;
 use crate::ui;
 
 /// The terminal this session writes to.
@@ -48,7 +48,7 @@ pub struct SessionProvider {
     /// Display halves only, in catalogue order. Empty means no question:
     /// bare `/model` is then forwarded to aldwin-cli, which reports rather
     /// than asks.
-    pub catalogue:        Vec<ProviderChoice>,
+    pub catalogue: Vec<ProviderChoice>,
     /// The catalogue id of the row `provider.yaml` resolves to, or `None`
     /// for an endpoint the catalogue has never seen — or for nothing
     /// configured at all.
@@ -136,17 +136,25 @@ pub async fn run(
     // The design's title bar is the terminal's own — `gateway — aldwin`,
     // set once and never drawn. Best-effort: a terminal that ignores the
     // title ignores the sequence.
-    let _ = execute!(stdout, SetTitle(format!("{} — aldwin", crate::app::project_name())));
+    let _ = execute!(
+        stdout,
+        SetTitle(format!("{} — aldwin", crate::app::project_name()))
+    );
     let _ = execute!(stdout, EnableBracketedPaste);
     // Pushed after the alternate screen is up, because the keyboard mode is
     // part of the screen's own state — the flags have to land on the screen
     // the session actually runs on. Best-effort, and unconditional: see this
     // function's doc comment on why asking first was the bug.
-    let _ = execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     // Best-effort: a terminal that doesn't know the mode ignores the
     // sequence, and one that does gives the wheel back without costing
     // selection. Not worth failing the session over either way.
-    let _ = stdout.write_all(ALTERNATE_SCROLL_ON).and_then(|()| stdout.flush());
+    let _ = stdout
+        .write_all(ALTERNATE_SCROLL_ON)
+        .and_then(|()| stdout.flush());
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
 
@@ -218,11 +226,18 @@ fn restore_terminal() -> io::Result<()> {
     let raw = disable_raw_mode();
     let pop = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     let paste = execute!(io::stdout(), DisableBracketedPaste);
-    let scroll = io::stdout().write_all(ALTERNATE_SCROLL_OFF).and_then(|()| io::stdout().flush());
+    let scroll = io::stdout()
+        .write_all(ALTERNATE_SCROLL_OFF)
+        .and_then(|()| io::stdout().flush());
     let mouse = execute!(io::stdout(), DisableMouseCapture);
     let alt = execute!(io::stdout(), LeaveAlternateScreen);
     let cursor = execute!(io::stdout(), Show);
-    raw.and(pop).and(paste).and(scroll).and(mouse).and(alt).and(cursor)
+    raw.and(pop)
+        .and(paste)
+        .and(scroll)
+        .and(mouse)
+        .and(alt)
+        .and(cursor)
 }
 
 /// Paints one frame as a single atomic update.
@@ -268,7 +283,9 @@ fn sync_mouse(out: &mut impl Write, wanted: bool, captured: &mut bool) {
     if wanted == *captured {
         return;
     }
-    let _ = out.write_all(if wanted { MOUSE_ON } else { MOUSE_OFF }).and_then(|()| out.flush());
+    let _ = out
+        .write_all(if wanted { MOUSE_ON } else { MOUSE_OFF })
+        .and_then(|()| out.flush());
     *captured = wanted;
 }
 
@@ -536,10 +553,16 @@ mod tests {
         let mut out = Vec::new();
         let mut captured = false;
         sync_mouse(&mut out, false, &mut captured);
-        assert!(out.is_empty(), "nothing is sent while the conversation keeps the mouse");
+        assert!(
+            out.is_empty(),
+            "nothing is sent while the conversation keeps the mouse"
+        );
         sync_mouse(&mut out, true, &mut captured);
         sync_mouse(&mut out, true, &mut captured);
-        assert_eq!(out, MOUSE_ON, "asked for once, however many frames the review is open");
+        assert_eq!(
+            out, MOUSE_ON,
+            "asked for once, however many frames the review is open"
+        );
         out.clear();
         sync_mouse(&mut out, false, &mut captured);
         assert_eq!(out, MOUSE_OFF);

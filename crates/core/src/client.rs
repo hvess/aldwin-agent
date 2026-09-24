@@ -1,7 +1,10 @@
-use std::pin::Pin;
+use crate::{
+    event::LlmEvent,
+    types::{Message, ToolDefinition},
+};
 use futures::Stream;
+use std::pin::Pin;
 use thiserror::Error;
-use crate::{event::LlmEvent, types::{Message, ToolDefinition}};
 
 #[derive(Debug, Error)]
 pub enum LlmError {
@@ -16,10 +19,10 @@ pub enum LlmError {
 }
 
 pub struct LlmRequest<'a> {
-    pub model:             &'a str,
-    pub system:            &'a str,
-    pub tools:             &'a [ToolDefinition],
-    pub messages:          &'a [Message],
+    pub model: &'a str,
+    pub system: &'a str,
+    pub tools: &'a [ToolDefinition],
+    pub messages: &'a [Message],
     /// Indices into `messages` after which the provider should insert a cache breakpoint.
     pub cache_breakpoints: &'a [usize],
 }

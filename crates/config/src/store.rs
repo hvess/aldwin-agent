@@ -4,8 +4,9 @@ use std::sync::{Arc, RwLock};
 use crate::{
     annotated,
     domain::{
-        ContextFilesConfig, GrantEntry, McpConfig, McpServer, PermissionsConfig, ProviderConfig, Rung,
-        TuiConfig, CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION, TUI_VERSION,
+        ContextFilesConfig, GrantEntry, McpConfig, McpServer, PermissionsConfig, ProviderConfig,
+        Rung, TuiConfig, CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION,
+        TUI_VERSION,
     },
     error::ConfigError,
     fsio,
@@ -38,25 +39,25 @@ pub enum InitOutcome {
 /// snapshot for that layer is left untouched.
 #[derive(Debug)]
 pub struct ReloadFailure {
-    pub path:  PathBuf,
+    pub path: PathBuf,
     pub error: ConfigError,
 }
 
 struct Inner {
     project_dir: PathBuf,
-    global_dir:  PathBuf,
+    global_dir: PathBuf,
 
     /// Permissions files moved aside by [`retire_v1_permissions`] during this
     /// open — reported once at startup, never acted on again.
     retired_permissions: Vec<PathBuf>,
 
     project_permissions: RwLock<PermissionsConfig>,
-    global_permissions:  RwLock<PermissionsConfig>,
-    project_provider:    RwLock<Option<ProviderConfig>>,
-    global_provider:     RwLock<Option<ProviderConfig>>,
-    project_mcp:         RwLock<McpConfig>,
-    global_mcp:          RwLock<McpConfig>,
-    global_tui:          RwLock<TuiConfig>,
+    global_permissions: RwLock<PermissionsConfig>,
+    project_provider: RwLock<Option<ProviderConfig>>,
+    global_provider: RwLock<Option<ProviderConfig>>,
+    project_mcp: RwLock<McpConfig>,
+    global_mcp: RwLock<McpConfig>,
+    global_tui: RwLock<TuiConfig>,
     project_context_files: RwLock<ContextFilesConfig>,
 }
 
@@ -86,7 +87,9 @@ fn load_provider(path: &Path) -> Result<Option<ProviderConfig>, ConfigError> {
         return Ok(None);
     };
     if !cfg.has_valid_api_key_env() {
-        return Err(ConfigError::MissingApiKeyEnv { path: path.to_path_buf() });
+        return Err(ConfigError::MissingApiKeyEnv {
+            path: path.to_path_buf(),
+        });
     }
     Ok(Some(cfg))
 }
@@ -164,7 +167,7 @@ impl Config {
     /// file, an unknown version, or an empty `api_key_env` refuses to start.
     pub fn open_at(
         project_root: impl AsRef<Path>,
-        global_dir:   impl Into<PathBuf>,
+        global_dir: impl Into<PathBuf>,
     ) -> Result<Self, ConfigError> {
         let global_dir = global_dir.into();
         let project_dir = project_root.as_ref().join(".aldwin");
@@ -184,7 +187,7 @@ impl Config {
                 .unwrap_or_else(PermissionsConfig::empty);
 
         let project_provider = load_provider(&project_dir.join("provider.yaml"))?;
-        let global_provider  = load_provider(&global_dir.join("provider.yaml"))?;
+        let global_provider = load_provider(&global_dir.join("provider.yaml"))?;
 
         let project_mcp = fsio::read_versioned(&project_dir.join("mcp.yaml"), MCP_VERSION)?
             .unwrap_or_else(McpConfig::empty);
@@ -206,12 +209,12 @@ impl Config {
                 global_dir,
                 retired_permissions: retired,
                 project_permissions: RwLock::new(project_permissions),
-                global_permissions:  RwLock::new(global_permissions),
-                project_provider:    RwLock::new(project_provider),
-                global_provider:     RwLock::new(global_provider),
+                global_permissions: RwLock::new(global_permissions),
+                project_provider: RwLock::new(project_provider),
+                global_provider: RwLock::new(global_provider),
                 project_mcp: RwLock::new(project_mcp),
-                global_mcp:  RwLock::new(global_mcp),
-                global_tui:  RwLock::new(global_tui),
+                global_mcp: RwLock::new(global_mcp),
+                global_tui: RwLock::new(global_tui),
                 project_context_files: RwLock::new(project_context_files),
             }),
         })
@@ -220,7 +223,7 @@ impl Config {
     fn scope_dir(&self, scope: Scope) -> &Path {
         match scope {
             Scope::Project => &self.inner.project_dir,
-            Scope::Global  => &self.inner.global_dir,
+            Scope::Global => &self.inner.global_dir,
         }
     }
 
@@ -235,35 +238,60 @@ impl Config {
     /// carried, and that is not something to leave sitting inside a tree the
     /// developer may well be committing.
     pub fn history_dir(&self) -> PathBuf {
-        let project_root = self.inner.project_dir.parent().unwrap_or(&self.inner.project_dir);
+        let project_root = self
+            .inner
+            .project_dir
+            .parent()
+            .unwrap_or(&self.inner.project_dir);
         crate::history::project_dir(&self.inner.global_dir.join("history"), project_root)
     }
 
     // ── Read ─────────────────────────────────────────────────────────────
 
     pub fn project_permissions(&self) -> PermissionsConfig {
-        self.inner.project_permissions.read().expect("lock poisoned").clone()
+        self.inner
+            .project_permissions
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     pub fn global_permissions(&self) -> PermissionsConfig {
-        self.inner.global_permissions.read().expect("lock poisoned").clone()
+        self.inner
+            .global_permissions
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     /// `None` means no project-scope override — fall back to `global_provider`.
     pub fn project_provider(&self) -> Option<ProviderConfig> {
-        self.inner.project_provider.read().expect("lock poisoned").clone()
+        self.inner
+            .project_provider
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     /// Unlike `project_provider`, absence here is an error: there is no
     /// meaningful default model or `api_key_env` to fall back to.
     pub fn global_provider(&self) -> Result<ProviderConfig, ConfigError> {
-        self.inner.global_provider.read().expect("lock poisoned").clone().ok_or_else(|| {
-            ConfigError::ProviderNotConfigured { path: self.domain_path(Scope::Global, "provider") }
-        })
+        self.inner
+            .global_provider
+            .read()
+            .expect("lock poisoned")
+            .clone()
+            .ok_or_else(|| ConfigError::ProviderNotConfigured {
+                path: self.domain_path(Scope::Global, "provider"),
+            })
     }
 
     pub fn project_mcp(&self) -> McpConfig {
-        self.inner.project_mcp.read().expect("lock poisoned").clone()
+        self.inner
+            .project_mcp
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     pub fn global_mcp(&self) -> McpConfig {
@@ -275,7 +303,11 @@ impl Config {
     }
 
     pub fn project_context_files(&self) -> ContextFilesConfig {
-        self.inner.project_context_files.read().expect("lock poisoned").clone()
+        self.inner
+            .project_context_files
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     // ── Write ────────────────────────────────────────────────────────────
@@ -292,7 +324,13 @@ impl Config {
     /// `header` is an `annotated::*_HEADER` constant, or `""` for a domain
     /// with none; see `fsio::write_atomic_with_header` for why it is
     /// prepended on every write.
-    fn with_domain_mut<T: Clone + serde::Serialize>(&self, lock: &RwLock<T>, path: &Path, header: &str, f: impl FnOnce(&mut T)) -> Result<(), ConfigError> {
+    fn with_domain_mut<T: Clone + serde::Serialize>(
+        &self,
+        lock: &RwLock<T>,
+        path: &Path,
+        header: &str,
+        f: impl FnOnce(&mut T),
+    ) -> Result<(), ConfigError> {
         let mut guard = lock.write().expect("lock poisoned");
         let mut next = guard.clone();
         f(&mut next);
@@ -304,12 +342,21 @@ impl Config {
     fn permissions_lock(&self, scope: Scope) -> &RwLock<PermissionsConfig> {
         match scope {
             Scope::Project => &self.inner.project_permissions,
-            Scope::Global  => &self.inner.global_permissions,
+            Scope::Global => &self.inner.global_permissions,
         }
     }
 
-    fn with_permissions_mut(&self, scope: Scope, f: impl FnOnce(&mut PermissionsConfig)) -> Result<(), ConfigError> {
-        self.with_domain_mut(self.permissions_lock(scope), &self.domain_path(scope, "permissions"), annotated::PERMISSIONS_HEADER, f)
+    fn with_permissions_mut(
+        &self,
+        scope: Scope,
+        f: impl FnOnce(&mut PermissionsConfig),
+    ) -> Result<(), ConfigError> {
+        self.with_domain_mut(
+            self.permissions_lock(scope),
+            &self.domain_path(scope, "permissions"),
+            annotated::PERMISSIONS_HEADER,
+            f,
+        )
     }
 
     /// Adds `entry` to one list, replacing any existing entry for the same
@@ -318,9 +365,17 @@ impl Config {
     /// depend on their order — `git: read` then `git: write` reads as a
     /// widening, but a reader has to know which of the two wins to be sure.
     /// One program, one line, per list.
-    pub fn add_grant(&self, scope: Scope, list: GrantList, entry: GrantEntry) -> Result<(), ConfigError> {
+    pub fn add_grant(
+        &self,
+        scope: Scope,
+        list: GrantList,
+        entry: GrantEntry,
+    ) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| {
-            let target = match list { GrantList::Allow => &mut cfg.allow, GrantList::Deny => &mut cfg.deny };
+            let target = match list {
+                GrantList::Allow => &mut cfg.allow,
+                GrantList::Deny => &mut cfg.deny,
+            };
             target.retain(|e| e.program != entry.program);
             target.push(entry);
         })
@@ -354,9 +409,17 @@ impl Config {
 
     /// Removes whatever entry names `program` in one list, whatever class it
     /// carried.
-    pub fn remove_grant(&self, scope: Scope, list: GrantList, program: &str) -> Result<(), ConfigError> {
+    pub fn remove_grant(
+        &self,
+        scope: Scope,
+        list: GrantList,
+        program: &str,
+    ) -> Result<(), ConfigError> {
         self.with_permissions_mut(scope, |cfg| {
-            let target = match list { GrantList::Allow => &mut cfg.allow, GrantList::Deny => &mut cfg.deny };
+            let target = match list {
+                GrantList::Allow => &mut cfg.allow,
+                GrantList::Deny => &mut cfg.deny,
+            };
             target.retain(|e| e.program != program);
         })
     }
@@ -368,20 +431,31 @@ impl Config {
         }
         let lock = match scope {
             Scope::Project => &self.inner.project_provider,
-            Scope::Global  => &self.inner.global_provider,
+            Scope::Global => &self.inner.global_provider,
         };
-        self.with_domain_mut(lock, &path, annotated::PROVIDER_HEADER, move |current| *current = Some(provider))
+        self.with_domain_mut(lock, &path, annotated::PROVIDER_HEADER, move |current| {
+            *current = Some(provider)
+        })
     }
 
     fn mcp_lock(&self, scope: Scope) -> &RwLock<McpConfig> {
         match scope {
             Scope::Project => &self.inner.project_mcp,
-            Scope::Global  => &self.inner.global_mcp,
+            Scope::Global => &self.inner.global_mcp,
         }
     }
 
-    fn with_mcp_mut(&self, scope: Scope, f: impl FnOnce(&mut McpConfig)) -> Result<(), ConfigError> {
-        self.with_domain_mut(self.mcp_lock(scope), &self.domain_path(scope, "mcp"), annotated::MCP_HEADER, f)
+    fn with_mcp_mut(
+        &self,
+        scope: Scope,
+        f: impl FnOnce(&mut McpConfig),
+    ) -> Result<(), ConfigError> {
+        self.with_domain_mut(
+            self.mcp_lock(scope),
+            &self.domain_path(scope, "mcp"),
+            annotated::MCP_HEADER,
+            f,
+        )
     }
 
     /// Upserts by server name — adding a server that already exists in this
@@ -400,12 +474,25 @@ impl Config {
 
     pub fn set_tui(&self, tui: TuiConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(Scope::Global, "tui");
-        self.with_domain_mut(&self.inner.global_tui, &path, annotated::TUI_HEADER, move |current| *current = tui)
+        self.with_domain_mut(
+            &self.inner.global_tui,
+            &path,
+            annotated::TUI_HEADER,
+            move |current| *current = tui,
+        )
     }
 
-    fn with_context_files_mut(&self, f: impl FnOnce(&mut ContextFilesConfig)) -> Result<(), ConfigError> {
+    fn with_context_files_mut(
+        &self,
+        f: impl FnOnce(&mut ContextFilesConfig),
+    ) -> Result<(), ConfigError> {
         // No `annotated` header: this domain is not part of the first-launch tour.
-        self.with_domain_mut(&self.inner.project_context_files, &self.domain_path(Scope::Project, "context_files"), "", f)
+        self.with_domain_mut(
+            &self.inner.project_context_files,
+            &self.domain_path(Scope::Project, "context_files"),
+            "",
+            f,
+        )
     }
 
     pub fn add_context_file(&self, path: PathBuf) -> Result<(), ConfigError> {
@@ -475,7 +562,11 @@ impl Config {
         self.reload_provider(Scope::Project, &mut failures);
         self.reload_provider(Scope::Global, &mut failures);
 
-        if failures.is_empty() { Ok(()) } else { Err(failures) }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures)
+        }
     }
 
     fn reload_domain<T: Clone + serde::de::DeserializeOwned>(
@@ -500,7 +591,7 @@ impl Config {
         let path = self.domain_path(scope, "provider");
         let lock = match scope {
             Scope::Project => &self.inner.project_provider,
-            Scope::Global  => &self.inner.global_provider,
+            Scope::Global => &self.inner.global_provider,
         };
         // Locked before the read, for `reload_domain`'s reason.
         let mut guard = lock.write().expect("lock poisoned");
@@ -532,14 +623,18 @@ impl Config {
 
         if !dir.exists() {
             let permissions_path = dir.join("permissions.yaml");
-            let mcp_path         = dir.join("mcp.yaml");
-            let tui_path         = dir.join("tui.yaml");
+            let mcp_path = dir.join("mcp.yaml");
+            let tui_path = dir.join("tui.yaml");
 
             fsio::write_atomic_text(&permissions_path, annotated::PERMISSIONS)?;
             fsio::write_atomic_text(&mcp_path, annotated::MCP)?;
             fsio::write_atomic_text(&tui_path, annotated::TUI)?;
 
-            *self.inner.global_permissions.write().expect("lock poisoned") =
+            *self
+                .inner
+                .global_permissions
+                .write()
+                .expect("lock poisoned") =
                 fsio::read_versioned(&permissions_path, PERMISSIONS_VERSION)?
                     .expect("just wrote a file matching this schema");
             *self.inner.global_mcp.write().expect("lock poisoned") =
@@ -558,8 +653,11 @@ impl Config {
         // The other three are written together at init, so any of them
         // missing really is a half-deleted config directory.
         let required = ["permissions.yaml", "mcp.yaml", "tui.yaml"];
-        let missing: Vec<&'static str> =
-            required.iter().copied().filter(|f| !dir.join(f).is_file()).collect();
+        let missing: Vec<&'static str> = required
+            .iter()
+            .copied()
+            .filter(|f| !dir.join(f).is_file())
+            .collect();
 
         if missing.is_empty() {
             Ok(InitOutcome::AlreadyPresent)
@@ -579,8 +677,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Class, GrantEntry, Rung};
     use crate::domain::McpTransport;
+    use crate::domain::{Class, GrantEntry, Rung};
     use tempfile::tempdir;
 
     /// Fresh (project_dir, global_dir) temp roots and the Config opened on
@@ -607,8 +705,14 @@ mod tests {
             let new_dir = home.path().join(".aldwin");
             migrate_legacy_global_dir(home.path(), &new_dir);
 
-            assert!(!legacy_dir.exists(), "the old {legacy}/ should be moved, not copied");
-            assert!(new_dir.join("provider.yaml").exists(), "the migrated file must survive the move");
+            assert!(
+                !legacy_dir.exists(),
+                "the old {legacy}/ should be moved, not copied"
+            );
+            assert!(
+                new_dir.join("provider.yaml").exists(),
+                "the migrated file must survive the move"
+            );
         }
     }
 
@@ -631,7 +735,10 @@ mod tests {
             "mjolnir",
             "the directory the developer was last using is the one that carries over"
         );
-        assert!(home.path().join(".amundsen").exists(), "the older one stays put — merging would pick between two files silently");
+        assert!(
+            home.path().join(".amundsen").exists(),
+            "the older one stays put — merging would pick between two files silently"
+        );
     }
 
     #[test]
@@ -647,8 +754,15 @@ mod tests {
 
         migrate_legacy_global_dir(home.path(), &new_dir);
 
-        assert!(legacy_dir.exists(), "an already-migrated (or independently created) new dir must not trigger another move");
-        assert_eq!(std::fs::read_to_string(new_dir.join("provider.yaml")).unwrap(), "current", "the existing new-dir content must not be clobbered");
+        assert!(
+            legacy_dir.exists(),
+            "an already-migrated (or independently created) new dir must not trigger another move"
+        );
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("provider.yaml")).unwrap(),
+            "current",
+            "the existing new-dir content must not be clobbered"
+        );
     }
 
     #[test]
@@ -658,7 +772,10 @@ mod tests {
 
         migrate_legacy_global_dir(home.path(), &new_dir);
 
-        assert!(!new_dir.exists(), "nothing to migrate — a fresh install must not have .aldwin/ conjured from nothing");
+        assert!(
+            !new_dir.exists(),
+            "nothing to migrate — a fresh install must not have .aldwin/ conjured from nothing"
+        );
     }
 
     #[test]
@@ -672,7 +789,10 @@ mod tests {
         assert_eq!(config.global_tui(), TuiConfig::empty());
         assert_eq!(config.project_context_files(), ContextFilesConfig::empty());
         assert!(config.project_provider().is_none());
-        assert!(matches!(config.global_provider(), Err(ConfigError::ProviderNotConfigured { .. })));
+        assert!(matches!(
+            config.global_provider(),
+            Err(ConfigError::ProviderNotConfigured { .. })
+        ));
     }
 
     #[test]
@@ -681,7 +801,13 @@ mod tests {
         let aldwin_dir = project.path().join(".aldwin");
         assert!(!aldwin_dir.exists());
 
-        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
+        config
+            .add_grant(
+                Scope::Project,
+                GrantList::Allow,
+                GrantEntry::classed("rg", Class::Read),
+            )
+            .unwrap();
         assert!(aldwin_dir.is_dir());
         assert!(aldwin_dir.join("permissions.yaml").is_file());
     }
@@ -703,7 +829,10 @@ mod tests {
         assert_eq!(config.global_permissions(), PermissionsConfig::empty());
 
         // Idempotent: a second call sees everything already there.
-        assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::AlreadyPresent);
+        assert_eq!(
+            config.init_global_if_empty().unwrap(),
+            InitOutcome::AlreadyPresent
+        );
     }
 
     /// A fresh global directory names no provider at all — the one question
@@ -715,8 +844,14 @@ mod tests {
     fn init_writes_no_provider_so_the_question_is_still_open() {
         let (_project, global, config) = fresh();
         assert_eq!(config.init_global_if_empty().unwrap(), InitOutcome::Created);
-        assert!(!global.path().join(".aldwin").join("provider.yaml").exists(), "init must not guess a provider");
-        assert!(config.global_provider().is_err(), "which is what the session reads to know the question is unanswered");
+        assert!(
+            !global.path().join(".aldwin").join("provider.yaml").exists(),
+            "init must not guess a provider"
+        );
+        assert!(
+            config.global_provider().is_err(),
+            "which is what the session reads to know the question is unanswered"
+        );
         assert_eq!(
             config.init_global_if_empty().unwrap(),
             InitOutcome::AlreadyPresent,
@@ -742,8 +877,20 @@ mod tests {
     fn allow_and_deny_stay_separate_lists_never_merged() {
         let (_project, _global, config) = fresh();
 
-        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
-        config.add_grant(Scope::Project, GrantList::Deny, GrantEntry::classed("git", Class::Write)).unwrap();
+        config
+            .add_grant(
+                Scope::Project,
+                GrantList::Allow,
+                GrantEntry::classed("git", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(
+                Scope::Project,
+                GrantList::Deny,
+                GrantEntry::classed("git", Class::Write),
+            )
+            .unwrap();
 
         let cfg = config.project_permissions();
         assert_eq!(cfg.allow, vec![GrantEntry::classed("git", Class::Read)]);
@@ -761,7 +908,13 @@ mod tests {
             .map(|i| {
                 let config = config.clone();
                 std::thread::spawn(move || {
-                    config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed(format!("prog{i}"), Class::Read)).unwrap();
+                    config
+                        .add_grant(
+                            Scope::Project,
+                            GrantList::Allow,
+                            GrantEntry::classed(format!("prog{i}"), Class::Read),
+                        )
+                        .unwrap();
                 })
             })
             .collect();
@@ -770,9 +923,16 @@ mod tests {
         }
 
         let allow = config.project_permissions().allow;
-        assert_eq!(allow.len(), 8, "every concurrent grant must survive, got {allow:?}");
+        assert_eq!(
+            allow.len(),
+            8,
+            "every concurrent grant must survive, got {allow:?}"
+        );
         for i in 0..8 {
-            assert!(allow.contains(&GrantEntry::classed(format!("prog{i}"), Class::Read)), "missing grant for prog{i} in {allow:?}");
+            assert!(
+                allow.contains(&GrantEntry::classed(format!("prog{i}"), Class::Read)),
+                "missing grant for prog{i} in {allow:?}"
+            );
         }
     }
 
@@ -783,9 +943,24 @@ mod tests {
     #[test]
     fn add_grant_keeps_one_line_per_program_in_a_list() {
         let (_project, _global, config) = fresh();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Write)).unwrap();
-        assert_eq!(config.global_permissions().allow, vec![GrantEntry::classed("git", Class::Write)]);
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("git", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("git", Class::Write),
+            )
+            .unwrap();
+        assert_eq!(
+            config.global_permissions().allow,
+            vec![GrantEntry::classed("git", Class::Write)]
+        );
     }
 
     /// Regression, reported as "editing permissions.yaml doesn't really
@@ -796,14 +971,32 @@ mod tests {
     #[test]
     fn permissions_yaml_keeps_its_explanatory_header_after_a_grant_is_persisted() {
         let (project, global, config) = fresh();
-        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
+        config
+            .add_grant(
+                Scope::Project,
+                GrantList::Allow,
+                GrantEntry::classed("git", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
+            .unwrap();
 
-        let project_text = std::fs::read_to_string(project.path().join(".aldwin").join("permissions.yaml")).unwrap();
-        let global_text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml")).unwrap();
+        let project_text =
+            std::fs::read_to_string(project.path().join(".aldwin").join("permissions.yaml"))
+                .unwrap();
+        let global_text =
+            std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml"))
+                .unwrap();
         for text in [&project_text, &global_text] {
-            assert!(text.starts_with("# Aldwin permissions"), "grant persistence must not strip the annotated header: {text:?}");
-            assert!(text.contains("program"), "header should still explain the entry shape: {text:?}");
+            assert!(
+                text.starts_with("# Aldwin permissions"),
+                "grant persistence must not strip the annotated header: {text:?}"
+            );
+            assert!(
+                text.contains("program"),
+                "header should still explain the entry shape: {text:?}"
+            );
         }
         assert!(project_text.contains("git: read"));
         assert!(global_text.contains("curl"));
@@ -822,24 +1015,63 @@ mod tests {
             extended_thinking_budget: None,
         };
         config.set_provider(Scope::Global, provider).unwrap();
-        config.add_mcp_server(Scope::Global, McpServer { name: "fs".into(), transport: McpTransport::Stdio { command: "fs-server".into(), args: vec![] }, env: Default::default() }).unwrap();
-        config.set_tui(TuiConfig { theme: Some("dark".into()), ..TuiConfig::empty() }).unwrap();
+        config
+            .add_mcp_server(
+                Scope::Global,
+                McpServer {
+                    name: "fs".into(),
+                    transport: McpTransport::Stdio {
+                        command: "fs-server".into(),
+                        args: vec![],
+                    },
+                    env: Default::default(),
+                },
+            )
+            .unwrap();
+        config
+            .set_tui(TuiConfig {
+                theme: Some("dark".into()),
+                ..TuiConfig::empty()
+            })
+            .unwrap();
 
-        let provider_text = std::fs::read_to_string(global.path().join(".aldwin").join("provider.yaml")).unwrap();
-        let mcp_text = std::fs::read_to_string(global.path().join(".aldwin").join("mcp.yaml")).unwrap();
-        let tui_text = std::fs::read_to_string(global.path().join(".aldwin").join("tui.yaml")).unwrap();
-        assert!(provider_text.starts_with("# Aldwin provider settings"), "{provider_text:?}");
-        assert!(mcp_text.starts_with("# Aldwin MCP server registry"), "{mcp_text:?}");
-        assert!(tui_text.starts_with("# Aldwin TUI preferences"), "{tui_text:?}");
+        let provider_text =
+            std::fs::read_to_string(global.path().join(".aldwin").join("provider.yaml")).unwrap();
+        let mcp_text =
+            std::fs::read_to_string(global.path().join(".aldwin").join("mcp.yaml")).unwrap();
+        let tui_text =
+            std::fs::read_to_string(global.path().join(".aldwin").join("tui.yaml")).unwrap();
+        assert!(
+            provider_text.starts_with("# Aldwin provider settings"),
+            "{provider_text:?}"
+        );
+        assert!(
+            mcp_text.starts_with("# Aldwin MCP server registry"),
+            "{mcp_text:?}"
+        );
+        assert!(
+            tui_text.starts_with("# Aldwin TUI preferences"),
+            "{tui_text:?}"
+        );
     }
 
     #[test]
     fn remove_grant_only_touches_its_own_list() {
         let (_project, _global, config) = fresh();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rg")).unwrap();
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("rg", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rg"))
+            .unwrap();
 
-        config.remove_grant(Scope::Global, GrantList::Allow, "rg").unwrap();
+        config
+            .remove_grant(Scope::Global, GrantList::Allow, "rg")
+            .unwrap();
 
         let cfg = config.global_permissions();
         assert!(cfg.allow.is_empty());
@@ -855,12 +1087,31 @@ mod tests {
     fn a_written_permissions_file_reads_as_the_model_it_implements() {
         let (_project, global, config) = fresh();
         config.set_default_rung(Scope::Global, Rung::Read).unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("git", Class::Read)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl")).unwrap();
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("git", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("cargo", Class::Write),
+            )
+            .unwrap();
+        config
+            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
+            .unwrap();
 
-        let text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml")).unwrap();
-        let body = text.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n");
+        let text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml"))
+            .unwrap();
+        let body = text
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let expected = [
             "version: 2",
@@ -890,15 +1141,24 @@ mod tests {
     #[test]
     fn roots_are_read_from_a_permissions_file_and_a_misspelling_is_an_error() {
         let parsed: PermissionsConfig =
-            serde_yaml_ng::from_str("version: 2\nroots:\n- ../proton-libs\n- /abs/other\n").unwrap();
-        assert_eq!(parsed.roots, vec![PathBuf::from("../proton-libs"), PathBuf::from("/abs/other")]);
+            serde_yaml_ng::from_str("version: 2\nroots:\n- ../proton-libs\n- /abs/other\n")
+                .unwrap();
+        assert_eq!(
+            parsed.roots,
+            vec![PathBuf::from("../proton-libs"), PathBuf::from("/abs/other")]
+        );
 
         let none: PermissionsConfig = serde_yaml_ng::from_str("version: 2\n").unwrap();
         assert!(none.roots.is_empty());
         let written = serde_yaml_ng::to_string(&none).unwrap();
-        assert!(!written.contains("roots"), "an empty list must not be written: {written}");
+        assert!(
+            !written.contains("roots"),
+            "an empty list must not be written: {written}"
+        );
 
-        assert!(serde_yaml_ng::from_str::<PermissionsConfig>("version: 2\nroot:\n- ../x\n").is_err());
+        assert!(
+            serde_yaml_ng::from_str::<PermissionsConfig>("version: 2\nroot:\n- ../x\n").is_err()
+        );
     }
 
     /// A v1 permissions.yaml described a world ADR 0004 deleted — its entries
@@ -922,11 +1182,20 @@ mod tests {
         let config = Config::open_at(project.path(), global.path().join(".aldwin")).unwrap();
 
         assert_eq!(config.project_permissions(), PermissionsConfig::empty());
-        assert_eq!(config.retired_permissions(), [dir.join("permissions.yaml.v1")]);
+        assert_eq!(
+            config.retired_permissions(),
+            [dir.join("permissions.yaml.v1")]
+        );
 
         let kept = std::fs::read_to_string(dir.join("permissions.yaml.v1")).unwrap();
-        assert!(kept.contains("shell:cargo test*"), "the old file must survive verbatim: {kept:?}");
-        assert!(!dir.join("permissions.yaml").exists(), "the v1 file is moved, not copied");
+        assert!(
+            kept.contains("shell:cargo test*"),
+            "the old file must survive verbatim: {kept:?}"
+        );
+        assert!(
+            !dir.join("permissions.yaml").exists(),
+            "the v1 file is moved, not copied"
+        );
     }
 
     #[test]
@@ -934,10 +1203,21 @@ mod tests {
         let (project, _global, _config) = fresh();
         let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("permissions.yaml"), "version: 99\nallow: []\ndeny: []\n").unwrap();
+        std::fs::write(
+            dir.join("permissions.yaml"),
+            "version: 99\nallow: []\ndeny: []\n",
+        )
+        .unwrap();
 
         let err = Config::open_at(project.path(), _global.path().join(".aldwin")).unwrap_err();
-        assert!(matches!(err, ConfigError::UnknownVersion { found: 99, expected: PERMISSIONS_VERSION, .. }));
+        assert!(matches!(
+            err,
+            ConfigError::UnknownVersion {
+                found: 99,
+                expected: PERMISSIONS_VERSION,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -962,10 +1242,17 @@ mod tests {
         let (_project, global, _config) = fresh();
         let dir = global.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("provider.yaml"), "version: 1\nprovider: anthropic\nmodel: m\napi_key_env: X\n").unwrap();
+        std::fs::write(
+            dir.join("provider.yaml"),
+            "version: 1\nprovider: anthropic\nmodel: m\napi_key_env: X\n",
+        )
+        .unwrap();
 
         let config = Config::open_at(_project.path(), &dir).unwrap();
-        assert_eq!(config.global_provider().unwrap().extended_thinking_budget, None);
+        assert_eq!(
+            config.global_provider().unwrap().extended_thinking_budget,
+            None
+        );
     }
 
     #[test]
@@ -980,7 +1267,10 @@ mod tests {
             extended_thinking_budget: Some(16_000),
         };
         config.set_provider(Scope::Global, provider).unwrap();
-        assert_eq!(config.global_provider().unwrap().extended_thinking_budget, Some(16_000));
+        assert_eq!(
+            config.global_provider().unwrap().extended_thinking_budget,
+            Some(16_000)
+        );
     }
 
     #[test]
@@ -1011,7 +1301,11 @@ mod tests {
         };
         let err = config.set_provider(Scope::Global, bad).unwrap_err();
         assert!(matches!(err, ConfigError::MissingApiKeyEnv { .. }));
-        assert!(!_global.path().join(".aldwin").join("provider.yaml").exists());
+        assert!(!_global
+            .path()
+            .join(".aldwin")
+            .join("provider.yaml")
+            .exists());
         assert!(config.global_provider().is_err());
     }
 
@@ -1022,7 +1316,10 @@ mod tests {
         // still rejects a bogus field rather than silently accepting it.
         let bad = "name: fs\nkind: stdio\ncommand: fs-server\nbogus: 1\n";
         let result: Result<McpServer, _> = serde_yaml_ng::from_str(bad);
-        assert!(result.is_err(), "expected bogus field to be rejected, got {result:?}");
+        assert!(
+            result.is_err(),
+            "expected bogus field to be rejected, got {result:?}"
+        );
     }
 
     #[test]
@@ -1033,7 +1330,10 @@ mod tests {
                 Scope::Global,
                 McpServer {
                     name: "fs".into(),
-                    transport: McpTransport::Stdio { command: "fs-server".into(), args: vec![] },
+                    transport: McpTransport::Stdio {
+                        command: "fs-server".into(),
+                        args: vec![],
+                    },
                     env: Default::default(),
                 },
             )
@@ -1043,7 +1343,9 @@ mod tests {
                 Scope::Global,
                 McpServer {
                     name: "fs".into(),
-                    transport: McpTransport::Http { url: "http://localhost:9/".into() },
+                    transport: McpTransport::Http {
+                        url: "http://localhost:9/".into(),
+                    },
                     env: Default::default(),
                 },
             )
@@ -1057,8 +1359,20 @@ mod tests {
     #[test]
     fn reload_all_retains_previous_snapshot_on_parse_failure_but_names_the_file() {
         let (project, _global, config) = fresh();
-        config.add_grant(Scope::Project, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("cargo", Class::Write)).unwrap();
+        config
+            .add_grant(
+                Scope::Project,
+                GrantList::Allow,
+                GrantEntry::classed("rg", Class::Read),
+            )
+            .unwrap();
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("cargo", Class::Write),
+            )
+            .unwrap();
 
         // Hand-edit project permissions.yaml into garbage, but leave global alone.
         let dir = project.path().join(".aldwin");
@@ -1070,9 +1384,15 @@ mod tests {
         assert_eq!(failures[0].path, dir.join("permissions.yaml"));
 
         // Previous snapshot retained for the broken layer...
-        assert_eq!(config.project_permissions().allow, vec![GrantEntry::classed("rg", Class::Read)]);
+        assert_eq!(
+            config.project_permissions().allow,
+            vec![GrantEntry::classed("rg", Class::Read)]
+        );
         // ...while an unrelated, still-valid layer still reloads fine.
-        assert_eq!(config.global_permissions().allow, vec![GrantEntry::classed("cargo", Class::Write)]);
+        assert_eq!(
+            config.global_permissions().allow,
+            vec![GrantEntry::classed("cargo", Class::Write)]
+        );
     }
 
     #[test]
@@ -1080,20 +1400,38 @@ mod tests {
         let (project, _global, config) = fresh();
         let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("permissions.yaml"), "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\ndeny: []\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("permissions.yaml"),
+            "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\ndeny: []\n",
+        )
+        .unwrap();
 
         config.reload_all().unwrap();
         let cfg = config.project_permissions();
         assert_eq!(cfg.default, Some(Rung::Read));
-        assert_eq!(cfg.allow, vec![GrantEntry::classed("git", Class::Read), GrantEntry::program("curl")]);
+        assert_eq!(
+            cfg.allow,
+            vec![
+                GrantEntry::classed("git", Class::Read),
+                GrantEntry::program("curl")
+            ]
+        );
     }
 
     #[test]
     fn clones_share_the_same_in_memory_state() {
         let (_project, _global, config) = fresh();
         let other = config.clone();
-        config.add_grant(Scope::Global, GrantList::Allow, GrantEntry::classed("rg", Class::Read)).unwrap();
-        assert_eq!(other.global_permissions().allow, vec![GrantEntry::classed("rg", Class::Read)]);
+        config
+            .add_grant(
+                Scope::Global,
+                GrantList::Allow,
+                GrantEntry::classed("rg", Class::Read),
+            )
+            .unwrap();
+        assert_eq!(
+            other.global_permissions().allow,
+            vec![GrantEntry::classed("rg", Class::Read)]
+        );
     }
 }

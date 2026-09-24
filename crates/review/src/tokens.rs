@@ -32,10 +32,19 @@ use std::path::Path;
 
 /// Roles the terminal does not draw, with the reason.
 const UNCARRIED: [(&str, &str); 10] = [
-    ("chrome", "the mock's macOS title bar; a terminal's title bar is the terminal's"),
+    (
+        "chrome",
+        "the mock's macOS title bar; a terminal's title bar is the terminal's",
+    ),
     ("dot", "the title bar's traffic lights; same"),
-    ("syn", "reserved by colors.css: \"not applied in current frames\""),
-    ("call", "reserved by colors.css: \"not applied in current frames\""),
+    (
+        "syn",
+        "reserved by colors.css: \"not applied in current frames\"",
+    ),
+    (
+        "call",
+        "reserved by colors.css: \"not applied in current frames\"",
+    ),
     ("canvas", "the documentation page around the frames"),
     ("canvas-ink", "same"),
     ("canvas-body", "same"),
@@ -84,8 +93,12 @@ type Roles = BTreeMap<String, Rgb>;
 
 /// Emit the file. Returns its full text.
 pub fn generate(design_dir: &Path) -> Result<String> {
-    let colors = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/colors.css"))?);
-    let layout = strip_comments(&std::fs::read_to_string(design_dir.join("tokens/layout.css"))?);
+    let colors = strip_comments(&std::fs::read_to_string(
+        design_dir.join("tokens/colors.css"),
+    )?);
+    let layout = strip_comments(&std::fs::read_to_string(
+        design_dir.join("tokens/layout.css"),
+    )?);
     let glyph_card = std::fs::read_to_string(design_dir.join("guidelines/glyphs.html"))?;
     let frame = std::fs::read_to_string(design_dir.join(FRAME))?;
 
@@ -98,20 +111,25 @@ pub fn generate(design_dir: &Path) -> Result<String> {
     // Every carried role must parse to a colour in the dark scope; the light
     // scope overrides most and inherits the rest, which is the design's own
     // arrangement rather than a fallback.
-    let resolve_scope = |raw: &BTreeMap<String, String>, fallback: Option<&Roles>| -> Result<Roles> {
+    let resolve_scope = |raw: &BTreeMap<String, String>,
+                         fallback: Option<&Roles>|
+     -> Result<Roles> {
         let mut out = Roles::new();
         for role in &carried {
-            let value = raw.get(*role).and_then(|v| parse_color(v)).or_else(|| fallback?.get(*role).copied());
+            let value = raw
+                .get(*role)
+                .and_then(|v| parse_color(v))
+                .or_else(|| fallback?.get(*role).copied());
             match value {
                 Some(rgb) => {
                     out.insert((*role).clone(), rgb);
                 }
-                None => {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        format!("--{role} resolves to no colour this generator can read (oklch() or #hex)"),
-                    ))
-                }
+                None => return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "--{role} resolves to no colour this generator can read (oklch() or #hex)"
+                    ),
+                )),
             }
         }
         Ok(out)
@@ -121,11 +139,19 @@ pub fn generate(design_dir: &Path) -> Result<String> {
 
     // The mark and the gauge mix two roles in OKLCH; the mix has to happen on
     // the unrounded values, so the source roles are re-read as OKLCH here.
-    let oklch_of = |raw: &BTreeMap<String, String>, fallback: &BTreeMap<String, String>, role: &str| -> Result<Oklch> {
+    let oklch_of = |raw: &BTreeMap<String, String>,
+                    fallback: &BTreeMap<String, String>,
+                    role: &str|
+     -> Result<Oklch> {
         raw.get(role)
             .or_else(|| fallback.get(role))
             .and_then(|v| parse_oklch_or_hex(v))
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("--{role} is needed for a color-mix and does not parse")))
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("--{role} is needed for a color-mix and does not parse"),
+                )
+            })
     };
 
     let mark = mark_cells(&frame)?;
@@ -133,12 +159,17 @@ pub fn generate(design_dir: &Path) -> Result<String> {
 
     let mut out = header();
 
-    for (name, theme, roles, raw) in [("DARK", "Dark", &dark, &dark_raw), ("LIGHT", "Light", &light, &light_raw)] {
+    for (name, theme, roles, raw) in [
+        ("DARK", "Dark", &dark, &dark_raw),
+        ("LIGHT", "Light", &light, &light_raw),
+    ] {
         let fill = oklch_of(raw, &dark_raw, "fill")?;
         let win = oklch_of(raw, &dark_raw, "win")?;
         let track = oklch_of(raw, &dark_raw, "track")?;
 
-        out.push_str(&format!("pub(crate) const {name}: Palette = Palette {{\n    theme: Theme::{theme},\n"));
+        out.push_str(&format!(
+            "pub(crate) const {name}: Palette = Palette {{\n    theme: Theme::{theme},\n"
+        ));
         for (role, rgb) in roles {
             out.push_str(&format!("    {}: {},\n", field(role), rgb.literal()));
         }
@@ -193,8 +224,12 @@ pub fn generate(design_dir: &Path) -> Result<String> {
         // Every colour of that theme as a flat list, so a conformance test
         // can ask "is this colour in the design system?" without naming the
         // fields — and without going stale when the design gains one.
-        let mut values: Vec<(String, Rgb)> = roles.iter().map(|(role, rgb)| (format!("--{role}"), *rgb)).collect();
-        let mut seen: BTreeSet<(u8, u8, u8)> = values.iter().map(|(_, c)| (c.0, c.1, c.2)).collect();
+        let mut values: Vec<(String, Rgb)> = roles
+            .iter()
+            .map(|(role, rgb)| (format!("--{role}"), *rgb))
+            .collect();
+        let mut seen: BTreeSet<(u8, u8, u8)> =
+            values.iter().map(|(_, c)| (c.0, c.1, c.2)).collect();
         for rgb in &ramp_colors {
             if seen.insert((rgb.0, rgb.1, rgb.2)) {
                 values.push(("the context bar, --fill mixed over --track".into(), *rgb));
@@ -205,7 +240,10 @@ pub fn generate(design_dir: &Path) -> Result<String> {
                 values.push(("the mark, --fill mixed over --win".into(), *rgb));
             }
         }
-        out.push_str(&format!("pub(crate) const {name}_VALUES: [Color; {}] = [\n", values.len()));
+        out.push_str(&format!(
+            "pub(crate) const {name}_VALUES: [Color; {}] = [\n",
+            values.len()
+        ));
         for (what, rgb) in &values {
             out.push_str(&format!("    {}, // {what}\n", rgb.literal()));
         }
@@ -262,9 +300,12 @@ fn grid(layout: &str) -> Result<String> {
          // the two would surface as a stage-3 diff rather than hide in a sum.\n\n",
     );
     for (token, name) in GRID {
-        let value = resolved
-            .get(token)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("layout.css declares no --{token} in ch")))?;
+        let value = resolved.get(token).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("layout.css declares no --{token} in ch"),
+            )
+        })?;
         out.push_str(&format!("pub(crate) const {name}: usize = {value};\n"));
     }
     out.push_str(&format!(
@@ -309,11 +350,16 @@ fn glyphs(card: &str, frame: &str) -> Result<String> {
     // Each entry of the card is `…width:3ch">X</span>`; the glyph is what
     // sits between the closing bracket and the closing tag.
     for chunk in card.split("width:3ch\">").skip(1) {
-        let Some(end) = chunk.find("</span>") else { continue };
+        let Some(end) = chunk.find("</span>") else {
+            continue;
+        };
         marks.extend(chunk[..end].chars().filter(|c| !c.is_whitespace()));
     }
     if marks.is_empty() {
-        return Err(Error::new(ErrorKind::InvalidData, "guidelines/glyphs.html lists no glyphs"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "guidelines/glyphs.html lists no glyphs",
+        ));
     }
     for window in frame_windows(frame) {
         marks.extend(text_of(&window).chars().filter(|c| !c.is_ascii()));
@@ -325,9 +371,19 @@ fn glyphs(card: &str, frame: &str) -> Result<String> {
     for c in &baseline.contradictions {
         excepted.extend(c.glyphs.chars());
     }
-    let cite: Vec<&str> = baseline.contradictions.iter().filter(|c| !c.glyphs.is_empty()).map(|c| c.id.as_str()).collect();
+    let cite: Vec<&str> = baseline
+        .contradictions
+        .iter()
+        .filter(|c| !c.glyphs.is_empty())
+        .map(|c| c.id.as_str())
+        .collect();
 
-    let list = |set: &BTreeSet<char>| set.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>().join(", ");
+    let list = |set: &BTreeSet<char>| {
+        set.iter()
+            .map(|c| format!("{c:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     Ok(format!(
         "\n// ---- Glyphs ---------------------------------------------------------\n\
          //\n\
@@ -353,7 +409,7 @@ fn glyphs(card: &str, frame: &str) -> Result<String> {
 /// each half, or `None` for the ground.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MarkCell {
-    top:    Option<u8>,
+    top: Option<u8>,
     bottom: Option<u8>,
 }
 
@@ -369,18 +425,34 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "the frame has no `A launch` window"))?;
 
     let mut rows: Vec<Vec<MarkCell>> = Vec::new();
-    for row_html in launch.split("<div style=\"display:flex;height:24px\">").skip(1) {
+    for row_html in launch
+        .split("<div style=\"display:flex;height:24px\">")
+        .skip(1)
+    {
         let row_html = row_html.split("</div>").next().unwrap_or("");
         let mut row = Vec::new();
-        for span in row_html.split("<span style=\"width:1ch;height:24px").skip(1) {
+        for span in row_html
+            .split("<span style=\"width:1ch;height:24px")
+            .skip(1)
+        {
             let style = span.split('"').next().unwrap_or("");
             let cell = match style.find("linear-gradient(") {
-                None => MarkCell { top: None, bottom: None },
+                None => MarkCell {
+                    top: None,
+                    bottom: None,
+                },
                 Some(at) => {
                     let inner = &style[at + "linear-gradient(".len()..];
-                    let (top, bottom) = split_gradient(inner)
-                        .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("unreadable mark cell: {style}")))?;
-                    MarkCell { top: mix_percent(top), bottom: mix_percent(bottom) }
+                    let (top, bottom) = split_gradient(inner).ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::InvalidData,
+                            format!("unreadable mark cell: {style}"),
+                        )
+                    })?;
+                    MarkCell {
+                        top: mix_percent(top),
+                        bottom: mix_percent(bottom),
+                    }
                 }
             };
             row.push(cell);
@@ -390,11 +462,17 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
         }
     }
     if rows.is_empty() {
-        return Err(Error::new(ErrorKind::InvalidData, "the launch frame has no mark rows"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "the launch frame has no mark rows",
+        ));
     }
     let width = rows[0].len();
     if rows.iter().any(|r| r.len() != width) {
-        return Err(Error::new(ErrorKind::InvalidData, "the mark's rows are not all the same width"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "the mark's rows are not all the same width",
+        ));
     }
     Ok(rows)
 }
@@ -420,14 +498,18 @@ fn mix_percent(half: &str) -> Option<u8> {
 fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
     let mut out = Vec::new();
     for window in frame_windows(frame) {
-        let Some(at) = window.find("Context ") else { continue };
+        let Some(at) = window.find("Context ") else {
+            continue;
+        };
         let bar = &window[at..];
         let filled: Vec<f64> = bar
             .split("color-mix(in oklch, var(--fill) ")
             .skip(1)
             .filter_map(|chunk| {
                 let (pct, rest) = chunk.split_once('%')?;
-                rest.trim_start().starts_with(", var(--track)").then(|| pct.trim().parse().ok())?
+                rest.trim_start()
+                    .starts_with(", var(--track)")
+                    .then(|| pct.trim().parse().ok())?
             })
             .collect();
         let empty = bar
@@ -435,7 +517,10 @@ fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
             .nth(1)
             .and_then(|rest| rest.split('<').next())
             .map_or(0, |run| run.chars().filter(|&c| c == '━').count());
-        let shown = bar.split("</span> ").find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok()).unwrap_or(0);
+        let shown = bar
+            .split("</span> ")
+            .find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok())
+            .unwrap_or(0);
         out.push((filled, empty, shown));
     }
     out
@@ -448,12 +533,19 @@ fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
 fn check_gauge_against_frame(frame: &str) -> Result<()> {
     let gauges = frame_gauges(frame);
     if gauges.is_empty() {
-        return Err(Error::new(ErrorKind::InvalidData, "the frame draws no context bar"));
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "the frame draws no context bar",
+        ));
     }
     for (filled, empty, shown) in gauges {
         let n = ((f64::from(shown) / 10.0).round() as usize).min(GAUGE_SEGMENTS);
         let wanted: Vec<f64> = (0..n).filter_map(|i| gauge_mix(n, i)).collect();
-        let close = filled.len() == wanted.len() && filled.iter().zip(&wanted).all(|(a, b)| (a - b).abs() < 0.01);
+        let close = filled.len() == wanted.len()
+            && filled
+                .iter()
+                .zip(&wanted)
+                .all(|(a, b)| (a - b).abs() < 0.01);
         if !close || empty != GAUGE_SEGMENTS - n {
             return Err(Error::new(
                 ErrorKind::InvalidData,
@@ -472,7 +564,9 @@ fn frame_windows(frame: &str) -> Vec<String> {
     while let Some(rel) = frame[from..].find("data-screen-label=\"") {
         let attr_at = from + rel;
         // Back up to the `<div` that carries the attribute.
-        let Some(open) = frame[..attr_at].rfind("<div") else { break };
+        let Some(open) = frame[..attr_at].rfind("<div") else {
+            break;
+        };
         let end = balanced_div_end(frame, open).unwrap_or(frame.len());
         out.push(frame[open..end].to_string());
         from = end.max(attr_at + 1);
@@ -520,7 +614,10 @@ fn text_of(html: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    out.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 // ---- CSS ------------------------------------------------------------------
@@ -529,15 +626,27 @@ fn text_of(html: &str) -> String {
 fn declarations(css: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for line in css.lines() {
-        let Some(rest) = line.trim().strip_prefix("--") else { continue };
-        let Some((name, value)) = rest.split_once(':') else { continue };
-        map.insert(name.trim().to_string(), value.trim().trim_end_matches(';').trim().to_string());
+        let Some(rest) = line.trim().strip_prefix("--") else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once(':') else {
+            continue;
+        };
+        map.insert(
+            name.trim().to_string(),
+            value.trim().trim_end_matches(';').trim().to_string(),
+        );
     }
     map
 }
 
 fn scope<'a>(css: &'a str, selector: &str) -> &'a str {
-    let Some(start) = css.find(&format!("{selector} {{")).or_else(|| css.find(&format!("{selector}{{"))) else { return "" };
+    let Some(start) = css
+        .find(&format!("{selector} {{"))
+        .or_else(|| css.find(&format!("{selector}{{")))
+    else {
+        return "";
+    };
     let body = &css[start..];
     match body.find('}') {
         Some(end) => &body[..end],
@@ -571,7 +680,10 @@ fn field(role: &str) -> String {
 fn layout_tokens(css: &str) -> BTreeMap<String, u16> {
     let mut out = BTreeMap::new();
     for (name, value) in declarations(css) {
-        if let Some(n) = value.strip_suffix("ch").and_then(|v| v.trim().parse::<u16>().ok()) {
+        if let Some(n) = value
+            .strip_suffix("ch")
+            .and_then(|v| v.trim().parse::<u16>().ok())
+        {
             out.insert(name, n);
         }
     }
@@ -586,7 +698,10 @@ struct Rgb(u8, u8, u8);
 
 impl Rgb {
     fn literal(self) -> String {
-        format!("Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x})", self.0, self.1, self.2)
+        format!(
+            "Color::Rgb(0x{:02x}, 0x{:02x}, 0x{:02x})",
+            self.0, self.1, self.2
+        )
     }
 }
 
@@ -600,7 +715,10 @@ struct Oklch {
 
 impl Oklch {
     fn to_rgb(self) -> Rgb {
-        let (a, b) = (self.c * self.h.to_radians().cos(), self.c * self.h.to_radians().sin());
+        let (a, b) = (
+            self.c * self.h.to_radians().cos(),
+            self.c * self.h.to_radians().sin(),
+        );
         oklab_to_rgb(self.l, a, b)
     }
 }
@@ -632,7 +750,11 @@ fn parse_hex(value: &str) -> Option<Rgb> {
     if v.len() != 6 {
         return None;
     }
-    Some(Rgb(u8::from_str_radix(&v[0..2], 16).ok()?, u8::from_str_radix(&v[2..4], 16).ok()?, u8::from_str_radix(&v[4..6], 16).ok()?))
+    Some(Rgb(
+        u8::from_str_radix(&v[0..2], 16).ok()?,
+        u8::from_str_radix(&v[2..4], 16).ok()?,
+        u8::from_str_radix(&v[4..6], 16).ok()?,
+    ))
 }
 
 /// Björn Ottosson's OKLab → linear sRGB, then the sRGB transfer curve.
@@ -649,13 +771,21 @@ fn oklab_to_rgb(l: f64, a: f64, b: f64) -> Rgb {
 
 fn encode(linear: f64) -> u8 {
     let c = linear.clamp(0.0, 1.0);
-    let v = if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    let v = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
     (v * 255.0).round() as u8
 }
 
 fn decode(channel: u8) -> f64 {
     let c = f64::from(channel) / 255.0;
-    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn rgb_to_oklch(rgb: Rgb) -> Oklch {
@@ -686,7 +816,11 @@ fn mix_oklch_f(a: Oklch, b: Oklch, percent: f64) -> Oklch {
     } else if dh < -180.0 {
         dh += 360.0;
     }
-    Oklch { l: a.l * p + b.l * (1.0 - p), c: a.c * p + b.c * (1.0 - p), h: (a.h + dh * (1.0 - p)).rem_euclid(360.0) }
+    Oklch {
+        l: a.l * p + b.l * (1.0 - p),
+        c: a.c * p + b.c * (1.0 - p),
+        h: (a.h + dh * (1.0 - p)).rem_euclid(360.0),
+    }
 }
 
 // ---- The stage --------------------------------------------------------------
@@ -697,7 +831,10 @@ pub fn check(root: &Path, design_dir: &Path) -> Result<std::result::Result<usize
     let path = output_path(root);
     let found = std::fs::read_to_string(&path).unwrap_or_default();
     if wanted == found {
-        return Ok(Ok(wanted.lines().filter(|l| l.contains("Color::Rgb") || l.starts_with("pub(crate) const")).count()));
+        return Ok(Ok(wanted
+            .lines()
+            .filter(|l| l.contains("Color::Rgb") || l.starts_with("pub(crate) const"))
+            .count()));
     }
     let at = wanted.lines().zip(found.lines()).position(|(a, b)| a != b);
     Ok(Err(match at {
@@ -708,7 +845,11 @@ pub fn check(root: &Path, design_dir: &Path) -> Result<std::result::Result<usize
             wanted.lines().nth(n).unwrap_or("").trim(),
             found.lines().nth(n).unwrap_or("(end of file)").trim()
         ),
-        None => format!("{OUTPUT} is stale: {} lines expected, {} found", wanted.lines().count(), found.lines().count()),
+        None => format!(
+            "{OUTPUT} is stale: {} lines expected, {} found",
+            wanted.lines().count(),
+            found.lines().count()
+        ),
     }))
 }
 
@@ -719,11 +860,16 @@ mod tests {
     #[test]
     fn every_role_the_design_declares_is_carried_or_explained() {
         let text = generate(&design_dir()).expect("tokens generate");
-        let colors = strip_comments(&std::fs::read_to_string(design_dir().join("tokens/colors.css")).unwrap());
+        let colors = strip_comments(
+            &std::fs::read_to_string(design_dir().join("tokens/colors.css")).unwrap(),
+        );
         for role in declarations(scope(&colors, ":root")).keys() {
             let carried = text.contains(&format!("    {}: Color::Rgb", field(role)));
             let excused = UNCARRIED.iter().any(|(name, _)| name == role);
-            assert!(carried || excused, "--{role} is neither generated nor on the uncarried list");
+            assert!(
+                carried || excused,
+                "--{role} is neither generated nor on the uncarried list"
+            );
         }
     }
 
@@ -732,8 +878,14 @@ mod tests {
     #[test]
     fn the_light_theme_inherits_what_it_does_not_redeclare() {
         let text = generate(&design_dir()).expect("tokens generate");
-        let light = text.split("pub(crate) const LIGHT: Palette").nth(1).expect("a LIGHT palette");
-        assert!(light.contains("    onfill: Color::Rgb"), "--onfill must reach the light palette by inheritance");
+        let light = text
+            .split("pub(crate) const LIGHT: Palette")
+            .nth(1)
+            .expect("a LIGHT palette");
+        assert!(
+            light.contains("    onfill: Color::Rgb"),
+            "--onfill must reach the light palette by inheritance"
+        );
     }
 
     /// A white and a black, and the round trip through OKLCH.
@@ -746,7 +898,10 @@ mod tests {
             let rgb = parse_hex(hex).unwrap();
             let back = rgb_to_oklch(rgb).to_rgb();
             let close = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= 1;
-            assert!(close(rgb.0, back.0) && close(rgb.1, back.1) && close(rgb.2, back.2), "{hex} → {back:?}");
+            assert!(
+                close(rgb.0, back.0) && close(rgb.1, back.1) && close(rgb.2, back.2),
+                "{hex} → {back:?}"
+            );
         }
     }
 
@@ -755,7 +910,10 @@ mod tests {
     #[test]
     fn the_accent_is_a_blue() {
         let Rgb(r, g, b) = parse_color("oklch(0.64 0.2 255)").unwrap();
-        assert!(b > 200 && r < 80 && g > 100 && g < 160, "expected a blue, got ({r}, {g}, {b})");
+        assert!(
+            b > 200 && r < 80 && g > 100 && g < 160,
+            "expected a blue, got ({r}, {g}, {b})"
+        );
     }
 
     /// `color-mix` at 100% is the first colour and at 0% the second.
@@ -766,7 +924,10 @@ mod tests {
         assert_eq!(mix_oklch(fill, win, 100).to_rgb(), fill.to_rgb());
         assert_eq!(mix_oklch(fill, win, 0).to_rgb(), win.to_rgb());
         let mid = mix_oklch(fill, win, 50);
-        assert!((mid.l - 0.36).abs() < 0.001, "lightness interpolates linearly: {mid:?}");
+        assert!(
+            (mid.l - 0.36).abs() < 0.001,
+            "lightness interpolates linearly: {mid:?}"
+        );
     }
 
     /// The mark as the frame draws it: six rows of eighteen, an open A whose
@@ -777,11 +938,37 @@ mod tests {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
         let mark = mark_cells(&frame).unwrap();
         assert_eq!((mark.len(), mark[0].len()), (6, 18));
-        let filled = |row: &Vec<MarkCell>| row.iter().filter(|c| c.top.is_some() || c.bottom.is_some()).count();
-        assert_eq!(mark.iter().map(filled).collect::<Vec<_>>(), vec![6, 8, 6, 6, 8, 8]);
-        assert_eq!(mark[0][6], MarkCell { top: None, bottom: Some(45) }, "the apex starts as a lower half");
-        assert_eq!(mark[5][0], MarkCell { top: None, bottom: Some(100) }, "the foot ends at full fill");
-        assert!(mark[2][7..11].iter().all(|c| c.top.is_none() && c.bottom.is_none()), "the A is open between its legs");
+        let filled = |row: &Vec<MarkCell>| {
+            row.iter()
+                .filter(|c| c.top.is_some() || c.bottom.is_some())
+                .count()
+        };
+        assert_eq!(
+            mark.iter().map(filled).collect::<Vec<_>>(),
+            vec![6, 8, 6, 6, 8, 8]
+        );
+        assert_eq!(
+            mark[0][6],
+            MarkCell {
+                top: None,
+                bottom: Some(45)
+            },
+            "the apex starts as a lower half"
+        );
+        assert_eq!(
+            mark[5][0],
+            MarkCell {
+                top: None,
+                bottom: Some(100)
+            },
+            "the foot ends at full fill"
+        );
+        assert!(
+            mark[2][7..11]
+                .iter()
+                .all(|c| c.top.is_none() && c.bottom.is_none()),
+            "the A is open between its legs"
+        );
     }
 
     /// The two bars the frame draws — four segments at 38–44 % and five at
@@ -791,9 +978,24 @@ mod tests {
     fn the_gauge_rule_reproduces_every_bar_in_the_frame() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
         let gauges = frame_gauges(&frame);
-        assert!(gauges.iter().any(|(f, e, s)| f == &[55.0, 70.0, 85.0, 100.0] && *e == 6 && *s == 41), "{gauges:?}");
-        assert!(gauges.iter().any(|(f, e, s)| f == &[52.0, 64.0, 76.0, 88.0, 100.0] && *e == 5 && *s == 46), "{gauges:?}");
-        assert!(gauges.iter().any(|(f, e, s)| f.is_empty() && *e == 10 && *s == 0), "{gauges:?}");
+        assert!(
+            gauges
+                .iter()
+                .any(|(f, e, s)| f == &[55.0, 70.0, 85.0, 100.0] && *e == 6 && *s == 41),
+            "{gauges:?}"
+        );
+        assert!(
+            gauges
+                .iter()
+                .any(|(f, e, s)| f == &[52.0, 64.0, 76.0, 88.0, 100.0] && *e == 5 && *s == 46),
+            "{gauges:?}"
+        );
+        assert!(
+            gauges
+                .iter()
+                .any(|(f, e, s)| f.is_empty() && *e == 10 && *s == 0),
+            "{gauges:?}"
+        );
         check_gauge_against_frame(&frame).expect("the rule matches the frame");
         assert_eq!(gauge_mix(4, 0), Some(55.0));
         assert_eq!(gauge_mix(1, 0), Some(100.0));
@@ -803,8 +1005,17 @@ mod tests {
     #[test]
     fn the_grid_is_read_in_cells() {
         let text = generate(&design_dir()).expect("tokens generate");
-        for (name, value) in [("MARGIN_X", 3), ("BODY_X", 5), ("MARK_COL", 2), ("TREE_W", 28), ("GUTTER_LN", 5)] {
-            assert!(text.contains(&format!("pub(crate) const {name}: usize = {value};")), "{name} should be {value}");
+        for (name, value) in [
+            ("MARGIN_X", 3),
+            ("BODY_X", 5),
+            ("MARK_COL", 2),
+            ("TREE_W", 28),
+            ("GUTTER_LN", 5),
+        ] {
+            assert!(
+                text.contains(&format!("pub(crate) const {name}: usize = {value};")),
+                "{name} should be {value}"
+            );
         }
     }
 
@@ -813,9 +1024,21 @@ mod tests {
     #[test]
     fn the_glyph_table_is_the_card_plus_the_frame() {
         let text = generate(&design_dir()).expect("tokens generate");
-        let marks = text.split("pub(crate) const MARKS: [char; ").nth(1).unwrap().split("];").next().unwrap();
-        for glyph in ['›', '✓', '●', '○', '▎', '◆', '⋯', '━', '↩', '⌃', '⎋', '↺', '/', '?', '↑', '↓', '⌄', '−', '▀'] {
-            assert!(marks.contains(&format!("{glyph:?}")), "{glyph} missing from MARKS");
+        let marks = text
+            .split("pub(crate) const MARKS: [char; ")
+            .nth(1)
+            .unwrap()
+            .split("];")
+            .next()
+            .unwrap();
+        for glyph in [
+            '›', '✓', '●', '○', '▎', '◆', '⋯', '━', '↩', '⌃', '⎋', '↺', '/', '?', '↑', '↓', '⌄',
+            '−', '▀',
+        ] {
+            assert!(
+                marks.contains(&format!("{glyph:?}")),
+                "{glyph} missing from MARKS"
+            );
         }
     }
 }

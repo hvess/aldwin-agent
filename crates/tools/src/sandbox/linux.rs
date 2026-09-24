@@ -43,21 +43,26 @@ const READ_RIGHTS: u64 = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR;
 
 #[repr(C)]
 struct RulesetAttr {
-    handled_access_fs:  u64,
+    handled_access_fs: u64,
     handled_access_net: u64,
 }
 
 #[repr(C, packed)]
 struct PathBeneathAttr {
     allowed_access: u64,
-    parent_fd:      RawFd,
+    parent_fd: RawFd,
 }
 
 fn abi_version() -> io::Result<i32> {
     // SAFETY: the version probe is defined as a null attr, zero size, and the
     // VERSION flag; it reads nothing and returns the ABI number.
     let v = unsafe {
-        libc::syscall(SYS_CREATE_RULESET, std::ptr::null::<RulesetAttr>(), 0usize, CREATE_RULESET_VERSION)
+        libc::syscall(
+            SYS_CREATE_RULESET,
+            std::ptr::null::<RulesetAttr>(),
+            0usize,
+            CREATE_RULESET_VERSION,
+        )
     };
     if v < 0 {
         return Err(io::Error::last_os_error());
@@ -67,11 +72,16 @@ fn abi_version() -> io::Result<i32> {
 
 pub fn availability() -> Availability {
     match abi_version() {
-        Ok(abi) if abi >= 1 => Availability::Enforcing { abi, network: abi >= 4 },
-        Ok(_) => Availability::Unavailable { reason: "this kernel reports no usable Landlock ABI" },
-        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => {
-            Availability::Unavailable { reason: "this kernel has no Landlock support" }
-        }
+        Ok(abi) if abi >= 1 => Availability::Enforcing {
+            abi,
+            network: abi >= 4,
+        },
+        Ok(_) => Availability::Unavailable {
+            reason: "this kernel reports no usable Landlock ABI",
+        },
+        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => Availability::Unavailable {
+            reason: "this kernel has no Landlock support",
+        },
         Err(_) => Availability::Unavailable {
             reason: "Landlock is present but disabled — add it to the kernel's lsm= list",
         },
@@ -100,7 +110,7 @@ fn handled_fs(abi: i32) -> u64 {
 /// paths, and — from ABI 4 — reach no TCP address.
 pub struct ReadOnly {
     ruleset: OwnedFd,
-    abi:     i32,
+    abi: i32,
 }
 
 impl ReadOnly {
@@ -109,17 +119,33 @@ impl ReadOnly {
     /// `target/` is exempt on the same terms as the first's.
     pub fn build(roots: &[std::path::PathBuf]) -> io::Result<Self> {
         let abi = abi_version()?;
-        let handled_net = if abi >= 4 { NET_BIND_TCP | NET_CONNECT_TCP } else { 0 };
+        let handled_net = if abi >= 4 {
+            NET_BIND_TCP | NET_CONNECT_TCP
+        } else {
+            0
+        };
 
-        let attr =
-            RulesetAttr { handled_access_fs: handled_fs(abi), handled_access_net: handled_net };
+        let attr = RulesetAttr {
+            handled_access_fs: handled_fs(abi),
+            handled_access_net: handled_net,
+        };
         // ABI 1-3 kernels know an 8-byte attr; handing them 16 is E2BIG.
-        let attr_size = if abi >= 4 { std::mem::size_of::<RulesetAttr>() } else { 8 };
+        let attr_size = if abi >= 4 {
+            std::mem::size_of::<RulesetAttr>()
+        } else {
+            8
+        };
 
         // SAFETY: `attr` outlives the call and `attr_size` matches what this
         // ABI defines the struct to be.
-        let fd =
-            unsafe { libc::syscall(SYS_CREATE_RULESET, &attr as *const RulesetAttr, attr_size, 0) };
+        let fd = unsafe {
+            libc::syscall(
+                SYS_CREATE_RULESET,
+                &attr as *const RulesetAttr,
+                attr_size,
+                0,
+            )
+        };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -215,7 +241,10 @@ fn add_path_rule(ruleset: &OwnedFd, path: &Path, rights: u64) -> io::Result<()> 
     // SAFETY: `open` returned a fresh owned descriptor.
     let parent = unsafe { OwnedFd::from_raw_fd(parent) };
 
-    let attr = PathBeneathAttr { allowed_access: rights, parent_fd: parent.as_raw_fd() };
+    let attr = PathBeneathAttr {
+        allowed_access: rights,
+        parent_fd: parent.as_raw_fd(),
+    };
     // SAFETY: `attr` outlives the call; its layout is the packed struct the
     // kernel documents for LANDLOCK_RULE_PATH_BENEATH.
     let rc = unsafe {
@@ -263,9 +292,12 @@ mod tests {
     }
 
     fn sandboxed<S: AsRef<std::ffi::OsStr>>(root: &Path, argv: &[S]) -> std::process::Output {
-        let plan = ReadOnly::build(std::slice::from_ref(&root.to_path_buf())).expect("ruleset builds");
+        let plan =
+            ReadOnly::build(std::slice::from_ref(&root.to_path_buf())).expect("ruleset builds");
         let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..]).current_dir(root).stdin(std::process::Stdio::null());
+        cmd.args(&argv[1..])
+            .current_dir(root)
+            .stdin(std::process::Stdio::null());
         // SAFETY: two syscalls, no allocation — see `engage`.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(&mut cmd, move || plan.engage());
@@ -302,8 +334,15 @@ mod tests {
         std::fs::write(&victim, "original\n").unwrap();
 
         let out = sandboxed(dir.path(), &["/usr/bin/tee", "untouched.txt"]);
-        assert!(!out.status.success(), "writing must fail, not succeed quietly: {out:?}");
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n", "nothing may land");
+        assert!(
+            !out.status.success(),
+            "writing must fail, not succeed quietly: {out:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "original\n",
+            "nothing may land"
+        );
     }
 
     #[test]
@@ -332,7 +371,10 @@ mod tests {
 
         let out = sandboxed(dir.path(), &["/usr/bin/tee", "brand-new.txt"]);
         assert!(!out.status.success());
-        assert!(!dir.path().join("brand-new.txt").exists(), "a refused write creates nothing");
+        assert!(
+            !dir.path().join("brand-new.txt").exists(),
+            "a refused write creates nothing"
+        );
     }
 
     #[test]
@@ -342,7 +384,10 @@ mod tests {
         }
         let dir = project();
         let out = sandboxed(dir.path(), &["/usr/bin/tee", "/dev/null"]);
-        assert!(out.status.success(), "/dev/null must stay writable: {out:?}");
+        assert!(
+            out.status.success(),
+            "/dev/null must stay writable: {out:?}"
+        );
     }
 
     /// The other half of a read declaration: it cannot reach the network
@@ -360,9 +405,18 @@ mod tests {
         let dir = project();
         let out = sandboxed(
             dir.path(),
-            &["/usr/bin/curl", "--max-time", "5", "-s", &format!("http://127.0.0.1:{port}/")],
+            &[
+                "/usr/bin/curl",
+                "--max-time",
+                "5",
+                "-s",
+                &format!("http://127.0.0.1:{port}/"),
+            ],
         );
-        assert!(!out.status.success(), "a read must not reach the network: {out:?}");
+        assert!(
+            !out.status.success(),
+            "a read must not reach the network: {out:?}"
+        );
     }
 
     /// `.git/` is deliberately absent from the incidental list, so that a
@@ -377,7 +431,10 @@ mod tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
 
         let out = sandboxed(dir.path(), &["/usr/bin/tee", ".git/smuggled"]);
-        assert!(!out.status.success(), "a read must not write into .git: {out:?}");
+        assert!(
+            !out.status.success(),
+            "a read must not write into .git: {out:?}"
+        );
         assert!(!dir.path().join(".git/smuggled").exists());
     }
 }

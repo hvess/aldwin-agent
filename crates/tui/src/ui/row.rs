@@ -27,13 +27,13 @@ use super::wrap::wrap_line;
 pub(super) struct Row {
     /// Cells held off each edge of the column, painted in `surround` —
     /// how far a box sits in from the surface it is quoted inside.
-    margin:   usize,
+    margin: usize,
     surround: Color,
     /// Cells of `bg` between the edge and the content — the reference's
     /// `padding: 0 27px` on every card row.
-    pad:      usize,
+    pad: usize,
     /// The surface this row fills, edge to edge.
-    bg:       Color,
+    bg: Color,
 }
 
 impl Row {
@@ -41,7 +41,12 @@ impl Row {
     /// `margin: 0 3ch` — with `surround` painted in the margins and no
     /// padding of its own, so content starts at the band's edge.
     pub fn band(bg: Color, surround: Color) -> Self {
-        Self { margin: MARGIN_X, surround, pad: 0, bg }
+        Self {
+            margin: MARGIN_X,
+            surround,
+            pad: 0,
+            bg,
+        }
     }
 
     /// A row inside a field — a fenced code block on `tint`. It has no
@@ -49,13 +54,21 @@ impl Row {
     /// marking the field's extent is the step between its own ground and
     /// the surface it is quoted on.
     pub fn field(bg: Color) -> Self {
-        Self { margin: 0, surround: Color::Reset, pad: 0, bg }
+        Self {
+            margin: 0,
+            surround: Color::Reset,
+            pad: 0,
+            bg,
+        }
     }
 
     /// Overrides how far the row sits in from each edge of its column —
     /// frame E's option row, `margin: 0 1ch` inside the question panel.
     pub fn inset(self, cells: usize) -> Self {
-        Self { margin: cells, ..self }
+        Self {
+            margin: cells,
+            ..self
+        }
     }
 
     /// Overrides the cells of fill held between the row's edge and its
@@ -79,13 +92,21 @@ impl Row {
     fn on_field(self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         spans
             .into_iter()
-            .map(|span| if span.style.bg.is_some() { span } else { Span::styled(span.content, span.style.bg(self.bg)) })
+            .map(|span| {
+                if span.style.bg.is_some() {
+                    span
+                } else {
+                    Span::styled(span.content, span.style.bg(self.bg))
+                }
+            })
             .collect()
     }
 
     /// Cells left for content once margins and padding are taken.
     fn avail(self, width: u16) -> usize {
-        (width as usize).saturating_sub(2 * self.margin).saturating_sub(2 * self.pad)
+        (width as usize)
+            .saturating_sub(2 * self.margin)
+            .saturating_sub(2 * self.pad)
     }
 
     /// Wraps `spans` to fit and returns one fully-built row per wrapped
@@ -98,14 +119,22 @@ impl Row {
     /// [`Row::on_field`]).
     pub fn build(self, spans: Vec<Span<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
         let avail = self.avail(ctx.width);
-        wrap_line(Line::from(spans), avail).into_iter().map(|line| self.assemble(line.spans, ctx)).collect()
+        wrap_line(Line::from(spans), avail)
+            .into_iter()
+            .map(|line| self.assemble(line.spans, ctx))
+            .collect()
     }
 
     /// Like [`Row::build`], for a row whose first span is a glyph column:
     /// the rest wraps to what is left after `indent` cells, and every
     /// continuation row is indented by `indent` so the text keeps one left
     /// edge under itself rather than stepping back under the glyph.
-    pub fn build_indented(self, mut spans: Vec<Span<'static>>, indent: usize, ctx: Ctx) -> Vec<Line<'static>> {
+    pub fn build_indented(
+        self,
+        mut spans: Vec<Span<'static>>,
+        indent: usize,
+        ctx: Ctx,
+    ) -> Vec<Line<'static>> {
         if spans.is_empty() {
             return vec![self.blank(ctx)];
         }
@@ -117,7 +146,11 @@ impl Row {
             .enumerate()
             .map(|(i, line)| {
                 let mut content = Vec::with_capacity(line.spans.len() + 1);
-                content.push(if i == 0 { glyph.clone() } else { Span::styled(" ".repeat(indent), field) });
+                content.push(if i == 0 {
+                    glyph.clone()
+                } else {
+                    Span::styled(" ".repeat(indent), field)
+                });
                 content.extend(line.spans);
                 self.assemble(content, ctx)
             })
@@ -139,7 +172,10 @@ impl Row {
         let content = self.on_field(content);
         let content_width: usize = content.iter().map(|s| s.content.width()).sum();
         let leading = self.margin + self.pad;
-        let fill = width.saturating_sub(leading).saturating_sub(content_width).saturating_sub(self.margin);
+        let fill = width
+            .saturating_sub(leading)
+            .saturating_sub(content_width)
+            .saturating_sub(self.margin);
 
         let mut spans = Vec::with_capacity(content.len() + 4);
         let surround = Style::default().bg(self.surround);
@@ -173,5 +209,8 @@ impl Row {
 /// Not a `Row`: it fills the column edge to edge with no margin, padding or
 /// content of its own.
 pub(super) fn band_row(bg: Color, ctx: Ctx) -> Line<'static> {
-    Line::from(Span::styled(" ".repeat(ctx.width as usize), Style::default().bg(bg)))
+    Line::from(Span::styled(
+        " ".repeat(ctx.width as usize),
+        Style::default().bg(bg),
+    ))
 }

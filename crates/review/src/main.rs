@@ -11,10 +11,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
 use aldwin_review::capture::{capture, measure_cell};
 use aldwin_review::geometry::{Size, Theme};
 use aldwin_review::{scene, stages, tokens, Baseline, Compositor};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(about = "The review loop's deterministic stages")]
@@ -108,20 +108,28 @@ enum Command {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root")
 }
 
 /// A fresh directory for this run's frames, keeping the last few.
 fn frames_dir(root: &Path) -> std::io::Result<PathBuf> {
     let parent = root.join("target/review-frames");
     std::fs::create_dir_all(&parent)?;
-    let mut existing: Vec<PathBuf> =
-        std::fs::read_dir(&parent)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    let mut existing: Vec<PathBuf> = std::fs::read_dir(&parent)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
     existing.sort();
     for old in existing.iter().take(existing.len().saturating_sub(3)) {
         let _ = std::fs::remove_dir_all(old);
     }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(std::io::Error::other)?;
     let dir = parent.join(format!("run-{}", now.as_secs()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -152,7 +160,10 @@ fn build_app(root: &Path) -> std::io::Result<PathBuf> {
     }
     let binary = root.join("target/debug/aldwin");
     if !binary.exists() {
-        return Err(std::io::Error::other(format!("{} still does not exist after a successful build", binary.display())));
+        return Err(std::io::Error::other(format!(
+            "{} still does not exist after a successful build",
+            binary.display()
+        )));
     }
     Ok(binary)
 }
@@ -162,7 +173,12 @@ fn build_app(root: &Path) -> std::io::Result<PathBuf> {
 /// No assertions: everything that reads declared cells is a hermetic test in
 /// `crates/tui` now. This exists to make pictures, which is the one thing a
 /// `TestBackend` cannot do.
-fn capture_all(root: &Path, base: &Baseline, theme: Option<Theme>, quiet_ms: u64) -> std::io::Result<PathBuf> {
+fn capture_all(
+    root: &Path,
+    base: &Baseline,
+    theme: Option<Theme>,
+    quiet_ms: u64,
+) -> std::io::Result<PathBuf> {
     let dir = frames_dir(root)?;
     let binary = build_app(root)?;
     let comp = Compositor::start(&dir)?;
@@ -177,7 +193,18 @@ fn capture_all(root: &Path, base: &Baseline, theme: Option<Theme>, quiet_ms: u64
     for name in scene::IMPLEMENTED {
         for size in Size::ALL {
             for &theme in &themes {
-                capture(&comp, &binary, base, cell, name, size, theme, Duration::from_millis(quiet_ms), &[], &dir)?;
+                capture(
+                    &comp,
+                    &binary,
+                    base,
+                    cell,
+                    name,
+                    size,
+                    theme,
+                    Duration::from_millis(quiet_ms),
+                    &[],
+                    &dir,
+                )?;
             }
         }
     }
@@ -192,21 +219,35 @@ fn main() -> std::io::Result<()> {
     match cli.command {
         Command::Stage5 { run, findings } => {
             let stage5: aldwin_review::report::Stage5 =
-                serde_json::from_str(&std::fs::read_to_string(&findings)?).map_err(std::io::Error::other)?;
+                serde_json::from_str(&std::fs::read_to_string(&findings)?)
+                    .map_err(std::io::Error::other)?;
             let report = run.join("review.html");
             let score = aldwin_review::report::write_stage5(&report, &stage5)?;
             let threshold = aldwin_review::report::THRESHOLD;
-            println!("stage 5: {score}, threshold {threshold} — {}", if score >= threshold { "passes" } else { "does not pass" });
+            println!(
+                "stage 5: {score}, threshold {threshold} — {}",
+                if score >= threshold {
+                    "passes"
+                } else {
+                    "does not pass"
+                }
+            );
             println!("report: {}", report.display());
             if score < threshold {
-                return Err(std::io::Error::other("stage 5 is below the threshold; fix and re-run the loop"));
+                return Err(std::io::Error::other(
+                    "stage 5 is below the threshold; fix and re-run the loop",
+                ));
             }
             Ok(())
         }
 
         Command::Scenes => {
             for name in scene::CATALOGUE {
-                let state = if scene::IMPLEMENTED.contains(name) { "ready" } else { "not wired up" };
+                let state = if scene::IMPLEMENTED.contains(name) {
+                    "ready"
+                } else {
+                    "not wired up"
+                };
                 println!("{name:<16} {state}");
             }
             Ok(())
@@ -253,7 +294,13 @@ fn main() -> std::io::Result<()> {
             }
         }
 
-        Command::Capture { scene: one, size, theme, out, quiet_ms } => {
+        Command::Capture {
+            scene: one,
+            size,
+            theme,
+            out,
+            quiet_ms,
+        } => {
             let dir = match out {
                 Some(path) => {
                     std::fs::create_dir_all(&path)?;
@@ -275,7 +322,18 @@ fn main() -> std::io::Result<()> {
             for name in names {
                 for &s in &sizes {
                     for &t in &themes {
-                        let frame = capture(&comp, &binary, &base, cell, name, s, t, Duration::from_millis(quiet_ms), &[], &dir)?;
+                        let frame = capture(
+                            &comp,
+                            &binary,
+                            &base,
+                            cell,
+                            name,
+                            s,
+                            t,
+                            Duration::from_millis(quiet_ms),
+                            &[],
+                            &dir,
+                        )?;
                         println!("{name} {s} {t}  {}", frame.path.display());
                     }
                 }
@@ -284,13 +342,31 @@ fn main() -> std::io::Result<()> {
             Ok(())
         }
 
-        Command::Review { goal, focus, no_capture, theme, quiet_ms, stages_only } => {
-            let focused: Vec<&str> = focus.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
-            let unknown: Vec<&&str> = focused.iter().filter(|s| !scene::IMPLEMENTED.contains(s)).collect();
+        Command::Review {
+            goal,
+            focus,
+            no_capture,
+            theme,
+            quiet_ms,
+            stages_only,
+        } => {
+            let focused: Vec<&str> = focus
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            let unknown: Vec<&&str> = focused
+                .iter()
+                .filter(|s| !scene::IMPLEMENTED.contains(s))
+                .collect();
             if focused.is_empty() || !unknown.is_empty() {
                 return Err(std::io::Error::other(format!(
                     "--focus must be comma-separated scene names; {} is not one. Known: {}",
-                    if unknown.is_empty() { "(nothing)".to_string() } else { format!("{unknown:?}") },
+                    if unknown.is_empty() {
+                        "(nothing)".to_string()
+                    } else {
+                        format!("{unknown:?}")
+                    },
                     scene::IMPLEMENTED.join(", ")
                 )));
             }
@@ -320,14 +396,26 @@ fn main() -> std::io::Result<()> {
             };
             let captured = frames
                 .as_ref()
-                .map(|dir| std::fs::read_dir(dir).map(|e| e.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0))
+                .map(|dir| {
+                    std::fs::read_dir(dir)
+                        .map(|e| {
+                            e.filter_map(|e| e.ok())
+                                .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
+                                .count()
+                        })
+                        .unwrap_or(0)
+                })
                 .unwrap_or(0);
 
             println!();
             let mut failed = 0;
             for outcome in &outcomes {
                 if outcome.passed {
-                    let detail = if outcome.detail.is_empty() { String::new() } else { format!(" — {}", outcome.detail) };
+                    let detail = if outcome.detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", outcome.detail)
+                    };
                     println!("  ok    {}{detail}", outcome.stage);
                 } else {
                     failed += 1;
@@ -391,9 +479,15 @@ fn main() -> std::io::Result<()> {
             // one, and the moment it is needed is the moment attention is on
             // the findings instead.
             println!("\nStage 5 is not written yet. After the judge, run:");
-            println!("  ./target/release/aldwin-review stage5 --run {} --findings <file.json>", dir.display());
+            println!(
+                "  ./target/release/aldwin-review stage5 --run {} --findings <file.json>",
+                dir.display()
+            );
             if failed > 0 {
-                return Err(std::io::Error::other(format!("{failed} of {} deterministic stages failed", outcomes.len())));
+                return Err(std::io::Error::other(format!(
+                    "{failed} of {} deterministic stages failed",
+                    outcomes.len()
+                )));
             }
             if stages_only {
                 println!("stages 0–4 clean. Not a review: stage 5 was not run.");
@@ -412,7 +506,9 @@ fn main() -> std::io::Result<()> {
             println!("stages 0–4 clean — review INCOMPLETE until stage 5 is written.");
             println!("Spawn the judge against those frames, then run the stage5 command above.");
             println!("(Use --stages-only if you wanted the deterministic check alone.)");
-            Err(std::io::Error::other("review incomplete: stage 5 not written"))
+            Err(std::io::Error::other(
+                "review incomplete: stage 5 not written",
+            ))
         }
     }
 }

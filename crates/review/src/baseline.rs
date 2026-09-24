@@ -24,15 +24,15 @@ use crate::geometry::Cell;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Baseline {
     #[serde(rename = "//", default)]
-    pub comment:        String,
-    pub cell:           Cell,
-    pub font:           String,
+    pub comment: String,
+    pub cell: Cell,
+    pub font: String,
     /// `rustc --version` this baseline's results were produced on. Stage 0
     /// fails when the toolchain moves: clippy's lint set changes between
     /// releases, so a stage 1 failure on untouched code is a real
     /// possibility and deserves to be named rather than puzzled over.
     #[serde(default)]
-    pub toolchain:      String,
+    pub toolchain: String,
     #[serde(default)]
     pub contradictions: Vec<Contradiction>,
 }
@@ -40,16 +40,16 @@ pub struct Baseline {
 /// One place the design system disagrees with itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contradiction {
-    pub id:               String,
+    pub id: String,
     /// What the design states in one place.
-    pub design_says:      String,
+    pub design_says: String,
     /// What it states in another, or what its own rendered frame shows.
     pub design_also_says: String,
     /// Which half the app follows, and why that is the defensible one.
-    pub app_follows:      String,
+    pub app_follows: String,
     /// Glyphs this contradiction licenses, for the closed-table check.
     #[serde(default)]
-    pub glyphs:           String,
+    pub glyphs: String,
 }
 
 impl Baseline {
@@ -63,8 +63,8 @@ impl Baseline {
 
     pub fn load_from(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let baseline: Baseline =
-            serde_json::from_str(&text).map_err(|e| Error::new(ErrorKind::InvalidData, format!("{}: {e}", path.display())))?;
+        let baseline: Baseline = serde_json::from_str(&text)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, format!("{}: {e}", path.display())))?;
 
         for c in &baseline.contradictions {
             if c.design_says.trim().is_empty() || c.design_also_says.trim().is_empty() {

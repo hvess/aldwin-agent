@@ -118,7 +118,9 @@ pub(crate) struct Palette {
 impl Palette {
     /// The brand mark's cells for this theme, `[row][col]` of (upper half,
     /// lower half) — see `tokens::MARK_CELL`.
-    pub fn mark(&self) -> &'static [[(Color, Color); crate::tokens::MARK_COLS]; crate::tokens::MARK_ROWS] {
+    pub fn mark(
+        &self,
+    ) -> &'static [[(Color, Color); crate::tokens::MARK_COLS]; crate::tokens::MARK_ROWS] {
         match self.theme {
             Theme::Dark => &crate::tokens::MARK_DARK,
             Theme::Light => &crate::tokens::MARK_LIGHT,
@@ -183,7 +185,13 @@ mod tests {
             let ladder = [pal.win, pal.tint, pal.panel, pal.field];
             for pair in ladder.windows(2) {
                 let (lower, upper) = (luma(pair[0]), luma(pair[1]));
-                assert!(if rising { upper > lower } else { upper < lower }, "{:?}: {:?} -> {:?}", pal.theme, pair[0], pair[1]);
+                assert!(
+                    if rising { upper > lower } else { upper < lower },
+                    "{:?}: {:?} -> {:?}",
+                    pal.theme,
+                    pair[0],
+                    pair[1]
+                );
             }
         }
     }
@@ -208,7 +216,11 @@ mod tests {
         for pal in [&DARK, &LIGHT] {
             assert!(pal.gauge(0).iter().all(|c| *c == pal.track));
             assert_eq!(pal.gauge(10)[9], pal.fill, "the leading edge is full fill");
-            assert_eq!(pal.gauge(4)[4], pal.track, "the fifth segment of four is empty");
+            assert_eq!(
+                pal.gauge(4)[4],
+                pal.track,
+                "the fifth segment of four is empty"
+            );
             assert_eq!(pal.gauge(4)[3], pal.fill);
         }
     }

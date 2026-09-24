@@ -28,7 +28,12 @@ pub const GIT_HASH: &str = env!("ALDWIN_GIT_HASH");
 /// `0.1.12 (a1b2c3d4)` — what `aldwin --version` prints. The version alone
 /// can't identify a build between releases; the commit alone doesn't say
 /// which release it belongs to.
-pub const VERSION_FULL: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("ALDWIN_GIT_HASH"), ")");
+pub const VERSION_FULL: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("ALDWIN_GIT_HASH"),
+    ")"
+);
 
 #[cfg(test)]
 mod tests {
@@ -44,12 +49,21 @@ mod tests {
     #[test]
     fn version_is_the_manifest_version() {
         assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
-        assert_ne!(VERSION, "0.0.0", "the workspace version must be a real release number");
+        assert_ne!(
+            VERSION, "0.0.0",
+            "the workspace version must be a real release number"
+        );
     }
 
     #[test]
     fn version_full_carries_both_the_release_and_the_commit() {
-        assert!(VERSION_FULL.starts_with(VERSION), "{VERSION_FULL} must lead with the release version");
-        assert!(VERSION_FULL.contains(GIT_HASH), "{VERSION_FULL} must name the commit it was built from");
+        assert!(
+            VERSION_FULL.starts_with(VERSION),
+            "{VERSION_FULL} must lead with the release version"
+        );
+        assert!(
+            VERSION_FULL.contains(GIT_HASH),
+            "{VERSION_FULL} must name the commit it was built from"
+        );
     }
 }

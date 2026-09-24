@@ -41,7 +41,7 @@ gaps outer 0
 ";
 
 pub struct Compositor {
-    sock:  PathBuf,
+    sock: PathBuf,
     child: Child,
 }
 
@@ -52,11 +52,18 @@ impl Compositor {
         let cfg = dir.join("sway.cfg");
         std::fs::write(&cfg, CONFIG)?;
 
-        let check = Command::new("sway").arg("-C").arg("-c").arg(&cfg).output()?;
+        let check = Command::new("sway")
+            .arg("-C")
+            .arg("-c")
+            .arg(&cfg)
+            .output()?;
         if !check.status.success() {
             return Err(Error::new(
                 ErrorKind::InvalidData,
-                format!("sway rejected the harness config: {}", String::from_utf8_lossy(&check.stderr).trim()),
+                format!(
+                    "sway rejected the harness config: {}",
+                    String::from_utf8_lossy(&check.stderr).trim()
+                ),
             ));
         }
 
@@ -106,9 +113,16 @@ impl Compositor {
 
     /// One `swaymsg` call against this compositor's own socket.
     pub fn msg(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new("swaymsg").arg("-s").arg(&self.sock).args(args).output()?;
+        let out = Command::new("swaymsg")
+            .arg("-s")
+            .arg(&self.sock)
+            .args(args)
+            .output()?;
         if !out.status.success() {
-            return Err(Error::other(format!("swaymsg {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
+            return Err(Error::other(format!(
+                "swaymsg {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -122,7 +136,14 @@ impl Compositor {
     /// Resize the output. The harness always passes an exact multiple of the
     /// measured cell, so the frame is a whole number of cells with no slack.
     pub fn set_mode(&self, width: u32, height: u32) -> Result<()> {
-        self.msg(&["--", "output", OUTPUT, "mode", "--custom", &format!("{width}x{height}")])?;
+        self.msg(&[
+            "--",
+            "output",
+            OUTPUT,
+            "mode",
+            "--custom",
+            &format!("{width}x{height}"),
+        ])?;
         // The mode change is asynchronous; foot must not be launched into the
         // old geometry or it starts at one size and is resized under it.
         sleep(Duration::from_millis(400));

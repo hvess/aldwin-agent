@@ -33,24 +33,29 @@ pub enum Color {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Attrs {
-    pub bold:      bool,
-    pub dim:       bool,
-    pub italic:    bool,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
     pub underline: bool,
-    pub reverse:   bool,
+    pub reverse: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Cell {
-    pub ch:    char,
-    pub fg:    Color,
-    pub bg:    Color,
+    pub ch: char,
+    pub fg: Color,
+    pub bg: Color,
     pub attrs: Attrs,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { ch: ' ', fg: Color::Default, bg: Color::Default, attrs: Attrs::default() }
+        Cell {
+            ch: ' ',
+            fg: Color::Default,
+            bg: Color::Default,
+            attrs: Attrs::default(),
+        }
     }
 }
 
@@ -76,12 +81,16 @@ impl Cell {
 pub struct Grid {
     pub cols: u16,
     pub rows: u16,
-    cells:    Vec<Cell>,
+    cells: Vec<Cell>,
 }
 
 impl Grid {
     fn new(cols: u16, rows: u16) -> Self {
-        Grid { cols, rows, cells: vec![Cell::default(); cols as usize * rows as usize] }
+        Grid {
+            cols,
+            rows,
+            cells: vec![Cell::default(); cols as usize * rows as usize],
+        }
     }
 
     pub fn get(&self, row: u16, col: u16) -> Cell {
@@ -107,7 +116,10 @@ impl Grid {
     }
 
     pub fn text(&self) -> String {
-        (0..self.rows).map(|r| self.row_text(r)).collect::<Vec<_>>().join("\n")
+        (0..self.rows)
+            .map(|r| self.row_text(r))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// A cheap identity for the visible state.
@@ -141,36 +153,36 @@ enum State {
 }
 
 pub struct Vt {
-    grid:    Grid,
-    row:     u16,
-    col:     u16,
-    pen:     Cell,
-    state:   State,
-    params:  Vec<u32>,
+    grid: Grid,
+    row: u16,
+    col: u16,
+    pen: Cell,
+    state: State,
+    params: Vec<u32>,
     current: Option<u32>,
     private: bool,
     /// A `:` was seen in this CSI — the only thing that tells the
     /// colour-space spelling `38:2::r:g:b` from `38;2;0;g;b` with more
     /// parameters behind it.
-    colons:  bool,
-    utf8:    Vec<u8>,
-    need:    usize,
+    colons: bool,
+    utf8: Vec<u8>,
+    need: usize,
 }
 
 impl Vt {
     pub fn new(cols: u16, rows: u16) -> Self {
         Vt {
-            grid:    Grid::new(cols, rows),
-            row:     0,
-            col:     0,
-            pen:     Cell::default(),
-            state:   State::Ground,
-            params:  Vec::new(),
+            grid: Grid::new(cols, rows),
+            row: 0,
+            col: 0,
+            pen: Cell::default(),
+            state: State::Ground,
+            params: Vec::new(),
             current: None,
             private: false,
-            colons:  false,
-            utf8:    Vec::new(),
-            need:    0,
+            colons: false,
+            utf8: Vec::new(),
+            need: 0,
         }
     }
 
@@ -225,7 +237,12 @@ impl Vt {
             State::Csi => match b {
                 b'0'..=b'9' => {
                     let d = (b - b'0') as u32;
-                    self.current = Some(self.current.unwrap_or(0).saturating_mul(10).saturating_add(d));
+                    self.current = Some(
+                        self.current
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(d),
+                    );
                 }
                 // Colons appear in the SGR-with-colour-space spelling; treat
                 // them as separators so `38:2::r:g:b` does not silently
@@ -351,7 +368,11 @@ impl Vt {
 
     /// A missing parameter and a zero both mean the default.
     fn param(&self, i: usize, default: u32) -> u32 {
-        self.params.get(i).copied().filter(|&v| v != 0).unwrap_or(default)
+        self.params
+            .get(i)
+            .copied()
+            .filter(|&v| v != 0)
+            .unwrap_or(default)
     }
 
     /// A relative move's count. Clamped rather than cast: `as u16` wraps
@@ -373,8 +394,18 @@ impl Vt {
             // which poisons the parser's lock and takes the capture down
             // behind a misleading message.
             b'A' => self.row = self.row.saturating_sub(self.count()),
-            b'B' => self.row = self.row.saturating_add(self.count()).min(self.grid.rows.saturating_sub(1)),
-            b'C' => self.col = self.col.saturating_add(self.count()).min(self.grid.cols.saturating_sub(1)),
+            b'B' => {
+                self.row = self
+                    .row
+                    .saturating_add(self.count())
+                    .min(self.grid.rows.saturating_sub(1))
+            }
+            b'C' => {
+                self.col = self
+                    .col
+                    .saturating_add(self.count())
+                    .min(self.grid.cols.saturating_sub(1))
+            }
             b'D' => self.col = self.col.saturating_sub(self.count()),
             b'G' => self.col = self.clamp_col(self.param(0, 1)),
             b'd' => self.row = self.clamp_row(self.param(0, 1)),
@@ -401,7 +432,12 @@ impl Vt {
     }
 
     fn blank(&self) -> Cell {
-        Cell { ch: ' ', fg: self.pen.fg, bg: self.pen.bg, attrs: Attrs::default() }
+        Cell {
+            ch: ' ',
+            fg: self.pen.fg,
+            bg: self.pen.bg,
+            attrs: Attrs::default(),
+        }
     }
 
     fn erase_display(&mut self, mode: u32) {

@@ -5,30 +5,37 @@ use serde_json::Value;
 
 use super::bridge::McpBridge;
 use crate::error::ToolError;
-use aldwin_permissions::Class;
-use aldwin_core::DispatchContext;
 use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use aldwin_core::DispatchContext;
+use aldwin_permissions::Class;
 
 /// One remote MCP tool, proxied through `McpBridge`. It runs in its own
 /// process over the real tree, so the dispatcher opens the review before it
 /// the way it does before `run`; an MCP tool that edits files does so
 /// without a diff (open-tasks 13), which is why every one is a write.
 pub struct McpTool {
-    descriptor:  ToolDescriptor,
-    bridge:      Arc<McpBridge>,
-    server:      String,
+    descriptor: ToolDescriptor,
+    bridge: Arc<McpBridge>,
+    server: String,
     remote_name: String,
 }
 
 impl McpTool {
-    pub fn new(bridge: Arc<McpBridge>, server: String, registered_name: String, remote: &rmcp::model::Tool) -> Self {
+    pub fn new(
+        bridge: Arc<McpBridge>,
+        server: String,
+        registered_name: String,
+        remote: &rmcp::model::Tool,
+    ) -> Self {
         let input_schema = serde_json::Value::Object((*remote.input_schema).clone());
         Self {
             descriptor: ToolDescriptor {
                 name: registered_name,
                 description: remote.description.clone().unwrap_or_default().into_owned(),
                 input_schema,
-                source: ToolSource::Mcp { server: server.clone() },
+                source: ToolSource::Mcp {
+                    server: server.clone(),
+                },
             },
             bridge,
             server,
@@ -61,12 +68,17 @@ impl Tool for McpTool {
     fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
         Ok(Some(PermissionRequest {
             program: self.descriptor().name.clone(),
-            class:   Class::Write,
-            argv:    vec![serde_json::to_string(input).unwrap_or_default()],
+            class: Class::Write,
+            argv: vec![serde_json::to_string(input).unwrap_or_default()],
         }))
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        _ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
         let arguments = match input {
             Value::Object(map) => map,
             Value::Null => serde_json::Map::new(),
@@ -77,9 +89,16 @@ impl Tool for McpTool {
             }
         };
 
-        let (content, is_error) = self.bridge.call_tool(&self.server, &self.remote_name, arguments).await?;
+        let (content, is_error) = self
+            .bridge
+            .call_tool(&self.server, &self.remote_name, arguments)
+            .await?;
         if is_error {
-            Err(ToolError::McpToolError { server: self.server.clone(), tool: self.remote_name.clone(), message: content })
+            Err(ToolError::McpToolError {
+                server: self.server.clone(),
+                tool: self.remote_name.clone(),
+                message: content,
+            })
         } else {
             Ok(content)
         }
@@ -93,20 +112,39 @@ mod tests {
     use serde_json::json;
 
     fn fake_server() -> McpServer {
-        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp_server.py");
-        McpServer { name: "fake".into(), transport: McpTransport::Stdio { command: "python3".into(), args: vec![script.into()] }, env: Default::default() }
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/fake_mcp_server.py"
+        );
+        McpServer {
+            name: "fake".into(),
+            transport: McpTransport::Stdio {
+                command: "python3".into(),
+                args: vec![script.into()],
+            },
+            env: Default::default(),
+        }
     }
 
     fn remote_echo_tool() -> rmcp::model::Tool {
         let mut schema = serde_json::Map::new();
         schema.insert("type".into(), json!("object"));
-        rmcp::model::Tool::new("echo", "Echoes the given text back.", std::sync::Arc::new(schema))
+        rmcp::model::Tool::new(
+            "echo",
+            "Echoes the given text back.",
+            std::sync::Arc::new(schema),
+        )
     }
 
     #[tokio::test]
     async fn call_proxies_through_the_bridge_and_returns_text() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
-        let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
+        let tool = McpTool::new(
+            bridge,
+            "fake".into(),
+            "fake:echo".into(),
+            &remote_echo_tool(),
+        );
 
         let (ctx, _e, _p) = crate::test_support::dispatch_context();
         let out = tool.call("c1", json!({"text": "hi"}), &ctx).await.unwrap();
@@ -130,14 +168,29 @@ mod tests {
     #[test]
     fn descriptor_names_its_server() {
         let bridge = Arc::new(McpBridge::new(vec![]));
-        let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
-        assert_eq!(tool.descriptor().source, ToolSource::Mcp { server: "fake".into() });
+        let tool = McpTool::new(
+            bridge,
+            "fake".into(),
+            "fake:echo".into(),
+            &remote_echo_tool(),
+        );
+        assert_eq!(
+            tool.descriptor().source,
+            ToolSource::Mcp {
+                server: "fake".into()
+            }
+        );
     }
 
     #[test]
     fn the_permission_request_is_a_write_whatever_the_server_says() {
         let bridge = Arc::new(McpBridge::new(vec![]));
-        let tool = McpTool::new(bridge, "fake".into(), "fake:echo".into(), &remote_echo_tool());
+        let tool = McpTool::new(
+            bridge,
+            "fake".into(),
+            "fake:echo".into(),
+            &remote_echo_tool(),
+        );
         let request = tool.permission(&json!({"text": "hi"})).unwrap().unwrap();
         assert_eq!(request.class, aldwin_permissions::Class::Write);
         assert_eq!(request.program, "fake:echo");

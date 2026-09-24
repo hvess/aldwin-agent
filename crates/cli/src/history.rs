@@ -24,14 +24,14 @@ use tokio::sync::mpsc;
 /// somewhere else.
 #[derive(Debug)]
 pub struct History {
-    dir:    PathBuf,
-    model:  String,
+    dir: PathBuf,
+    model: String,
     /// Which transcript is being written *now* — the session the developer
     /// is sitting in, or the one they resumed onto. Excluded from every
     /// listing and refused by `/resume`: a session cannot be resumed into
     /// itself, and offering it as a row is offering a no-op.
     current: Mutex<SessionId>,
-    store:  Mutex<Option<HistoryStore>>,
+    store: Mutex<Option<HistoryStore>>,
     events: mpsc::Sender<Event>,
     /// Whether this transcript's failure has been said — see `report`.
     reported: AtomicBool,
@@ -44,9 +44,14 @@ impl History {
     /// when the history directory cannot be written: the session then runs
     /// without one, having said so once. History must never be able to stop
     /// a session starting, let alone fail a turn.
-    pub fn open(dir: PathBuf, model: String, events: mpsc::Sender<Event>) -> Result<Arc<Self>, String> {
+    pub fn open(
+        dir: PathBuf,
+        model: String,
+        events: mpsc::Sender<Event>,
+    ) -> Result<Arc<Self>, String> {
         let id = SessionId::mint();
-        let store = HistoryStore::create(&dir, &id, &header(&model)).map_err(|e| format!("history is off for this session: {e}"))?;
+        let store = HistoryStore::create(&dir, &id, &header(&model))
+            .map_err(|e| format!("history is off for this session: {e}"))?;
         Ok(Arc::new(Self {
             dir,
             model,
@@ -122,10 +127,15 @@ impl History {
     /// session is writing.
     pub fn resumable(&self) -> Vec<SessionChoice> {
         let current = self.current();
-        session_choices(&self.dir).into_iter().filter(|s| s.id != current.0).collect()
+        session_choices(&self.dir)
+            .into_iter()
+            .filter(|s| s.id != current.0)
+            .collect()
     }
 
-    pub fn dir(&self) -> &Path { &self.dir }
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
 
     /// A submission is on its way to core. Set here as well as by the
     /// `TurnStarted` record, because `/clear` typed straight after a message
@@ -153,7 +163,9 @@ impl RecordSink for History {
         let guard = self.store.lock().expect("history lock poisoned");
         let Some(store) = guard.as_ref() else { return };
         if let Err(e) = store.append(record) {
-            self.report(format!("history write failed; this session is no longer being recorded: {e}"));
+            self.report(format!(
+                "history write failed; this session is no longer being recorded: {e}"
+            ));
         }
     }
 }
@@ -167,14 +179,17 @@ impl RecordSink for History {
 /// Callers inside a running session want [`History::resumable`] instead:
 /// this one includes the transcript currently being written.
 pub fn session_choices(dir: &Path) -> Vec<SessionChoice> {
-    aldwin_config::list_sessions(dir).into_iter().map(choice).collect()
+    aldwin_config::list_sessions(dir)
+        .into_iter()
+        .map(choice)
+        .collect()
 }
 
 fn choice(summary: SessionSummary) -> SessionChoice {
     SessionChoice {
-        id:    summary.id.0,
+        id: summary.id.0,
         title: summary.title,
-        when:  format_when(summary.started_at),
+        when: format_when(summary.started_at),
         turns: summary.turns,
     }
 }
@@ -185,7 +200,10 @@ fn format_when(epoch_secs: u64) -> String {
     use chrono::{Local, TimeZone};
     // `try_from`, not `as`: a damaged header past `i64::MAX` would wrap to a
     // plausible-looking date before 1970 rather than to "unknown".
-    match i64::try_from(epoch_secs).ok().and_then(|secs| Local.timestamp_opt(secs, 0).single()) {
+    match i64::try_from(epoch_secs)
+        .ok()
+        .and_then(|secs| Local.timestamp_opt(secs, 0).single())
+    {
         Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
         // Unrepresentable, which means the header was damaged. The row is
         // still worth showing: its title is what the developer picks by.
@@ -195,10 +213,13 @@ fn format_when(epoch_secs: u64) -> String {
 
 fn header(model: &str) -> SessionHeader {
     SessionHeader {
-        version:    HISTORY_VERSION,
+        version: HISTORY_VERSION,
         started_at: now(),
-        cwd:        std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned(),
-        model:      model.to_string(),
+        cwd: std::env::current_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        model: model.to_string(),
     }
 }
 
@@ -217,14 +238,23 @@ mod tests {
 
     fn history(dir: &Path) -> (Arc<History>, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel(8);
-        (History::open(dir.to_path_buf(), "m".into(), tx).expect("a store"), rx)
+        (
+            History::open(dir.to_path_buf(), "m".into(), tx).expect("a store"),
+            rx,
+        )
     }
 
     fn turn(n: u64, text: &str) -> Vec<LogRecord> {
         vec![
             LogRecord::TurnStarted { turn_id: TurnId(n) },
-            LogRecord::UserMessage { turn_id: TurnId(n), text: text.into() },
-            LogRecord::TurnEnded { turn_id: TurnId(n), reason: TurnEndReason::EndTurn },
+            LogRecord::UserMessage {
+                turn_id: TurnId(n),
+                text: text.into(),
+            },
+            LogRecord::TurnEnded {
+                turn_id: TurnId(n),
+                reason: TurnEndReason::EndTurn,
+            },
         ]
     }
 
@@ -257,9 +287,16 @@ mod tests {
         }
 
         let sessions = session_choices(dir.path());
-        assert_eq!(sessions.len(), 2, "two sessions, not one file with both in it");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "two sessions, not one file with both in it"
+        );
         let titles: Vec<&str> = sessions.iter().map(|s| s.title.as_str()).collect();
-        assert!(titles.contains(&"before the clear"), "clearing does not destroy the record");
+        assert!(
+            titles.contains(&"before the clear"),
+            "clearing does not destroy the record"
+        );
         assert!(titles.contains(&"after the clear"));
     }
 
@@ -275,14 +312,25 @@ mod tests {
         let id = SessionId(session_choices(dir.path())[0].id.clone());
 
         history.seal_and_open_new(); // a second session, as a new launch would
-        history.continue_session(&id).expect("the transcript reopens");
+        history
+            .continue_session(&id)
+            .expect("the transcript reopens");
         for record in turn(2, "second") {
             history.append(&record);
         }
 
-        let resumed = session_choices(dir.path()).into_iter().find(|s| s.id == id.0).expect("still listed");
-        assert_eq!(resumed.turns, 2, "the continued turn landed in the resumed file");
-        assert_eq!(resumed.title, "first", "and its title still comes from where it began");
+        let resumed = session_choices(dir.path())
+            .into_iter()
+            .find(|s| s.id == id.0)
+            .expect("still listed");
+        assert_eq!(
+            resumed.turns, 2,
+            "the continued turn landed in the resumed file"
+        );
+        assert_eq!(
+            resumed.title, "first",
+            "and its title still comes from where it began"
+        );
     }
 
     /// History must never be able to fail a turn: a store that cannot be
@@ -316,7 +364,10 @@ mod tests {
         for record in turn(1, "hello") {
             history.append(&record);
         }
-        assert!(rx.try_recv().is_err(), "a store that could not even be reopened is simply off");
+        assert!(
+            rx.try_recv().is_err(),
+            "a store that could not even be reopened is simply off"
+        );
     }
 
     /// `/clear` with nowhere to open the next transcript used to switch
@@ -332,7 +383,9 @@ mod tests {
         history.seal_and_open_new();
         history.seal_and_open_new();
 
-        assert!(matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("history is off from here")));
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("history is off from here"))
+        );
         assert!(rx.try_recv().is_err(), "said once, not per clear");
         for record in turn(1, "unrecorded") {
             history.append(&record); // must not panic
@@ -347,6 +400,11 @@ mod tests {
             history.append(&record);
         }
         let sessions = session_choices(dir.path());
-        assert_eq!(sessions[0].when.len(), 16, "`YYYY-MM-DD HH:MM`: {}", sessions[0].when);
+        assert_eq!(
+            sessions[0].when.len(),
+            16,
+            "`YYYY-MM-DD HH:MM`: {}",
+            sessions[0].when
+        );
     }
 }

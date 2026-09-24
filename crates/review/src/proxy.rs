@@ -38,9 +38,9 @@ use crate::pty::{self, Pty};
 use crate::vt::{Color, Grid, Vt};
 
 pub struct Proxy {
-    app:   Pty,
-    vt:    Arc<Mutex<Vt>>,
-    idle:  Arc<AtomicU64>,
+    app: Pty,
+    vt: Arc<Mutex<Vt>>,
+    idle: Arc<AtomicU64>,
     child: Child,
     start: Instant,
 }
@@ -64,7 +64,13 @@ pub(crate) fn shell_quote(s: &str) -> String {
 impl Proxy {
     /// Start foot, wait for it to size its pty, then start the app on a pty
     /// already at that size.
-    pub fn start(comp: &Compositor, font: &str, cols: u16, rows: u16, mut app_command: Command) -> Result<Self> {
+    pub fn start(
+        comp: &Compositor,
+        font: &str,
+        cols: u16,
+        rows: u16,
+        mut app_command: Command,
+    ) -> Result<Self> {
         let display = Pty::open()?;
         let app = Pty::open()?;
 
@@ -98,13 +104,24 @@ impl Proxy {
         spawn_pump(
             app.try_clone_master()?,
             display.try_clone_master()?,
-            Some(Observer { vt: vt.clone(), idle: idle.clone(), start, last_print: 0 }),
+            Some(Observer {
+                vt: vt.clone(),
+                idle: idle.clone(),
+                start,
+                last_print: 0,
+            }),
         );
         // foot → app: keystrokes, and foot's replies to the app's own
         // capability queries.
         spawn_pump(display.try_clone_master()?, app.try_clone_master()?, None);
 
-        Ok(Proxy { app, vt, idle, child, start })
+        Ok(Proxy {
+            app,
+            vt,
+            idle,
+            child,
+            start,
+        })
     }
 
     /// Block until the app has emitted nothing for `idle`.
@@ -205,9 +222,9 @@ impl Drop for Proxy {
 /// last-change mark, and the fingerprint that decides whether the *visible*
 /// state moved.
 struct Observer {
-    vt:         Arc<Mutex<Vt>>,
-    idle:       Arc<AtomicU64>,
-    start:      Instant,
+    vt: Arc<Mutex<Vt>>,
+    idle: Arc<AtomicU64>,
+    start: Instant,
     last_print: u64,
 }
 
@@ -219,7 +236,13 @@ fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
         .is_some()
         .then(|| std::env::var_os("ALDWIN_SHOT_TRACE"))
         .flatten()
-        .and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
+        .and_then(|p| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+        });
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -240,7 +263,10 @@ fn spawn_pump(from: OwnedFd, to: OwnedFd, mut observe: Option<Observer>) {
                         let now = vt.grid().fingerprint();
                         if now != observer.last_print {
                             observer.last_print = now;
-                            observer.idle.store(observer.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                            observer.idle.store(
+                                observer.start.elapsed().as_millis() as u64,
+                                Ordering::Relaxed,
+                            );
                         }
                     }
                     if pty::write_all(to.as_raw_fd(), &buf[..n]).is_err() {
@@ -264,7 +290,9 @@ pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Resul
     let image = png::decode(frame)?;
     let mut checked = 0;
     for (row, col, c) in grid.cells() {
-        let Color::Rgb(r, g, b) = c.effective().1 else { continue };
+        let Color::Rgb(r, g, b) = c.effective().1 else {
+            continue;
+        };
         if c.ch != ' ' {
             continue;
         }

@@ -95,8 +95,14 @@ mod tests {
         assert!(BASE.contains("`ask` tool"));
         assert!(BASE.contains("Nothing is saved until they approve"));
         assert!(BASE.contains("need no permission"));
-        assert!(!BASE.contains("waits for their approval on its own"), "an edit no longer gates itself");
-        assert!(!BASE.contains("spends a developer's attention on a prompt"), "there is no prompt to spend it on");
+        assert!(
+            !BASE.contains("waits for their approval on its own"),
+            "an edit no longer gates itself"
+        );
+        assert!(
+            !BASE.contains("spends a developer's attention on a prompt"),
+            "there is no prompt to spend it on"
+        );
     }
 
     #[test]

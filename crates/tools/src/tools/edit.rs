@@ -15,8 +15,8 @@ use crate::staging::Staging;
 /// Outside the lock entirely: `permission` returns `None`.
 pub struct EditTool {
     descriptor: ToolDescriptor,
-    workspace:  Workspace,
-    staging:    Arc<Staging>,
+    workspace: Workspace,
+    staging: Arc<Staging>,
 }
 
 impl EditTool {
@@ -49,9 +49,9 @@ impl EditTool {
 }
 
 struct EditArgs {
-    path:   String,
+    path: String,
     before: String,
-    after:  String,
+    after: String,
 }
 
 fn edit_args(input: &Value) -> Result<EditArgs, ToolError> {
@@ -60,9 +60,16 @@ fn edit_args(input: &Value) -> Result<EditArgs, ToolError> {
             .get(name)
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| ToolError::InvalidInput { tool: "edit".into(), message: format!("missing {name:?} string field") })
+            .ok_or_else(|| ToolError::InvalidInput {
+                tool: "edit".into(),
+                message: format!("missing {name:?} string field"),
+            })
     };
-    Ok(EditArgs { path: field("path")?, before: field("before")?, after: field("after")? })
+    Ok(EditArgs {
+        path: field("path")?,
+        before: field("before")?,
+        after: field("after")?,
+    })
 }
 
 #[async_trait]
@@ -76,7 +83,12 @@ impl Tool for EditTool {
         Ok(None)
     }
 
-    async fn call(&self, _call_id: &str, input: Value, _ctx: &DispatchContext) -> Result<String, ToolError> {
+    async fn call(
+        &self,
+        _call_id: &str,
+        input: Value,
+        _ctx: &DispatchContext,
+    ) -> Result<String, ToolError> {
         let args = edit_args(&input)?;
         let path = self.workspace.resolve(&args.path)?;
         let rel = args.path.clone();
@@ -88,19 +100,31 @@ impl Tool for EditTool {
                 // against a missing file is a mistake about the file.
                 None if args.before.is_empty() => Ok(args.after.clone()),
                 None => Err(ToolError::Io {
-                    path:   path.clone(),
-                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "no such file (give an empty `before` to create it)"),
+                    path: path.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no such file (give an empty `before` to create it)",
+                    ),
                 }),
                 Some(current) => {
-                    let count = if args.before.is_empty() { 0 } else { current.matches(args.before.as_str()).count() };
+                    let count = if args.before.is_empty() {
+                        0
+                    } else {
+                        current.matches(args.before.as_str()).count()
+                    };
                     if count != 1 {
-                        return Err(ToolError::AmbiguousMatch { path: path.clone(), count });
+                        return Err(ToolError::AmbiguousMatch {
+                            path: path.clone(),
+                            count,
+                        });
                     }
                     Ok(current.replacen(&args.before, &args.after, 1))
                 }
             })
             .await?;
-        Ok(format!("staged an edit to {rel}; the developer reviews it before it is written"))
+        Ok(format!(
+            "staged an edit to {rel}; the developer reviews it before it is written"
+        ))
     }
 }
 
@@ -112,7 +136,10 @@ mod tests {
 
     fn tool(dir: &tempfile::TempDir) -> (EditTool, Arc<Staging>) {
         let staging = Arc::new(Staging::new());
-        (EditTool::new(Workspace::new(dir.path()), staging.clone()), staging)
+        (
+            EditTool::new(Workspace::new(dir.path()), staging.clone()),
+            staging,
+        )
     }
 
     #[tokio::test]
@@ -123,11 +150,25 @@ mod tests {
         let (tool, staging) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
 
-        let out = tool.call("c1", json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { hi(); }"}), &ctx).await.unwrap();
+        let out = tool
+            .call(
+                "c1",
+                json!({"path": "f.rs", "before": "fn a() {}", "after": "fn a() { hi(); }"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
         assert!(out.starts_with("staged an edit to f.rs"));
 
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {}\nfn b() {}\n", "nothing is written by the tool");
-        assert_eq!(staging.changeset().files[0].after, "fn a() { hi(); }\nfn b() {}\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn a() {}\nfn b() {}\n",
+            "nothing is written by the tool"
+        );
+        assert_eq!(
+            staging.changeset().files[0].after,
+            "fn a() { hi(); }\nfn b() {}\n"
+        );
     }
 
     #[tokio::test]
@@ -135,7 +176,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let (tool, _) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
-        let err = tool.call("c1", json!({"path": "/etc/passwd", "before": "root", "after": "x"}), &ctx).await.unwrap_err();
+        let err = tool
+            .call(
+                "c1",
+                json!({"path": "/etc/passwd", "before": "root", "after": "x"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::PathEscapesWorkspace { .. }));
     }
 
@@ -146,9 +194,23 @@ mod tests {
         let (tool, staging) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
 
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "missing", "after": "y"}), &ctx).await.unwrap_err();
+        let err = tool
+            .call(
+                "c1",
+                json!({"path": "f.rs", "before": "missing", "after": "y"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 0, .. }));
-        let err = tool.call("c1", json!({"path": "f.rs", "before": "x", "after": "y"}), &ctx).await.unwrap_err();
+        let err = tool
+            .call(
+                "c1",
+                json!({"path": "f.rs", "before": "x", "after": "y"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::AmbiguousMatch { count: 2, .. }));
         assert!(staging.is_empty(), "a failed edit stages nothing");
     }
@@ -159,10 +221,23 @@ mod tests {
         let (tool, staging) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
 
-        let err = tool.call("c1", json!({"path": "new.rs", "before": "fn", "after": "x"}), &ctx).await.unwrap_err();
+        let err = tool
+            .call(
+                "c1",
+                json!({"path": "new.rs", "before": "fn", "after": "x"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::Io { .. }));
 
-        tool.call("c2", json!({"path": "new.rs", "before": "", "after": "fn x() {}\n"}), &ctx).await.unwrap();
+        tool.call(
+            "c2",
+            json!({"path": "new.rs", "before": "", "after": "fn x() {}\n"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         let cs = staging.changeset();
         assert_eq!(cs.files[0].before, None);
         assert_eq!(cs.files[0].after, "fn x() {}\n");
@@ -178,8 +253,20 @@ mod tests {
         let (tool, staging) = tool(&dir);
         let (ctx, _e, _p) = dispatch_context();
 
-        tool.call("c1", json!({"path": "f.rs", "before": "a", "after": "A"}), &ctx).await.unwrap();
-        tool.call("c2", json!({"path": "f.rs", "before": "b", "after": "B"}), &ctx).await.unwrap();
+        tool.call(
+            "c1",
+            json!({"path": "f.rs", "before": "a", "after": "A"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        tool.call(
+            "c2",
+            json!({"path": "f.rs", "before": "b", "after": "B"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(staging.changeset().files[0].after, "A\nB\n");
     }
 }

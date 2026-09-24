@@ -11,7 +11,9 @@ use aldwin_core::{ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutco
 use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, WorkItem};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::crossterm::{execute, ExecutableCommand};
 use ratatui::Terminal;
 
@@ -20,11 +22,17 @@ fn main() -> io::Result<()> {
     let theme = Theme::from_config(std::env::args().nth(2).as_deref());
 
     let catalogue = vec![ProviderChoice {
-        id:      "anthropic".into(),
+        id: "anthropic".into(),
         purpose: "claude models · ANTHROPIC_API_KEY".into(),
-        models:  vec![ModelChoice { id: "claude-sonnet-5".into(), purpose: "balanced; a good default".into(), context: 1_000_000 }],
+        models: vec![ModelChoice {
+            id: "claude-sonnet-5".into(),
+            purpose: "balanced; a good default".into(),
+            context: 1_000_000,
+        }],
     }];
-    let mut app = App::new("claude-sonnet-5".into()).with_theme(theme).with_catalogue(catalogue, Some("anthropic".into()));
+    let mut app = App::new("claude-sonnet-5".into())
+        .with_theme(theme)
+        .with_catalogue(catalogue, Some("anthropic".into()));
     scene(&scene_name, &mut app);
 
     enable_raw_mode()?;
@@ -42,7 +50,9 @@ fn main() -> io::Result<()> {
 }
 
 fn echo(app: &mut App) {
-    app.log.push(LogEntry::UserMessage { text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into() });
+    app.log.push(LogEntry::UserMessage {
+        text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into(),
+    });
 }
 
 fn scene(name: &str, app: &mut App) {
@@ -50,14 +60,37 @@ fn scene(name: &str, app: &mut App) {
         "launch" => {}
         "working" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText { text: "Looking at how requests move through the gateway.".into() });
-            let item = |verb: &str, target: &str, fact: &str| WorkItem { call_id: target.into(), verb: verb.into(), target: target.into(), fact: Some(fact.into()), failed: false };
-            app.log.push(LogEntry::Work { items: vec![item("Read", "src/gateway/mod.rs", "412 lines"), item("Searched", "tower::limit", "7 matches")], open: true });
+            app.log.push(LogEntry::AssistantText {
+                text: "Looking at how requests move through the gateway.".into(),
+            });
+            let item = |verb: &str, target: &str, fact: &str| WorkItem {
+                call_id: target.into(),
+                verb: verb.into(),
+                target: target.into(),
+                fact: Some(fact.into()),
+                failed: false,
+            };
+            app.log.push(LogEntry::Work {
+                items: vec![
+                    item("Read", "src/gateway/mod.rs", "412 lines"),
+                    item("Searched", "tower::limit", "7 matches"),
+                ],
+                open: true,
+            });
             app.log.push(LogEntry::Plan {
                 steps: vec![
-                    PlanStep { text: "Count requests per key".into(), state: StepState::Done },
-                    PlanStep { text: "Turn away requests over the limit".into(), state: StepState::Running },
-                    PlanStep { text: "Check that it works".into(), state: StepState::Pending },
+                    PlanStep {
+                        text: "Count requests per key".into(),
+                        state: StepState::Done,
+                    },
+                    PlanStep {
+                        text: "Turn away requests over the limit".into(),
+                        state: StepState::Running,
+                    },
+                    PlanStep {
+                        text: "Check that it works".into(),
+                        state: StepState::Pending,
+                    },
                 ],
             });
             app.turn_active = true;
@@ -81,13 +114,33 @@ fn scene(name: &str, app: &mut App) {
             let after = before.replace("line 20\n", "line twenty\nline twenty-one\n");
             app.apply_event(Event::ReviewRequested {
                 review_id: "r".into(),
-                changeset: Changeset { files: vec![ChangedFile { path: "src/gateway/router.rs".into(), before: Some(before), after }, ChangedFile { path: "tests/limit.rs".into(), before: None, after: "fn t() {}\n".into() }] },
+                changeset: Changeset {
+                    files: vec![
+                        ChangedFile {
+                            path: "src/gateway/router.rs".into(),
+                            before: Some(before),
+                            after,
+                        },
+                        ChangedFile {
+                            path: "tests/limit.rs".into(),
+                            before: None,
+                            after: "fn t() {}\n".into(),
+                        },
+                    ],
+                },
             });
         }
         "saved" => {
             echo(app);
-            app.apply_event(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files: vec!["a".into(), "b".into(), "c".into()], comments_resolved: 1 } });
-            app.log.push(LogEntry::AssistantText { text: "Done. Each key now gets 100 requests a minute, read from settings.".into() });
+            app.apply_event(Event::ReviewClosed {
+                outcome: ReviewOutcome::Saved {
+                    files: vec!["a".into(), "b".into(), "c".into()],
+                    comments_resolved: 1,
+                },
+            });
+            app.log.push(LogEntry::AssistantText {
+                text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
+            });
         }
         other => panic!("unknown scene {other:?}"),
     }

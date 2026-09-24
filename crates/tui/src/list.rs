@@ -10,17 +10,23 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 /// second column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRow {
-    pub label:  String,
+    pub label: String,
     pub detail: String,
 }
 
 impl ListRow {
     pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), detail: String::new() }
+        Self {
+            label: label.into(),
+            detail: String::new(),
+        }
     }
 
     pub fn with_detail(label: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { label: label.into(), detail: detail.into() }
+        Self {
+            label: label.into(),
+            detail: detail.into(),
+        }
     }
 }
 
@@ -34,7 +40,7 @@ pub enum ListOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct List {
-    pub rows:     Vec<ListRow>,
+    pub rows: Vec<ListRow>,
     pub selected: usize,
 }
 
@@ -61,7 +67,9 @@ impl List {
             (KeyCode::Down, _) => self.selected = (self.selected + 1).min(last),
             (KeyCode::Enter, _) => return ListOutcome::Chose(self.selected),
             (KeyCode::Esc, _) => return ListOutcome::Close,
-            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => return ListOutcome::Close,
+            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                return ListOutcome::Close
+            }
             // Press the number: the design's own instruction.
             (KeyCode::Char(c), _) if c.is_ascii_digit() && c != '0' => {
                 let idx = (c as u8 - b'1') as usize;
@@ -80,34 +88,59 @@ mod tests {
     use super::*;
 
     fn list() -> List {
-        List::new(vec![ListRow::new("Yes"), ListRow::new("No"), ListRow::new("Chat about this")])
+        List::new(vec![
+            ListRow::new("Yes"),
+            ListRow::new("No"),
+            ListRow::new("Chat about this"),
+        ])
     }
 
     #[test]
     fn arrows_clamp_and_enter_picks() {
         let mut l = list();
-        assert_eq!(l.handle_key(KeyCode::Up, KeyModifiers::NONE), ListOutcome::Stay);
+        assert_eq!(
+            l.handle_key(KeyCode::Up, KeyModifiers::NONE),
+            ListOutcome::Stay
+        );
         assert_eq!(l.selected, 0);
         l.handle_key(KeyCode::Down, KeyModifiers::NONE);
         l.handle_key(KeyCode::Down, KeyModifiers::NONE);
         l.handle_key(KeyCode::Down, KeyModifiers::NONE);
         assert_eq!(l.selected, 2);
-        assert_eq!(l.handle_key(KeyCode::Enter, KeyModifiers::NONE), ListOutcome::Chose(2));
+        assert_eq!(
+            l.handle_key(KeyCode::Enter, KeyModifiers::NONE),
+            ListOutcome::Chose(2)
+        );
     }
 
     #[test]
     fn a_number_picks_directly_and_an_out_of_range_one_does_nothing() {
         let mut l = list();
-        assert_eq!(l.handle_key(KeyCode::Char('2'), KeyModifiers::NONE), ListOutcome::Chose(1));
-        assert_eq!(l.handle_key(KeyCode::Char('9'), KeyModifiers::NONE), ListOutcome::Stay);
-        assert_eq!(l.handle_key(KeyCode::Char('0'), KeyModifiers::NONE), ListOutcome::Stay);
+        assert_eq!(
+            l.handle_key(KeyCode::Char('2'), KeyModifiers::NONE),
+            ListOutcome::Chose(1)
+        );
+        assert_eq!(
+            l.handle_key(KeyCode::Char('9'), KeyModifiers::NONE),
+            ListOutcome::Stay
+        );
+        assert_eq!(
+            l.handle_key(KeyCode::Char('0'), KeyModifiers::NONE),
+            ListOutcome::Stay
+        );
     }
 
     #[test]
     fn escape_and_ctrl_c_close() {
         let mut l = list();
-        assert_eq!(l.handle_key(KeyCode::Esc, KeyModifiers::NONE), ListOutcome::Close);
-        assert_eq!(l.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL), ListOutcome::Close);
+        assert_eq!(
+            l.handle_key(KeyCode::Esc, KeyModifiers::NONE),
+            ListOutcome::Close
+        );
+        assert_eq!(
+            l.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            ListOutcome::Close
+        );
     }
 
     #[test]

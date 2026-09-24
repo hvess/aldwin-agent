@@ -8,7 +8,7 @@
 //! calls complete, `Plan` is replaced whenever the `plan` tool speaks, and
 //! `Question` gains its answer.
 
-use aldwin_core::{PlanStep, ReviewOutcome, RetryInfo};
+use aldwin_core::{PlanStep, RetryInfo, ReviewOutcome};
 
 /// One entry in the conversation log.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,10 @@ pub enum LogEntry {
     Plan { steps: Vec<PlanStep> },
     /// A question the agent asked through `ask`, and how it was answered
     /// once it was. Drawn as the question, then ` · ` and the answer.
-    Question { question: String, answer: Option<String> },
+    Question {
+        question: String,
+        answer: Option<String>,
+    },
     /// What a review left behind: `✓ Saved 3 files · 1 comment resolved`.
     Review { outcome: ReviewOutcome },
     /// A message from outside the turn — the interceptor answering a slash
@@ -35,7 +38,11 @@ pub enum LogEntry {
     /// Something failed: a turn that errored, a cancelled turn, a provider
     /// retry. A sentence in `label`, the detail one disclosure below
     /// (ADR 0009 §5: no red, no glyph).
-    Failure { message: String, detail: Option<String>, open: bool },
+    Failure {
+        message: String,
+        detail: Option<String>,
+        open: bool,
+    },
     /// The turn ended cleanly — the blank row between turns.
     TurnBreak,
 }
@@ -45,10 +52,22 @@ impl LogEntry {
     /// as the detail.
     pub fn retry(info: &RetryInfo) -> Self {
         let message = match info.status {
-            Some(status) => format!("{} answered {status}; trying again ({}).", info.provider, ordinal(info.attempt)),
-            None => format!("{} did not answer; trying again ({}).", info.provider, ordinal(info.attempt)),
+            Some(status) => format!(
+                "{} answered {status}; trying again ({}).",
+                info.provider,
+                ordinal(info.attempt)
+            ),
+            None => format!(
+                "{} did not answer; trying again ({}).",
+                info.provider,
+                ordinal(info.attempt)
+            ),
         };
-        LogEntry::Failure { message, detail: Some(info.message.clone()), open: false }
+        LogEntry::Failure {
+            message,
+            detail: Some(info.message.clone()),
+            open: false,
+        }
     }
 }
 
@@ -67,11 +86,11 @@ fn ordinal(n: u32) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkItem {
     pub call_id: String,
-    pub verb:    String,
-    pub target:  String,
+    pub verb: String,
+    pub target: String,
     /// Right-flush, once the call has finished.
-    pub fact:    Option<String>,
-    pub failed:  bool,
+    pub fact: Option<String>,
+    pub failed: bool,
 }
 
 impl WorkItem {
@@ -79,7 +98,13 @@ impl WorkItem {
     /// vocabulary is the design's: outcomes, never tool names — `run` is
     /// what it ran, `explain` is what it looked up.
     pub fn describe(name: &str, input: &serde_json::Value) -> (String, String) {
-        let s = |key: &str| input.get(key).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+        let s = |key: &str| {
+            input
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
         match name {
             "read" => ("Read".into(), s("path")),
             "edit" => ("Changed".into(), s("path")),
@@ -96,7 +121,11 @@ impl WorkItem {
             // The design's own verb for a lookup — and eight characters,
             // which is what fits the 9-cell `--detail-col` with its gap.
             "explain" => {
-                let target = if !s("path").is_empty() { s("path") } else { s("query") };
+                let target = if !s("path").is_empty() {
+                    s("path")
+                } else {
+                    s("query")
+                };
                 ("Searched".into(), target)
             }
             "plan" => ("Planned".into(), String::new()),
@@ -130,7 +159,8 @@ impl WorkItem {
 /// joined with ` · `. `Read 3 files · Ran 2 programs`.
 pub fn summarise_work(items: &[WorkItem]) -> String {
     let mut order: Vec<&str> = Vec::new();
-    let mut counts: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<&str, (usize, usize)> =
+        std::collections::HashMap::new();
     for item in items {
         let entry = counts.entry(item.verb.as_str()).or_insert_with(|| {
             order.push(item.verb.as_str());
@@ -165,7 +195,11 @@ pub fn summarise_work(items: &[WorkItem]) -> String {
 }
 
 fn plural(n: usize, noun: &str) -> String {
-    if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
 }
 
 /// The sentence a failed turn leads with: what happened, in plain words, and
@@ -188,14 +222,22 @@ pub fn failure_sentence(error: &str) -> &'static str {
     }
     if let Some(rest) = error.strip_prefix("terminal error after ") {
         // Retries exhausted: say why they were needed, if the last one says.
-        return match rest.split_once(": ").map(|(_, last)| failure_sentence(last)) {
+        return match rest
+            .split_once(": ")
+            .map(|(_, last)| failure_sentence(last))
+        {
             Some(sentence) if sentence != FALLBACK => sentence,
             _ => "The provider kept failing. Send again in a moment.",
         };
     }
-    let status = error.strip_prefix("provider error ").and_then(|rest| rest.split(':').next()).and_then(|s| s.trim().parse::<u16>().ok());
+    let status = error
+        .strip_prefix("provider error ")
+        .and_then(|rest| rest.split(':').next())
+        .and_then(|s| s.trim().parse::<u16>().ok());
     match status {
-        Some(401 | 403) => "The provider did not accept your API key. Check the key, then send again.",
+        Some(401 | 403) => {
+            "The provider did not accept your API key. Check the key, then send again."
+        }
         Some(429) => "The provider is limiting requests right now. Wait a moment, then send again.",
         Some(500..=599) => "The provider had a problem on its side. Send again in a moment.",
         Some(_) => "The provider turned the request down. The detail says why.",
@@ -223,15 +265,42 @@ mod tests {
     #[test]
     fn a_failure_reads_as_what_happened_and_what_to_do() {
         let cases = [
-            ("provider error 400: {\"error\":{\"message\":\"unknown model gpt-5\"}}", "The provider turned the request down. The detail says why."),
-            ("provider error 401: invalid x-api-key", "The provider did not accept your API key. Check the key, then send again."),
-            ("provider error 429: rate_limit_error", "The provider is limiting requests right now. Wait a moment, then send again."),
-            ("provider error 529: overloaded_error", "The provider had a problem on its side. Send again in a moment."),
-            ("network error: connection refused", "The provider could not be reached. Check your connection, then send again."),
-            ("stream interrupted: unexpected EOF", "The reply was cut off partway. Send again to have it retried."),
-            ("terminal error after 3 retries: provider error 529: overloaded", "The provider had a problem on its side. Send again in a moment."),
-            ("terminal error after 3 retries: something else", "The provider kept failing. Send again in a moment."),
-            ("command channel closed", "The turn stopped before it finished. The detail says why."),
+            (
+                "provider error 400: {\"error\":{\"message\":\"unknown model gpt-5\"}}",
+                "The provider turned the request down. The detail says why.",
+            ),
+            (
+                "provider error 401: invalid x-api-key",
+                "The provider did not accept your API key. Check the key, then send again.",
+            ),
+            (
+                "provider error 429: rate_limit_error",
+                "The provider is limiting requests right now. Wait a moment, then send again.",
+            ),
+            (
+                "provider error 529: overloaded_error",
+                "The provider had a problem on its side. Send again in a moment.",
+            ),
+            (
+                "network error: connection refused",
+                "The provider could not be reached. Check your connection, then send again.",
+            ),
+            (
+                "stream interrupted: unexpected EOF",
+                "The reply was cut off partway. Send again to have it retried.",
+            ),
+            (
+                "terminal error after 3 retries: provider error 529: overloaded",
+                "The provider had a problem on its side. Send again in a moment.",
+            ),
+            (
+                "terminal error after 3 retries: something else",
+                "The provider kept failing. Send again in a moment.",
+            ),
+            (
+                "command channel closed",
+                "The turn stopped before it finished. The detail says why.",
+            ),
         ];
         for (error, sentence) in cases {
             assert_eq!(failure_sentence(error), sentence, "{error}");
@@ -242,16 +311,39 @@ mod tests {
 
     #[test]
     fn calls_are_described_as_outcomes_not_tool_names() {
-        assert_eq!(WorkItem::describe("read", &json!({"path": "src/x.rs"})), ("Read".into(), "src/x.rs".into()));
-        assert_eq!(WorkItem::describe("run", &json!({"program": "cargo", "args": ["test", "-q"]})), ("Ran".into(), "cargo test -q".into()));
-        assert_eq!(WorkItem::describe("explain", &json!({"query": "tower::limit"})), ("Searched".into(), "tower::limit".into()));
+        assert_eq!(
+            WorkItem::describe("read", &json!({"path": "src/x.rs"})),
+            ("Read".into(), "src/x.rs".into())
+        );
+        assert_eq!(
+            WorkItem::describe("run", &json!({"program": "cargo", "args": ["test", "-q"]})),
+            ("Ran".into(), "cargo test -q".into())
+        );
+        assert_eq!(
+            WorkItem::describe("explain", &json!({"query": "tower::limit"})),
+            ("Searched".into(), "tower::limit".into())
+        );
     }
 
     #[test]
     fn the_summary_counts_by_verb_in_first_seen_order() {
-        let item = |verb: &str, failed: bool| WorkItem { call_id: "c".into(), verb: verb.into(), target: String::new(), fact: None, failed };
-        let items = vec![item("Read", false), item("Read", false), item("Ran", true), item("Read", false)];
-        assert_eq!(summarise_work(&items), "Read 3 files · Ran 1 program, 1 failed");
+        let item = |verb: &str, failed: bool| WorkItem {
+            call_id: "c".into(),
+            verb: verb.into(),
+            target: String::new(),
+            fact: None,
+            failed,
+        };
+        let items = vec![
+            item("Read", false),
+            item("Read", false),
+            item("Ran", true),
+            item("Read", false),
+        ];
+        assert_eq!(
+            summarise_work(&items),
+            "Read 3 files · Ran 1 program, 1 failed"
+        );
         assert_eq!(summarise_work(&[item("Read", false)]), "Read 1 file");
     }
 
@@ -260,6 +352,9 @@ mod tests {
         assert_eq!(WorkItem::fact_for("Read", "a\nb\nc", false), "3 lines");
         assert_eq!(WorkItem::fact_for("Ran", "anything", false), "ok");
         assert_eq!(WorkItem::fact_for("Ran", "exit 1\nstderr", true), "exit 1");
-        assert_eq!(first_line(&"x".repeat(40), 10), format!("{}…", "x".repeat(9)));
+        assert_eq!(
+            first_line(&"x".repeat(40), 10),
+            format!("{}…", "x".repeat(9))
+        );
     }
 }

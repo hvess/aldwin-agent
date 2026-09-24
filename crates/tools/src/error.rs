@@ -18,7 +18,11 @@ pub enum ToolError {
     InvalidInput { tool: String, message: String },
 
     #[error("{path}: {source}")]
-    Io { path: PathBuf, #[source] source: std::io::Error },
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     /// The message names the roots rather than only the refusal: the
     /// observed failure was a model told "outside the project root" with no
@@ -35,7 +39,10 @@ pub enum ToolError {
     /// The message names the file to go and change, because that is the
     /// only way out.
     #[error("{program} is denied by a rule in {where_it_lives} — nothing here can override it")]
-    Locked { program: String, where_it_lives: &'static str },
+    Locked {
+        program: String,
+        where_it_lives: &'static str,
+    },
 
     /// A call declared a read did not complete with the project read-only.
     /// Nothing landed — that is the property the sandbox exists to provide —
@@ -66,8 +73,15 @@ pub enum ToolError {
     /// honoured. Not a failure the model sees: the dispatcher runs the call
     /// unconfined and tells the developer once (ADR 0009 §3). Carries
     /// `program`/`args` so a future prompt could name what it is about.
-    #[error("this call was declared a read, but reads cannot be enforced on this system: {source}")]
-    SandboxUnavailable { program: String, args: Vec<String>, #[source] source: std::io::Error },
+    #[error(
+        "this call was declared a read, but reads cannot be enforced on this system: {source}"
+    )]
+    SandboxUnavailable {
+        program: String,
+        args: Vec<String>,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("no such program: {program}")]
     ProgramNotFound { program: String },
@@ -91,5 +105,9 @@ pub enum ToolError {
     Mcp(#[from] crate::mcp::McpError),
 
     #[error("MCP tool {server}:{tool} returned an error: {message}")]
-    McpToolError { server: String, tool: String, message: String },
+    McpToolError {
+        server: String,
+        tool: String,
+        message: String,
+    },
 }

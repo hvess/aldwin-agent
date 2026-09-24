@@ -26,33 +26,45 @@ use crate::geometry::Theme;
 
 /// The static half of a scene: what it needs seeded and what it will be told.
 pub struct Script {
-    pub name:     &'static str,
+    pub name: &'static str,
     /// One per request the scene makes, in order.
-    pub replies:  Vec<Canned>,
+    pub replies: Vec<Canned>,
     /// Files the scene needs in the project before it runs — a `read` needs
     /// something to read, an `edit` needs its `before` text to exist exactly
     /// once.
-    pub files:    Vec<(&'static str, &'static str)>,
+    pub files: Vec<(&'static str, &'static str)>,
     /// Past sessions to seed into this project's history directory, as
     /// `(first user message, started_at, turns)`. Written through the
     /// product's own `HistoryStore`, same rule as the global config: a copy
     /// of the JSONL format here would drift from the one being reviewed.
-    pub history:  &'static [(&'static str, u64, usize)],
+    pub history: &'static [(&'static str, u64, usize)],
     /// Typed once the app has settled.
-    pub keys:     &'static str,
+    pub keys: &'static str,
     /// Written only when the scene wants a provider configured at all;
     /// `launch_unconfigured` is defined by its absence.
     pub provider: bool,
 }
 
 pub struct Prepared {
-    pub cwd:  PathBuf,
+    pub cwd: PathBuf,
     pub home: PathBuf,
     pub keys: Vec<Vec<u8>>,
 }
 
-pub const CATALOGUE: &[&str] =
-    &["launch", "launch_unconfigured", "plan", "details", "question", "commands", "review", "saved", "markdown", "failure", "long", "resume"];
+pub const CATALOGUE: &[&str] = &[
+    "launch",
+    "launch_unconfigured",
+    "plan",
+    "details",
+    "question",
+    "commands",
+    "review",
+    "saved",
+    "markdown",
+    "failure",
+    "long",
+    "resume",
+];
 
 /// Scenes that are wired up. The rest stay in `CATALOGUE` so the vocabulary is
 /// visible, and refuse to run rather than capture something else.
@@ -72,13 +84,20 @@ const TABLE: &str = "Three providers are configured here:\n\n| provider | key va
 const CTRL_ENTER: &str = "\"\\e[13;5u\"";
 
 fn plan(states: [&str; 3]) -> serde_json::Value {
-    let texts = ["Count requests per key", "Turn away requests over the limit", "Check that it works"];
+    let texts = [
+        "Count requests per key",
+        "Turn away requests over the limit",
+        "Check that it works",
+    ];
     serde_json::json!({ "steps": texts.iter().zip(states).map(|(t, s)| serde_json::json!({ "text": t, "state": s })).collect::<Vec<_>>() })
 }
 
 pub fn script(name: &str) -> Result<Script> {
     if !CATALOGUE.contains(&name) {
-        return Err(Error::new(ErrorKind::InvalidInput, format!("unknown scene {name:?}; see scene::CATALOGUE")));
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            format!("unknown scene {name:?}; see scene::CATALOGUE"),
+        ));
     }
     if !IMPLEMENTED.contains(&name) {
         return Err(Error::new(ErrorKind::Unsupported, format!("scene {name:?} is in the catalogue but not wired up yet; implemented: {IMPLEMENTED:?}")));
@@ -237,12 +256,18 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
     // `~/.aldwin` is materialised by the product's own writer rather than a
     // copy of its templates here.
     let global = home.join(".aldwin");
-    let config = aldwin_config::Config::open_at(&cwd, &global).map_err(|e| Error::other(format!("seeding global config: {e}")))?;
-    config.init_global_if_empty().map_err(|e| Error::other(format!("seeding global config: {e}")))?;
+    let config = aldwin_config::Config::open_at(&cwd, &global)
+        .map_err(|e| Error::other(format!("seeding global config: {e}")))?;
+    config
+        .init_global_if_empty()
+        .map_err(|e| Error::other(format!("seeding global config: {e}")))?;
 
     // Theme is global-only and read once at startup, so it is seeded as config
     // rather than sent as a command.
-    std::fs::write(global.join("tui.yaml"), format!("version: 1\ntheme: {theme}\n"))?;
+    std::fs::write(
+        global.join("tui.yaml"),
+        format!("version: 1\ntheme: {theme}\n"),
+    )?;
 
     if script.provider {
         // The endpoint carries an ephemeral port, so this is written per run.
@@ -264,7 +289,8 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         std::fs::write(file, contents)?;
     }
 
-    let keys = crate::keys::parse(&script.keys.replace("{CTRL_ENTER}", CTRL_ENTER)).map_err(Error::other)?;
+    let keys = crate::keys::parse(&script.keys.replace("{CTRL_ENTER}", CTRL_ENTER))
+        .map_err(Error::other)?;
     Ok(Prepared { cwd, home, keys })
 }
 
@@ -279,19 +305,41 @@ fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
     let dir = aldwin_config::history_project_dir(&global.join("history"), cwd);
     for (index, (text, started_at, turns)) in script.history.iter().enumerate() {
         let id = SessionId(format!("{started_at:010}-0-{index}"));
-        let header = SessionHeader { version: HISTORY_VERSION, started_at: *started_at, cwd: cwd.to_string_lossy().into_owned(), model: "gpt-5".into() };
-        let store = HistoryStore::create(&dir, &id, &header).map_err(|e| Error::other(format!("seeding history: {e}")))?;
+        let header = SessionHeader {
+            version: HISTORY_VERSION,
+            started_at: *started_at,
+            cwd: cwd.to_string_lossy().into_owned(),
+            model: "gpt-5".into(),
+        };
+        let store = HistoryStore::create(&dir, &id, &header)
+            .map_err(|e| Error::other(format!("seeding history: {e}")))?;
         for turn in 0..*turns {
             let turn_id = TurnId(turn as u64 + 1);
             let step_id = StepId(turn as u64 + 1);
-            let user = if turn == 0 { (*text).to_string() } else { format!("and then? ({turn})") };
+            let user = if turn == 0 {
+                (*text).to_string()
+            } else {
+                format!("and then? ({turn})")
+            };
             for record in [
                 LogRecord::TurnStarted { turn_id },
-                LogRecord::UserMessage { turn_id, text: user },
-                LogRecord::AssistantMessage { turn_id, step_id, text: PROSE.into() },
-                LogRecord::TurnEnded { turn_id, reason: TurnEndReason::EndTurn },
+                LogRecord::UserMessage {
+                    turn_id,
+                    text: user,
+                },
+                LogRecord::AssistantMessage {
+                    turn_id,
+                    step_id,
+                    text: PROSE.into(),
+                },
+                LogRecord::TurnEnded {
+                    turn_id,
+                    reason: TurnEndReason::EndTurn,
+                },
             ] {
-                store.append(&record).map_err(|e| Error::other(format!("seeding history: {e}")))?;
+                store
+                    .append(&record)
+                    .map_err(|e| Error::other(format!("seeding history: {e}")))?;
             }
         }
     }

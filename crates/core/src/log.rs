@@ -1,5 +1,5 @@
-use std::sync::{Arc, RwLock};
 use crate::event::LogRecord;
+use std::sync::{Arc, RwLock};
 
 /// Where a committed record goes *besides* memory.
 ///
@@ -20,15 +20,20 @@ pub struct ConversationLog {
     inner: Arc<RwLock<Vec<LogRecord>>>,
     /// `None` is the ordinary no-history case — every test, and any session
     /// whose store could not be opened.
-    sink:  Option<Arc<dyn RecordSink>>,
+    sink: Option<Arc<dyn RecordSink>>,
 }
 
 impl ConversationLog {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// The same log, writing through to `sink` as well as to memory.
     pub fn with_sink(sink: Arc<dyn RecordSink>) -> Self {
-        Self { inner: Arc::new(RwLock::new(Vec::new())), sink: Some(sink) }
+        Self {
+            inner: Arc::new(RwLock::new(Vec::new())),
+            sink: Some(sink),
+        }
     }
 
     pub fn append(&self, record: LogRecord) {
@@ -53,7 +58,9 @@ impl ConversationLog {
         self.inner.read().expect("log lock poisoned").len()
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// `/clear` — wipes every record so the next turn's
     /// `messages_from_log()` starts from nothing.
@@ -97,7 +104,9 @@ mod tests {
     #[test]
     fn clear_empties_a_populated_log() {
         let log = ConversationLog::new();
-        log.append(LogRecord::TurnStarted { turn_id: TurnId::next() });
+        log.append(LogRecord::TurnStarted {
+            turn_id: TurnId::next(),
+        });
         assert!(!log.is_empty());
         log.clear();
         assert!(log.is_empty());
@@ -107,7 +116,9 @@ mod tests {
     #[test]
     fn a_log_with_no_sink_behaves_exactly_as_before() {
         let log = ConversationLog::new();
-        log.append(LogRecord::TurnStarted { turn_id: TurnId::next() });
+        log.append(LogRecord::TurnStarted {
+            turn_id: TurnId::next(),
+        });
         assert_eq!(log.len(), 1);
     }
 
@@ -115,8 +126,15 @@ mod tests {
     fn append_fans_out_to_the_sink() {
         let spy = Arc::new(Spy::default());
         let log = ConversationLog::with_sink(spy.clone());
-        log.append(LogRecord::UserMessage { turn_id: TurnId::next(), text: "hi".into() });
-        assert_eq!(spy.0.lock().unwrap().len(), 1, "the record reaches the sink as well as memory");
+        log.append(LogRecord::UserMessage {
+            turn_id: TurnId::next(),
+            text: "hi".into(),
+        });
+        assert_eq!(
+            spy.0.lock().unwrap().len(),
+            1,
+            "the record reaches the sink as well as memory"
+        );
         assert_eq!(log.len(), 1);
     }
 
@@ -127,8 +145,14 @@ mod tests {
     fn replace_does_not_write_through_to_the_sink() {
         let spy = Arc::new(Spy::default());
         let log = ConversationLog::with_sink(spy.clone());
-        log.replace(vec![LogRecord::UserMessage { turn_id: TurnId(1), text: "from disk".into() }]);
+        log.replace(vec![LogRecord::UserMessage {
+            turn_id: TurnId(1),
+            text: "from disk".into(),
+        }]);
         assert_eq!(log.len(), 1, "the log takes the loaded records");
-        assert!(spy.0.lock().unwrap().is_empty(), "and none of them is written back out");
+        assert!(
+            spy.0.lock().unwrap().is_empty(),
+            "and none of them is written back out"
+        );
     }
 }

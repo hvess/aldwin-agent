@@ -20,31 +20,31 @@ use crate::config::ProviderConfig;
 
 #[derive(Debug, Serialize)]
 pub struct WireRequest {
-    pub model:      String,
-    pub messages:   Vec<WireMessage>,
+    pub model: String,
+    pub messages: Vec<WireMessage>,
     pub max_tokens: u32,
-    pub stream:     bool,
+    pub stream: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools:      Vec<WireTool>,
+    pub tools: Vec<WireTool>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WireTool {
     #[serde(rename = "type")]
-    pub kind:     &'static str,
+    pub kind: &'static str,
     pub function: WireFunctionDef,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WireFunctionDef {
-    pub name:        String,
+    pub name: String,
     pub description: String,
-    pub parameters:  serde_json::Value,
+    pub parameters: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct WireMessage {
-    pub role:    &'static str,
+    pub role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,15 +55,15 @@ pub struct WireMessage {
 
 #[derive(Debug, Serialize)]
 pub struct WireToolCall {
-    pub id:       String,
+    pub id: String,
     #[serde(rename = "type")]
-    pub kind:     &'static str,
+    pub kind: &'static str,
     pub function: WireFunctionCall,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WireFunctionCall {
-    pub name:      String,
+    pub name: String,
     pub arguments: String,
 }
 
@@ -79,17 +79,31 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
         .tools
         .iter()
         .map(|t| WireTool {
-            kind:     "function",
-            function: WireFunctionDef { name: t.name.clone(), description: t.description.clone(), parameters: t.input_schema.clone() },
+            kind: "function",
+            function: WireFunctionDef {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.input_schema.clone(),
+            },
         })
         .collect();
 
-    let mut messages = vec![WireMessage { role: "system", content: Some(request.system.to_string()), ..Default::default() }];
+    let mut messages = vec![WireMessage {
+        role: "system",
+        content: Some(request.system.to_string()),
+        ..Default::default()
+    }];
     for m in request.messages {
         map_message_into(m, &mut messages);
     }
 
-    WireRequest { model: config.model.clone(), messages, max_tokens: config.extended_thinking_budget, stream: true, tools }
+    WireRequest {
+        model: config.model.clone(),
+        messages,
+        max_tokens: config.extended_thinking_budget,
+        stream: true,
+        tools,
+    }
 }
 
 /// OpenAI's message shape doesn't allow mixed tool-result + text content in
@@ -107,16 +121,25 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
     let mut text = String::new();
     let mut tool_calls: Vec<WireToolCall> = Vec::new();
 
-    let flush = |text: &mut String, tool_calls: &mut Vec<WireToolCall>, out: &mut Vec<WireMessage>| {
-        if !text.is_empty() || !tool_calls.is_empty() {
-            out.push(WireMessage {
-                role,
-                content: if text.is_empty() { None } else { Some(std::mem::take(text)) },
-                tool_calls: if tool_calls.is_empty() { None } else { Some(std::mem::take(tool_calls)) },
-                tool_call_id: None,
-            });
-        }
-    };
+    let flush =
+        |text: &mut String, tool_calls: &mut Vec<WireToolCall>, out: &mut Vec<WireMessage>| {
+            if !text.is_empty() || !tool_calls.is_empty() {
+                out.push(WireMessage {
+                    role,
+                    content: if text.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(text))
+                    },
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(tool_calls))
+                    },
+                    tool_call_id: None,
+                });
+            }
+        };
 
     for block in &m.content {
         match block {
@@ -132,9 +155,9 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
             ContentBlock::ToolResult(result) => {
                 flush(&mut text, &mut tool_calls, out);
                 out.push(WireMessage {
-                    role:         "tool",
-                    content:      Some(result.content.clone()),
-                    tool_calls:   None,
+                    role: "tool",
+                    content: Some(result.content.clone()),
+                    tool_calls: None,
                     tool_call_id: Some(result.call_id.clone()),
                 });
             }
@@ -145,9 +168,12 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
 
 fn map_tool_call(call: &ToolCall) -> WireToolCall {
     WireToolCall {
-        id:       call.id.clone(),
-        kind:     "function",
-        function: WireFunctionCall { name: call.name.clone(), arguments: call.input.to_string() },
+        id: call.id.clone(),
+        kind: "function",
+        function: WireFunctionCall {
+            name: call.name.clone(),
+            arguments: call.input.to_string(),
+        },
     }
 }
 
@@ -165,13 +191,13 @@ pub struct WireChunk {
     #[serde(default)]
     pub choices: Vec<WireChoice>,
     #[serde(default)]
-    pub usage:   Option<WireUsage>,
+    pub usage: Option<WireUsage>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 pub struct WireChoice {
     #[serde(default)]
-    pub delta:         WireDelta,
+    pub delta: WireDelta,
     #[serde(default)]
     pub finish_reason: Option<String>,
 }
@@ -179,20 +205,20 @@ pub struct WireChoice {
 #[derive(Debug, Deserialize, Default)]
 pub struct WireDelta {
     #[serde(default)]
-    pub content:    Option<String>,
+    pub content: Option<String>,
     /// Lumo (and other reasoning backends) stream thinking text here, in the
     /// same deltas as content.
     #[serde(default)]
-    pub reasoning:  Option<String>,
+    pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<WireToolCallDelta>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WireToolCallDelta {
-    pub index:    usize,
+    pub index: usize,
     #[serde(default)]
-    pub id:       Option<String>,
+    pub id: Option<String>,
     #[serde(default)]
     pub function: Option<WireFunctionDelta>,
 }
@@ -200,7 +226,7 @@ pub struct WireToolCallDelta {
 #[derive(Debug, Deserialize, Default)]
 pub struct WireFunctionDelta {
     #[serde(default)]
-    pub name:      Option<String>,
+    pub name: Option<String>,
     #[serde(default)]
     pub arguments: Option<String>,
 }
@@ -208,7 +234,7 @@ pub struct WireFunctionDelta {
 #[derive(Debug, Deserialize)]
 pub struct WireUsage {
     #[serde(default)]
-    pub prompt_tokens:     u32,
+    pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
 }
@@ -237,12 +263,16 @@ pub fn parse_error_body(text: &str) -> Option<String> {
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
     #[error("malformed tool arguments JSON for {name:?}: {source}")]
-    ToolInput { name: String, #[source] source: serde_json::Error },
+    ToolInput {
+        name: String,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 #[derive(Default)]
 struct ToolBuffer {
-    id:   Option<String>,
+    id: Option<String>,
     name: Option<String>,
     json: String,
 }
@@ -267,7 +297,7 @@ struct ToolBuffer {
 #[derive(Default)]
 pub struct Assembler {
     tool_buffers: BTreeMap<usize, ToolBuffer>,
-    usage:        Option<WireUsage>,
+    usage: Option<WireUsage>,
     /// Set when `finish_reason` arrived before any usage did — see
     /// [`Assembler::end_step`].
     pending_stop: Option<StopReason>,
@@ -319,9 +349,11 @@ impl Assembler {
             self.reasoning_buf.push_str(&fragment);
             events.push(LlmEvent::ThinkingDelta { text: fragment });
         }
-        if self.in_reasoning && (text.is_some() || !tool_calls.is_empty() || choice.finish_reason.is_some()) {
+        if self.in_reasoning
+            && (text.is_some() || !tool_calls.is_empty() || choice.finish_reason.is_some())
+        {
             events.push(LlmEvent::ThinkingEnd {
-                text:      std::mem::take(&mut self.reasoning_buf),
+                text: std::mem::take(&mut self.reasoning_buf),
                 signature: String::new(),
             });
             self.in_reasoning = false;
@@ -349,16 +381,25 @@ impl Assembler {
             // `"stop"` with calls buffered is a tool turn too: some
             // compatible backends never say `"tool_calls"`, and treating it
             // as the end of the turn loses the calls without a word.
-            Some(reason) if reason == "tool_calls" || (reason == "stop" && !self.tool_buffers.is_empty()) => {
+            Some(reason)
+                if reason == "tool_calls"
+                    || (reason == "stop" && !self.tool_buffers.is_empty()) =>
+            {
                 for (_, buf) in std::mem::take(&mut self.tool_buffers) {
                     let input = if buf.json.is_empty() {
                         serde_json::Value::Object(Default::default())
                     } else {
-                        serde_json::from_str(&buf.json)
-                            .map_err(|source| WireError::ToolInput { name: buf.name.clone().unwrap_or_default(), source })?
+                        serde_json::from_str(&buf.json).map_err(|source| WireError::ToolInput {
+                            name: buf.name.clone().unwrap_or_default(),
+                            source,
+                        })?
                     };
                     events.push(LlmEvent::ToolUseRequested {
-                        call: ToolCall { id: buf.id.unwrap_or_default(), name: buf.name.unwrap_or_default(), input },
+                        call: ToolCall {
+                            id: buf.id.unwrap_or_default(),
+                            name: buf.name.unwrap_or_default(),
+                            input,
+                        },
                     });
                 }
                 self.end_step(StopReason::ToolUse, &mut events);
@@ -393,13 +434,22 @@ impl Assembler {
 
     fn step_ended(&self, stop_reason: StopReason) -> aldwin_core::LlmEvent {
         use aldwin_core::{CacheStats, LlmEvent, StepOutcome};
-        let (input_tokens, output_tokens) =
-            self.usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens)).unwrap_or_default();
+        let (input_tokens, output_tokens) = self
+            .usage
+            .as_ref()
+            .map(|u| (u.prompt_tokens, u.completion_tokens))
+            .unwrap_or_default();
         LlmEvent::StepEnded {
             outcome: StepOutcome {
                 stop_reason,
-                usage: UsageStats { input_tokens, output_tokens },
-                cache: CacheStats { cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+                usage: UsageStats {
+                    input_tokens,
+                    output_tokens,
+                },
+                cache: CacheStats {
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                },
             },
         }
     }
@@ -418,7 +468,11 @@ mod tests {
     #[test]
     fn text_delta_passes_through() {
         let mut a = Assembler::new();
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}"#)).unwrap();
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}"#,
+            ))
+            .unwrap();
         assert!(matches!(&out[..], [LlmEvent::TextDelta { text }] if text == "hi"));
     }
 
@@ -437,7 +491,8 @@ mod tests {
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"},"index":0}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
             ))
             .unwrap();
-        let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { outcome }] = &out[..] else {
+        let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { outcome }] = &out[..]
+        else {
             panic!("expected ToolUseRequested then StepEnded, got {out:?}")
         };
         assert_eq!(call.id, "c1");
@@ -460,7 +515,9 @@ mod tests {
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":":\"f.rs\"}"},"index":0}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
             ))
             .unwrap();
-        let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { .. }] = &out[..] else { panic!("expected two events, got {out:?}") };
+        let [LlmEvent::ToolUseRequested { call }, LlmEvent::StepEnded { .. }] = &out[..] else {
+            panic!("expected two events, got {out:?}")
+        };
         assert_eq!(call.id, "c1");
         assert_eq!(call.name, "read");
         assert_eq!(call.input, json!({"path": "f.rs"}));
@@ -474,7 +531,9 @@ mod tests {
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"noop"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
             ))
             .unwrap();
-        let [LlmEvent::ToolUseRequested { call }, ..] = &out[..] else { panic!("expected at least one event") };
+        let [LlmEvent::ToolUseRequested { call }, ..] = &out[..] else {
+            panic!("expected at least one event")
+        };
         assert_eq!(call.input, json!({}));
     }
 
@@ -486,7 +545,9 @@ mod tests {
         ))
         .unwrap();
         let err = a
-            .handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#))
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ))
             .unwrap_err();
         assert!(matches!(err, WireError::ToolInput { .. }));
     }
@@ -503,7 +564,9 @@ mod tests {
             ))
             .unwrap();
         assert!(matches!(&out[0], LlmEvent::ToolUseRequested { call } if call.name == "read"));
-        assert!(matches!(&out[1], LlmEvent::StepEnded { outcome } if outcome.stop_reason == StopReason::ToolUse));
+        assert!(
+            matches!(&out[1], LlmEvent::StepEnded { outcome } if outcome.stop_reason == StopReason::ToolUse)
+        );
     }
 
     #[test]
@@ -512,7 +575,9 @@ mod tests {
         let out = a
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#))
             .unwrap();
-        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded") };
+        let [LlmEvent::StepEnded { outcome }] = &out[..] else {
+            panic!("expected StepEnded")
+        };
         assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
         assert_eq!(outcome.usage.input_tokens, 10);
         assert_eq!(outcome.usage.output_tokens, 5);
@@ -523,8 +588,15 @@ mod tests {
         let mut a = Assembler::new();
         // No usage anywhere in this stream, so StepEnded waits for the end of
         // it — the mapping is what's under test, not the timing.
-        assert!(a.handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#)).unwrap().is_empty());
-        let Some(LlmEvent::StepEnded { outcome }) = a.finish() else { panic!("expected StepEnded") };
+        assert!(a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#
+            ))
+            .unwrap()
+            .is_empty());
+        let Some(LlmEvent::StepEnded { outcome }) = a.finish() else {
+            panic!("expected StepEnded")
+        };
         assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
     }
 
@@ -534,7 +606,14 @@ mod tests {
     #[test]
     fn usage_arriving_after_finish_reason_still_reaches_step_ended() {
         let mut a = Assembler::new();
-        assert_eq!(a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#)).unwrap().len(), 1);
+        assert_eq!(
+            a.handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#
+            ))
+            .unwrap()
+            .len(),
+            1
+        );
         assert!(a
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{"role":null,"content":null},"finish_reason":"stop"}]}"#))
             .unwrap()
@@ -542,11 +621,16 @@ mod tests {
         let out = a
             .handle(chunk(r#"{"choices":[],"usage":{"prompt_tokens":77,"completion_tokens":7,"total_tokens":84}}"#))
             .unwrap();
-        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded, got {out:?}") };
+        let [LlmEvent::StepEnded { outcome }] = &out[..] else {
+            panic!("expected StepEnded, got {out:?}")
+        };
         assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
         assert_eq!(outcome.usage.input_tokens, 77);
         assert_eq!(outcome.usage.output_tokens, 7);
-        assert!(a.finish().is_none(), "the step was already ended; nothing left to flush");
+        assert!(
+            a.finish().is_none(),
+            "the step was already ended; nothing left to flush"
+        );
     }
 
     #[test]
@@ -557,9 +641,18 @@ mod tests {
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{}"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
             ))
             .unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ToolUseRequested { .. }]), "StepEnded should be held back, got {out:?}");
-        let out = a.handle(chunk(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#)).unwrap();
-        let [LlmEvent::StepEnded { outcome }] = &out[..] else { panic!("expected StepEnded, got {out:?}") };
+        assert!(
+            matches!(&out[..], [LlmEvent::ToolUseRequested { .. }]),
+            "StepEnded should be held back, got {out:?}"
+        );
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#,
+            ))
+            .unwrap();
+        let [LlmEvent::StepEnded { outcome }] = &out[..] else {
+            panic!("expected StepEnded, got {out:?}")
+        };
         assert!(matches!(outcome.stop_reason, StopReason::ToolUse));
         assert_eq!(outcome.usage.input_tokens, 3);
     }
@@ -572,19 +665,54 @@ mod tests {
     #[test]
     fn reasoning_deltas_bracket_and_carry_their_text() {
         let mut a = Assembler::new();
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"17*"}}]}"#)).unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ThinkingStart, LlmEvent::ThinkingDelta { .. }]), "got {out:?}");
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"23"}}]}"#)).unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ThinkingDelta { .. }]), "thinking opens once, got {out:?}");
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"391","reasoning":null}}]}"#)).unwrap();
-        let [LlmEvent::ThinkingEnd { text: thought, signature }, LlmEvent::TextDelta { text }] = &out[..] else {
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"17*"}}]}"#,
+            ))
+            .unwrap();
+        assert!(
+            matches!(
+                &out[..],
+                [LlmEvent::ThinkingStart, LlmEvent::ThinkingDelta { .. }]
+            ),
+            "got {out:?}"
+        );
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"23"}}]}"#,
+            ))
+            .unwrap();
+        assert!(
+            matches!(&out[..], [LlmEvent::ThinkingDelta { .. }]),
+            "thinking opens once, got {out:?}"
+        );
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":"391","reasoning":null}}]}"#,
+            ))
+            .unwrap();
+        let [LlmEvent::ThinkingEnd {
+            text: thought,
+            signature,
+        }, LlmEvent::TextDelta { text }] = &out[..]
+        else {
             panic!("got {out:?}")
         };
-        assert_eq!(thought, "17*23", "the whole block, not just the last fragment");
+        assert_eq!(
+            thought, "17*23",
+            "the whole block, not just the last fragment"
+        );
         assert!(signature.is_empty(), "this wire issues no signature");
         assert_eq!(text, "391");
-        let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":"!"}}]}"#)).unwrap();
-        assert!(matches!(&out[..], [LlmEvent::TextDelta { .. }]), "thinking closes once, got {out:?}");
+        let out = a
+            .handle(chunk(
+                r#"{"choices":[{"index":0,"delta":{"content":"!"}}]}"#,
+            ))
+            .unwrap();
+        assert!(
+            matches!(&out[..], [LlmEvent::TextDelta { .. }]),
+            "thinking closes once, got {out:?}"
+        );
     }
 
     #[test]
@@ -592,10 +720,15 @@ mod tests {
     /// so a carried thinking block must not be echoed into the request.
     fn thinking_blocks_are_not_sent_back_on_this_wire() {
         let messages = [Message {
-            role:    Role::Assistant,
+            role: Role::Assistant,
             content: vec![
-                ContentBlock::Thinking { text: "private".into(), signature: String::new() },
-                ContentBlock::Text { text: "visible".into() },
+                ContentBlock::Thinking {
+                    text: "private".into(),
+                    signature: String::new(),
+                },
+                ContentBlock::Text {
+                    text: "visible".into(),
+                },
             ],
         }];
         let mut out = Vec::new();
@@ -607,21 +740,36 @@ mod tests {
     #[test]
     fn a_finish_reason_closes_an_open_thinking_bracket() {
         let mut a = Assembler::new();
-        a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"reasoning":"hmm"}}]}"#)).unwrap();
+        a.handle(chunk(
+            r#"{"choices":[{"index":0,"delta":{"reasoning":"hmm"}}]}"#,
+        ))
+        .unwrap();
         let out = a
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#))
             .unwrap();
-        assert!(matches!(&out[..], [LlmEvent::ThinkingEnd { .. }, LlmEvent::StepEnded { .. }]), "got {out:?}");
+        assert!(
+            matches!(
+                &out[..],
+                [LlmEvent::ThinkingEnd { .. }, LlmEvent::StepEnded { .. }]
+            ),
+            "got {out:?}"
+        );
     }
 
     #[test]
     fn parse_error_body_handles_the_detail_shape() {
-        assert_eq!(parse_error_body(r#"{"detail":"Invalid API Key"}"#), Some("Invalid API Key".to_string()));
+        assert_eq!(
+            parse_error_body(r#"{"detail":"Invalid API Key"}"#),
+            Some("Invalid API Key".to_string())
+        );
     }
 
     #[test]
     fn parse_error_body_handles_the_message_shape() {
-        assert_eq!(parse_error_body(r#"{"message":"bad model"}"#), Some("bad model".to_string()));
+        assert_eq!(
+            parse_error_body(r#"{"message":"bad model"}"#),
+            Some("bad model".to_string())
+        );
         assert_eq!(parse_error_body("not json at all"), None);
     }
 
@@ -635,10 +783,20 @@ mod tests {
             extended_thinking_budget: 4096,
         };
         let messages = vec![Message {
-            role:    Role::User,
-            content: vec![ContentBlock::ToolResult(ToolResult { call_id: "t1".into(), content: "ok".into(), is_error: false })],
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult(ToolResult {
+                call_id: "t1".into(),
+                content: "ok".into(),
+                is_error: false,
+            })],
         }];
-        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools: &[],
+            messages: &messages,
+            cache_breakpoints: &[],
+        };
 
         let wire = build_request(&config, &request);
         assert_eq!(wire.messages[0].role, "system");
@@ -657,13 +815,25 @@ mod tests {
             extended_thinking_budget: 4096,
         };
         let messages = vec![Message {
-            role:    Role::Assistant,
+            role: Role::Assistant,
             content: vec![
-                ContentBlock::Text { text: "checking...".into() },
-                ContentBlock::ToolUse(ToolCall { id: "c1".into(), name: "read".into(), input: json!({"path": "f.rs"}) }),
+                ContentBlock::Text {
+                    text: "checking...".into(),
+                },
+                ContentBlock::ToolUse(ToolCall {
+                    id: "c1".into(),
+                    name: "read".into(),
+                    input: json!({"path": "f.rs"}),
+                }),
             ],
         }];
-        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &messages, cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools: &[],
+            messages: &messages,
+            cache_breakpoints: &[],
+        };
 
         let wire = build_request(&config, &request);
         assert_eq!(wire.messages.len(), 2);
@@ -685,7 +855,13 @@ mod tests {
             base_url: Some("https://x".into()),
             extended_thinking_budget: 4096,
         };
-        let request = LlmRequest { model: "unused", system: "sys", tools: &[], messages: &[], cache_breakpoints: &[] };
+        let request = LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools: &[],
+            messages: &[],
+            cache_breakpoints: &[],
+        };
         let wire = build_request(&config, &request);
         assert_eq!(wire.max_tokens, 4096);
     }
@@ -699,8 +875,18 @@ mod tests {
             base_url: Some("https://x".into()),
             extended_thinking_budget: 4096,
         };
-        let tools = vec![ToolDefinition { name: "read".into(), description: "reads a file".into(), input_schema: json!({"type":"object"}) }];
-        let request = LlmRequest { model: "unused", system: "sys", tools: &tools, messages: &[], cache_breakpoints: &[] };
+        let tools = vec![ToolDefinition {
+            name: "read".into(),
+            description: "reads a file".into(),
+            input_schema: json!({"type":"object"}),
+        }];
+        let request = LlmRequest {
+            model: "unused",
+            system: "sys",
+            tools: &tools,
+            messages: &[],
+            cache_breakpoints: &[],
+        };
         let wire = build_request(&config, &request);
         assert_eq!(wire.tools.len(), 1);
         assert_eq!(wire.tools[0].kind, "function");

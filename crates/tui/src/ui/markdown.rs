@@ -236,7 +236,10 @@ fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let columns = table.header.len();
 
-    let header: Vec<Cell> = table.header.iter().map(|cell| parse_inline(cell, Style::default().fg(pal.label).add_modifier(Modifier::BOLD), ctx)).collect();
+    // `label`, not weight 600: the design spends emphasis on the review
+    // title, a file path, a question and "Aldwin", and ADR 0002 gives the
+    // header its tone only.
+    let header: Vec<Cell> = table.header.iter().map(|cell| parse_inline(cell, Style::default().fg(pal.label), ctx)).collect();
     let body: Vec<Vec<Cell>> = table
         .rows
         .iter()
@@ -353,9 +356,13 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
         // needed and it is not in this list, do not draw one."
         return band_row(pal.tint, ctx);
     }
-    if let Some((level, rest)) = parse_heading(trimmed_start) {
-        let style = if level <= 2 { base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { base.add_modifier(Modifier::BOLD) };
-        return Line::from(parse_inline(rest, style, ctx));
+    if let Some(rest) = parse_heading(trimmed_start) {
+        // A heading is its own line of prose, nothing more. Not underlined
+        // — nothing in a window is stroked, and an underline is a stroke —
+        // and not weight 600, which the design spends on the review title,
+        // a file path, a question and "Aldwin" alone. `**bold**` inside a
+        // line is the model's own emphasis and keeps its weight.
+        return Line::from(parse_inline(rest, base, ctx));
     }
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
@@ -449,7 +456,9 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         } else if rest.starts_with('[') {
             if let Some((label, url, remainder)) = parse_link(rest) {
                 flush(&mut buf, base, &mut spans);
-                spans.push(Span::styled(label.to_string(), base.add_modifier(Modifier::UNDERLINED)));
+                // The label as text, the address after it in `label3` — no
+                // underline, which would be a stroke.
+                spans.push(Span::styled(label.to_string(), base));
                 if !url.is_empty() && url != label {
                     spans.push(Span::styled(format!(" ({url})"), Style::default().fg(ctx.pal.label3)));
                 }
@@ -478,12 +487,12 @@ fn parse_link(text: &str) -> Option<(&str, &str, &str)> {
     Some((label, url, remainder))
 }
 
-fn parse_heading(line: &str) -> Option<(u8, &str)> {
+fn parse_heading(line: &str) -> Option<&str> {
     let hashes = line.chars().take_while(|&c| c == '#').count();
     if hashes == 0 || hashes > 6 {
         return None;
     }
-    line[hashes..].strip_prefix(' ').map(|rest| (hashes as u8, rest))
+    line[hashes..].strip_prefix(' ')
 }
 
 fn parse_bullet(line: &str) -> Option<&str> {

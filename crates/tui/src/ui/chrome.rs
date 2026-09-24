@@ -11,6 +11,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::grid::{truncate_spans, Ctx, GROUP_GAP, MARGIN_X, MARK_COL};
 use super::question;
+use aldwin_core::ReviewOutcome;
+
 use crate::app::{App, Mode};
 use crate::draft;
 use crate::log::LogEntry;
@@ -292,49 +294,70 @@ enum Status {
 }
 
 /// What the footer says now — only the keys that work in this state.
-fn footer_state(app: &App) -> (Status, Vec<KeyHint>) {
+struct Footer {
+    status: Status,
+    /// The keys of the moment, after the status word.
+    keys:   Vec<KeyHint>,
+    /// `/  Commands`: not a key of the moment but the way to everything
+    /// else, and frame A sets it apart — right-flush, one group gap before
+    /// the context bar.
+    aside:  Option<KeyHint>,
+}
+
+impl Footer {
+    fn new(status: Status, keys: Vec<KeyHint>) -> Self {
+        Self { status, keys, aside: None }
+    }
+}
+
+fn footer_state(app: &App) -> Footer {
+    let details = || if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") };
     match &app.mode {
-        Mode::Question(_) => (Status::Waiting, vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")]),
-        Mode::Commands(_) => (Status::Ready, vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")]),
-        Mode::Review(r) => {
-            if r.keys_shown {
-                (
-                    Status::None,
-                    vec![
-                        KeyHint::new("↑↓", "Move"),
-                        KeyHint::new("⇧↑↓", "Select"),
-                        KeyHint::new("↩", "Comment"),
-                        KeyHint::new("⌃↩", "Approve"),
-                        KeyHint::new("⇥", "Next file"),
-                        KeyHint::new("⎋", "Discard"),
-                    ],
-                )
-            } else {
-                (Status::None, vec![KeyHint::new("?", "Keys")])
+        Mode::Question(_) => Footer::new(Status::Waiting, vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")]),
+        Mode::Commands(_) => Footer::new(Status::Ready, vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")]),
+        // Shift and Tab are words, as Space is: the glyph table has no mark
+        // for either, and "if it is not in the table, do not draw one."
+        Mode::Review(r) if r.keys_shown => {
+            let mut keys = vec![KeyHint::new("↑↓", "Scroll"), KeyHint::new("Shift ↑↓", "Select")];
+            if r.file().has_folds() {
+                keys.push(KeyHint::new("Space", "Show All Lines"));
             }
+            keys.extend([
+                KeyHint::new("↩", "Comment"),
+                KeyHint::new("⌃↩", "Approve"),
+                KeyHint::new("Tab", "Next file"),
+                KeyHint::new("⎋", "Discard"),
+            ]);
+            Footer::new(Status::None, keys)
         }
+        Mode::Review(_) => Footer::new(Status::None, vec![KeyHint::new("?", "Keys")]),
         Mode::Conversation if app.turn_active || app.awaiting_turn => {
             let mut keys = vec![KeyHint::new("⎋", "Stop")];
             if app.input.is_empty() && has_details(app) {
-                keys.push(if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") });
+                keys.push(details());
             }
-            (Status::Working, keys)
+            Footer::new(Status::Working, keys)
         }
-        Mode::Conversation if app.answering.is_some() => (Status::Waiting, vec![KeyHint::new("↩", "Send")]),
-        Mode::Conversation if !app.input.is_empty() => (Status::Ready, vec![KeyHint::new("↩", "Send")]),
+        Mode::Conversation if app.answering.is_some() => Footer::new(Status::Waiting, vec![KeyHint::new("↩", "Send")]),
+        Mode::Conversation if !app.input.is_empty() => Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")]),
+        // Frame J: after a turn that saved, the footer is the context bar
+        // alone — `↺  Undo` is not offered (baseline `frame-j-offers-undo`)
+        // and nothing takes its place.
+        Mode::Conversation if just_saved(app) => Footer::new(Status::None, Vec::new()),
         Mode::Conversation => {
-            let mut keys = vec![KeyHint::new("/", "Commands")];
-            if has_details(app) {
-                keys.push(if app.details_open { KeyHint::new("Space", "Hide Details") } else { KeyHint::new("Space", "Show Details") });
-            }
-            (Status::Ready, keys)
+            let keys = if has_details(app) { vec![details()] } else { Vec::new() };
+            Footer { status: Status::Ready, keys, aside: Some(KeyHint::new("/", "Commands")) }
         }
     }
 }
 
+/// The last turn ended in an approve: it holds a `Saved` review row.
+fn just_saved(app: &App) -> bool {
+    app.this_turn().iter().any(|e| matches!(e, LogEntry::Review { outcome: ReviewOutcome::Saved { .. } }))
+}
+
 fn has_details(app: &App) -> bool {
-    let since = app.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })).unwrap_or(0);
-    app.log[since..].iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
+    app.this_turn().iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
 }
 
 /// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
@@ -342,8 +365,12 @@ fn has_details(app: &App) -> bool {
 /// flush right.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
-    let (status, keys) = footer_state(app);
+    let Footer { status, keys, aside } = footer_state(app);
     let dim = Style::default().fg(pal.label2);
+    // Every footer glyph is `label2`, as every footer in frames A–J draws
+    // it: the accent is for the action at the field's right edge, which is
+    // the one that is ready, not for a key the footer merely names.
+    let group = |key: KeyHint| vec![Span::styled(key.glyph, dim), Span::styled(format!("  {}", key.verb), dim)];
 
     let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
     match status {
@@ -356,13 +383,7 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
         Status::None => groups.push(vec![Span::raw(" ".repeat(MARK_COL))]),
     }
-    for key in keys {
-        let glyph_fg = match key.glyph {
-            "↩" | "⌃↩" | "/" => pal.accent,
-            _ => pal.label2,
-        };
-        groups.push(vec![Span::styled(key.glyph, Style::default().fg(glyph_fg)), Span::styled(format!("  {}", key.verb), dim)]);
-    }
+    groups.extend(keys.into_iter().map(group));
 
     let mut left: Vec<Span<'static>> = Vec::new();
     for (i, group) in groups.into_iter().enumerate() {
@@ -379,9 +400,24 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let right = context_bar(app.status.context_percent(), pal);
-    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
+    // The context bar is never cut, and the status and the keys of the
+    // moment come before the aside: when the row cannot hold all three, the
+    // aside goes first — the way to the commands is `/` whether it is
+    // named or not.
     let width = area.width as usize;
+    let bar = context_bar(app.status.context_percent(), pal);
+    let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
+    let mut right: Vec<Span<'static>> = Vec::new();
+    if let Some(aside) = aside {
+        let aside = group(aside);
+        let fits = span_w(&left) + GROUP_GAP + span_w(&aside) + GROUP_GAP + span_w(&bar) <= width.saturating_sub(MARGIN_X * 2);
+        if fits {
+            right.extend(aside);
+            right.push(Span::raw(" ".repeat(GROUP_GAP)));
+        }
+    }
+    right.extend(bar);
+    let right_w = span_w(&right);
     let budget = width.saturating_sub(MARGIN_X * 2).saturating_sub(GROUP_GAP).saturating_sub(right_w);
     let left = truncate_spans(left, budget);
     let used: usize = left.iter().map(|s| s.content.width()).sum();

@@ -186,19 +186,38 @@ pub struct Stage5 {
     pub questions:      Vec<String>,
 }
 
+/// The score stage 5 must reach. 100 means no finding of any severity: a
+/// minor deviation from a frame fails the review as a major one does, only
+/// by less. It was 90 (two minors) until 2026-09-24, when the developer
+/// raised it to 95 and then to 100 after a whole-app pass.
+pub const THRESHOLD: u32 = 100;
+
 /// The score, derived from severities rather than chosen by the judge.
 ///
 /// A model picking "80" cannot say what makes it 80 rather than 70. This
-/// can, and it makes the 90 threshold mean something concrete: at most two
-/// minor deviations and nothing else.
+/// can, and it makes [`THRESHOLD`] mean something concrete.
 pub fn score(findings: &[Finding]) -> u32 {
-    let weight = |s: &str| match s.trim() {
-        "blocking" => 25,
-        "major" => 15,
-        _ => 5,
-    };
-    let deducted: u32 = findings.iter().map(|f| weight(&f.severity)).sum();
+    let deducted: u32 = findings
+        .iter()
+        .map(|f| match severity(f) {
+            "blocking" => 25,
+            "major" => 15,
+            _ => 5,
+        })
+        .sum();
     100u32.saturating_sub(deducted)
+}
+
+/// A finding's severity as the score reads it: `blocking` or `major`, and
+/// anything else — `minor`, a misspelling, a `Minor` — is a minor. The
+/// score and the report's counts both go through this, so a finding can
+/// never be deducted without being counted.
+fn severity(f: &Finding) -> &'static str {
+    match f.severity.trim().to_ascii_lowercase().as_str() {
+        "blocking" => "blocking",
+        "major" => "major",
+        _ => "minor",
+    }
 }
 
 /// Render stage 5 into the report, replacing the placeholder.
@@ -218,16 +237,16 @@ pub fn write_stage5(report: &Path, stage5: &Stage5) -> Result<u32> {
     let end = text[start..].find("</p>").map(|i| start + i + 4).unwrap_or(start + STAGE5_MARKER.len());
 
     let value = score(&stage5.findings);
-    let counts = |s: &str| stage5.findings.iter().filter(|f| f.severity.trim() == s).count();
+    let counts = |s: &str| stage5.findings.iter().filter(|f| severity(f) == s).count();
     let (blocking, major, minor) = (counts("blocking"), counts("major"), counts("minor"));
-    let verdict = if value >= 90 { ("ok", "passes") } else { ("bad", "does not pass") };
+    let verdict = if value >= THRESHOLD { ("ok", "passes") } else { ("bad", "does not pass") };
 
     let mut out = String::new();
     out.push_str(&format!("<p><strong>Iteration {}.</strong></p>", stage5.iteration));
     out.push_str(&format!(
         "<p class=\"count\">Score <strong class=\"{}\">{value}</strong> — \
          100 &minus; (25 &times; {blocking} blocking) &minus; (15 &times; {major} major) &minus; (5 &times; {minor} minor). \
-         Threshold is 90, so stage&nbsp;5 <strong>{}</strong>.</p>",
+         Threshold is {THRESHOLD}, so stage&nbsp;5 <strong>{}</strong>.</p>",
         verdict.0, verdict.1
     ));
 

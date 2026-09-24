@@ -1,6 +1,6 @@
 ---
 name: review
-description: The feedback loop to run after a change to Aldwin is ready for submission. Runs lint, tests, design-token checks and screenshot baselines, then has an independent subagent compare the rendered frames against the designs and score its confidence. Iterates until the change is clean and the judge is 90% confident. Use when a feature is finished, not while it is being written.
+description: The feedback loop to run after a change to Aldwin is ready for submission. Runs lint, tests, design-token checks and screenshot baselines, then has an independent subagent compare the rendered frames against the designs and score its confidence. Iterates until the change is clean and the judge reports no findings (a score of 100). Use when a feature is finished, not while it is being written.
 ---
 
 # Review
@@ -208,8 +208,8 @@ seven — and worse, it routes the judge's findings through the hands of the
 agent whose work is being judged. The judge's own words go in the report.
 
 It derives the score from the severities — `100 − (25 × blocking) − (15 ×
-major) − (5 × minor)`, floored at 0, so **90 means at most two minor
-deviations and nothing else** — renders the section with the arithmetic
+major) − (5 × minor)`, floored at 0; the threshold is **100, so any finding at all
+fails the stage** — renders the section with the arithmetic
 shown, prints the verdict and exits non-zero below the threshold.
 
 **This is a command rather than an instruction for a reason.** The first
@@ -218,12 +218,12 @@ came back empty on three consecutive runs: the agent was reading findings and
 fixing code, which is exactly when a manual step gets skipped. A report step
 that depends on remembering is a report step that will not happen.
 
-- **≥ 90** — stage 5 passes. The review is done.
-- **< 90** — fix what the judge found, then run the whole loop again from
+- **100** — stage 5 passes. The review is done.
+- **< 100** — fix what the judge found, then run the whole loop again from
   stage 0. A fix that changes a frame changes which code paths that frame
   exercises, so the deterministic stages have to re-run too.
 
-**Cap the loop at five iterations.** If it has not reached 90 by then, stop
+**Cap the loop at five iterations.** If it has not reached 100 by then, stop
 and take it to the developer: five failed passes is a disagreement about what
 the design means, and another iteration will not settle it.
 

@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::grid::{at_body, column, elide, justified, marked, Ctx, DETAIL_COL, MARK_COL};
+use super::grid::{at_body, column, elide, justified, marked, Ctx, BODY_X, DETAIL_COL, MARGIN_X, MARK_COL};
 use super::markdown::{self, Segment};
 use super::row::Row;
 use super::wrap::wrap_line;
@@ -148,15 +148,15 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     match entry {
         // `UserEcho`: the request on `--tint`, `margin: 0 3ch`, a `›` in the
-        // mark column, all of it in `label2` — it is what you said, not
-        // what is happening.
+        // mark column in `label3` and the words in `label2` — it is what
+        // you said, not what is happening.
         LogEntry::UserMessage { text } => {
             let row = Row::band(pal.tint, pal.win);
             let mut lines = Vec::new();
             for (i, l) in text.lines().enumerate() {
                 let glyph = if i == 0 { "›" } else { "" };
                 let spans = vec![
-                    Span::styled(format!("{glyph:<width$}", width = MARK_COL), Style::default().fg(pal.label2).bg(pal.tint)),
+                    Span::styled(format!("{glyph:<width$}", width = MARK_COL), Style::default().fg(pal.label3).bg(pal.tint)),
                     Span::styled(l.to_string(), Style::default().fg(pal.label2).bg(pal.tint)),
                 ];
                 lines.extend(row.build_indented(spans, MARK_COL, ctx));
@@ -169,14 +169,15 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         // `Prose`: plain text at `--body-x` in `label`; markdown's fences
         // and tables render, everything else is a sentence.
         LogEntry::AssistantText { text } => at_body(render_assistant_text(text, ctx.body())),
-        // `Disclosure`: the summary with `⌄` open or `›` closed; open, the
-        // `DetailRow`s — verb in a `--detail-col` field, target, fact flush
-        // right.
+        // `Disclosure`: the summary with `⌄` open or `›` closed, both in
+        // `label2`; open, the `DetailRow`s — verb in a `--detail-col` field,
+        // target, fact flush right. A detail row is `padding: 0 5ch` like
+        // prose, so its fact ends where prose does.
         LogEntry::Work { items, open } => {
             let width = ctx.body().width as usize;
             let summary = summarise_work(items);
             let glyph = if *open { "⌄" } else { "›" };
-            let head = vec![Span::styled(summary, Style::default().fg(pal.label2)), Span::styled(format!("  {glyph}"), Style::default().fg(pal.label3))];
+            let head = vec![Span::styled(summary, Style::default().fg(pal.label2)), Span::styled(format!("  {glyph}"), Style::default().fg(pal.label2))];
             let mut lines = vec![Line::from(head)];
             if *open {
                 for item in items {
@@ -193,16 +194,17 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         }
         // `PlanStep`: the glyph in the mark column at the margin, the
         // outcome at `--body-x`. `✓` accent over `label2`; `●` amber over
-        // `label`; `○` `label3` over `label3`.
+        // `label`; `○` `label3` over `label2` (frame B).
         LogEntry::Plan { steps } => steps
             .iter()
             .map(|step| {
                 let (glyph, glyph_fg, text_fg) = match step.state {
                     StepState::Done => ("✓", pal.accent, pal.label2),
                     StepState::Running => ("●", pal.amber, pal.label),
-                    StepState::Pending => ("○", pal.label3, pal.label3),
+                    StepState::Pending => ("○", pal.label3, pal.label2),
                 };
-                let text = elide(&step.text, ctx.body().width as usize);
+                // A plan step is `padding: 0 3ch` (frame B), not prose.
+                let text = elide(&step.text, (ctx.width as usize).saturating_sub(BODY_X + MARGIN_X));
                 marked(Span::styled(glyph, Style::default().fg(glyph_fg)), vec![Span::styled(text, Style::default().fg(text_fg))])
             })
             .collect(),
@@ -251,7 +253,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             if let Some(detail) = detail {
                 let glyph = if *open { "⌄" } else { "›" };
                 if let Some(first) = lines.first_mut() {
-                    first.spans.push(Span::styled(format!("  {glyph}"), Style::default().fg(pal.label3)));
+                    first.spans.push(Span::styled(format!("  {glyph}"), Style::default().fg(pal.label2)));
                 }
                 if *open {
                     for l in detail.lines().take(40) {

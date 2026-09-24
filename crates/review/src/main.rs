@@ -195,9 +195,10 @@ fn main() -> std::io::Result<()> {
                 serde_json::from_str(&std::fs::read_to_string(&findings)?).map_err(std::io::Error::other)?;
             let report = run.join("review.html");
             let score = aldwin_review::report::write_stage5(&report, &stage5)?;
-            println!("stage 5: {score}, threshold 90 — {}", if score >= 90 { "passes" } else { "does not pass" });
+            let threshold = aldwin_review::report::THRESHOLD;
+            println!("stage 5: {score}, threshold {threshold} — {}", if score >= threshold { "passes" } else { "does not pass" });
             println!("report: {}", report.display());
-            if score < 90 {
+            if score < threshold {
                 return Err(std::io::Error::other("stage 5 is below the threshold; fix and re-run the loop"));
             }
             Ok(())

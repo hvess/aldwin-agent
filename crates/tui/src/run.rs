@@ -65,9 +65,10 @@ pub struct SessionProvider {
 /// alone), and always restores the terminal on the way out — success,
 /// `Err`, or a panic unwinding through `run_loop` — via `TerminalGuard`.
 ///
-/// Mouse capture is deliberately **off** — the terminal keeps the mouse, so
-/// a plain click-drag is its own native text selection, and copying a chunk
-/// of the transcript works the way it does in any other terminal output.
+/// Mouse capture is deliberately **off** in the conversation — the terminal
+/// keeps the mouse there, so a plain click-drag is its own native text
+/// selection, and copying a chunk of the transcript works the way it does
+/// in any other terminal output.
 /// This reverses a brief experiment with capture on (which had let the wheel
 /// scroll the log directly): a terminal hands mouse events either to the
 /// application or to its own selection, never to both, so that trade cost
@@ -76,12 +77,18 @@ pub struct SessionProvider {
 /// is that the developer reads and reasons about the transcript, being able
 /// to select and copy out of it beats a wheel binding.
 ///
-/// [`ALTERNATE_SCROLL`] is how the wheel comes back anyway, without that
-/// trade. Nothing else is sent to enable capture, so nothing else needs
-/// disabling on the way out — but `restore_terminal` still emits
-/// `DisableMouseCapture` anyway, as a cheap belt-and-braces reset of a mode
-/// this process may have inherited or a previous build may have left on in
-/// the same terminal.
+/// The one exception is the full-window review (ADR 0010): lines are
+/// selected for a comment by dragging across them, so capture is on for
+/// exactly as long as a review is open — see [`sync_mouse`]. The
+/// transcript is not on screen then, so there is nothing of it to copy.
+///
+/// [`ALTERNATE_SCROLL_ON`] is how the wheel comes back in the conversation,
+/// without that trade. `restore_terminal` emits `DisableMouseCapture` on the
+/// way out, and it is load-bearing: a panic or an error while a review
+/// holds the mouse unwinds through `TerminalGuard` with capture on, and
+/// that reset is what hands the mouse back to the terminal. It is also
+/// broader than what `sync_mouse` asks for, so it clears a mode this process
+/// may have inherited too.
 ///
 /// Three other modes are asked for here, all best-effort:
 ///
@@ -240,6 +247,31 @@ fn present(terminal: &mut Out, app: &mut App) -> io::Result<()> {
     Ok(())
 }
 
+/// Mouse reporting for the review, and no more of it than the review uses:
+/// presses and releases (1000), motion only while a button is held — a
+/// drag — (1002), in SGR encoding (1006) so a column past 223 still
+/// reports. Not crossterm's `EnableMouseCapture`, which also turns on
+/// 1003, every pointer movement, and would repaint the review each time
+/// the pointer merely crossed it.
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+/// Captures the mouse while a review is open and releases it the moment
+/// the review closes (ADR 0010). Best-effort, like every other mode here:
+/// a terminal that ignores the request keeps its own selection, and every
+/// key the review names still works.
+///
+/// With capture on the wheel arrives as `MouseEventKind::Scroll*` rather
+/// than as alternate-scroll arrow keys, which `App::handle_mouse` routes to
+/// the diff. Called once per loop iteration; writes only on a change.
+fn sync_mouse(out: &mut impl Write, wanted: bool, captured: &mut bool) {
+    if wanted == *captured {
+        return;
+    }
+    let _ = out.write_all(if wanted { MOUSE_ON } else { MOUSE_OFF }).and_then(|()| out.flush());
+    *captured = wanted;
+}
+
 /// One crossterm event applied to the app. `false` means the input stream
 /// ended or failed, and with it the session.
 ///
@@ -355,6 +387,7 @@ async fn run_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     present(terminal, &mut app)?;
+    let mut mouse_captured = false;
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut closed = false;
@@ -449,6 +482,7 @@ async fn run_loop(
         for command in app.outbox.drain(..) {
             let _ = commands.send(command).await;
         }
+        sync_mouse(&mut io::stdout(), app.wants_mouse(), &mut mouse_captured);
 
         if app.should_quit || closed {
             break;
@@ -490,3 +524,34 @@ const MAX_EVENTS_PER_FRAME: usize = 512;
 /// alternate-scroll cursor keys and has to land whole; nothing a developer
 /// can do with a keyboard comes near this.
 const MAX_INPUT_PER_FRAME: usize = 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ADR 0010 §3: capture follows the review, and each change is written
+    /// once — the loop calls this every iteration.
+    #[test]
+    fn the_mouse_is_captured_for_the_review_and_released_after_it() {
+        let mut out = Vec::new();
+        let mut captured = false;
+        sync_mouse(&mut out, false, &mut captured);
+        assert!(out.is_empty(), "nothing is sent while the conversation keeps the mouse");
+        sync_mouse(&mut out, true, &mut captured);
+        sync_mouse(&mut out, true, &mut captured);
+        assert_eq!(out, MOUSE_ON, "asked for once, however many frames the review is open");
+        out.clear();
+        sync_mouse(&mut out, false, &mut captured);
+        assert_eq!(out, MOUSE_OFF);
+        assert!(!captured);
+    }
+
+    /// Button and drag reporting only: 1003 would report every movement of
+    /// the pointer, and each report is a repaint.
+    #[test]
+    fn capture_asks_for_presses_and_drags_not_every_movement() {
+        let on = String::from_utf8_lossy(MOUSE_ON);
+        assert!(on.contains("?1000h") && on.contains("?1002h") && on.contains("?1006h"));
+        assert!(!on.contains("1003"));
+    }
+}

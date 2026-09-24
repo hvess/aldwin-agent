@@ -1,22 +1,19 @@
 use std::collections::HashMap;
 
-use aldwin_core::{Answer, Command, Event, LogRecord, PlanStep, Question, ReviewDecision, ReviewOutcome, TurnEndReason};
+use aldwin_core::{Answer, Command, Event, LogRecord, PlanStep, Question, ReviewDecision, ReviewOutcome, StepState, TurnEndReason};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::list::{List, ListOutcome, ListRow};
 use crate::log::{LogEntry, WorkItem};
 use crate::resume::SessionChoice;
 use crate::review::{Review, ReviewOutcome as ReviewKey};
-use crate::scroll::ScrollState;
+use crate::scroll::{ScrollState, WHEEL_ROWS};
 
 /// How long a second Ctrl+C still counts as "again" for the exit escape
 /// hatch in `App::cancel_or_quit`, in `App::tick`s — `run.rs` advances that
 /// counter every 120ms, so ~2 seconds.
 const DOUBLE_CTRL_C_TICKS: u64 = 16;
 
-/// Rows one wheel notch moves the transcript — the same three a terminal's
-/// own alternate-scroll translation sends as cursor keys.
-const WHEEL_ROWS: usize = 3;
 
 /// The design's option row for a question the developer would rather
 /// answer in words. Appended by the `ask` tool; matched here by text.
@@ -196,6 +193,10 @@ pub struct App {
     /// Whether the work disclosures of the current turn are open. Space
     /// toggles it (`Space  Hide Details`).
     pub details_open:   bool,
+    /// Where the current (or last) turn begins in `log`: the message that
+    /// opened it. Not simply the last `UserMessage` — an answer given
+    /// through "Chat about this" is one too, and it lands mid-turn.
+    turn_start:         usize,
     last_cancel_tick:   Option<u64>,
     pub tick:           u64,
     /// Populated on `ToolUseRequested` (the one event that carries the
@@ -237,6 +238,7 @@ impl App {
             awaiting_turn: false,
             answering: None,
             details_open: false,
+            turn_start: 0,
             last_cancel_tick: None,
             tick: 0,
             pending_calls: HashMap::new(),
@@ -319,7 +321,34 @@ impl App {
         !matches!(self.mode, Mode::Conversation)
     }
 
+    /// The current turn's entries, or the last turn's while idle.
+    pub(crate) fn this_turn(&self) -> &[LogEntry] {
+        &self.log[self.turn_start.min(self.log.len())..]
+    }
+
+    fn this_turn_mut(&mut self) -> &mut [LogEntry] {
+        let start = self.turn_start.min(self.log.len());
+        &mut self.log[start..]
+    }
+
+    /// A turn opens at `message`: it goes into the log and marks where
+    /// the turn begins.
+    fn open_turn(&mut self, message: String) {
+        self.turn_start = self.log.len();
+        self.push(LogEntry::UserMessage { text: message });
+    }
+
+    /// `TurnStarted` — live, or replayed on `/resume` — confirms the
+    /// message that opened the turn: the last one sent before it, since
+    /// nothing can be said inside a turn before the turn has begun.
+    fn mark_turn_started(&mut self) {
+        if let Some(i) = self.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })) {
+            self.turn_start = i;
+        }
+    }
+
     fn reset_conversation(&mut self) {
+        self.turn_start = 0;
         self.log.clear();
         self.scroll = ScrollState::default();
         self.thinking = false;
@@ -415,11 +444,22 @@ impl App {
             LogRecord::ToolResult { result, .. } => self.finish_call(&result.call_id, &result.content, result.is_error),
             LogRecord::TurnEnded { reason, .. } => self.push_turn_end(reason),
             LogRecord::Thinking { .. } | LogRecord::RedactedThinking { .. } => {}
-            LogRecord::TurnStarted { .. } | LogRecord::StepBoundary { .. } => {}
+            LogRecord::TurnStarted { .. } => self.mark_turn_started(),
+            LogRecord::StepBoundary { .. } => {}
         }
     }
 
     fn push_turn_end(&mut self, reason: TurnEndReason) {
+        // Amber means running, and once the turn is over nothing is. A step
+        // the plan still called running goes back to pending: it was not
+        // finished, and it is not happening.
+        for entry in self.this_turn_mut() {
+            if let LogEntry::Plan { steps } = entry {
+                for step in steps.iter_mut().filter(|s| s.state == StepState::Running) {
+                    step.state = StepState::Pending;
+                }
+            }
+        }
         match reason {
             TurnEndReason::EndTurn => self.push(LogEntry::TurnBreak),
             TurnEndReason::Cancelled => {
@@ -427,16 +467,9 @@ impl App {
                 self.push(LogEntry::TurnBreak);
             }
             TurnEndReason::Error(message) => {
-                // The sentence names the kind of failure; the disclosure
-                // holds all of it. Every error the loop reports reads
-                // `kind: particulars`, and the particulars are a provider's
-                // own body — JSON, as often as not — which is a detail to
-                // open, not a sentence to read (ADR 0009 §5).
-                let first = crate::log::first_line(&message, 72);
-                let sentence = match first.split_once(": ") {
-                    Some((kind, _)) if !kind.is_empty() => format!("The turn did not finish: {kind}."),
-                    _ => format!("The turn did not finish: {first}"),
-                };
+                // A sentence you can act on; the error itself, a provider's
+                // own body as often as not, is the detail (ADR 0009 §5).
+                let sentence = crate::log::failure_sentence(&message).to_string();
                 self.push(LogEntry::Failure { message: sentence, detail: Some(message), open: false });
                 self.push(LogEntry::TurnBreak);
             }
@@ -446,6 +479,7 @@ impl App {
     pub fn apply_event(&mut self, event: Event) {
         match event {
             Event::TurnStarted { .. } => {
+                self.mark_turn_started();
                 self.turn_active = true;
                 self.awaiting_turn = false;
                 self.details_open = false;
@@ -490,7 +524,7 @@ impl App {
             // message is — this is the one message the TUI did not send.
             Event::FollowUp { text, .. } => {
                 self.awaiting_turn = true;
-                self.push(LogEntry::UserMessage { text });
+                self.open_turn(text);
             }
             Event::PlanUpdated { steps, .. } => self.set_plan(steps),
             Event::QuestionAsked { call_id, question } => {
@@ -546,8 +580,7 @@ impl App {
 
     /// The plan is one entry per turn, replaced in place.
     fn set_plan(&mut self, steps: Vec<PlanStep>) {
-        let since_turn = self.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })).unwrap_or(0);
-        if let Some(entry) = self.log[since_turn..].iter_mut().find(|e| matches!(e, LogEntry::Plan { .. })) {
+        if let Some(entry) = self.this_turn_mut().iter_mut().find(|e| matches!(e, LogEntry::Plan { .. })) {
             *entry = LogEntry::Plan { steps };
         } else {
             self.push(LogEntry::Plan { steps });
@@ -613,15 +646,13 @@ impl App {
 
     /// Whether the current turn has any work to show or hide.
     fn has_work(&self) -> bool {
-        let since = self.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })).unwrap_or(0);
-        self.log[since..].iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
+        self.this_turn().iter().any(|e| matches!(e, LogEntry::Work { .. } | LogEntry::Failure { detail: Some(_), .. }))
     }
 
     fn toggle_details(&mut self) {
         self.details_open = !self.details_open;
         let open = self.details_open;
-        let since = self.log.iter().rposition(|e| matches!(e, LogEntry::UserMessage { .. })).unwrap_or(0);
-        for entry in &mut self.log[since..] {
+        for entry in self.this_turn_mut() {
             match entry {
                 LogEntry::Work { open: o, .. } => *o = open,
                 LogEntry::Failure { open: o, detail: Some(_), .. } => *o = open,
@@ -788,7 +819,18 @@ impl App {
         }
     }
 
+    /// Whether the mouse should be captured: only while a review is open,
+    /// where lines are selected by dragging across them (ADR 0010). The
+    /// conversation leaves the mouse to the terminal's own selection.
+    pub(crate) fn wants_mouse(&self) -> bool {
+        matches!(self.mode, Mode::Review(_))
+    }
+
     pub fn handle_mouse(&mut self, event: MouseEvent) {
+        if let Some(review) = self.review_mut() {
+            review.handle_mouse(event.kind, event.column, event.row);
+            return;
+        }
         if self.band_is_held() {
             return;
         }
@@ -894,7 +936,7 @@ impl App {
     /// The tail every submission shares, typed or picked.
     fn submit_text(&mut self, text: String) {
         self.awaiting_turn = true;
-        self.push(LogEntry::UserMessage { text: text.clone() });
+        self.open_turn(text.clone());
         self.outbox.push(Command::Submit { text });
     }
 
@@ -1126,11 +1168,75 @@ mod tests {
         let mut a = app();
         a.log.push(LogEntry::UserMessage { text: "go".into() });
         let step = |t: &str, s| PlanStep { text: t.into(), state: s };
-        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", aldwin_core::StepState::Running)] });
-        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", aldwin_core::StepState::Done), step("Check", aldwin_core::StepState::Running)] });
+        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", StepState::Running)] });
+        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", StepState::Done), step("Check", StepState::Running)] });
         assert_eq!(a.log.iter().filter(|e| matches!(e, LogEntry::Plan { .. })).count(), 1);
         let Some(LogEntry::Plan { steps }) = a.log.last() else { panic!() };
         assert_eq!(steps.len(), 2);
+    }
+
+    fn plan_states(a: &App) -> Vec<StepState> {
+        let plans: Vec<_> = a.log.iter().filter_map(|e| if let LogEntry::Plan { steps } = e { Some(steps) } else { None }).collect();
+        assert_eq!(plans.len(), 1, "one plan entry per turn: {:?}", a.log);
+        plans[0].iter().map(|s| s.state).collect()
+    }
+
+    /// Amber means running: once the turn has ended, nothing in its plan is
+    /// — whether it finished or was stopped.
+    #[test]
+    fn a_step_still_running_when_the_turn_ends_goes_back_to_pending() {
+        use StepState::{Done, Pending, Running};
+        for reason in [TurnEndReason::EndTurn, TurnEndReason::Cancelled] {
+            let mut a = app();
+            a.submit_text("go".into());
+            a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            let step = |t: &str, s| PlanStep { text: t.into(), state: s };
+            a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", Done), step("Check", Running), step("Ship", Pending)] });
+            a.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason });
+            assert_eq!(plan_states(&a), vec![Done, Pending, Pending]);
+        }
+    }
+
+    /// An answer typed through "Chat about this" goes into the log as a
+    /// message, mid-turn. It is not a new turn: the plan is still replaced
+    /// in place after it, and still settled when the turn ends.
+    #[test]
+    fn a_chat_about_this_answer_does_not_split_the_turn() {
+        use StepState::{Done, Pending, Running};
+        let mut a = app();
+        a.submit_text("go".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        let step = |t: &str, s| PlanStep { text: t.into(), state: s };
+        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", Running)] });
+        a.apply_event(Event::QuestionAsked {
+            call_id:  "q1".into(),
+            question: Question { question: "Q?".into(), detail: String::new(), options: vec!["Yes".into(), CHAT_ABOUT_THIS.into()] },
+        });
+        a.handle_key(press(KeyCode::Char('2')));
+        for c in "it depends".chars() {
+            a.handle_key(press(KeyCode::Char(c)));
+        }
+        a.handle_key(press(KeyCode::Enter));
+        assert!(matches!(a.log.last(), Some(LogEntry::UserMessage { .. })), "the answer is in the log as a message");
+        a.apply_event(Event::PlanUpdated { turn_id: TurnId(1), steps: vec![step("Count", Done), step("Check", Running)] });
+        a.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::EndTurn });
+        assert_eq!(plan_states(&a), vec![Done, Pending]);
+    }
+
+    /// ADR 0010 §3: the mouse is the review's, and only while it is open.
+    #[test]
+    fn the_mouse_is_wanted_while_a_review_is_open_and_goes_to_it() {
+        let mut a = app();
+        assert!(!a.wants_mouse());
+        let after = (1..=60).map(|i| format!("line {i}\n")).collect::<String>();
+        a.apply_event(Event::ReviewRequested { review_id: "r".into(), changeset: Changeset { files: vec![ChangedFile { path: "f.rs".into(), before: None, after }] } });
+        assert!(a.wants_mouse());
+        let transcript = a.scroll.offset;
+        a.handle_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 0, row: 0, modifiers: KeyModifiers::NONE });
+        assert_eq!(a.review().unwrap().scroll, WHEEL_ROWS, "the wheel scrolls the diff");
+        assert_eq!(a.scroll.offset, transcript, "and not the conversation behind it");
+        a.apply_event(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files: vec!["f.rs".into()], comments_resolved: 0 } });
+        assert!(!a.wants_mouse(), "the conversation gives the mouse back to the terminal");
     }
 
     #[test]
@@ -1181,13 +1287,13 @@ mod tests {
     fn a_failed_turn_is_a_sentence_with_its_detail_folded() {
         let mut a = app();
         a.apply_event(Event::TurnEnded { turn_id: TurnId(1), reason: TurnEndReason::Error("boom\nstack".into()) });
-        assert!(matches!(&a.log[0], LogEntry::Failure { message, detail: Some(d), open: false } if message.contains("boom") && d.contains("stack")));
+        assert!(matches!(&a.log[0], LogEntry::Failure { message, detail: Some(d), open: false } if message == "The turn stopped before it finished. The detail says why." && d == "boom\nstack"));
         assert_eq!(a.log[1], LogEntry::TurnBreak);
 
         // A provider's body is a detail, not a sentence.
         let body = r#"provider error 400: {"error":{"message":"the request was malformed"}}"#;
         a.apply_event(Event::TurnEnded { turn_id: TurnId(2), reason: TurnEndReason::Error(body.into()) });
-        assert!(matches!(&a.log[2], LogEntry::Failure { message, detail: Some(d), .. } if message == "The turn did not finish: provider error 400." && d == body));
+        assert!(matches!(&a.log[2], LogEntry::Failure { message, detail: Some(d), .. } if message == "The provider turned the request down. The detail says why." && d == body));
     }
 
     #[test]

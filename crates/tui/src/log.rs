@@ -168,6 +168,41 @@ fn plural(n: usize, noun: &str) -> String {
     if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
 }
 
+/// The sentence a failed turn leads with: what happened, in plain words, and
+/// what you can do about it (HIG, "Write clear error messages"). The error
+/// itself — status, body, retries — is the detail one disclosure below,
+/// exact and unabridged (ADR 0009 §5), so none of it is repeated here.
+///
+/// `TurnEndReason::Error` carries a string, so this reads `LlmError`'s
+/// `Display` (`aldwin-core`, `client.rs`): `network error: …`,
+/// `provider error 429: …`, `stream interrupted: …`, `terminal error after
+/// N retries: …`. Anything else — an error from the loop itself — gets the
+/// plain fallback. Open-tasks 32 is carrying the kind instead.
+pub fn failure_sentence(error: &str) -> &'static str {
+    const FALLBACK: &str = "The turn stopped before it finished. The detail says why.";
+    if error.starts_with("network error:") {
+        return "The provider could not be reached. Check your connection, then send again.";
+    }
+    if error.starts_with("stream interrupted:") {
+        return "The reply was cut off partway. Send again to have it retried.";
+    }
+    if let Some(rest) = error.strip_prefix("terminal error after ") {
+        // Retries exhausted: say why they were needed, if the last one says.
+        return match rest.split_once(": ").map(|(_, last)| failure_sentence(last)) {
+            Some(sentence) if sentence != FALLBACK => sentence,
+            _ => "The provider kept failing. Send again in a moment.",
+        };
+    }
+    let status = error.strip_prefix("provider error ").and_then(|rest| rest.split(':').next()).and_then(|s| s.trim().parse::<u16>().ok());
+    match status {
+        Some(401 | 403) => "The provider did not accept your API key. Check the key, then send again.",
+        Some(429) => "The provider is limiting requests right now. Wait a moment, then send again.",
+        Some(500..=599) => "The provider had a problem on its side. Send again in a moment.",
+        Some(_) => "The provider turned the request down. The detail says why.",
+        None => FALLBACK,
+    }
+}
+
 /// The first line of `content`, elided to `max` characters.
 pub fn first_line(content: &str, max: usize) -> String {
     let line = content.lines().next().unwrap_or("").trim();
@@ -182,6 +217,27 @@ pub fn first_line(content: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No status code, no body, no retry count on the surface — each is in
+    /// the detail — and every sentence says what to do next.
+    #[test]
+    fn a_failure_reads_as_what_happened_and_what_to_do() {
+        let cases = [
+            ("provider error 400: {\"error\":{\"message\":\"unknown model gpt-5\"}}", "The provider turned the request down. The detail says why."),
+            ("provider error 401: invalid x-api-key", "The provider did not accept your API key. Check the key, then send again."),
+            ("provider error 429: rate_limit_error", "The provider is limiting requests right now. Wait a moment, then send again."),
+            ("provider error 529: overloaded_error", "The provider had a problem on its side. Send again in a moment."),
+            ("network error: connection refused", "The provider could not be reached. Check your connection, then send again."),
+            ("stream interrupted: unexpected EOF", "The reply was cut off partway. Send again to have it retried."),
+            ("terminal error after 3 retries: provider error 529: overloaded", "The provider had a problem on its side. Send again in a moment."),
+            ("terminal error after 3 retries: something else", "The provider kept failing. Send again in a moment."),
+            ("command channel closed", "The turn stopped before it finished. The detail says why."),
+        ];
+        for (error, sentence) in cases {
+            assert_eq!(failure_sentence(error), sentence, "{error}");
+            assert!(!sentence.chars().any(|c| c.is_ascii_digit()), "{sentence}");
+        }
+    }
     use serde_json::json;
 
     #[test]

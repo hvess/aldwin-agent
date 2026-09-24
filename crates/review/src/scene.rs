@@ -15,9 +15,8 @@
 //! have no counterpart here: `working` and `running` are transient (the fake
 //! provider answers at once, so the amber dot is never on screen when the
 //! frame is taken — what this catalogue captures instead is the plan the
-//! turn leaves behind), and `selecting`/`commented` need `⇧↓`, which the
-//! key grammar cannot send through a pty without the Kitty encoding the app
-//! negotiates with the terminal, not with us.
+//! turn leaves behind), and `selecting`/`commented` need a mouse drag
+//! (ADR 0010), which the key grammar does not send.
 
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};

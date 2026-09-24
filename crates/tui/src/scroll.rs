@@ -1,3 +1,8 @@
+/// Rows one wheel notch moves — the transcript, and the review's diff —
+/// the same three a terminal's own alternate-scroll translation sends as
+/// cursor keys.
+pub(crate) const WHEEL_ROWS: usize = 3;
+
 /// Log scroll position, in rendered *wrapped* terminal rows — `total_len`
 /// in every method below must be `App::total_lines()` (see its doc
 /// comment), not `App::log`'s entry count and not a logical (pre-wrap)

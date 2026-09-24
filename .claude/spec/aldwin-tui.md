@@ -10,7 +10,56 @@ the top bar, the permission panel and first run are gone, and the entries
 that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
+
+**Progress (2026-09-24, a whole-app conformance pass):** The review loop was
+run over every scene rather than one change's (goal: "every screen should
+match the Aldwin Design System as amended by the ADRs"), with stage 5's
+threshold raised to 100 on the way. It took four iterations (65, 65, 80,
+100), and an audit of the resulting diff in three passes — correctness,
+ethos, quality — found the rest. What changed, each against its source:
+
+- **The review's lines are selected with the mouse (ADR 0010).** The diff
+  had a keyboard line cursor whose only mark was a `label` gutter number;
+  frames G–I draw every number `label3`. There is no cursor now: a press
+  selects a line, a drag a run, a press on a fold opens it, and `Space`
+  opens every fold for the keyboard. `Shift ↑↓` selects from the keyboard
+  (the first line shown, then extends), so the review stays usable by
+  keyboard alone. The key list names Shift and Tab in words: `⇧` and `⇥`
+  are not in the glyph table, and the old list's `⇥` never was. A selection is kept in *unfolded*
+  rows — the first version kept drawn rows, and opening a fold above a
+  selection moved it onto other lines, found by the audit. The mouse is
+  captured only while a review is open, and only for presses and drags
+  (1000/1002/1006, not crossterm's 1003).
+- **The question panel is inset** (frame E): the panel between the
+  margins, its text `padding: 0 3ch` in, each option `margin: 0 1ch`, the
+  current option's number `label2`. Frame E states both insets as bare
+  `ch`; baseline `question-panel-insets-are-untokenised` records it.
+  `/resume`'s dates are right-flush facts.
+- **The command menu's current row is `tint`** (frame F, "idle selection"
+  in `colors.css` — the focus stays in the `/` field), between the margins.
+- **The footer:** every glyph `label2` (frames A–J; the accent is the
+  field's ready action only); `/  Commands` right-flush beside the context
+  bar (frame A), and the first thing to go on a narrow row; after a turn
+  that saved, the context bar alone (baseline `frame-j-offers-undo`).
+- **Tones and widths:** the echo's `›` `label3`, the disclosure glyph and a
+  pending step's text `label2`; prose, detail facts and the review's
+  summary end `BODY_X` from the right edge (`padding: 0 5ch`).
+- **Markdown:** no underline anywhere — headings and links had one, and an
+  underline is a stroke — and no weight 600 on a table header or a
+  heading, which the design spends on the review title, a path, a question
+  and "Aldwin".
+- **A failure says what to do.** `The turn did not finish: provider error
+  400.` put a status code on the surface; `log::failure_sentence` reads the
+  error's kind and says what happened and what to do next ("Check your
+  connection, then send again."), the error itself one disclosure below
+  (HIG "Writing", ADR 0009 §5). Reading a string is open-tasks 32.
+- **A turn is marked where it opens.** Six places scanned back to the last
+  `UserMessage`, and an answer through "Chat about this" is one, mid-turn:
+  a plan updated after it split in two. `App::this_turn` reads from the
+  message that opened the turn (`submit_text`, `FollowUp`, `TurnStarted`).
+  With it, a step still running when a turn ends goes back to pending —
+  amber means running, and nothing is.
 
 **Progress (2026-09-23, the Aldwin Design System — a replacement):** The
 design system was replaced whole (`.claude/design/IMPORT.md`, "None of
@@ -57,8 +106,9 @@ what each thing was measured against:
   the `panel` ground: question in weight 600, detail, blank, numbered
   options with the current on `field`. Four things ask through it — the
   agent's `ask`, the provider and model questions when nothing is
-  configured, `/resume` — and the command menu is the same rows on the
-  window ground above the field.
+  configured, `/resume` — and the command menu is the same list on the
+  window ground above the field, its current row on `tint` rather than
+  `field` (frame F: the focus stays in the field).
 - **The review** (`review.rs`, `ui::review`) is the whole window: header
   with the last request as title and the agent's last sentence as summary;
   the tree 28 cells wide on `tint` from the frame's left edge with reading
@@ -2143,7 +2193,7 @@ above it, now parted by a padding row.
 
 ## Out of Scope
 
-- Mouse support — keyboard-only, and as of 2026-09-03 that includes the wheel. *Narrowed 2026-09-02, then reverted 2026-09-03:* mouse capture was briefly enabled so the wheel could scroll the log (`App::handle_mouse`), fixing a report that the wheel couldn't scroll at all. The developer's next round of feedback was the cost of that trade — "text selection has been disabled (or is simply not working)" — which is inherent, not a bug in the wiring: a terminal routes mouse events either to the application or to its own selection, never to both, so capture buys a wheel binding at the price of click-drag selection. For a harness whose premise is that the developer reads and reasons about the transcript, selecting and copying out of it wins; PageUp/PageDown/arrow scrolling already covers the wheel's job. Capture is off, `handle_mouse` is gone, and this line is back to "keyboard-only" without the carve-out.
+- Mouse support — keyboard-only **outside the review**, and as of 2026-09-03 that includes the wheel. *Amended 2026-09-24 by ADR 0010:* while a review is open the mouse is captured, and lines are selected for a comment by clicking and dragging across them; the conversation keeps the terminal's own selection. *Narrowed 2026-09-02, then reverted 2026-09-03:* mouse capture was briefly enabled so the wheel could scroll the log (`App::handle_mouse`), fixing a report that the wheel couldn't scroll at all. The developer's next round of feedback was the cost of that trade — "text selection has been disabled (or is simply not working)" — which is inherent, not a bug in the wiring: a terminal routes mouse events either to the application or to its own selection, never to both, so capture buys a wheel binding at the price of click-drag selection. For a harness whose premise is that the developer reads and reasons about the transcript, selecting and copying out of it wins; PageUp/PageDown/arrow scrolling already covers the wheel's job. Capture went off and `handle_mouse` went with it, until ADR 0010 brought both back for the review alone — where the transcript is not on screen, so there is nothing of it to copy.
 - Rich/configurable color theming — a two-way `Theme::{Dark,Light}` choice exists now (2026-09-02, `tui.yaml`'s `theme` field — see the Palette bullet and its same-day Progress entry), each a small fixed semantic palette, but that's a binary switch between two hand-tuned sets, not a user-configurable/custom theming system (arbitrary colors, N themes, per-element overrides); that remains out of scope, still blocked on the mascot palette decision for anything beyond these two fixed options.
 - Syntax highlighting in diff blocks — plain text diff in V0.
 - Conversation log search or filtering.

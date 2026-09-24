@@ -189,10 +189,25 @@ own.
 | `Space` | show or hide the details of the current turn's work (on an empty field) |
 | `↑` `↓` | move within a multi-line draft, then scroll the transcript |
 | `1`–`9`, `↩` | pick and confirm in any question |
-| in the review: `↑↓` move, `⇧↑↓` select, `↩` comment, `⌃↩` approve or send (a bare `↩` with nothing selected or typed does the same, for terminals that cannot tell them apart), `⇥` next file, `⎋` discard, `?` keys | |
 
-The mouse wheel scrolls too — the terminal keeps the mouse, so selecting and
-copying text works the way it does anywhere else.
+In the review:
+
+| key | does |
+| --- | --- |
+| click, drag | select a line, or a run of lines, to comment on; a click on `⋯  N lines` opens it |
+| `⇧↑` `⇧↓` | select from the keyboard: the first line shown, then extend |
+| `Space` | open every folded run in the file |
+| `↑` `↓`, `PgUp` `PgDn` | scroll the diff, or move a selection |
+| `↩` | comment on the selection |
+| `⌃↩` | approve, or send the comments (a bare `↩` with nothing selected or typed does the same, for terminals that cannot tell them apart) |
+| `⇥` `⇧⇥`, `←` `→` | next and previous file |
+| `⎋` | clear the selection, then discard |
+| `?` | show the keys |
+
+The mouse wheel scrolls too. In the conversation the terminal keeps the
+mouse, so selecting and copying text works the way it does anywhere else;
+while a review is open Aldwin takes it, to select lines with (most
+terminals still copy with a Shift-drag).
 
 `/` in an empty field opens the commands: `/resume`, `/model`, `/quit`,
 `/clear`. Also reachable by typing them: `/theme light|dark`,

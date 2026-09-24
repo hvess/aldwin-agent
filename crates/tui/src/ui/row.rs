@@ -52,6 +52,12 @@ impl Row {
         Self { margin: 0, surround: Color::Reset, pad: 0, bg }
     }
 
+    /// Overrides how far the row sits in from each edge of its column —
+    /// frame E's option row, `margin: 0 1ch` inside the question panel.
+    pub fn inset(self, cells: usize) -> Self {
+        Self { margin: cells, ..self }
+    }
+
     /// Overrides the cells of fill held between the row's edge and its
     /// content. `CommandBlock.jsx` is the one surface that isn't on the
     /// grid's own `MARGIN_X`: it is a field inset by `MARGIN_X` whose

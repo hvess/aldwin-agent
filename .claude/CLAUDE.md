@@ -47,9 +47,10 @@ product; read it before reopening any of it.
 
 Two things about reading the design, each learned the hard way:
 
-1. **Measure the frame; reading the prose is not enough.** Every position
-   in `frames/Aldwin Agent TUI.dc.html` is a `var(--…)` from
-   `tokens/layout.css`, so measuring is a token lookup — but the frame also
+1. **Measure the frame; reading the prose is not enough.** Nearly every
+   position in `frames/Aldwin Agent TUI.dc.html` is a `var(--…)` from
+   `tokens/layout.css`, so measuring is a token lookup (frame E's panel
+   insets are bare `ch`; baseline records it) — but the frame also
    holds things the prose never states: the brand mark is 108 half-block
    cells that exist nowhere else, and the context bar's ramp is arithmetic
    in `ContextBar.jsx`. A design pass that read the README alone would have
@@ -152,6 +153,10 @@ a decision they cover.
   end. Nothing is written before an approve. A deny is still a lock. There
   is no first run. `plan` and `ask` carry the plan and a question to the
   screen. A failure is a sentence.
+- **0010 — Review lines are selected with the mouse.** The diff has no line
+  cursor; a click selects a line, a drag selects a run, and `Shift ↑↓`
+  selects from the keyboard. The mouse is captured only while a review is
+  open, so the conversation keeps the terminal's own text selection.
 
 ## Key Constraints (non-negotiable)
 

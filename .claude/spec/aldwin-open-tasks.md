@@ -74,14 +74,15 @@ contradicts) and the entry says so before it goes.
     reopen; the row is drawn without the `›`. Closing it shares a record
     with entry 27.
 
-30. **The screenshot harness cannot press `⇧↓` or `⌃↩` except as literal
-    Kitty sequences.** `keys.rs` names arrows, Enter, Tab, Esc, Space and
-    Backspace; the review's selection and approve keys go through the
-    protocol the app negotiates with the terminal. `scene.rs` sends `⌃↩` as
-    the raw `\e[13;5u` for the `saved` scene, which works because the app
-    pushes the Kitty flag at startup, and does not attempt `⇧↓` at all — so
-    `selecting` and `commented` exist only as `render_snapshot.rs` scenes.
-    Entry 7's `wtype` is the honest fix.
+30. **The screenshot harness cannot drag the mouse, and presses `⌃↩` only
+    as a literal Kitty sequence.** `keys.rs` names arrows, Enter, Tab, Esc,
+    Space and Backspace. `scene.rs` sends `⌃↩` as the raw `\e[13;5u` for
+    the `saved` scene, which works because the app pushes the Kitty flag at
+    startup. A review selection is a mouse drag (ADR 0010), which the key
+    grammar has no way to send — so `selecting` and `commented` exist only
+    as `render_snapshot.rs` scenes, seeded with `Review::select`. An SGR
+    mouse sequence written to the pty is the honest fix, and needs no
+    compositor.
 
 31. **`working` and `running` are transient and the harness cannot hold
     them.** The fake provider answers at once, so the amber `● Working…` is
@@ -90,6 +91,15 @@ contradicts) and the entry says so before it goes.
     working footer with a half-streamed sentence, which is a real state.
     Not done because the capture's quiet-window rule would then wait forever
     — it needs a per-scene override.
+
+32. **A failed turn's kind reaches the TUI as a string.**
+    `TurnEndReason::Error(String)` carries `LlmError`'s `Display`, and
+    `log::failure_sentence` reads its prefixes (`network error:`,
+    `provider error 429:`, …) to choose a sentence you can act on. A new
+    `LlmError` variant, or a reworded `#[error]`, falls through to the plain
+    fallback without failing any test. The fix is a typed kind beside the
+    message in `TurnEndReason::Error`; that changes `LogRecord::TurnEnded`,
+    which is written to disk (ADR 0005), so it needs its own ADR.
 
 ## Review loop
 

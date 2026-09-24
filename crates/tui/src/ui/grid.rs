@@ -53,11 +53,11 @@ impl<'a> Ctx<'a> {
         Self { width, ..self }
     }
 
-    /// The prose column: from `BODY_X` to one `MARGIN_X` short of the right
-    /// edge, so wrapped text and filled blocks end where the field does
-    /// rather than running into the frame's edge.
+    /// The prose column: `padding: 0 5ch` in every frame, so it runs from
+    /// `BODY_X` to `BODY_X` short of the right edge — symmetric, and two
+    /// cells inside where the field ends.
     pub fn body(self) -> Self {
-        self.narrow(self.width.saturating_sub(BODY_X as u16).saturating_sub(MARGIN_X as u16))
+        self.narrow(self.width.saturating_sub(2 * BODY_X as u16))
     }
 }
 

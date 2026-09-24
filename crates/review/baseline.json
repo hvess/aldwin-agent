@@ -34,6 +34,13 @@
       "design_also_says": "The README's `Field` names no placeholder among its parts, and the Content Fundamentals ask for outcomes, not instructions; a hint in the field is an instruction to the developer that the field repeats every time it is empty.",
       "app_follows": "The developer's decision of 2026-09-24: the field carries no hint in any state. An empty field is the accent `›` and the caret on the body column; the grid, ground and caret are the frame's exactly.",
       "glyphs": ""
+    },
+    {
+      "id": "question-panel-insets-are-untokenised",
+      "design_says": "`tokens/layout.css` is the grid, and the app draws every measure through it: `--margin-x`, `--body-x`, `--number-col` and the rest, each a token the frames read with `var(--…)`.",
+      "design_also_says": "Frame E's `QuestionPanel` positions its contents with measures no token names: the panel's text is `padding:0 3ch` inside it, and each option row is `margin:0 1ch` inside the panel.",
+      "app_follows": "Frame E's values, as the named constants `PANEL_PAD` (3) and `OPTION_INSET` (1) in `crates/tui/src/ui/question.rs`, citing this entry. Remove both, and this entry, when `layout.css` names them and the generator carries them.",
+      "glyphs": ""
     }
   ]
 }

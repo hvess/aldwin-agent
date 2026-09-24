@@ -3,13 +3,15 @@
 //! `tests/render_snapshot.rs`; these say what the design's rules are and
 //! that the frame follows them.
 
-use aldwin_core::{ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState};
+use aldwin_core::{ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnEndReason, TurnId};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 
-use super::grid::{BODY_X, MARGIN_X};
+use super::grid::{BODY_X, COMMAND_COL, MARGIN_X, MARK_COL, NUMBER_COL};
+use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::LogEntry;
 use crate::palette::Theme;
@@ -95,6 +97,8 @@ fn the_echoed_prompt_is_a_tint_band_and_prose_is_at_the_body_column() {
     let echo = find_row(&buf, "Add rate limiting").unwrap();
     assert_eq!(echo, 1, "the first entry sits under the top padding");
     assert_eq!(col_of(&buf, echo, "›"), Some(MARGIN_X));
+    assert_eq!(buf[(MARGIN_X as u16, echo)].fg, pal.label3, "the echo's mark is label3, its words label2");
+    assert_eq!(buf[(BODY_X as u16, echo)].fg, pal.label2);
     assert_eq!(buf[(MARGIN_X as u16, echo)].bg, pal.tint);
     assert_eq!(buf[(96, echo)].bg, pal.tint, "the band runs to the right margin");
     assert_eq!(buf[(97, echo)].bg, pal.win);
@@ -127,6 +131,35 @@ fn the_plan_marks_done_running_and_pending_in_their_three_tones() {
     assert_eq!(buf[(BODY_X as u16, y + 1)].fg, pal.label);
     assert_eq!(buf[(MARGIN_X as u16, y + 2)].symbol(), "○");
     assert_eq!(buf[(MARGIN_X as u16, y + 2)].fg, pal.label3);
+    assert_eq!(buf[(BODY_X as u16, y + 2)].fg, pal.label2, "frame B: a pending step's text is label2");
+}
+
+/// Frames B, C and J: the disclosure's glyph is the row's own `label2`.
+#[test]
+fn a_disclosure_glyph_is_in_the_rows_tone() {
+    let mut a = app();
+    a.log.push(LogEntry::UserMessage { text: "go".into() });
+    a.log.push(LogEntry::Work { items: vec![crate::log::WorkItem { call_id: "c".into(), verb: "Read".into(), target: "src/x.rs".into(), fact: Some("6 lines".into()), failed: false }], open: false });
+    let buf = render(&mut a, 100, 36);
+    let pal = Theme::Dark.palette();
+    let y = find_row(&buf, "Read 1 file").unwrap();
+    let glyph = col_of(&buf, y, "›").unwrap() as u16;
+    assert_eq!(buf[(glyph, y)].fg, pal.label2);
+}
+
+/// Prose is `padding: 0 5ch` in every frame: it wraps `BODY_X` short of the
+/// right edge, as it starts `BODY_X` in from the left.
+#[test]
+fn prose_wraps_as_far_from_the_right_edge_as_it_starts_from_the_left() {
+    let mut a = app();
+    a.log.push(LogEntry::AssistantText { text: "word ".repeat(80) });
+    let width = 80;
+    let buf = render(&mut a, width, 36);
+    let rows: Vec<String> = (0..buf.area.height).map(|y| row_text(&buf, y)).filter(|r| r.contains("word")).collect();
+    assert!(rows.len() > 1, "the text wraps");
+    for row in rows {
+        assert!(row.trim_end().chars().count() <= (width as usize) - BODY_X, "{row:?} runs past the prose column");
+    }
 }
 
 #[test]
@@ -143,17 +176,29 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     });
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
+    // Frame E: the panel is inset by the margin like the field; its text is
+    // padded 3ch inside it; each option row is inset 1ch inside the panel.
+    let right = buf.area.width - 1;
+    let (panel_x, text_x, option_x) = (MARGIN_X as u16, (MARGIN_X + PANEL_PAD) as u16, (MARGIN_X + OPTION_INSET) as u16);
+    let (number_x, answer_x) = (option_x + MARK_COL as u16, option_x + (MARK_COL + NUMBER_COL) as u16);
     let q = find_row(&buf, "Should requests").unwrap();
-    assert!(buf[(BODY_X as u16, q)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buf[(0, q)].bg, pal.panel, "the panel ground runs edge to edge");
-    assert!(row_text(&buf, q - 1).trim().is_empty() && buf[(0, q - 1)].bg == pal.panel, "a blank panel row above the question");
+    assert!(buf[(text_x, q)].modifier.contains(Modifier::BOLD));
+    assert_eq!(col_of(&buf, q, "Should"), Some(text_x as usize), "the question sits 3ch inside the panel");
+    assert_eq!(buf[(panel_x, q)].bg, pal.panel, "the panel starts at the margin");
+    assert_eq!(buf[(right - MARGIN_X as u16, q)].bg, pal.panel, "and ends at the right margin");
+    assert_eq!(buf[(0, q)].bg, pal.win, "the margin stays window ground");
+    assert_eq!(buf[(right, q)].bg, pal.win);
+    assert!(row_text(&buf, q - 1).trim().is_empty() && buf[(panel_x, q - 1)].bg == pal.panel, "a blank panel row above the question");
     let opt = find_row(&buf, "Yes, limit").unwrap();
     assert_eq!(opt, q + 3, "question, detail, blank, options");
-    assert_eq!(col_of(&buf, opt, "›"), Some(MARGIN_X));
-    assert_eq!(col_of(&buf, opt, "1"), Some(BODY_X));
-    assert_eq!(col_of(&buf, opt, "Yes"), Some(BODY_X + 3), "the text after --number-col");
-    assert_eq!(buf[(0, opt)].bg, pal.field, "the current row on --field");
-    assert_eq!(buf[(0, opt + 1)].bg, pal.panel);
+    assert_eq!(col_of(&buf, opt, "›"), Some(option_x as usize));
+    assert_eq!(col_of(&buf, opt, "1"), Some(number_x as usize));
+    assert_eq!(col_of(&buf, opt, "Yes"), Some(answer_x as usize), "the text after --number-col");
+    assert_eq!(buf[(number_x, opt)].fg, pal.label2, "the current option's number is label2");
+    assert_eq!(buf[(number_x, opt + 1)].fg, pal.label3, "the others' are label3");
+    assert_eq!(buf[(option_x, opt)].bg, pal.field, "the current row on --field");
+    assert_eq!(buf[(panel_x, opt)].bg, pal.panel, "inset 1ch inside the panel");
+    assert_eq!(buf[(option_x, opt + 1)].bg, pal.panel);
     let footer = find_row(&buf, "Waiting for you").unwrap();
     assert!(row_text(&buf, footer).contains("↑↓  Choose") && row_text(&buf, footer).contains("↩  Select"));
     assert!(!row_text(&buf, footer).contains("›"), "no field while a question is open");
@@ -162,14 +207,18 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
 #[test]
 fn the_command_menu_lists_the_four_commands_above_the_field() {
     let mut a = app();
-    a.handle_key(ratatui::crossterm::event::KeyEvent::new(ratatui::crossterm::event::KeyCode::Char('/'), ratatui::crossterm::event::KeyModifiers::NONE));
+    a.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
     let y = find_row(&buf, "/resume").unwrap();
     assert_eq!(col_of(&buf, y, "›"), Some(MARGIN_X));
     assert_eq!(col_of(&buf, y, "/"), Some(BODY_X));
     assert_eq!(buf[(BODY_X as u16, y)].fg, pal.accent);
-    assert_eq!(col_of(&buf, y, "Pick up"), Some(BODY_X + 12), "purpose at --command-col");
+    assert_eq!(col_of(&buf, y, "Pick up"), Some(BODY_X + COMMAND_COL), "purpose at --command-col");
+    let right = buf.area.width - 1;
+    assert_eq!(buf[(MARGIN_X as u16, y)].bg, pal.tint, "frame F: the current command is an idle selection, on --tint");
+    assert_eq!(buf[(right - MARGIN_X as u16, y)].bg, pal.tint);
+    assert_eq!((buf[(0, y)].bg, buf[(right, y)].bg), (pal.win, pal.win), "between the margins, not edge to edge");
     assert!(row_text(&buf, y + 1).contains("/model"));
     assert!(row_text(&buf, y + 2).contains("/quit"));
     assert!(row_text(&buf, y + 3).contains("/clear"));
@@ -294,4 +343,109 @@ fn a_streaming_reply_rebuilds_one_block_not_the_conversation() {
     }
     let _ = render(&mut a, 100, 36);
     assert_eq!(a.blocks_rebuilt(), 1);
+}
+
+#[test]
+fn the_idle_footer_sets_commands_beside_the_context_bar() {
+    let mut a = app();
+    let buf = render(&mut a, 100, 30);
+    let pal = Theme::Dark.palette();
+    let footer = find_row(&buf, "Context").unwrap();
+    assert_eq!(col_of(&buf, footer, "Ready"), Some(BODY_X));
+    let commands = col_of(&buf, footer, "/  Commands").unwrap();
+    let context = col_of(&buf, footer, "Context").unwrap();
+    assert_eq!(commands + "/  Commands".len() + crate::tokens::GROUP_GAP, context, "frame A: right-flush, one group gap before Context");
+    assert_eq!(buf[(commands as u16, footer)].fg, pal.label2, "a footer glyph is label2, never the accent");
+}
+
+#[test]
+fn after_a_turn_that_saved_the_footer_is_the_context_bar_alone() {
+    let mut a = app();
+    a.log.push(LogEntry::UserMessage { text: "go".into() });
+    a.apply_event(Event::ReviewClosed { outcome: ReviewOutcome::Saved { files: vec!["a".into()], comments_resolved: 0 } });
+    let buf = render(&mut a, 100, 30);
+    let footer = find_row(&buf, "Context").unwrap();
+    assert_eq!(row_text(&buf, footer).trim_start().split("  ").next(), Some("Context ━━━━━━━━━━ 0%"), "no status word, no keys");
+    for c in "next".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+    a.apply_event(Event::TurnEnded { turn_id: TurnId(2), reason: TurnEndReason::EndTurn });
+    let buf = render(&mut a, 100, 30);
+    assert!(row_text(&buf, find_row(&buf, "Context").unwrap()).contains("Ready"), "the next turn's footer is its own");
+}
+
+/// When the footer cannot hold everything, `/  Commands` gives way before
+/// the context bar loses its percentage.
+#[test]
+fn a_narrow_footer_drops_the_commands_before_the_context_bar() {
+    let mut a = app();
+    let buf = render(&mut a, 44, 20);
+    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
+    assert!(footer.contains("Ready") && footer.trim_end().ends_with("0%"), "{footer:?}");
+    assert!(!footer.contains("Commands"), "{footer:?}");
+    let buf = render(&mut a, 100, 20);
+    assert!(row_text(&buf, find_row(&buf, "Context").unwrap()).contains("/  Commands"));
+}
+
+/// `/resume`'s facts: `label2`, right-flush where the panel's text column
+/// ends, so the dates line up however long each title is.
+#[test]
+fn a_session_date_is_a_right_flush_fact() {
+    let session = |id: &str, title: &str| crate::resume::SessionChoice { id: id.into(), title: title.into(), when: "2026-09-19 13:00".into(), turns: 1 };
+    let mut a = app().with_sessions(vec![session("a", "short"), session("b", "a much longer title than that")]);
+    for c in "/resume".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 36);
+    let pal = Theme::Dark.palette();
+    let text_end = 100 - MARGIN_X - PANEL_PAD;
+    for title in ["short", "a much longer"] {
+        let y = find_row(&buf, title).unwrap();
+        let at = col_of(&buf, y, "2026-09-19").unwrap();
+        assert_eq!(at + "2026-09-19 13:00 · 1 turn".chars().count(), text_end, "{:?}", row_text(&buf, y));
+        assert_eq!(buf[(at as u16, y)].fg, pal.label2);
+    }
+}
+
+/// The pane the review records is where its rows are drawn: a click on a
+/// line's cell selects that line.
+#[test]
+fn a_click_on_a_drawn_diff_line_selects_that_line() {
+    let mut a = app();
+    let after = (1..=12).map(|i| format!("line {i}\n")).collect::<String>();
+    a.apply_event(Event::ReviewRequested { review_id: "r".into(), changeset: Changeset { files: vec![ChangedFile { path: "src/f.rs".into(), before: None, after }] } });
+    render(&mut a, 100, 36);
+    let buf = render(&mut a, 100, 36);
+    let y = find_row(&buf, "line 7").unwrap();
+    let x = col_of(&buf, y, "line 7").unwrap() as u16;
+    let click = |kind| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
+    a.handle_mouse(click(MouseEventKind::Down(MouseButton::Left)));
+    a.handle_mouse(click(MouseEventKind::Up(MouseButton::Left)));
+    assert_eq!(a.review().unwrap().selection_label(), Some(("1 line".into(), "f.rs · 7".into())));
+    let buf = render(&mut a, 100, 36);
+    assert_eq!(buf[(col_of(&buf, y, "7").unwrap() as u16 - 4, y)].symbol(), "▎", "the selection is drawn on the row that was clicked");
+}
+
+/// The review's key list names `Space` only while the file has a fold to
+/// open — footers name only the keys that work right now.
+#[test]
+fn the_review_offers_space_only_while_there_is_a_fold() {
+    let mut a = app();
+    let before = (1..=30).map(|i| format!("line {i}\n")).collect::<String>();
+    let after = before.replace("line 15\n", "line 15!\n");
+    a.apply_event(Event::ReviewRequested { review_id: "r".into(), changeset: Changeset { files: vec![ChangedFile { path: "f.rs".into(), before: Some(before), after }] } });
+    a.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    let footer = |a: &mut App| {
+        let buf = render(a, 160, 36);
+        row_text(&buf, find_row(&buf, "Context").unwrap())
+    };
+    let keys = footer(&mut a);
+    assert!(keys.contains("Space  Show All Lines") && keys.contains("Shift ↑↓  Select") && keys.contains("Tab  Next file"), "{keys:?}");
+    let marks = crate::tokens::MARKS;
+    assert!(keys.chars().all(|c| c.is_ascii() || marks.contains(&c)), "every key glyph is in the closed table: {keys:?}");
+    a.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert!(!footer(&mut a).contains("Space"), "every fold is open");
 }

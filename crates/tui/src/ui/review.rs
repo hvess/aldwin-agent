@@ -31,7 +31,7 @@ use super::grid::{elide, justified, Ctx, BODY_X, GUTTER_LN, MARGIN_X, MARK_COL, 
 use super::question;
 use crate::app::{App, Asking};
 use crate::list::{List, ListRow};
-use crate::review::{DiffRow, Review};
+use crate::review::{DiffRow, Pane, Review};
 use aldwin_core::Question;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -72,7 +72,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         width,
     );
     frame.render_widget(Paragraph::new(title_line), title_row);
-    let summary_line = Line::from(vec![Span::raw(" ".repeat(BODY_X)), Span::styled(elide(&summary, width.saturating_sub(BODY_X + MARGIN_X)), Style::default().fg(pal.label2))]);
+    // Frame G: the summary is `padding: 0 5ch`, the prose column.
+    let prose = Ctx::new(pal, area.width).body().width as usize;
+    let summary_line = Line::from(vec![Span::raw(" ".repeat(BODY_X)), Span::styled(elide(&summary, prose), Style::default().fg(pal.label2))]);
     frame.render_widget(Paragraph::new(summary_line), summary_row);
 
     // Two panes.
@@ -85,11 +87,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     ])
     .areas(body);
     draw_tree(frame, tree, review, pal);
-    let pane_height = diff.height.saturating_sub(3) as usize; // blank, header, blank
-    let (scroll, saw_bottom) = draw_diff(frame, diff, review, pal);
-    let _ = pane_height;
+    let (pane, saw_bottom) = draw_diff(frame, diff, review, pal);
     if let Some(review) = app.review_mut() {
-        review.scroll = scroll;
+        review.scroll = pane.top;
+        review.pane = Some(pane);
         if saw_bottom {
             review.mark_read();
         }
@@ -220,9 +221,10 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
 }
 
 /// The diff pane: a blank row, the path in weight 600 with `+11 −2` flush
-/// right, a blank row, then the rows. Returns the scroll it settled on and
+/// right, a blank row, then the rows. Returns where the rows landed — the
+/// scroll it settled on, and the rect a click is measured against — and
 /// whether the last row was on screen.
-fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palette::Palette) -> (usize, bool) {
+fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palette::Palette) -> (Pane, bool) {
     let file = review.file();
     let width = area.width as usize;
     let ctx = Ctx::new(pal, area.width);
@@ -240,14 +242,7 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
 
     let rows = file.rows();
     let pane = (area.height as usize).saturating_sub(3);
-    // Keep the cursor in view.
-    let mut top = review.scroll.min(rows.len().saturating_sub(pane));
-    if review.cursor < top {
-        top = review.cursor;
-    }
-    if pane > 0 && review.cursor >= top + pane {
-        top = review.cursor + 1 - pane;
-    }
+    let top = review.scroll.min(rows.len().saturating_sub(pane));
     let selection = review.selection();
     // A comment rides at the end of the *last* line of its range, once —
     // frame `I` puts `◆ Use config` on 145 of a 144–145 comment.
@@ -255,19 +250,19 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &crate::palett
 
     for (i, row) in rows.iter().enumerate().skip(top).take(pane) {
         let selected = selection.is_some_and(|(a, b)| a <= i && i <= b);
-        let is_cursor = i == review.cursor;
-        lines.push(diff_row(row, selected, is_cursor, comment_for, ctx));
+        lines.push(diff_row(row, selected, comment_for, ctx));
     }
     let saw_bottom = top + pane >= rows.len();
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
-    (top, saw_bottom)
+    let rows_at = Pane { x: area.x, y: area.y + 3, width: area.width, height: pane as u16, top };
+    (rows_at, saw_bottom)
 }
 
 /// One diff row: the 5-cell line number, the 2-cell sign, the code — on the
-/// row's own ground. Selected rows take the accent `▎` in the first cell
-/// and a 4-cell number; the cursor row's number is `label` rather than
-/// `label3`. A comment rides at the end in accent, `◆ text`.
-fn diff_row(row: &DiffRow, selected: bool, is_cursor: bool, comment_for: impl Fn(usize) -> Option<String>, ctx: Ctx) -> Line<'static> {
+/// row's own ground. Every number is `label3`, as frames G–I draw them.
+/// Selected rows take the accent `▎` in the first cell, a 4-cell number and
+/// `label` code. A comment rides at the end in accent, `◆ text`.
+fn diff_row(row: &DiffRow, selected: bool, comment_for: impl Fn(usize) -> Option<String>, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
     let width = ctx.width as usize;
     let (bg, sign, sign_fg, code, code_fg, number) = match row {
@@ -276,7 +271,7 @@ fn diff_row(row: &DiffRow, selected: bool, is_cursor: bool, comment_for: impl Fn
         DiffRow::Add { line, text } => (pal.addrow, "+", pal.add, text.clone(), pal.addcode, line.to_string()),
         DiffRow::Del { text, .. } => (pal.delrow, "−", pal.del, text.clone(), pal.delcode, String::new()),
     };
-    let number_fg = if is_cursor && !matches!(row, DiffRow::Fold { .. }) { pal.label } else { pal.label3 };
+    let number_fg = pal.label3;
     let mut spans: Vec<Span<'static>> = Vec::new();
     if selected {
         spans.push(Span::styled("▎", Style::default().fg(pal.accent).bg(bg)));

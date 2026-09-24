@@ -1,6 +1,10 @@
 # ADR 0002 — A markdown table is drawn, and it is the only stroked thing in the frame
 
 **Status:** accepted, 2026-09-08
+**Restated 2026-09-24** in the Aldwin Design System's tones, which replaced
+Mjolnir's whole: the rules are `label3`, the header and the body `label`.
+The decision is unchanged; `--tui-quiet`, `--tui-label` and `--tui-body`
+below are the names it was made in.
 **Supersedes:** nothing wholesale — it carves one exception out of the Turn 13
 "nothing inside a frame is stroked" rule and out of the closed glyph table in
 `.claude/design/HANDOFF.md`

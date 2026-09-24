@@ -10,7 +10,7 @@ skill that drives the loop and owns the fifth. Excludes what the stages
 themselves test (that is each crate's own spec) and the design system's
 content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
 
 ## Why
 
@@ -34,7 +34,7 @@ what this spec replaces.
 | 2 test | does the suite pass | `cargo test --workspace` | yes |
 | 3 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 4 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 90 | no, and cannot be |
+| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 100 | no, and cannot be |
 
 Stages 0–4 take about fifteen seconds and hold no clock, no network, no
 subprocess of the app and no compositor. Capture is not a stage: it runs after
@@ -161,6 +161,28 @@ harmless there because a bad frame is something the judge says out loud.
 - **Putting a check that needs a real terminal into stages 0–4.** They are
   hermetic and the value of that is the whole point; anything needing a
   compositor belongs after them, feeding stage 5.
+
+## Progress (2026-09-24, the threshold is 100)
+
+Stage 5's threshold went from 90 to 95 and then to 100, the developer's
+call, made during a whole-app pass (every scene in `--focus`, not one
+change's). It is one constant, `report::THRESHOLD`, that `stage5` and the
+report both read.
+
+- **What 100 means.** No finding of any severity. At 90 the loop tolerated
+  two minors, and the slack was deliberate: "the score is a threshold, not
+  a measurement" (Decision 6), and stage 5 is not reproducible — two
+  judges on the same frames report different minors. At 100 one run-to-run
+  minor fails the loop. That was accepted knowingly; the pass that raised
+  it reached 100 on its fourth iteration.
+- **The consequence to watch** is `baseline.json`. The fastest way to 100 is
+  to record a finding as a contradiction, and the list is a bug list for
+  the design, not an escape hatch: an entry must name the design saying
+  two things. The pass added one (`question-panel-insets-are-untokenised`),
+  for a gap in the token layer rather than a disagreement in the app.
+- **Severity is read once.** The score and the report's counts both go
+  through `report::severity`, case-insensitively; before, a `Minor` was
+  deducted but not counted.
 
 ## Progress (2026-09-23, the redesign)
 

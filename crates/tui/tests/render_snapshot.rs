@@ -235,10 +235,30 @@ fn nothing_inside_a_frame_is_stroked() {
                     let cell = &buffer[(x, y)];
                     assert!(!"─│┌┐└┘├┤┬┴┼╭╮╰╯┃║╔╗╚╝▁▔".contains(cell.symbol()), "{theme:?}/{scene_name} at {x},{y}: {:?} is a stroke", cell.symbol());
                 }
-                let underlined_blanks = (0..104u16)
-                    .filter(|x| buffer[(*x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED) && buffer[(*x, y)].symbol().trim().is_empty())
-                    .count();
-                assert!(underlined_blanks < 52, "{theme:?}/{scene_name} row {y}: a border drawn as an attribute");
+            }
+        }
+    }
+}
+
+/// An underline is a stroke drawn as an attribute, and nothing inside a
+/// window is stroked — not a border, not a heading, not a link. Every
+/// scene, `markdown` included: its heading and its link are the cases an
+/// underline was once used for.
+#[test]
+fn no_cell_is_underlined() {
+    for theme in [Theme::Dark, Theme::Light] {
+        for scene_name in SCENES {
+            let mut app = app(theme);
+            scene(scene_name, &mut app);
+            let buffer = render(&mut app, 104, 32);
+            for y in 0..32u16 {
+                for x in 0..104u16 {
+                    assert!(
+                        !buffer[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED),
+                        "{theme:?}/{scene_name} at {x},{y}: {:?} is underlined",
+                        buffer[(x, y)].symbol()
+                    );
+                }
             }
         }
     }
@@ -343,11 +363,12 @@ fn scene(name: &str, app: &mut App) {
         "review" => open_review(app),
         "selecting" => {
             open_review(app);
-            // Down to the first added row, then extend the selection by one.
-            for _ in 0..3 {
-                press(app, KeyCode::Down, KeyModifiers::NONE);
+            // The first two added lines, 144–145, as a drag across them
+            // leaves them (the mouse itself is `Review::handle_mouse`'s
+            // unit tests; here only the selection it produces matters).
+            if let Some(r) = app.review_for_tests() {
+                r.select(3, 4);
             }
-            press(app, KeyCode::Down, KeyModifiers::SHIFT);
             press(app, KeyCode::Enter, KeyModifiers::NONE);
             for c in "Read the limit from config, not 100.".chars() {
                 press(app, KeyCode::Char(c), KeyModifiers::NONE);
@@ -368,7 +389,7 @@ fn scene(name: &str, app: &mut App) {
         "markdown" => {
             app.log.push(LogEntry::UserMessage { text: "which providers are set up?".into() });
             app.log.push(LogEntry::AssistantText {
-                text: "Three, one per key:\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
+                text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
             });
             app.log.push(LogEntry::TurnBreak);
         }

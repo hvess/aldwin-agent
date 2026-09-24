@@ -4,17 +4,22 @@
 //! matters here: the ruleset has to be **built in the parent and engaged in
 //! the child**. Building it opens file descriptors and allocates; doing that
 //! between `fork` and `execve` in a threaded process is how you get a child
-//! that deadlocks in the allocator. So `ReadOnly::build` does all of it up
-//! front, and [`ReadOnly::engage`] — the part that actually runs in the
-//! forked child — is two syscalls with no allocation, which is what
-//! `pre_exec` is allowed to be.
+//! that deadlocks in the allocator. So [`Sandbox::build`] does all of it up
+//! front, and [`Sandbox::engage`] — the part that runs in the forked child —
+//! is two syscalls with no allocation, which is what `pre_exec` permits.
+//!
+//! The ruleset *handles* every write right the kernel's ABI knows and no
+//! read right. Handled-but-not-granted is denied, so everything handled is
+//! denied everywhere except beneath the rules added for the workspace roots
+//! and the incidental paths; everything not handled — execute, read a file,
+//! list a directory — stays allowed everywhere.
 
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use super::{incidental_writes, Availability};
+use super::incidental_writes;
 
 const SYS_CREATE_RULESET: libc::c_long = 444;
 const SYS_ADD_RULE: libc::c_long = 445;
@@ -23,28 +28,40 @@ const SYS_RESTRICT_SELF: libc::c_long = 446;
 const CREATE_RULESET_VERSION: u32 = 1;
 const RULE_PATH_BENEATH: libc::c_int = 1;
 
-// Filesystem access bits, in ABI order. Everything from EXECUTE to MAKE_SYM
-// is ABI 1; REFER is 2, TRUNCATE is 3, IOCTL_DEV is 5.
-const FS_EXECUTE: u64 = 1 << 0;
+// Filesystem access bits, in the kernel's order. Bits 0–12 are ABI 1;
+// REFER is ABI 2 and TRUNCATE ABI 3. The three read-side bits of ABI 1 —
+// EXECUTE (0), READ_FILE (2), READ_DIR (3) — are deliberately absent.
 const FS_WRITE_FILE: u64 = 1 << 1;
-const FS_READ_FILE: u64 = 1 << 2;
-const FS_READ_DIR: u64 = 1 << 3;
-const FS_ABI1: u64 = (1 << 13) - 1; // EXECUTE..MAKE_SYM
+const FS_REMOVE_DIR: u64 = 1 << 4;
+const FS_REMOVE_FILE: u64 = 1 << 5;
+const FS_MAKE_CHAR: u64 = 1 << 6;
+const FS_MAKE_DIR: u64 = 1 << 7;
+const FS_MAKE_REG: u64 = 1 << 8;
+const FS_MAKE_SOCK: u64 = 1 << 9;
+const FS_MAKE_FIFO: u64 = 1 << 10;
+const FS_MAKE_BLOCK: u64 = 1 << 11;
+const FS_MAKE_SYM: u64 = 1 << 12;
 const FS_REFER: u64 = 1 << 13;
 const FS_TRUNCATE: u64 = 1 << 14;
-const FS_IOCTL_DEV: u64 = 1 << 15;
 
-const NET_BIND_TCP: u64 = 1 << 0;
-const NET_CONNECT_TCP: u64 = 1 << 1;
+const WRITE_ABI1: u64 = FS_WRITE_FILE
+    | FS_REMOVE_DIR
+    | FS_REMOVE_FILE
+    | FS_MAKE_CHAR
+    | FS_MAKE_DIR
+    | FS_MAKE_REG
+    | FS_MAKE_SOCK
+    | FS_MAKE_FIFO
+    | FS_MAKE_BLOCK
+    | FS_MAKE_SYM;
 
-/// The three rights that let a program run and look at things, and nothing
-/// else. Everything a ruleset handles but does not grant is denied.
-const READ_RIGHTS: u64 = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR;
-
+/// Only the filesystem half of the kernel's attr. The kernel accepts any
+/// size from this one field upward, so there is no per-ABI size to get
+/// wrong — the network field ABI 4 added is simply not sent, which leaves
+/// the network unrestricted, as ADR 0011 intends.
 #[repr(C)]
 struct RulesetAttr {
     handled_access_fs: u64,
-    handled_access_net: u64,
 }
 
 #[repr(C, packed)]
@@ -70,79 +87,70 @@ fn abi_version() -> io::Result<i32> {
     Ok(v as i32)
 }
 
-pub fn availability() -> Availability {
+pub fn unavailable() -> Option<&'static str> {
     match abi_version() {
-        Ok(abi) if abi >= 1 => Availability::Enforcing {
-            abi,
-            network: abi >= 4,
-        },
-        Ok(_) => Availability::Unavailable {
-            reason: "this kernel reports no usable Landlock ABI",
-        },
-        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => Availability::Unavailable {
-            reason: "this kernel has no Landlock support",
-        },
-        Err(_) => Availability::Unavailable {
-            reason: "Landlock is present but disabled — add it to the kernel's lsm= list",
-        },
+        Ok(abi) if abi >= 1 => None,
+        Ok(_) => Some("this kernel reports no usable Landlock ABI"),
+        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => {
+            Some("this kernel has no Landlock support")
+        }
+        Err(_) => Some("Landlock is present but disabled — add it to the kernel's lsm= list"),
     }
 }
 
-/// Every filesystem right this ABI knows about. A ruleset must *handle* a
-/// right before it can deny it, so anything left out here is a right the
-/// sandbox silently permits — which is why this tracks the ABI upward rather
-/// than pinning to the version that existed when it was written.
+/// Every write right this ABI knows. A right must be *handled* before it can
+/// be denied, so one left out here is a write the sandbox silently permits —
+/// which is why this tracks the ABI upward.
+///
+/// On ABI 1, which cannot handle REFER, the kernel refuses every rename or
+/// link across directories (`EXDEV`), inside the workspace too. Kernels
+/// before 5.19 are rare enough that this is stated rather than worked round.
 fn handled_fs(abi: i32) -> u64 {
-    let mut bits = FS_ABI1;
+    let mut bits = WRITE_ABI1;
     if abi >= 2 {
         bits |= FS_REFER;
     }
     if abi >= 3 {
         bits |= FS_TRUNCATE;
     }
-    if abi >= 5 {
-        bits |= FS_IOCTL_DEV;
+    bits
+}
+
+/// The rights granted beneath one writable path. The kernel refuses a rule
+/// that grants a directory-only right on a file — the whole `add_rule` fails
+/// with `EINVAL` — which is how `/dev/null` once came out unwritable: it was
+/// offered `MAKE_DIR` with everything else.
+fn writable_rights(abi: i32, path: &Path) -> u64 {
+    if path.is_dir() {
+        return handled_fs(abi);
+    }
+    let mut bits = FS_WRITE_FILE;
+    if abi >= 3 {
+        bits |= FS_TRUNCATE;
     }
     bits
 }
 
-/// A built, unengaged ruleset: read anything, write only the incidental
-/// paths, and — from ABI 4 — reach no TCP address.
-pub struct ReadOnly {
+/// A built, unengaged ruleset: write only beneath the roots and the
+/// incidental paths.
+pub struct Sandbox {
     ruleset: OwnedFd,
-    abi: i32,
 }
 
-impl ReadOnly {
-    /// `roots` is the whole workspace (ADR 0007), not one project root: the
-    /// incidental-write exemptions are per-root, so a second root's
-    /// `target/` is exempt on the same terms as the first's.
-    pub fn build(roots: &[std::path::PathBuf]) -> io::Result<Self> {
+impl Sandbox {
+    /// Every root is writable, not only the project root: a second root
+    /// (ADR 0007) is workspace on the same terms as the first.
+    pub fn build(roots: &[PathBuf]) -> io::Result<Self> {
         let abi = abi_version()?;
-        let handled_net = if abi >= 4 {
-            NET_BIND_TCP | NET_CONNECT_TCP
-        } else {
-            0
-        };
-
         let attr = RulesetAttr {
             handled_access_fs: handled_fs(abi),
-            handled_access_net: handled_net,
         };
-        // ABI 1-3 kernels know an 8-byte attr; handing them 16 is E2BIG.
-        let attr_size = if abi >= 4 {
-            std::mem::size_of::<RulesetAttr>()
-        } else {
-            8
-        };
-
-        // SAFETY: `attr` outlives the call and `attr_size` matches what this
-        // ABI defines the struct to be.
+        // SAFETY: `attr` outlives the call and its size is what we pass.
         let fd = unsafe {
             libc::syscall(
                 SYS_CREATE_RULESET,
                 &attr as *const RulesetAttr,
-                attr_size,
+                std::mem::size_of::<RulesetAttr>(),
                 0,
             )
         };
@@ -152,34 +160,25 @@ impl ReadOnly {
         // SAFETY: the syscall returned a fresh, owned file descriptor.
         let ruleset = unsafe { OwnedFd::from_raw_fd(fd as RawFd) };
 
-        // Read the whole filesystem. See the module docs for why this is not
-        // the confinement — argument containment is.
-        add_path_rule(&ruleset, Path::new("/"), READ_RIGHTS)?;
-
-        // ...and write only here. A path that does not exist is not an error:
-        // a project with no `target/` simply has nothing to exempt.
-        for path in incidental_writes(roots) {
+        // A root that cannot be added is an error, not a skip: the workspace
+        // would be read-only and every run would fail without saying why.
+        for root in roots {
+            add_path_rule(&ruleset, root, handled_fs(abi))?;
+        }
+        // An incidental path that does not exist here has nothing to exempt.
+        for path in incidental_writes() {
             let _ = add_path_rule(&ruleset, &path, writable_rights(abi, &path));
         }
-
-        Ok(Self { ruleset, abi })
+        Ok(Self { ruleset })
     }
 
-    pub fn abi(&self) -> i32 {
-        self.abi
-    }
-
-    /// The command line to actually spawn. Unchanged on Linux: the
-    /// confinement is engaged in the child, not by wrapping the program.
+    /// Unchanged on Linux: the confinement is engaged in the child, not by
+    /// wrapping the program.
     pub fn command_line(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
         (program.to_string(), args.to_vec())
     }
 
-    /// Confines `cmd` so the program it spawns runs read-only.
-    ///
-    /// The ruleset is engaged inside the forked child, which is why `build`
-    /// did all the allocating work up front: [`engage`] is two syscalls with
-    /// no allocation, which is what `pre_exec` permits. See the module docs.
+    /// Confines whatever `cmd` spawns.
     pub fn install(self, cmd: &mut tokio::process::Command) {
         // SAFETY: `engage` is two syscalls with no allocation, which is what
         // `pre_exec` permits — see its own safety note.
@@ -193,9 +192,8 @@ impl ReadOnly {
     ///
     /// # Safety
     /// Intended for `pre_exec`, between `fork` and `execve`. It allocates
-    /// nothing and takes no locks — two syscalls — which is what makes it
-    /// safe to call there. Calling it on the parent would confine Aldwin
-    /// itself, permanently.
+    /// nothing and takes no locks, which is what makes it safe there.
+    /// Calling it on the parent would confine Aldwin itself, permanently.
     unsafe fn engage(&self) -> io::Result<()> {
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
@@ -207,32 +205,11 @@ impl ReadOnly {
     }
 }
 
-/// The rights to grant over a writable exemption.
-///
-/// Landlock refuses a rule that grants directory-only rights on a file — the
-/// whole `add_rule` call fails with `EINVAL`, and since a missing exemption
-/// is tolerated here, the failure is silent. That is how `/dev/null` came out
-/// unwritable on the first run of this: it was being offered `MAKE_DIR`
-/// alongside everything else, so its rule was never added at all.
-fn writable_rights(abi: i32, path: &Path) -> u64 {
-    if path.is_dir() {
-        return handled_fs(abi);
-    }
-    let mut bits = FS_EXECUTE | FS_READ_FILE | FS_WRITE_FILE;
-    if abi >= 3 {
-        bits |= FS_TRUNCATE;
-    }
-    if abi >= 5 {
-        bits |= FS_IOCTL_DEV;
-    }
-    bits
-}
-
 fn add_path_rule(ruleset: &OwnedFd, path: &Path, rights: u64) -> io::Result<()> {
     let c_path = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
 
-    // O_PATH: we want a handle to name the directory, never to read it here.
+    // O_PATH: a handle to name the directory, never to read it here.
     // SAFETY: `c_path` is a valid NUL-terminated string for the call's life.
     let parent = unsafe { libc::open(c_path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
     if parent < 0 {
@@ -265,176 +242,112 @@ fn add_path_rule(ruleset: &OwnedFd, path: &Path, rights: u64) -> io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{confinement_or_explicit_skip, scratch_dir};
     use std::process::Command;
 
-    /// Every enforcement test below is conditional on the kernel actually
-    /// offering Landlock, so this one exists to make a kernel that does not
-    /// visible rather than silently skipping the suite.
-    #[test]
-    fn availability_is_reported_rather_than_assumed() {
-        match availability() {
-            Availability::Enforcing { abi, .. } => assert!(abi >= 1),
-            Availability::Unavailable { reason } => {
-                eprintln!("landlock unavailable here: {reason} — enforcement tests skipped");
-            }
-        }
-    }
-
-    /// Deliberately **not** `tempfile::tempdir()`: that lands under `/tmp`,
-    /// which is on the incidental-write list, so every assertion below would
-    /// pass for the wrong reason — writes allowed by an exemption rather than
-    /// denied by the sandbox. This cost a debugging round the first time.
-    fn project() -> tempfile::TempDir {
-        tempfile::Builder::new()
-            .prefix("aldwin-sandbox-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("a scratch project outside the incidental paths")
-    }
-
-    fn sandboxed<S: AsRef<std::ffi::OsStr>>(root: &Path, argv: &[S]) -> std::process::Output {
-        let plan =
-            ReadOnly::build(std::slice::from_ref(&root.to_path_buf())).expect("ruleset builds");
-        let mut cmd = Command::new(&argv[0]);
+    fn confined(root: &Path, argv: &[&str]) -> std::process::Output {
+        let sandbox =
+            Sandbox::build(std::slice::from_ref(&root.to_path_buf())).expect("ruleset builds");
+        let mut cmd = Command::new(argv[0]);
         cmd.args(&argv[1..])
             .current_dir(root)
             .stdin(std::process::Stdio::null());
         // SAFETY: two syscalls, no allocation — see `engage`.
         unsafe {
-            std::os::unix::process::CommandExt::pre_exec(&mut cmd, move || plan.engage());
+            std::os::unix::process::CommandExt::pre_exec(&mut cmd, move || sandbox.engage());
         }
         cmd.output().expect("spawns")
     }
 
-    fn enforcing() -> bool {
-        availability().enforcing()
+    #[test]
+    fn a_write_inside_the_workspace_lands() {
+        if !confinement_or_explicit_skip() {
+            return;
+        }
+        let root = scratch_dir();
+        let out = confined(root.path(), &["/bin/sh", "-c", "mkdir d && echo hi > d/f"]);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("d/f")).unwrap(),
+            "hi\n"
+        );
     }
 
     #[test]
-    fn a_read_still_reads() {
-        if !enforcing() {
+    fn a_write_outside_the_workspace_cannot_land() {
+        if !confinement_or_explicit_skip() {
             return;
         }
-        let dir = project();
-        std::fs::write(dir.path().join("hello.txt"), "contents\n").unwrap();
-
-        let out = sandboxed(dir.path(), &["/usr/bin/cat", "hello.txt"]);
-        assert!(out.status.success(), "a read must still run: {out:?}");
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "contents\n");
-    }
-
-    /// The whole model in one assertion: a call that claimed to be a read
-    /// cannot write, whatever it claimed.
-    #[test]
-    fn a_write_cannot_land() {
-        if !enforcing() {
-            return;
-        }
-        let dir = project();
-        let victim = dir.path().join("untouched.txt");
+        let root = scratch_dir();
+        let outside = scratch_dir();
+        let victim = outside.path().join("victim");
         std::fs::write(&victim, "original\n").unwrap();
 
-        let out = sandboxed(dir.path(), &["/usr/bin/tee", "untouched.txt"]);
-        assert!(
-            !out.status.success(),
-            "writing must fail, not succeed quietly: {out:?}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&victim).unwrap(),
-            "original\n",
-            "nothing may land"
-        );
-    }
-
-    #[test]
-    fn a_file_cannot_be_deleted_either() {
-        if !enforcing() {
-            return;
+        let target = victim.to_str().unwrap();
+        for script in [
+            format!("echo changed > {target}"),
+            format!("rm -f {target}"),
+            format!("mv {target} {target}.moved"),
+        ] {
+            let out = confined(root.path(), &["/bin/sh", "-c", &script]);
+            assert!(!out.status.success(), "{script}: {out:?}");
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n");
         }
-        let dir = project();
-        let victim = dir.path().join("keep.txt");
-        std::fs::write(&victim, "still here\n").unwrap();
-
-        let out = sandboxed(dir.path(), &["/usr/bin/rm", "-f", "keep.txt"]);
-        assert!(!out.status.success(), "rm must fail: {out:?}");
-        assert!(victim.exists(), "the file must survive");
-    }
-
-    /// Re-running after the developer allows it as a write is only safe
-    /// because the first attempt could not have half-finished. This pins that
-    /// the failed attempt leaves no partial file behind.
-    #[test]
-    fn a_refused_write_leaves_nothing_behind() {
-        if !enforcing() {
-            return;
-        }
-        let dir = project();
-
-        let out = sandboxed(dir.path(), &["/usr/bin/tee", "brand-new.txt"]);
-        assert!(!out.status.success());
-        assert!(
-            !dir.path().join("brand-new.txt").exists(),
-            "a refused write creates nothing"
-        );
-    }
-
-    #[test]
-    fn the_incidental_list_lets_a_read_use_dev_null() {
-        if !enforcing() {
-            return;
-        }
-        let dir = project();
-        let out = sandboxed(dir.path(), &["/usr/bin/tee", "/dev/null"]);
-        assert!(
-            out.status.success(),
-            "/dev/null must stay writable: {out:?}"
-        );
-    }
-
-    /// The other half of a read declaration: it cannot reach the network
-    /// either, so a call that "only reads" cannot quietly send what it read
-    /// somewhere. Landlock covers TCP from ABI 4; the listener is local so
-    /// the test needs no internet, only the refusal.
-    #[test]
-    fn a_read_cannot_open_a_tcp_connection() {
-        let Availability::Enforcing { network: true, .. } = availability() else {
-            return;
-        };
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
-        let port = listener.local_addr().unwrap().port();
-
-        let dir = project();
-        let out = sandboxed(
-            dir.path(),
+        let out = confined(
+            root.path(),
             &[
-                "/usr/bin/curl",
-                "--max-time",
-                "5",
-                "-s",
-                &format!("http://127.0.0.1:{port}/"),
+                "/bin/sh",
+                "-c",
+                &format!("touch {}/new", outside.path().display()),
             ],
         );
-        assert!(
-            !out.status.success(),
-            "a read must not reach the network: {out:?}"
-        );
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!outside.path().join("new").exists());
     }
 
-    /// `.git/` is deliberately absent from the incidental list, so that a
-    /// `git commit` — which touches nothing outside it — cannot succeed while
-    /// claiming to be a read.
+    /// Rules are on the root's inode, not its name, so a symlink inside a
+    /// root that points out of it leads to somewhere the rule does not cover.
     #[test]
-    fn dot_git_is_not_writable_from_a_read() {
-        if !enforcing() {
+    fn a_symlink_out_of_the_workspace_does_not_carry_write_access_with_it() {
+        if !confinement_or_explicit_skip() {
             return;
         }
-        let dir = project();
-        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let root = scratch_dir();
+        let outside = scratch_dir();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("out")).unwrap();
 
-        let out = sandboxed(dir.path(), &["/usr/bin/tee", ".git/smuggled"]);
-        assert!(
-            !out.status.success(),
-            "a read must not write into .git: {out:?}"
+        let out = confined(root.path(), &["/bin/sh", "-c", "echo x > out/smuggled"]);
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!outside.path().join("smuggled").exists());
+    }
+
+    #[test]
+    fn reads_outside_the_workspace_and_the_incidental_writes_still_work() {
+        if !confinement_or_explicit_skip() {
+            return;
+        }
+        let root = scratch_dir();
+        let out = confined(
+            root.path(),
+            &[
+                "/bin/sh",
+                "-c",
+                "cat /etc/passwd >/dev/null; echo x > /dev/null",
+            ],
         );
-        assert!(!dir.path().join(".git/smuggled").exists());
+        assert!(out.status.success(), "{out:?}");
+    }
+
+    #[test]
+    fn a_file_rule_offers_only_file_rights() {
+        assert_eq!(
+            writable_rights(3, Path::new("/dev/null")),
+            FS_WRITE_FILE | FS_TRUNCATE
+        );
+        assert_eq!(
+            handled_fs(1) & (1 << 0 | 1 << 2 | 1 << 3),
+            0,
+            "no read right is handled, so reads stay open"
+        );
     }
 }

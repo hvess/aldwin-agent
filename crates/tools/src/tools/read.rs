@@ -6,9 +6,8 @@ use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::paths::Workspace;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
-use aldwin_permissions::Class;
 
 /// Reads a file — the staged version when an edit this turn has touched it,
 /// so the model reads back what it wrote, otherwise the disk.
@@ -31,7 +30,7 @@ impl ReadTool {
                     "properties": { "path": { "type": "string" } },
                     "required": ["path"],
                 }),
-                source: ToolSource::Builtin,
+                observes_disk: false,
             },
             workspace,
             staging,
@@ -54,16 +53,6 @@ fn path_arg(input: &Value) -> Result<String, ToolError> {
 impl Tool for ReadTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    /// `read` is a read whatever it is pointed at — the class is a property
-    /// of the tool here, not something a caller declares.
-    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(Some(PermissionRequest {
-            program: "read".into(),
-            class: Class::Read,
-            argv: vec![path_arg(input)?],
-        }))
     }
 
     async fn call(
@@ -90,7 +79,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn tool(dir: &tempfile::TempDir) -> (ReadTool, Arc<Staging>) {
-        let staging = Arc::new(Staging::new());
+        let staging = Arc::new(Staging::new(Workspace::new(dir.path())));
         (
             ReadTool::new(Workspace::new(dir.path()), staging.clone()),
             staging,
@@ -159,21 +148,5 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::Io { .. }));
-    }
-
-    #[test]
-    fn the_permission_request_is_always_a_read_of_the_given_path() {
-        let (tool, _) = tool(&tempdir().unwrap());
-        assert!(matches!(
-            tool.permission(&json!({})),
-            Err(ToolError::InvalidInput { .. })
-        ));
-        let request = tool
-            .permission(&json!({"path": "./src/main.rs"}))
-            .unwrap()
-            .unwrap();
-        assert_eq!(request.program, "read");
-        assert_eq!(request.class, Class::Read);
-        assert_eq!(request.argv, vec!["./src/main.rs".to_string()]);
     }
 }

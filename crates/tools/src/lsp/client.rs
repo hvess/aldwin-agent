@@ -10,6 +10,8 @@ use tokio::io::BufReader;
 use tokio::sync::oneshot;
 
 use super::protocol::{read_message, write_message};
+use crate::paths::Workspace;
+use crate::sandbox;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LspError {
@@ -93,8 +95,8 @@ struct Inner {
     // across the await let two concurrent calls on the same URI both see
     // "not yet opened" and both send `didOpen` — a protocol violation).
     synced: tokio::sync::Mutex<HashMap<String, Synced>>,
-    // Kept alive so `kill_on_drop` fires when the last `LspClient` clone is
-    // dropped — the safety net under the graceful `shutdown()` handshake.
+    // Kept alive so `kill_on_drop` ends the server when the last
+    // `LspClient` clone is dropped — with the session, or on a respawn.
     _child: tokio::process::Child,
 }
 
@@ -107,20 +109,27 @@ pub struct LspClient {
 }
 
 impl LspClient {
-    /// Spawns `command`, performs the `initialize`/`initialized` handshake
-    /// against `root`, and returns once the server has acknowledged it.
-    pub async fn spawn(command: &str, args: &[&str], root: &Path) -> Result<Self, LspError> {
-        let mut cmd = tokio::process::Command::new(command);
-        cmd.args(args)
-            .stdin(Stdio::piped())
+    /// Spawns `command` in the sandbox over `workspace` (a language server
+    /// runs build scripts and proc macros — repository code), performs the
+    /// `initialize`/`initialized` handshake against the project root, and
+    /// returns once the server has acknowledged it.
+    pub async fn spawn(
+        command: &str,
+        args: &[&str],
+        workspace: &Workspace,
+    ) -> Result<Self, LspError> {
+        let spawn_error = |source| LspError::Spawn {
+            command: command.to_string(),
+            source,
+        };
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let mut cmd = sandbox::command(command, &args, &workspace.roots()).map_err(spawn_error)?;
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|source| LspError::Spawn {
-            command: command.to_string(),
-            source,
-        })?;
+        let mut child = cmd.spawn().map_err(spawn_error)?;
         let stdin = child.stdin.take().expect("stdin is piped above");
         let stdout = child.stdout.take().expect("stdout is piped above");
 
@@ -136,7 +145,8 @@ impl LspClient {
         });
         let client = Self { inner };
 
-        let root_uri = file_uri(root);
+        let root = workspace.project_root();
+        let root_uri = file_uri(&root);
         let workspace_name = root
             .file_name()
             .and_then(|n| n.to_str())
@@ -286,15 +296,6 @@ impl LspClient {
         write_message(&mut *stdin, message)
             .await
             .map_err(LspError::Io)
-    }
-
-    /// Graceful LSP shutdown: `shutdown` request, then `exit` notification.
-    /// `kill_on_drop` on the child process is the fallback if this is never
-    /// called (or the server doesn't respond) — see aldwin-tools.md's "LSP
-    /// servers ... shut down at process exit."
-    pub async fn shutdown(&self) {
-        let _ = self.request("shutdown", Value::Null).await;
-        let _ = self.notify("exit", Value::Null).await;
     }
 }
 
@@ -467,7 +468,7 @@ mod tests {
     /// position was resolved against the text from before it.
     #[tokio::test]
     async fn a_document_that_changed_is_sent_again_and_one_that_did_not_is_not() {
-        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/"))
+        let client = LspClient::spawn("python3", &[FAKE_SERVER], &Workspace::new("/"))
             .await
             .unwrap();
         let uri = "file:///a.rs";
@@ -484,7 +485,6 @@ mod tests {
             hover(&client, uri).await,
             json!({"contents": "after", "opens": 1, "changes": 1})
         );
-        client.shutdown().await;
     }
 
     /// A request made after the server has gone must fail, not wait: the
@@ -492,7 +492,7 @@ mod tests {
     /// registered after that had nobody left to answer it.
     #[tokio::test]
     async fn a_server_that_has_exited_reads_as_closed_and_later_requests_do_not_hang() {
-        let client = LspClient::spawn("python3", &[FAKE_SERVER], Path::new("/"))
+        let client = LspClient::spawn("python3", &[FAKE_SERVER], &Workspace::new("/"))
             .await
             .unwrap();
         assert!(!client.is_closed());
@@ -544,9 +544,8 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
 
-        let client = LspClient::spawn("rust-analyzer", &[], dir.path())
+        LspClient::spawn("rust-analyzer", &[], &Workspace::new(dir.path()))
             .await
             .expect("rust-analyzer must be on PATH for this test");
-        client.shutdown().await;
     }
 }

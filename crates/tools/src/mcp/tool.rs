@@ -5,14 +5,13 @@ use serde_json::Value;
 
 use super::bridge::McpBridge;
 use crate::error::ToolError;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 use aldwin_core::DispatchContext;
-use aldwin_permissions::Class;
 
 /// One remote MCP tool, proxied through `McpBridge`. It runs in its own
 /// process over the real tree, so the dispatcher opens the review before it
 /// the way it does before `run`; an MCP tool that edits files does so
-/// without a diff (open-tasks 13), which is why every one is a write.
+/// without a diff (open-tasks 13), inside the workspace the sandbox allows.
 pub struct McpTool {
     descriptor: ToolDescriptor,
     bridge: Arc<McpBridge>,
@@ -33,9 +32,8 @@ impl McpTool {
                 name: registered_name,
                 description: remote.description.clone().unwrap_or_default().into_owned(),
                 input_schema,
-                source: ToolSource::Mcp {
-                    server: server.clone(),
-                },
+                // Its own process, over the real tree.
+                observes_disk: true,
             },
             bridge,
             server,
@@ -48,29 +46,6 @@ impl McpTool {
 impl Tool for McpTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    /// **Every MCP tool is a write**, whatever the server says about it.
-    /// `argv` is the whole serialised argument object — MCP arguments vary
-    /// arbitrarily by tool, so that is what the prompt can show.
-    ///
-    /// A server advertises its own hints, and a server is exactly the party
-    /// whose word cannot be taken here: unlike `run`, an MCP call executes
-    /// inside the server's process, where the sandbox cannot hold a read
-    /// declaration to its word. With no way to enforce the claim, believing
-    /// it would be the trust-the-declaration design ADR 0004 rejected, minus
-    /// the enforcement that made it safe for `run`.
-    ///
-    /// Letting the developer classify a tool themselves — with the server's
-    /// claim shown as a claim — is ADR 0004 §4's intent and is not built yet.
-    /// Until it is, `write` is the conservative reading and the one that
-    /// cannot quietly be wrong.
-    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(Some(PermissionRequest {
-            program: self.descriptor().name.clone(),
-            class: Class::Write,
-            argv: vec![serde_json::to_string(input).unwrap_or_default()],
-        }))
     }
 
     async fn call(
@@ -108,6 +83,7 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Workspace;
     use aldwin_config::{McpServer, McpTransport};
     use serde_json::json;
 
@@ -138,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_proxies_through_the_bridge_and_returns_text() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()], Workspace::new(".")));
         let tool = McpTool::new(
             bridge,
             "fake".into(),
@@ -153,7 +129,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_error_result_becomes_a_structured_tool_error() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()], Workspace::new(".")));
         // Registered under the name "echo" but proxy to a remote name that
         // doesn't exist server-side, to force an isError result.
         let mut broken = remote_echo_tool();
@@ -165,35 +141,17 @@ mod tests {
         assert!(matches!(err, ToolError::McpToolError { .. }));
     }
 
+    /// An MCP server runs over the real tree, so the review opens before
+    /// any of its tools the way it does before `run`.
     #[test]
-    fn descriptor_names_its_server() {
-        let bridge = Arc::new(McpBridge::new(vec![]));
+    fn an_mcp_tool_observes_the_disk() {
+        let bridge = Arc::new(McpBridge::new(vec![], Workspace::new(".")));
         let tool = McpTool::new(
             bridge,
             "fake".into(),
             "fake:echo".into(),
             &remote_echo_tool(),
         );
-        assert_eq!(
-            tool.descriptor().source,
-            ToolSource::Mcp {
-                server: "fake".into()
-            }
-        );
-    }
-
-    #[test]
-    fn the_permission_request_is_a_write_whatever_the_server_says() {
-        let bridge = Arc::new(McpBridge::new(vec![]));
-        let tool = McpTool::new(
-            bridge,
-            "fake".into(),
-            "fake:echo".into(),
-            &remote_echo_tool(),
-        );
-        let request = tool.permission(&json!({"text": "hi"})).unwrap().unwrap();
-        assert_eq!(request.class, aldwin_permissions::Class::Write);
-        assert_eq!(request.program, "fake:echo");
-        assert_eq!(request.argv, vec![r#"{"text":"hi"}"#.to_string()]);
+        assert!(tool.descriptor().observes_disk);
     }
 }

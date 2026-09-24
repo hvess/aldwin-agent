@@ -660,9 +660,6 @@ fn describe(
 
 async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc::Sender<Event>) {
     match config.reload_all() {
-        // No `Locks` re-instantiation needed: it holds this same
-        // (Arc-backed) Config handle, so reload_all()'s in-place mutation
-        // is visible on its very next check.
         Ok(()) => {
             let _ = events
                 .send(Event::Notice {
@@ -1280,15 +1277,9 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
-        // Establish the project dir, then hand-corrupt permissions.yaml so
-        // reload_all() fails on that one layer.
-        config
-            .add_grant(
-                aldwin_config::Scope::Project,
-                aldwin_config::GrantList::Allow,
-                aldwin_config::GrantEntry::classed("rg", aldwin_config::Class::Read),
-            )
-            .unwrap();
+        // Hand-corrupt the project's permissions.yaml so reload_all() fails
+        // on that one layer.
+        std::fs::create_dir(project.path().join(".aldwin")).unwrap();
         let bad_path = project.path().join(".aldwin").join("permissions.yaml");
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
 

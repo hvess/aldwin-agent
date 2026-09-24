@@ -5,7 +5,7 @@ A coding agent harness where the developer's understanding is the product, not t
 **Status:** active
 **Scope:** Entire project — core, TUI, LLM client, tool layer.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
 
 ## Why
 
@@ -17,11 +17,12 @@ A tool for thought.
 
 ## Mascot
 
-- **Archetype:** Mjolnir — Thor's hammer. Superseded the little-owl archetype below at explicit developer direction (2026-08-29) toward something more "aggressive/directive," in the same spirit the owl was chosen for in the first place: "what we empower the developer/user to be." A hammer sidesteps the animal-mascot concern even more directly than the robot-owl did — it isn't a creature at all, it's a tool, always in the wielder's hand and never acting on its own, which reads as a literal restatement of "tool for thought" from the user's side rather than the LLM's.
-- **Why:** Not a redesign exercise — a real photo reference, traced. `aldwin-tui.md`'s "mascot pivot to Mjolnir" Progress entry has the full history: several procedurally-generated candidates (a cobra, a "tribal" infinity mark, two hand-coded Mjolnir attempts with a crosshatch-weave texture) were tried and rejected, most pointedly for not being "a true representation" of the reference images supplied. What landed, `ui::MJOLNIR_ART`, is a literal pixel trace of a real Mjolnir illustration (thresholded, trimmed, resized, read back one source pixel per Braille dot) rather than an original design — the opposite instinct from the owl's from-scratch invention, and worth remembering next time an original-mascot design stalls: a faithful trace of an existing well-composed reference can beat many rounds of procedural approximation.
-- **Constraints:** None formally revisited for Mjolnir — unlike the owl, this mark's fidelity is judged against its real-world reference image, not a set of stated silhouette/finish rules.
-- **Status:** Decided and implemented — `ui::MJOLNIR_ART` in the TUI's welcome banner (`aldwin-tui.md`'s "mascot pivot to Mjolnir" Progress entry, `ui::intro_lines`). Uses the TUI's existing accent color, same as the owl did; the mascot color-palette question below is about the owl era and is moot now that the mark itself changed.
-- **Superseded — the little-owl archetype (kept for history):** A small, careful automaton in the form of a little owl (Athene noctua), honestly mechanical rather than period brass, personality via perched stillness and considered head rotation. Chosen because an animal mascot mythologises the LLM as a creature with intent, while a robot in animal form sidesteps that; the little owl is Athena's bird, the literal source of the wise-owl trope, with perching over locomotion as the visual cue for patience and observation. Constraints that came with it: boxy/geometric silhouette surviving ASCII rendering at small sizes; one expressive feature (large camera-iris eye-lenses with subtle aperture motion) carrying personality; perched posture with head rotation, not ambulatory movement; talons that grip but do not act (can hold context, cannot edit); matte industrial finish in the Wall-E/Anki Vector lineage, not steampunk; slight wear and character marks, not factory-fresh; and no replicating an existing owl mascot's silhouette (Bubo, Hedwig, Owl from The Owl House). Implemented once as an ASCII owl in the welcome banner before being replaced — see `ui.rs`'s git history for that version.
+- **Superseded by the design system (2026-09-23).** The mark is the Aldwin
+  Design System's own: 108 half-block cells in the launch card, generated
+  into `tokens.rs` from the frame like every other design value. The traced
+  Mjolnir illustration (`ui::MJOLNIR_ART`) is gone with the Mjolnir system,
+  and the little-owl archetype before it; both are in git history, with the
+  reasoning that chose them in this section's earlier revisions.
 
 ## Workspace
 
@@ -30,29 +31,31 @@ A tool for thought.
   - **aldwin-core** (`crates/core`)
     - Role: Agent loop, append-only log, event/command types, LlmClient and ToolDispatcher trait defs.
     - Depends on: (none)
-    - Spec: .claude/spec/aldwin-core.md
+    - Spec: .claude/spec/archive/aldwin-core.md
   - **aldwin-llm** (`crates/llm`)
     - Role: LlmClient implementations. V0 Anthropic; V0.5 OpenAI-compat adapter covering Qwen, Kimi, Together, Fireworks, OpenRouter, vLLM, Ollama.
-    - Depends on: aldwin-core
-    - Spec: .claude/spec/aldwin-llm.md
+    - Depends on: aldwin-core, aldwin-config
+    - Spec: .claude/spec/archive/aldwin-llm.md
   - **aldwin-config** (`crates/config`)
-    - Role: Per-domain YAML files, scope resolution (session > project > global), persistence.
-    - Depends on: (none)
-    - Spec: .claude/spec/aldwin-config.md
-  - **aldwin-permissions** (`crates/permissions`)
-    - Role: The lock — a `deny:` entry refuses a program outright — and nothing else since ADR 0009. Reads and runs need no grant; the review gates edits.
-    - Depends on: aldwin-config
-    - Spec: .claude/spec/aldwin-permissions.md
+    - Role: Per-domain YAML files (project and global scope), the transcript store, persistence. `roots:` in `permissions.yaml` is the one permissions key read (ADR 0011).
+    - Depends on: aldwin-core
+    - Spec: .claude/spec/archive/aldwin-config.md
   - **aldwin-tools** (`crates/tools`)
-    - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask), the staged changeset the review opens over, the read-enforcing sandbox, MCP bridge via rmcp.
-    - Depends on: aldwin-core, aldwin-permissions, aldwin-config
+    - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask), the staged changeset the review opens over, the sandbox every spawned process runs in (writes only inside the workspace), MCP bridge via rmcp.
+    - Depends on: aldwin-core, aldwin-config
     - Spec: .claude/spec/aldwin-tools.md
   - **aldwin-tui** (`crates/tui`)
     - Role: ratatui frontend. Renders the event stream from the core, submits commands.
     - Depends on: aldwin-core
+    - Spec: .claude/spec/aldwin-tui.md
   - **aldwin** (`crates/cli`)
     - Role: Binary crate. Session bootstrap (composes the additional-context string handed to the core), wires concrete trait impls into the core, runs the TUI.
-    - Depends on: aldwin-core, aldwin-llm, aldwin-config, aldwin-permissions, aldwin-tools, aldwin-tui
+    - Depends on: aldwin-core, aldwin-llm, aldwin-config, aldwin-tools, aldwin-tui
+    - Spec: .claude/spec/archive/aldwin-cli.md
+  - **aldwin-review** (`crates/review`)
+    - Role: The submission loop's harness (`/review`): design tokens, rendered frames, the screenshot baselines. Dev-only; never in a release build.
+    - Depends on: aldwin-core, aldwin-config, aldwin-llm
+    - Spec: .claude/spec/aldwin-review.md
 
 ## Decisions
 
@@ -68,7 +71,7 @@ A tool for thought.
 
 - **Use the official rmcp crate for MCP client work.** — First-party Rust MCP SDK; reinventing the transport adds no value.
 
-- **No OS-level sandboxing in V0.** — *Reversed by ADR 0004 and load-bearing since ADR 0009.* A call the agent declares a read runs under Landlock (Linux) or Seatbelt (macOS) with the tree read-only and the network unreachable; with no prompt left in the product (ADR 0009), the sandbox is what holds a read declaration to its word. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
+- **No OS-level sandboxing in V0.** — *Reversed by ADR 0004; since ADR 0011 it is the boundary.* Every process Aldwin starts — a `run`, the language server, an MCP server — runs under Landlock (Linux) or Seatbelt (macOS) and can write only inside the workspace; reads and the network are open. Where neither exists, the developer is told once at startup. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
 
 - **Agent loop is discussion-first; action follows intent.** — Amended by ADR 0008: resting state is conversation, and action follows the developer's *intent* rather than their grammatical mood. The agent proposes, explains, surfaces tradeoffs; the developer drives. Not OpenCode's build/plan toggle, not Claude Code's act-first model.
 
@@ -76,7 +79,7 @@ A tool for thought.
 
 - **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). What an MCP tool itself writes is outside the review; open-tasks 13.
 
-- **Permission model — the review is the only gate.** — *Superseded by ADR 0009.* Reads and runs need no grant and never ask; the sandbox holds a read declaration to its word (ADR 0004 §4), and where it cannot the call runs unconfined and the developer is told once. A `deny:` entry is a lock (ADR 0004 §7). There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
+- **Permission model — the workspace is the only boundary.** — *Superseded by ADR 0009, then ADR 0011.* Reads and runs need no grant and never ask; every tool refuses a path outside the workspace, and every process Aldwin starts can write only inside it; where that cannot be enforced, the developer is told once. `run` takes a shell command. There is no class and no `deny:` lock. There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
 
 - **Edit is never allowlistable.** — Amended by ADR 0008 (intent, not grammar) and ADR 0009 (the review): the agent stages edits when the developer's intent is clear, and the review is where the developer approves, comments on, or discards them. There is nothing to allowlist an edit into. Friction on Edit is structural, not a setting.
 
@@ -95,7 +98,7 @@ A tool for thought.
 - Native GUI clients (SwiftUI, Compose, desktop GUI) — TUI for V0, web for V1, nothing else.
 - Mobile (iOS, Android) as a host for the core — desktop-only.
 - Provider-agnostic abstraction beyond Anthropic + OpenAI-compatible (Gemini, Bedrock, Vertex).
-- OS-level sandboxing (seccomp, landlock, containers) in V0.
+- Restricting the network from inside the sandbox — a stated non-goal of ADR 0011.
 - Multi-language core (KMP, JVM, TypeScript, Go) — considered and rejected.
 - Autonomous long-running agent runs without user check-in; multi-step edit sequences.
 - Vibe-coding / code-generation-firehose UX — default is discussion, not output.
@@ -103,11 +106,11 @@ A tool for thought.
 
 ## References
 
-- .claude/spec/aldwin-core.md — agent loop, conversation state, typed LLM/tool boundary.
-- .claude/spec/aldwin-llm.md — Anthropic client, SSE, wire-level retry, cache placement, provider config.
-- .claude/spec/aldwin-permissions.md — the lock, and the keys nothing reads.
+- .claude/spec/archive/aldwin-core.md — agent loop, conversation state, typed LLM/tool boundary.
+- .claude/spec/archive/aldwin-llm.md — Anthropic client, SSE, wire-level retry, cache placement, provider config.
+- .claude/spec/archive/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
 - .claude/adr/0009-the-review-is-the-only-gate.md — the review, staging, plan and ask, no first run.
-- .claude/spec/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
+- .claude/adr/0011-the-workspace-is-the-only-boundary.md — the one boundary, and the sandbox that holds it.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — prompt caching.
 - https://ratatui.rs/ — ratatui.

@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use aldwin_core::{ChangedFile, Changeset};
 
 use crate::error::ToolError;
+use crate::paths::Workspace;
 
 /// One staged file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,14 +41,18 @@ struct Inner {
 /// The changeset of the current turn, shared by every tool and the
 /// dispatcher. Locked for the whole of a read-modify-stage, so two edits to
 /// one file in the same step cannot interleave.
-#[derive(Default)]
 pub struct Staging {
     inner: Mutex<Inner>,
+    /// What each staged path is resolved through again at write time.
+    workspace: Workspace,
 }
 
 impl Staging {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(workspace: Workspace) -> Self {
+        Self {
+            inner: Mutex::default(),
+            workspace,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -124,10 +129,15 @@ impl Staging {
 
     /// Writes every staged file and empties the staging area. Returns the
     /// paths written, the comments closed, and any file that was **not**
-    /// written because it changed on disk since it was staged — the review
-    /// the developer approved showed a diff against content that is no
-    /// longer there, and writing over the newer content would clobber a
-    /// change they never saw.
+    /// written — because it changed on disk since it was staged (the review
+    /// showed a diff against content that is no longer there, and writing
+    /// over the newer content would clobber a change they never saw), or
+    /// because its path no longer resolves to where it was staged.
+    ///
+    /// The second check holds the workspace boundary again immediately
+    /// before each write, not only at the edit: a review can stay open for
+    /// minutes, and a directory swapped for a symlink in that time would
+    /// otherwise carry an approved write out of the workspace.
     pub async fn write_all(&self) -> Written {
         let (files, comments) = {
             let mut inner = self.lock();
@@ -142,6 +152,14 @@ impl Staging {
             skipped: Vec::new(),
         };
         for (resolved, staged) in files {
+            if self.workspace.resolve(&staged.rel).ok().as_ref() != Some(&resolved) {
+                written.skipped.push((
+                    staged.rel,
+                    "its path no longer resolves inside the workspace to where it was staged"
+                        .into(),
+                ));
+                continue;
+            }
             let now = match tokio::fs::read_to_string(&resolved).await {
                 Ok(text) => Some(text),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -201,9 +219,9 @@ mod tests {
     #[tokio::test]
     async fn an_edit_is_staged_not_written_and_read_sees_it() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("f.rs");
+        let path = dir.path().canonicalize().unwrap().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
-        let staging = Staging::new();
+        let staging = Staging::new(Workspace::new(dir.path()));
 
         staging
             .edit(path.clone(), "f.rs", |cur| {
@@ -227,9 +245,9 @@ mod tests {
     #[tokio::test]
     async fn a_second_edit_builds_on_the_first() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("f.rs");
+        let path = dir.path().canonicalize().unwrap().join("f.rs");
         std::fs::write(&path, "a\nb\n").unwrap();
-        let staging = Staging::new();
+        let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |cur| {
                 Ok(cur.unwrap().replace("a", "A"))
@@ -253,8 +271,8 @@ mod tests {
     #[tokio::test]
     async fn a_new_file_is_staged_with_no_before() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("new/limit.rs");
-        let staging = Staging::new();
+        let path = dir.path().canonicalize().unwrap().join("new/limit.rs");
+        let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "new/limit.rs", |cur| {
                 assert!(cur.is_none());
@@ -277,9 +295,9 @@ mod tests {
     #[tokio::test]
     async fn approve_writes_and_reports_the_comments_it_closed() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("f.rs");
+        let path = dir.path().canonicalize().unwrap().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
-        let staging = Staging::new();
+        let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
             .await
@@ -297,9 +315,9 @@ mod tests {
     #[tokio::test]
     async fn a_file_that_changed_under_the_review_is_not_overwritten() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("f.rs");
+        let path = dir.path().canonicalize().unwrap().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
-        let staging = Staging::new();
+        let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
             .await
@@ -315,9 +333,9 @@ mod tests {
     #[tokio::test]
     async fn discard_drops_everything_and_names_it() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("f.rs");
+        let path = dir.path().canonicalize().unwrap().join("f.rs");
         std::fs::write(&path, "old\n").unwrap();
-        let staging = Staging::new();
+        let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
             .await
@@ -325,5 +343,46 @@ mod tests {
         assert_eq!(staging.discard(), vec!["f.rs".to_string()]);
         assert!(staging.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
+    }
+
+    /// The review can stay open for minutes. A directory swapped for a
+    /// symlink in that time — or the file itself, pointing at a file outside
+    /// with the same text, so the `before` check passes — must not carry the
+    /// approved write out of the workspace.
+    #[tokio::test]
+    async fn a_symlink_swapped_in_after_staging_does_not_redirect_the_write() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("f.rs"), "old\n").unwrap();
+        std::fs::write(outside.path().join("f.rs"), "old\n").unwrap();
+        let staging = Staging::new(Workspace::new(&root));
+        staging
+            .edit(
+                root.join("src/new.rs"),
+                "src/new.rs",
+                |_| Ok("new\n".into()),
+            )
+            .await
+            .unwrap();
+        staging
+            .edit(root.join("f.rs"), "f.rs", |_| Ok("new\n".into()))
+            .await
+            .unwrap();
+
+        std::fs::remove_dir(root.join("src")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("src")).unwrap();
+        std::fs::remove_file(root.join("f.rs")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("f.rs"), root.join("f.rs")).unwrap();
+
+        let written = staging.write_all().await;
+        assert!(written.files.is_empty(), "{written:?}");
+        assert_eq!(written.skipped.len(), 2);
+        assert!(!outside.path().join("new.rs").exists());
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("f.rs")).unwrap(),
+            "old\n"
+        );
     }
 }

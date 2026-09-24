@@ -6,6 +6,9 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 
+use crate::paths::Workspace;
+use crate::sandbox;
+
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
     #[error("MCP server {server:?}: no such server is configured")]
@@ -26,19 +29,24 @@ pub enum McpError {
 }
 
 /// Subprocess host for MCP servers. Config entries are supplied once at
-/// construction (a snapshot — matches how `builtin_registry` takes a fixed
-/// `project_root`, not a live `Config` handle); each server's connection is
-/// spawned lazily, on first enumeration or call of any of its tools, and
-/// persists for the bridge's lifetime.
+/// construction (a snapshot, not a live `Config` handle); each server's
+/// connection is spawned lazily, on first enumeration or call of any of its
+/// tools, and persists for the bridge's lifetime.
+///
+/// Every server runs in the sandbox over `workspace` (ADR 0011): a project's
+/// `mcp.yaml` can arrive with a clone, and what it starts can write only
+/// where a `run` could.
 pub struct McpBridge {
     servers: HashMap<String, McpServer>,
+    workspace: Workspace,
     running: tokio::sync::Mutex<HashMap<String, Arc<RunningService<RoleClient, ()>>>>,
 }
 
 impl McpBridge {
-    pub fn new(servers: Vec<McpServer>) -> Self {
+    pub fn new(servers: Vec<McpServer>, workspace: Workspace) -> Self {
         Self {
             servers: servers.into_iter().map(|s| (s.name.clone(), s)).collect(),
+            workspace,
             running: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -74,13 +82,15 @@ impl McpBridge {
             });
         };
 
-        let mut cmd = tokio::process::Command::new(command);
-        cmd.args(args).envs(&entry.env);
-        let transport = TokioChildProcess::new(cmd).map_err(|source| McpError::Spawn {
+        let spawn_error = |source| McpError::Spawn {
             server: server_name.to_string(),
             command: command.clone(),
             source,
-        })?;
+        };
+        let mut cmd =
+            sandbox::command(command, args, &self.workspace.roots()).map_err(spawn_error)?;
+        cmd.envs(&entry.env);
+        let transport = TokioChildProcess::new(cmd).map_err(spawn_error)?;
         let service = ().serve(transport).await.map_err(|e| McpError::Rpc {
             server: server_name.to_string(),
             message: e.to_string(),
@@ -148,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn lists_tools_from_a_real_spawned_server() {
-        let bridge = McpBridge::new(vec![fake_server()]);
+        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
         let tools = bridge.list_tools("fake").await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
@@ -156,7 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn calls_a_tool_and_gets_its_text_content_back() {
-        let bridge = McpBridge::new(vec![fake_server()]);
+        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
         let mut args = serde_json::Map::new();
         args.insert("text".into(), json!("hello from the test"));
         let (content, is_error) = bridge.call_tool("fake", "echo", args).await.unwrap();
@@ -166,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn calling_an_unknown_tool_name_surfaces_is_error() {
-        let bridge = McpBridge::new(vec![fake_server()]);
+        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
         let (content, is_error) = bridge
             .call_tool("fake", "does-not-exist", serde_json::Map::new())
             .await
@@ -177,27 +187,30 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_server_name_is_a_structured_error() {
-        let bridge = McpBridge::new(vec![]);
+        let bridge = McpBridge::new(vec![], Workspace::new("."));
         let err = bridge.list_tools("nope").await.unwrap_err();
         assert!(matches!(err, McpError::UnknownServer { .. }));
     }
 
     #[tokio::test]
     async fn http_transport_is_not_yet_supported() {
-        let bridge = McpBridge::new(vec![McpServer {
-            name: "web".into(),
-            transport: McpTransport::Http {
-                url: "http://localhost:1/".into(),
-            },
-            env: Default::default(),
-        }]);
+        let bridge = McpBridge::new(
+            vec![McpServer {
+                name: "web".into(),
+                transport: McpTransport::Http {
+                    url: "http://localhost:1/".into(),
+                },
+                env: Default::default(),
+            }],
+            Workspace::new("."),
+        );
         let err = bridge.list_tools("web").await.unwrap_err();
         assert!(matches!(err, McpError::UnsupportedTransport { .. }));
     }
 
     #[tokio::test]
     async fn a_server_that_died_is_spawned_again_on_the_next_call() {
-        let bridge = McpBridge::new(vec![fake_server()]);
+        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
         assert!(
             bridge
                 .call_tool("fake", "die", serde_json::Map::new())
@@ -223,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_second_call_reuses_the_already_spawned_server() {
-        let bridge = McpBridge::new(vec![fake_server()]);
+        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
         bridge.list_tools("fake").await.unwrap();
         {
             let running = bridge.running.lock().await;

@@ -3,25 +3,25 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::ToolError;
 
-/// The set of directories tools may be pointed at (ADR 0004 §5, widened by
-/// ADR 0007): one boundary honoured by every tool, `run` included.
+/// The workspace: the directories tools may be pointed at, and the only
+/// directories a process Aldwin starts may write to (ADR 0007, and ADR 0011,
+/// which makes it the whole boundary).
 ///
 /// Roots are stated, never inferred: the first is the project root and the
 /// rest come from `roots:` in the project's `.aldwin/permissions.yaml`. A
-/// *list* rather than a single root because the single root is what made
-/// `run`'s omission load-bearing — a developer working across sibling
-/// checkouts had no sanctioned way to say so, so the unsanctioned way
-/// carried the work, and `edit` refused a file in a sibling checkout while
-/// `run` deleted two repositories there without a prompt.
+/// *list* rather than a single root because a developer working across
+/// sibling checkouts needs a sanctioned way to say so, or the unsanctioned
+/// way carries the work.
 ///
-/// **What this claims, exactly.** No tool is *pointed* outside these roots by
-/// us. It does not claim a program cannot write outside them once running —
-/// `cargo` writes `~/.cargo`, and a granted shell interprets a string we
-/// never parsed. That was already ADR 0004 §5's wording and it is unchanged.
+/// Two halves hold the line. Every tool's path argument — `read`, `edit`,
+/// `explain`, `run`'s `cwd` — resolves through [`Workspace::resolve`], which
+/// refuses anything outside, symlinks included. And every process a tool
+/// starts runs in `crate::sandbox`, which lets it write nowhere else. What
+/// a process *reads* is not bounded; ADR 0011 says why.
 ///
-/// The roots are shared between clones, the same way `Engine` shares its
-/// `Config`: every tool holds a `Workspace`, and `/reload-config` replacing
-/// the list through one of them is visible to all of them on the next call.
+/// The roots are shared between clones: every tool holds a `Workspace`, and
+/// `/reload-config` replacing the list through one of them is visible to all
+/// of them on the next call.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     /// Canonical, absolute. `roots[0]` is the project root — the directory
@@ -85,21 +85,18 @@ impl Workspace {
 
     /// Resolves a tool's path argument, refusing to leave the workspace.
     ///
+    /// Synchronous on purpose, though tools call it from async code: it is a
+    /// few `canonicalize` calls, microseconds each, and a `spawn_blocking`
+    /// hop would cost more than it saves.
+    ///
     /// A relative path resolves against the project root. An absolute path is
     /// taken as given — ADR 0004 §5 rejected those outright, because
     /// `PathBuf::join` silently *discards* its base when the joined path is
     /// absolute (`root.join("/etc/passwd")` is `/etc/passwd`, not an error),
-    /// and a broad grant matching the model's literal argument string had no
-    /// way to see the escape. With reach checked against canonical roots that
+    /// and a check against the model's literal argument had no way to see
+    /// the escape. With reach checked against canonical roots that
     /// hazard is closed directly, and refusing absolute paths would make a
     /// second root unaddressable.
-    pub fn resolve(&self, path_str: &str) -> Result<PathBuf, ToolError> {
-        self.resolve_against(&self.project_root(), path_str)
-    }
-
-    /// As [`resolve`], but relative paths resolve against `base` — which must
-    /// itself already be inside the workspace. This is what lets `run` check
-    /// its arguments against the working directory the call actually uses.
     ///
     /// **Containment is decided on resolved paths only.** The roots are
     /// canonical, so a purely lexical comparison against the path *as typed*
@@ -118,16 +115,12 @@ impl Workspace {
     ///
     /// The **normalized** path is what is returned and used for I/O, so what
     /// was checked in (1) is what gets opened.
-    pub(crate) fn resolve_against(
-        &self,
-        base: &Path,
-        path_str: &str,
-    ) -> Result<PathBuf, ToolError> {
+    pub fn resolve(&self, path_str: &str) -> Result<PathBuf, ToolError> {
         let candidate = Path::new(path_str);
         let joined = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else {
-            base.join(candidate)
+            self.project_root().join(candidate)
         };
         let escapes = || ToolError::PathEscapesWorkspace {
             path: path_str.to_string(),
@@ -165,18 +158,6 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join(", ")
     }
-}
-
-/// The symlink-resolved form of `path` (relative paths against `base`), for
-/// callers that need to compare it against something other than the roots.
-pub(crate) fn resolved_form(base: &Path, path_str: &str) -> Option<PathBuf> {
-    let candidate = Path::new(path_str);
-    let joined = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        base.join(candidate)
-    };
-    canonicalize_existing_prefix(&normalize_lexically(&joined)).ok()
 }
 
 /// Canonicalizes the longest *existing* ancestor of `path` (resolving any
@@ -415,15 +396,5 @@ mod tests {
             1,
             "the project root is never replaced"
         );
-    }
-
-    #[test]
-    fn resolve_against_uses_the_given_base_for_relative_paths() {
-        let root = tempdir().unwrap();
-        std::fs::create_dir(root.path().join("sub")).unwrap();
-        let ws = Workspace::new(root.path());
-        let base = ws.project_root().join("sub");
-        let resolved = ws.resolve_against(&base, "file.txt").unwrap();
-        assert_eq!(resolved, base.join("file.txt"));
     }
 }

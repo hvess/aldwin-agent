@@ -15,12 +15,17 @@ struct VersionOnly {
 }
 
 /// Read and parse `path` as YAML if it exists, checking the version field
-/// first so a future major bump fails with `UnknownVersion` instead of a
-/// confusing generic parse error. `Ok(None)` means the file does not exist —
-/// the normal "nothing persisted here yet" state, not an error.
+/// first so a file from a *newer* build fails with `UnknownVersion` instead
+/// of a confusing generic parse error. `Ok(None)` means the file does not
+/// exist — the normal "nothing persisted here yet" state, not an error.
+///
+/// An older version is handed to the schema rather than refused: a domain
+/// whose current shape still reads its old files (permissions, since ADR
+/// 0011) loads them, and one whose shape changed fails to parse, naming the
+/// field.
 pub fn read_versioned<T: DeserializeOwned>(
     path: &Path,
-    expected_version: u32,
+    current_version: u32,
 ) -> Result<Option<T>, ConfigError> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -37,11 +42,11 @@ pub fn read_versioned<T: DeserializeOwned>(
         path: path.to_path_buf(),
         source: e,
     })?;
-    if probe.version != expected_version {
+    if probe.version == 0 || probe.version > current_version {
         return Err(ConfigError::UnknownVersion {
             path: path.to_path_buf(),
             found: probe.version,
-            expected: expected_version,
+            expected: current_version,
         });
     }
 
@@ -94,9 +99,9 @@ pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
 ///
 /// `serde_yaml_ng::to_string` serialises fresh from the in-memory value and
 /// knows nothing of the file's comments, so a write without the header would
-/// drop a domain's explanation the first time anything is persisted to it
-/// (one permission grant is enough). The annotated text is a standing tour
-/// of the format, not a one-time greeting.
+/// drop a domain's explanation the first time anything is persisted to it.
+/// The annotated text is a standing tour of the format, not a one-time
+/// greeting.
 pub fn write_atomic_with_header<T: Serialize>(
     path: &Path,
     header: &str,

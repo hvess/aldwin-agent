@@ -1,17 +1,14 @@
 //! `ToolDispatcher` impl, built-in tool set, and the staged changeset the
 //! review is opened over. See `.claude/spec/aldwin-tools.md`.
 //!
-//! Covers the registry, dispatch flow, the lock, all six built-ins (Read,
-//! Edit, Run, Explain, Plan, Ask), the read-enforcing `sandbox`, the LSP
+//! Covers the registry, dispatch, all six built-ins (Read, Edit, Run,
+//! Explain, Plan, Ask), the `sandbox` every spawned process runs in, the LSP
 //! client Explain uses, the MCP bridge (`mcp`), and `staging` — where every
 //! edit of a turn waits for the review (ADR 0009).
 //!
-//! One piece of ADR 0004 is deliberately not built yet: letting the
-//! developer classify an MCP tool, with the server's own claim shown as a
-//! claim. Until it is, every MCP tool is a write — see `mcp::tool`'s
-//! `permission` for why that is the only reading that cannot quietly be
-//! wrong — and, because it runs in its own process over the real tree, it
-//! opens the review the way `run` does.
+//! The workspace is the only boundary (ADR 0011): every tool resolves its
+//! paths through [`Workspace`], and every process a tool starts — a `run`,
+//! the language server, an MCP server — can write only inside it.
 
 mod dispatcher;
 mod error;
@@ -26,42 +23,39 @@ mod tools;
 #[cfg(test)]
 mod test_support;
 
+use std::sync::Arc;
+
 pub use dispatcher::Dispatcher;
 pub use error::ToolError;
-pub use mcp::{register_mcp_tools, McpBridge, McpError, McpRegistrationFailure, McpTool};
+pub use mcp::{register_mcp_tools, McpBridge, McpRegistrationFailure};
 pub use paths::Workspace;
-pub use registry::{PermissionRequest, Registry, Tool, ToolDescriptor, ToolSource};
-pub use staging::{Staged, Staging, Written};
-pub use tools::{AskTool, EditTool, ExplainTool, PlanTool, ReadTool, RunTool, CHAT_ABOUT_THIS};
+pub use registry::Registry;
+pub use staging::Staging;
+
+use tools::{AskTool, EditTool, ExplainTool, PlanTool, ReadTool, RunTool};
 
 /// Registers the six built-ins over `workspace` — every one that touches a
 /// file, `run` included, contained by it — and over `staging`, which `edit`
 /// writes into and `read` reads through.
-pub fn builtin_registry(workspace: Workspace, staging: std::sync::Arc<Staging>) -> Registry {
+pub fn builtin_registry(workspace: Workspace, staging: Arc<Staging>) -> Registry {
     let mut registry = Registry::new();
     registry
-        .register(std::sync::Arc::new(ReadTool::new(
-            workspace.clone(),
-            staging.clone(),
-        )))
+        .register(Arc::new(ReadTool::new(workspace.clone(), staging.clone())))
         .expect("built-in names are unique");
     registry
-        .register(std::sync::Arc::new(EditTool::new(
-            workspace.clone(),
-            staging,
-        )))
+        .register(Arc::new(EditTool::new(workspace.clone(), staging)))
         .expect("built-in names are unique");
     registry
-        .register(std::sync::Arc::new(RunTool::new(workspace.clone())))
+        .register(Arc::new(RunTool::new(workspace.clone())))
         .expect("built-in names are unique");
     registry
-        .register(std::sync::Arc::new(ExplainTool::new(workspace)))
+        .register(Arc::new(ExplainTool::new(workspace)))
         .expect("built-in names are unique");
     registry
-        .register(std::sync::Arc::new(PlanTool::new()))
+        .register(Arc::new(PlanTool::new()))
         .expect("built-in names are unique");
     registry
-        .register(std::sync::Arc::new(AskTool::new()))
+        .register(Arc::new(AskTool::new()))
         .expect("built-in names are unique");
     registry
 }
@@ -72,7 +66,8 @@ mod tests {
 
     #[test]
     fn builtin_registry_has_all_six_tools() {
-        let registry = builtin_registry(Workspace::new("."), std::sync::Arc::new(Staging::new()));
+        let workspace = Workspace::new(".");
+        let registry = builtin_registry(workspace.clone(), Arc::new(Staging::new(workspace)));
         let mut names: Vec<String> = registry.definitions().into_iter().map(|d| d.name).collect();
         names.sort();
         assert_eq!(

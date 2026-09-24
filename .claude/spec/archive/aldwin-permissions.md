@@ -4,13 +4,25 @@ The lock — a `deny:` entry refuses a program outright and nothing narrower
 overrides it — and the reach a `roots:` entry declares. That is all this
 crate holds since ADR 0009.
 
-**Status:** active
+**Status:** closed — the crate is deleted, 2026-09-24. See the closing note.
 **Scope:** aldwin-permissions crate. The deny lock and the compatibility
 read of the keys nothing consults any more. Excludes the sandbox, the
 staging area and the review (all aldwin-tools), YAML I/O (config) and
 rendering (tui).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
+
+**Closing note (2026-09-24, ADR 0011 — the workspace is the only
+boundary):** The deny lock was the last thing this crate held, and ADR 0011
+removed it: a lock keyed on a command's first word is one the command can
+rename its way past, and with `run` now a shell command there is not even a
+first word to key it on. Every process Aldwin starts runs in a sandbox that
+can write only inside the workspace, and that — with every tool resolving
+its paths through `Workspace` — is the whole boundary. The crate is
+deleted. `deny:`, `allow:` and `default:` are still parsed so old files
+load, and reported once at startup (`Config::stale_permissions` in
+aldwin-config, wired in aldwin-cli's bootstrap). `roots:` is unchanged. What
+follows is the crate as it stood under ADR 0009, kept for its reasoning.
 
 **Progress (2026-09-23, ADR 0009 — the review is the only gate):** The
 engine of ADR 0004 is gone. Reads and runs need no grant and never ask; the

@@ -1,11 +1,50 @@
 # aldwin-tools
 
-ToolDispatcher impl, built-in tool set, Edit approval gate, MCP bridge via rmcp.
+ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every spawned process runs in, MCP bridge via rmcp.
 
 **Status:** active — one known gap, see Progress below
-**Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, Edit approval surface, MCP bridge. Excludes permission policy, agent loop, TUI, config persistence.
+**Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, staging, the sandbox, MCP bridge. Excludes agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
+
+**Progress (2026-09-24, ADR 0011 — the workspace is the only boundary):**
+Read `.claude/adr/0011-the-workspace-is-the-only-boundary.md` first; it
+supersedes the class, the argv rule and the deny lock that the entries
+below build on.
+
+- **One sandbox for every process** (`sandbox.rs`): write only beneath the
+  workspace roots and the incidental list (devices, `/tmp`, `$TMPDIR`,
+  `~/.cache`); read anything; network open. `sandbox::command` builds the
+  confined `tokio::process::Command` for `run`, the rust-analyzer behind
+  `explain` (`LspClient::spawn` takes the `Workspace`), and every MCP stdio
+  server (`McpBridge::new` takes it too). Landlock handles every write
+  right of the kernel's ABI and no read right; Seatbelt denies
+  `file-write*` and allows the roots back. `sandbox::unavailable` is the
+  one public item: cli asks it once at startup and says so when nothing
+  can be confined. A sandbox that fails to build where one is available
+  refuses the call (`ToolError::Sandbox`).
+- **`run` is `sh -c <command>`** with `{command, cwd?, timeout_secs?}`.
+  `path_like`, `first_component_exists`, `looks_like_denial`, `ReadRefused`,
+  `SandboxUnavailable`, `ProgramNotFound` and `Locked` are gone. `cwd` is
+  still resolved through `Workspace`; a timeout still kills the group.
+- **`Tool::permission` and `PermissionRequest` are gone**, and with them
+  `Class`. `ToolDescriptor::source` became `observes_disk`, so the
+  dispatcher opens the review before a disk-observing call without knowing
+  any tool by name; `as_write` and the once-flag went with the class.
+- **`Staging` holds the `Workspace`** and `write_all` resolves each path
+  again immediately before writing it; a symlink swapped in while the
+  review was open is skipped and named, not followed.
+- **`ExplainTool::shutdown_all` and `LspClient::shutdown` are deleted.**
+  Nothing called them; the server is killed when its client is dropped.
+- **Exports** are what aldwin-cli uses: `Dispatcher`, `Registry`,
+  `Staging`, `Workspace`, `builtin_registry`, `register_mcp_tools`,
+  `McpBridge`, `McpRegistrationFailure`, `ToolError`, and `sandbox`.
+- **Tests:** a run writing outside the workspace fails and changes nothing,
+  one writing inside (or in a second root) lands, a pipeline works, a `cwd`
+  outside or through an escaping symlink is refused, timeouts and cancels
+  still kill grandchildren, and a staged write through a swapped symlink is
+  refused. Sandbox tests that cannot run fail naming why unless
+  `ALDWIN_SKIP_SANDBOX_TESTS=1` asks for the skip.
 
 **Progress (2026-09-21, ADR 0007 — `run` joins the model the other tools live in):**
 Prompted by a reviewed session transcript, not by a plan. The 2026-09-20 entry
@@ -352,20 +391,20 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 
 ## Out of Scope
 
-- Permission policy, scope precedence, allowlist storage — aldwin-permissions.
+- Permission policy — there is none since ADR 0011; the workspace is the boundary, and this crate enforces it.
 - Agent loop, append-only log, turn/step semantics — aldwin-core.
 - TUI rendering of diffs, tool listings, approval dialogs — aldwin-tui.
 - Config file format and persistence of MCP server entries — aldwin-config.
 - Anthropic wire format, SSE, retry — aldwin-llm.
 - Session persistence of approval history — out of V0 per parent.
-- Sandboxing of shell execution (seccomp, landlock, containers) — out of V0 per parent.
 - Streaming tool outputs (partial deltas during execution) — V0 returns terminal results only.
 - Web-search, fetch, or any network tool as a built-in — channel via MCP.
 
 ## References
 
 - .claude/spec/aldwin.md — parent; built-in surface, MCP-as-extension, Edit-as-structural-friction.
-- .claude/spec/aldwin-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
-- .claude/spec/aldwin-permissions.md — check() interface, edit_class enforcement, MCP gating.
+- .claude/spec/archive/aldwin-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
+- .claude/spec/archive/aldwin-permissions.md — the lock this crate consulted until ADR 0011.
+- .claude/adr/0011-the-workspace-is-the-only-boundary.md — the boundary as it stands.
 - https://github.com/modelcontextprotocol/rust-sdk — rmcp.
 - https://modelcontextprotocol.io/specification — MCP protocol surface.

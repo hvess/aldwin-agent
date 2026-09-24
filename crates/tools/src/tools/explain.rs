@@ -7,9 +7,8 @@ use serde_json::{json, Value};
 use crate::error::ToolError;
 use crate::lsp::{self, LspClient};
 use crate::paths::Workspace;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 use aldwin_core::DispatchContext;
-use aldwin_permissions::Class;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -23,8 +22,10 @@ enum Op {
 
 /// LSP-backed code intelligence. Output is structured location and
 /// signature data only (JSON text) — no prose summaries, per
-/// aldwin-tools.md. Servers spawn lazily per-language on first use and
-/// persist in `clients` for the tool's (i.e. the session's) lifetime.
+/// aldwin-tools.md. Servers spawn lazily per-language on first use, in the
+/// sandbox every process over the repository runs in (a language server
+/// runs build scripts and proc macros), and persist in `clients` for the
+/// session; each is killed when the tool is dropped.
 pub struct ExplainTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
@@ -50,21 +51,10 @@ impl ExplainTool {
                     },
                     "required": ["op"],
                 }),
-                source:     ToolSource::Builtin,
+                observes_disk: false,
             },
             workspace,
             clients: tokio::sync::Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Best-effort graceful shutdown of every spawned server — call this
-    /// from the process's own shutdown sequence (aldwin-cli). Each
-    /// client's process is also `kill_on_drop`, so this isn't the only
-    /// thing standing between a spawned server and process exit.
-    pub async fn shutdown_all(&self) {
-        let clients = self.clients.lock().await;
-        for client in clients.values() {
-            client.shutdown().await;
         }
     }
 
@@ -76,8 +66,7 @@ impl ExplainTool {
         if let Some(client) = clients.get(server.language_id).filter(|c| !c.is_closed()) {
             return Ok(client.clone());
         }
-        let client =
-            LspClient::spawn(server.command, server.args, &self.workspace.project_root()).await?;
+        let client = LspClient::spawn(server.command, server.args, &self.workspace).await?;
         clients.insert(server.language_id, client.clone());
         Ok(client)
     }
@@ -108,24 +97,6 @@ fn required_u64(input: &Value, field: &'static str) -> Result<u64, ToolError> {
 impl Tool for ExplainTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    /// Like `read`, `explain` only ever observes. `argv` carries whichever
-    /// of the two shapes the call used, so the prompt can show what is being
-    /// looked at.
-    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        let subject = if let Some(path) = input.get("path").and_then(Value::as_str) {
-            path.to_string()
-        } else if let Some(query) = input.get("query").and_then(Value::as_str) {
-            query.to_string()
-        } else {
-            return Err(invalid("requires either \"path\" or \"query\""));
-        };
-        Ok(Some(PermissionRequest {
-            program: "explain".into(),
-            class: Class::Read,
-            argv: vec![subject],
-        }))
     }
 
     async fn call(
@@ -320,25 +291,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn permission_target_prefers_path_then_query() {
-        let tool = ExplainTool::new(Workspace::new("."));
-        let by_path = tool
-            .permission(&json!({"path": "src/main.rs"}))
-            .unwrap()
-            .unwrap();
-        assert_eq!(by_path.argv, vec!["src/main.rs".to_string()]);
-        assert_eq!(by_path.class, Class::Read);
-        assert_eq!(
-            tool.permission(&json!({"query": "MyStruct"}))
-                .unwrap()
-                .unwrap()
-                .argv,
-            vec!["MyStruct".to_string()]
-        );
-        assert!(tool.permission(&json!({})).is_err());
-    }
-
-    #[test]
     fn format_locations_normalises_single_location() {
         let out = format_locations(
             json!({"uri": "file:///a.rs", "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 8}}}),
@@ -481,7 +433,5 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-
-        tool.shutdown_all().await;
     }
 }

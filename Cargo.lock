@@ -24,18 +24,15 @@ dependencies = [
  "aldwin-config",
  "aldwin-core",
  "aldwin-llm",
- "aldwin-permissions",
  "aldwin-tools",
  "aldwin-tui",
  "async-stream",
  "chrono",
  "clap",
  "futures",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -61,7 +58,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -80,17 +76,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "aldwin-permissions"
-version = "0.3.0"
-dependencies = [
- "aldwin-config",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -115,7 +100,6 @@ version = "0.3.0"
 dependencies = [
  "aldwin-config",
  "aldwin-core",
- "aldwin-permissions",
  "async-trait",
  "libc",
  "rmcp",

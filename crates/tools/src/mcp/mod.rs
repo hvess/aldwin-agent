@@ -90,7 +90,8 @@ pub async fn register_mcp_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::{Tool, ToolDescriptor, ToolSource};
+    use crate::registry::{Tool, ToolDescriptor};
+    use crate::Workspace;
     use aldwin_config::{McpServer, McpTransport};
 
     fn fake_server(name: &str) -> McpServer {
@@ -110,7 +111,10 @@ mod tests {
 
     #[tokio::test]
     async fn registers_under_the_bare_name_when_there_is_no_collision() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
+        let bridge = Arc::new(McpBridge::new(
+            vec![fake_server("fake")],
+            Workspace::new("."),
+        ));
         let mut registry = Registry::new();
         assert!(register_mcp_tools(bridge, &mut registry).await.is_empty());
         assert!(registry.get("echo").is_some());
@@ -118,10 +122,13 @@ mod tests {
 
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
+        let bridge = Arc::new(McpBridge::new(
+            vec![fake_server("fake")],
+            Workspace::new("."),
+        ));
         let mut registry = crate::builtin_registry(
-            crate::Workspace::new("."),
-            std::sync::Arc::new(crate::Staging::new()),
+            Workspace::new("."),
+            std::sync::Arc::new(crate::Staging::new(Workspace::new("."))),
         );
         // Alias one built-in's registered name to "echo" indirectly isn't
         // possible without changing a built-in's name, so instead prove the
@@ -133,16 +140,6 @@ mod tests {
         impl Tool for Stub {
             fn descriptor(&self) -> &ToolDescriptor {
                 &self.0
-            }
-            fn permission(
-                &self,
-                _input: &serde_json::Value,
-            ) -> Result<Option<crate::registry::PermissionRequest>, ToolError> {
-                Ok(Some(crate::registry::PermissionRequest {
-                    program: "stub".into(),
-                    class: aldwin_permissions::Class::Write,
-                    argv: Vec::new(),
-                }))
             }
             async fn call(
                 &self,
@@ -158,7 +155,7 @@ mod tests {
                 name: "echo".into(),
                 description: "pretend built-in".into(),
                 input_schema: serde_json::json!({}),
-                source: ToolSource::Builtin,
+                observes_disk: false,
             })))
             .unwrap();
 
@@ -169,8 +166,8 @@ mod tests {
         );
         // The pre-registered "echo" is untouched — built-ins win unprefixed.
         assert_eq!(
-            registry.get("echo").unwrap().descriptor().source,
-            ToolSource::Builtin
+            registry.get("echo").unwrap().descriptor().description,
+            "pretend built-in"
         );
     }
 
@@ -184,7 +181,10 @@ mod tests {
             },
             env: Default::default(),
         };
-        let bridge = Arc::new(McpBridge::new(vec![broken, fake_server("fake")]));
+        let bridge = Arc::new(McpBridge::new(
+            vec![broken, fake_server("fake")],
+            Workspace::new("."),
+        ));
         let mut registry = Registry::new();
 
         let failures = register_mcp_tools(bridge, &mut registry).await;

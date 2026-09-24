@@ -3,14 +3,14 @@
 //! The model calls it with the whole list each time: to declare the steps
 //! before starting, and again as each one starts and finishes. The TUI draws
 //! the latest list; nothing else consumes it. The tool runs nothing and
-//! touches nothing, so it is outside the lock.
+//! touches nothing.
 
 use aldwin_core::{DispatchContext, PlanStep, StepState};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 
 /// More than this and the plan is a task list, not the three plain lines the
 /// developer can hold in view.
@@ -53,7 +53,7 @@ impl PlanTool {
                     },
                     "required": ["steps"],
                 }),
-                source: ToolSource::Builtin,
+                observes_disk: false,
             },
         }
     }
@@ -110,10 +110,6 @@ fn parse(input: &Value) -> Result<Vec<PlanStep>, ToolError> {
 impl Tool for PlanTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    fn permission(&self, _input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(None)
     }
 
     async fn call(

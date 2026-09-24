@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use aldwin_config::{Config, InitOutcome, McpServer, ProviderKind};
 use aldwin_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
-use aldwin_permissions::Locks;
-use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging};
+use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging, Workspace};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
@@ -126,7 +125,7 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
 
 /// The context files the session carries — `CLAUDE.md` and `AGENTS.md`
 /// at the project root, whichever exist. Reading them is a read, and reads
-/// need no permission (ADR 0009 §1); the old stdin prompt for each one is
+/// need no permission (ADR 0009 §6); the old stdin prompt for each one is
 /// gone with the rest of the asking.
 fn context_files(cwd: &Path) -> Vec<PathBuf> {
     ["CLAUDE.md", "AGENTS.md"]
@@ -141,8 +140,8 @@ fn context_files(cwd: &Path) -> Vec<PathBuf> {
 /// 2. Load all config layers (`Config::open` — refuses to start on any
 ///    parse failure, schema error, unknown major, or missing env var).
 /// 3. Build the additional-context string.
-/// 4. Instantiate the client (or the unconfigured stand-in), the locks,
-///    the staging area and the dispatcher.
+/// 4. Instantiate the client (or the unconfigured stand-in), the
+///    workspace, the staging area and the dispatcher.
 /// 5. Create the agent loop.
 /// 6. Launch the TUI.
 /// 7. Block on TUI exit; drop channels; wait for the agent to drain.
@@ -162,8 +161,6 @@ pub async fn run() -> Result<(), StartupError> {
 
     // `theme` is global-only — resolved once, before anything draws.
     let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
-
-    let locks = Arc::new(Locks::new(config.clone()));
 
     // What the session boots on. Nothing configured is not an error any
     // more: the launch card says `Model  not set` and the first message
@@ -189,10 +186,10 @@ pub async fn run() -> Result<(), StartupError> {
         ),
     };
 
-    // Reach: the project root, plus whatever `.aldwin/permissions.yaml`
-    // declares (ADR 0007). Project scope only, and stated rather than
-    // inferred — nothing here goes looking for sibling checkouts.
-    let workspace = aldwin_tools::Workspace::new(cwd.clone());
+    // The workspace: the project root, plus whatever `.aldwin/permissions.yaml`
+    // declares (ADR 0007) — the one boundary (ADR 0011). Project scope only,
+    // and stated rather than inferred.
+    let workspace = Workspace::new(cwd.clone());
     let reach_notice = apply_roots(&config, &cwd, &workspace);
     let additional_context = context::build(&cwd, &workspace.roots(), &context_files(&cwd));
 
@@ -203,27 +200,30 @@ pub async fn run() -> Result<(), StartupError> {
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
     // Every edit of a turn waits here for the review (ADR 0009 §4).
-    let staging = Arc::new(Staging::new());
+    let staging = Arc::new(Staging::new(workspace.clone()));
     let mut registry = aldwin_tools::builtin_registry(workspace.clone(), staging.clone());
-    let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
+    let mcp_bridge = Arc::new(McpBridge::new(
+        merged_mcp_servers(&config),
+        workspace.clone(),
+    ));
     // Best-effort per server/tool — one broken server must not prevent the
     // session from starting, or stop any other server's tools registering.
+    // Each failure is said, because a server the developer configured and
+    // cannot use is something they will otherwise go looking for.
     for failure in register_mcp_tools(mcp_bridge, &mut registry).await {
-        match failure.tool {
-            Some(tool) => tracing::warn!(
-                "MCP server {:?}: tool {tool:?} not registered: {}",
-                failure.server,
-                failure.error
+        let message = match failure.tool {
+            Some(tool) => format!(
+                "The MCP tool {tool} from {} could not be registered: {}",
+                failure.server, failure.error
             ),
-            None => tracing::warn!(
-                "MCP server {:?}: no tools registered: {}",
-                failure.server,
-                failure.error
+            None => format!(
+                "The MCP server {} could not be started: {}",
+                failure.server, failure.error
             ),
-        }
+        };
+        let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
     }
-    let dispatcher =
-        Dispatcher::new(registry, locks.clone(), staging).with_notices(event_tx.clone());
+    let dispatcher = Dispatcher::new(registry, staging).with_notices(event_tx.clone());
 
     // This session's transcript. `None` when the history directory cannot be
     // written — the session then runs without one, having said so once.
@@ -253,12 +253,15 @@ pub async fn run() -> Result<(), StartupError> {
             .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
     };
 
-    // Said once, at the top of the session: reach wider than the project,
-    // and a `permissions.yaml` still carrying keys from the previous model.
-    if let Some(message) = reach_notice {
-        let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
-    }
-    if let Some(message) = stale_keys_notice(&locks) {
+    // Said once, at the top of the session: a workspace wider than the
+    // project, a `permissions.yaml` still carrying keys from an earlier
+    // model, and a system where nothing Aldwin starts can be confined.
+    let notices = [
+        reach_notice,
+        stale_keys_notice(&config),
+        unconfined_notice(aldwin_tools::sandbox::unavailable()),
+    ];
+    for message in notices.into_iter().flatten() {
         let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
     }
 
@@ -303,19 +306,27 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
     by_name.into_values().collect()
 }
 
-/// `allow:` and `default:` in a `permissions.yaml` do nothing now (ADR
-/// 0009); a file that still carries them is said out loud once rather
-/// than silently honoured or silently ignored.
-fn stale_keys_notice(locks: &Locks) -> Option<String> {
-    let stale = locks.stale_keys();
+/// `allow:`, `default:` and `deny:` in a `permissions.yaml` do nothing now
+/// (ADR 0011); a file that still says something through one is said out
+/// loud once rather than silently honoured or silently ignored.
+fn stale_keys_notice(config: &Config) -> Option<String> {
+    let stale = config.stale_permissions();
     if stale.is_empty() {
         return None;
     }
-    let files: Vec<&str> = stale.iter().map(|s| s.where_it_lives()).collect();
+    let files: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
     Some(format!(
-        "{} still has `allow:` or `default:` from the old permission model; neither does anything now — reads and runs need no grant, and every edit is reviewed. Only `deny:` and `roots:` are read.",
+        "{} still has `allow:`, `default:` or `deny:` from an earlier permission model. None of them does anything now: the workspace is the only boundary, and every edit is reviewed. Only `roots:` is read.",
         files.join(" and ")
     ))
+}
+
+/// Where processes cannot be confined, everything Aldwin starts runs
+/// unconfined — and the developer hears that once, here, never silently
+/// (ADR 0011).
+fn unconfined_notice(reason: Option<&str>) -> Option<String> {
+    reason
+        .map(|reason| format!("Commands can write outside the workspace on this system: {reason}."))
 }
 
 /// Points `workspace` at the roots the project's `permissions.yaml` declares
@@ -325,7 +336,7 @@ fn stale_keys_notice(locks: &Locks) -> Option<String> {
 ///
 /// Called at startup and again after `/reload-config`. A relative root
 /// resolves against the project root.
-fn apply_roots(config: &Config, cwd: &Path, workspace: &aldwin_tools::Workspace) -> Option<String> {
+fn apply_roots(config: &Config, cwd: &Path, workspace: &Workspace) -> Option<String> {
     let declared: Vec<PathBuf> = config
         .project_permissions()
         .roots
@@ -349,7 +360,7 @@ fn apply_roots(config: &Config, cwd: &Path, workspace: &aldwin_tools::Workspace)
     let mut parts = Vec::new();
     if !extra.is_empty() {
         parts.push(format!(
-            "Tools can also reach {} (roots in .aldwin/permissions.yaml).",
+            "The workspace also takes in {} (roots in .aldwin/permissions.yaml).",
             extra.join(", ")
         ));
     }
@@ -372,41 +383,30 @@ mod tests {
     use super::*;
     use aldwin_config::McpTransport;
 
-    fn server(name: &str, command: &str) -> McpServer {
-        McpServer {
-            name: name.into(),
-            transport: McpTransport::Stdio {
-                command: command.into(),
-                args: vec![],
-            },
-            env: Default::default(),
-        }
-    }
-
     #[test]
     fn project_scope_server_replaces_a_global_one_of_the_same_name() {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
+        let mcp = |command: &str, other: &str| {
+            format!(
+                "version: 1\nservers:\n  - name: fs\n    kind: stdio\n    command: {command}\n{other}"
+            )
+        };
+        std::fs::write(
+            global.path().join("mcp.yaml"),
+            mcp(
+                "global-fs-server",
+                "  - name: other\n    kind: stdio\n    command: other-server\n",
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir(project.path().join(".aldwin")).unwrap();
+        std::fs::write(
+            project.path().join(".aldwin/mcp.yaml"),
+            mcp("project-fs-server", ""),
+        )
+        .unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
-
-        config
-            .add_mcp_server(
-                aldwin_config::Scope::Global,
-                server("fs", "global-fs-server"),
-            )
-            .unwrap();
-        config
-            .add_mcp_server(
-                aldwin_config::Scope::Project,
-                server("fs", "project-fs-server"),
-            )
-            .unwrap();
-        config
-            .add_mcp_server(
-                aldwin_config::Scope::Global,
-                server("other", "other-server"),
-            )
-            .unwrap();
 
         let merged = merged_mcp_servers(&config);
         assert_eq!(merged.len(), 2);
@@ -550,19 +550,28 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
-        let locks = Locks::new(config.clone());
-        assert_eq!(stale_keys_notice(&locks), None);
-        config
-            .ensure_permissions(aldwin_config::Scope::Project)
-            .unwrap();
-        config
-            .set_default_rung(aldwin_config::Scope::Project, aldwin_config::Rung::Write)
-            .unwrap();
-        let notice = stale_keys_notice(&locks).expect("a notice");
+        assert_eq!(stale_keys_notice(&config), None);
+
+        std::fs::create_dir(project.path().join(".aldwin")).unwrap();
+        std::fs::write(
+            project.path().join(".aldwin/permissions.yaml"),
+            "version: 2\ndeny:\n  - curl\n",
+        )
+        .unwrap();
+        config.reload_all().unwrap();
+        let notice = stale_keys_notice(&config).expect("a notice");
         assert!(
             notice.contains("permissions.yaml") && notice.contains("deny:"),
             "{notice}"
         );
+    }
+
+    #[test]
+    fn an_unconfined_system_is_said_once_and_a_confined_one_is_not() {
+        assert_eq!(unconfined_notice(None), None);
+        let notice = unconfined_notice(Some("this kernel has no Landlock support")).unwrap();
+        assert!(notice.contains("outside the workspace"), "{notice}");
+        assert!(notice.contains("Landlock"), "{notice}");
     }
 
     #[test]
@@ -576,7 +585,7 @@ mod tests {
         std::fs::write(&file, "version: 2\n").unwrap();
 
         let config = Config::open_at(project.path(), global.path()).unwrap();
-        let workspace = aldwin_tools::Workspace::new(project.path());
+        let workspace = Workspace::new(project.path());
         assert_eq!(apply_roots(&config, project.path(), &workspace), None);
 
         std::fs::write(

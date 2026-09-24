@@ -6,13 +6,12 @@ use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::paths::Workspace;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
 
 /// Stage a single edit (path, before, after). Nothing is written here: the
 /// change lands in [`Staging`], and the review — at the end of the turn, or
 /// before any run that would observe it — is what writes it (ADR 0009 §4).
-/// Outside the lock entirely: `permission` returns `None`.
 pub struct EditTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
@@ -40,7 +39,7 @@ impl EditTool {
                     },
                     "required": ["path", "before", "after"],
                 }),
-                source: ToolSource::Builtin,
+                observes_disk: false,
             },
             workspace,
             staging,
@@ -76,11 +75,6 @@ fn edit_args(input: &Value) -> Result<EditArgs, ToolError> {
 impl Tool for EditTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    /// Outside the lock: an edit reaches disk only through the review.
-    fn permission(&self, _input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(None)
     }
 
     async fn call(
@@ -135,7 +129,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn tool(dir: &tempfile::TempDir) -> (EditTool, Arc<Staging>) {
-        let staging = Arc::new(Staging::new());
+        let staging = Arc::new(Staging::new(Workspace::new(dir.path())));
         (
             EditTool::new(Workspace::new(dir.path()), staging.clone()),
             staging,

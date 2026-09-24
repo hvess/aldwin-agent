@@ -8,23 +8,20 @@ name = "aldwin"
 path = "src/main.rs"
 
 [dependencies]
-aldwin-core        = { path = "../core" }
-aldwin-config      = { path = "../config" }
-aldwin-permissions = { path = "../permissions" }
-aldwin-tools       = { path = "../tools" }
-aldwin-llm         = { path = "../llm" }
-aldwin-tui         = { path = "../tui" }
-tokio                = { workspace = true }
-futures              = { workspace = true }
-thiserror            = { workspace = true }
-tracing              = { workspace = true }
-serde_json           = { workspace = true }
-clap                 = { version = "4", features = ["derive"] }
-async-stream         = "0.3"
+aldwin-core   = { path = "../core" }
+aldwin-config = { path = "../config" }
+aldwin-tools  = { path = "../tools" }
+aldwin-llm    = { path = "../llm" }
+aldwin-tui    = { path = "../tui" }
+tokio         = { workspace = true }
+futures       = { workspace = true }
+thiserror     = { workspace = true }
+clap          = { workspace = true }
+async-stream  = { workspace = true }
 # Already in the tree via rmcp — this adds a name, not a build. `Local`
 # because a transcript's timestamp is read by the developer who made it,
 # and UTC in a picker row is a small daily subtraction problem.
-chrono               = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono        = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

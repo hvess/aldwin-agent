@@ -4,24 +4,13 @@ use std::sync::{Arc, RwLock};
 use crate::{
     annotated,
     domain::{
-        ContextFilesConfig, GrantEntry, McpConfig, McpServer, PermissionsConfig, ProviderConfig,
-        Rung, TuiConfig, CONTEXT_FILES_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION,
-        TUI_VERSION,
+        McpConfig, PermissionsConfig, ProviderConfig, TuiConfig, MCP_VERSION, PERMISSIONS_VERSION,
+        PROVIDER_VERSION, TUI_VERSION,
     },
     error::ConfigError,
     fsio,
     scope::Scope,
 };
-
-/// Which list a grant belongs to. Kept separate on disk and in memory —
-/// collapsing them would turn deny-wins from a structural property into a
-/// runtime sort, which is exactly the failure mode the format is meant to
-/// prevent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrantList {
-    Allow,
-    Deny,
-}
 
 /// Result of [`Config::init_global_if_empty`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,10 +36,6 @@ struct Inner {
     project_dir: PathBuf,
     global_dir: PathBuf,
 
-    /// Permissions files moved aside by [`retire_v1_permissions`] during this
-    /// open — reported once at startup, never acted on again.
-    retired_permissions: Vec<PathBuf>,
-
     project_permissions: RwLock<PermissionsConfig>,
     global_permissions: RwLock<PermissionsConfig>,
     project_provider: RwLock<Option<ProviderConfig>>,
@@ -58,7 +43,6 @@ struct Inner {
     project_mcp: RwLock<McpConfig>,
     global_mcp: RwLock<McpConfig>,
     global_tui: RwLock<TuiConfig>,
-    project_context_files: RwLock<ContextFilesConfig>,
 }
 
 /// Typed access to Aldwin's on-disk config. Cheap to clone — internally an
@@ -124,31 +108,6 @@ fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
     }
 }
 
-/// A v1 `permissions.yaml` described a world that no longer exists: its
-/// entries were `kind:pattern` strings naming a tool and a glob, and ADR 0004
-/// replaced both halves — a grant is now a program and a class, and the tool
-/// those globs were written against (`shell`, taking one opaque command
-/// string) is gone.
-///
-/// There is no honest reading of the old entries, so this does not attempt
-/// one. It moves the file aside to `permissions.yaml.v1` and lets the caller
-/// start from an empty v2 file, which the annotated header then explains.
-/// Reinterpreting the old lines would be the worse failure: a developer would
-/// keep a file they recognise while the rules inside it quietly meant
-/// something else.
-///
-/// Returns the backup path when it moved something, so the caller can say so.
-fn retire_v1_permissions(path: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let probe: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).ok()?;
-    if probe.get("version").and_then(serde_yaml_ng::Value::as_u64) != Some(1) {
-        return None;
-    }
-    let backup = path.with_extension("yaml.v1");
-    std::fs::rename(path, &backup).ok()?;
-    Some(backup)
-}
-
 impl Config {
     /// Read every existing layer once, resolving global scope to
     /// `~/.aldwin/`. See [`Config::open_at`] for the same thing with an
@@ -172,13 +131,6 @@ impl Config {
         let global_dir = global_dir.into();
         let project_dir = project_root.as_ref().join(".aldwin");
 
-        let mut retired = Vec::new();
-        for dir in [&project_dir, &global_dir] {
-            if let Some(backup) = retire_v1_permissions(&dir.join("permissions.yaml")) {
-                retired.push(backup);
-            }
-        }
-
         let project_permissions =
             fsio::read_versioned(&project_dir.join("permissions.yaml"), PERMISSIONS_VERSION)?
                 .unwrap_or_else(PermissionsConfig::empty);
@@ -197,17 +149,10 @@ impl Config {
         let global_tui = fsio::read_versioned(&global_dir.join("tui.yaml"), TUI_VERSION)?
             .unwrap_or_else(TuiConfig::empty);
 
-        let project_context_files = fsio::read_versioned(
-            &project_dir.join("context_files.yaml"),
-            CONTEXT_FILES_VERSION,
-        )?
-        .unwrap_or_else(ContextFilesConfig::empty);
-
         Ok(Self {
             inner: Arc::new(Inner {
                 project_dir,
                 global_dir,
-                retired_permissions: retired,
                 project_permissions: RwLock::new(project_permissions),
                 global_permissions: RwLock::new(global_permissions),
                 project_provider: RwLock::new(project_provider),
@@ -215,7 +160,6 @@ impl Config {
                 project_mcp: RwLock::new(project_mcp),
                 global_mcp: RwLock::new(global_mcp),
                 global_tui: RwLock::new(global_tui),
-                project_context_files: RwLock::new(project_context_files),
             }),
         })
     }
@@ -302,12 +246,22 @@ impl Config {
         self.inner.global_tui.read().expect("lock poisoned").clone()
     }
 
-    pub fn project_context_files(&self) -> ContextFilesConfig {
-        self.inner
-            .project_context_files
-            .read()
-            .expect("lock poisoned")
-            .clone()
+    /// The `permissions.yaml` files that still say something through a key
+    /// nothing reads — `allow:`, `default:` or `deny:` — nearest first, so
+    /// the developer can be told once that the file promises what the
+    /// product no longer does (ADR 0011).
+    pub fn stale_permissions(&self) -> Vec<PathBuf> {
+        [Scope::Project, Scope::Global]
+            .into_iter()
+            .filter(|&scope| {
+                let permissions = match scope {
+                    Scope::Project => self.project_permissions(),
+                    Scope::Global => self.global_permissions(),
+                };
+                permissions.has_stale_keys()
+            })
+            .map(|scope| self.domain_path(scope, "permissions"))
+            .collect()
     }
 
     // ── Write ────────────────────────────────────────────────────────────
@@ -316,10 +270,9 @@ impl Config {
     /// write lock — not just the final swap. A concurrent writer (another
     /// mutator on this domain, or `reload_all` re-reading it from disk) must
     /// block until this call has landed on both disk and memory, or one of
-    /// the two silently clobbers the other. See aldwin-permissions.md's
-    /// Pitfall: "storage must express deny-wins, not last-write-wins". Every
-    /// domain-mutating method in this file goes through here so the locking
-    /// cannot drift between domains.
+    /// the two silently clobbers the other. Every domain-mutating method in
+    /// this file goes through here so the locking cannot drift between
+    /// domains.
     ///
     /// `header` is an `annotated::*_HEADER` constant, or `""` for a domain
     /// with none; see `fsio::write_atomic_with_header` for why it is
@@ -339,91 +292,6 @@ impl Config {
         Ok(())
     }
 
-    fn permissions_lock(&self, scope: Scope) -> &RwLock<PermissionsConfig> {
-        match scope {
-            Scope::Project => &self.inner.project_permissions,
-            Scope::Global => &self.inner.global_permissions,
-        }
-    }
-
-    fn with_permissions_mut(
-        &self,
-        scope: Scope,
-        f: impl FnOnce(&mut PermissionsConfig),
-    ) -> Result<(), ConfigError> {
-        self.with_domain_mut(
-            self.permissions_lock(scope),
-            &self.domain_path(scope, "permissions"),
-            annotated::PERMISSIONS_HEADER,
-            f,
-        )
-    }
-
-    /// Adds `entry` to one list, replacing any existing entry for the same
-    /// program in that list. Replacement rather than append because two
-    /// entries for one program in one list would make the file's meaning
-    /// depend on their order — `git: read` then `git: write` reads as a
-    /// widening, but a reader has to know which of the two wins to be sure.
-    /// One program, one line, per list.
-    pub fn add_grant(
-        &self,
-        scope: Scope,
-        list: GrantList,
-        entry: GrantEntry,
-    ) -> Result<(), ConfigError> {
-        self.with_permissions_mut(scope, |cfg| {
-            let target = match list {
-                GrantList::Allow => &mut cfg.allow,
-                GrantList::Deny => &mut cfg.deny,
-            };
-            target.retain(|e| e.program != entry.program);
-            target.push(entry);
-        })
-    }
-
-    /// Sets this scope's standing rung. Nothing reads it since ADR 0009; kept
-    /// so a test can write a file from the old model. The answer for any call no entry
-    /// covers (ADR 0004 §6).
-    pub fn set_default_rung(&self, scope: Scope, rung: Rung) -> Result<(), ConfigError> {
-        self.with_permissions_mut(scope, |cfg| cfg.default = Some(rung))
-    }
-
-    /// Permissions files this open moved aside because they were still on the
-    /// pre-ADR-0004 schema. Empty in the ordinary case.
-    pub fn retired_permissions(&self) -> &[PathBuf] {
-        &self.inner.retired_permissions
-    }
-
-    /// Writes `permissions.yaml` for `scope` if it does not exist yet,
-    /// leaving whatever it already holds untouched if it does.
-    ///
-    /// The point is the file's *existence*, not its contents: aldwin-cli
-    /// treats a project with no permissions file as one whose access
-    /// question has never been answered, so an answer of "allow nothing"
-    /// still has to leave a file behind or it would be asked again on every
-    /// start. Without this, that case could only be expressed by adding a
-    /// grant and removing it again.
-    pub fn ensure_permissions(&self, scope: Scope) -> Result<(), ConfigError> {
-        self.with_permissions_mut(scope, |_| {})
-    }
-
-    /// Removes whatever entry names `program` in one list, whatever class it
-    /// carried.
-    pub fn remove_grant(
-        &self,
-        scope: Scope,
-        list: GrantList,
-        program: &str,
-    ) -> Result<(), ConfigError> {
-        self.with_permissions_mut(scope, |cfg| {
-            let target = match list {
-                GrantList::Allow => &mut cfg.allow,
-                GrantList::Deny => &mut cfg.deny,
-            };
-            target.retain(|e| e.program != program);
-        })
-    }
-
     pub fn set_provider(&self, scope: Scope, provider: ProviderConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(scope, "provider");
         if !provider.has_valid_api_key_env() {
@@ -438,40 +306,6 @@ impl Config {
         })
     }
 
-    fn mcp_lock(&self, scope: Scope) -> &RwLock<McpConfig> {
-        match scope {
-            Scope::Project => &self.inner.project_mcp,
-            Scope::Global => &self.inner.global_mcp,
-        }
-    }
-
-    fn with_mcp_mut(
-        &self,
-        scope: Scope,
-        f: impl FnOnce(&mut McpConfig),
-    ) -> Result<(), ConfigError> {
-        self.with_domain_mut(
-            self.mcp_lock(scope),
-            &self.domain_path(scope, "mcp"),
-            annotated::MCP_HEADER,
-            f,
-        )
-    }
-
-    /// Upserts by server name — adding a server that already exists in this
-    /// scope replaces it wholesale, the same rule the spec uses for how a
-    /// project-scope server shadows a global one of the same name.
-    pub fn add_mcp_server(&self, scope: Scope, server: McpServer) -> Result<(), ConfigError> {
-        self.with_mcp_mut(scope, |cfg| {
-            cfg.servers.retain(|s| s.name != server.name);
-            cfg.servers.push(server);
-        })
-    }
-
-    pub fn remove_mcp_server(&self, scope: Scope, name: &str) -> Result<(), ConfigError> {
-        self.with_mcp_mut(scope, |cfg| cfg.servers.retain(|s| s.name != name))
-    }
-
     pub fn set_tui(&self, tui: TuiConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(Scope::Global, "tui");
         self.with_domain_mut(
@@ -480,31 +314,6 @@ impl Config {
             annotated::TUI_HEADER,
             move |current| *current = tui,
         )
-    }
-
-    fn with_context_files_mut(
-        &self,
-        f: impl FnOnce(&mut ContextFilesConfig),
-    ) -> Result<(), ConfigError> {
-        // No `annotated` header: this domain is not part of the first-launch tour.
-        self.with_domain_mut(
-            &self.inner.project_context_files,
-            &self.domain_path(Scope::Project, "context_files"),
-            "",
-            f,
-        )
-    }
-
-    pub fn add_context_file(&self, path: PathBuf) -> Result<(), ConfigError> {
-        self.with_context_files_mut(|cfg| {
-            if !cfg.approved.contains(&path) {
-                cfg.approved.push(path);
-            }
-        })
-    }
-
-    pub fn remove_context_file(&self, path: &Path) -> Result<(), ConfigError> {
-        self.with_context_files_mut(|cfg| cfg.approved.retain(|p| p != path))
     }
 
     // ── Reload ───────────────────────────────────────────────────────────
@@ -549,13 +358,6 @@ impl Config {
             self.domain_path(Scope::Global, "tui"),
             TUI_VERSION,
             TuiConfig::empty,
-            &mut failures,
-        );
-        self.reload_domain(
-            &self.inner.project_context_files,
-            self.domain_path(Scope::Project, "context_files"),
-            CONTEXT_FILES_VERSION,
-            ContextFilesConfig::empty,
             &mut failures,
         );
 
@@ -608,7 +410,7 @@ impl Config {
     /// exists is inspected for completeness rather than touched.
     ///
     /// **`provider.yaml` is deliberately not among them.** Every other file
-    /// here has a meaningful empty value — no grants, no MCP servers, no
+    /// here has a meaningful empty value — no roots, no MCP servers, no
     /// theme override — so writing one states nothing on the developer's
     /// behalf. A provider does not: any file this could write would name a
     /// host, a model and a key variable nobody chose. It used to write
@@ -670,16 +472,34 @@ impl Config {
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
 // Covers this crate's real failure modes per aldwin-config.md's Pitfalls:
-// deny-wins staying structural, version-bump rejection, partial-init refusing
+// version-bump rejection, old permissions files still loading, partial-init refusing
 // to start, reload retaining the previous snapshot on a bad file while still
 // naming it, and project scope not materialising until first write.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::McpTransport;
-    use crate::domain::{Class, GrantEntry, Rung};
+    use crate::domain::McpServer;
     use tempfile::tempdir;
+
+    fn provider(model: &str) -> ProviderConfig {
+        ProviderConfig {
+            version: PROVIDER_VERSION,
+            provider: crate::domain::ProviderKind::Anthropic,
+            model: model.into(),
+            base_url: None,
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            extended_thinking_budget: None,
+        }
+    }
+
+    fn write_project_permissions(project: &Path, text: &str) -> PathBuf {
+        let dir = project.join(".aldwin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("permissions.yaml");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
 
     /// Fresh (project_dir, global_dir) temp roots and the Config opened on
     /// them — neither exists on disk yet, matching a real fresh checkout.
@@ -787,7 +607,6 @@ mod tests {
         assert_eq!(config.project_mcp(), McpConfig::empty());
         assert_eq!(config.global_mcp(), McpConfig::empty());
         assert_eq!(config.global_tui(), TuiConfig::empty());
-        assert_eq!(config.project_context_files(), ContextFilesConfig::empty());
         assert!(config.project_provider().is_none());
         assert!(matches!(
             config.global_provider(),
@@ -801,15 +620,9 @@ mod tests {
         let aldwin_dir = project.path().join(".aldwin");
         assert!(!aldwin_dir.exists());
 
-        config
-            .add_grant(
-                Scope::Project,
-                GrantList::Allow,
-                GrantEntry::classed("rg", Class::Read),
-            )
-            .unwrap();
+        config.set_provider(Scope::Project, provider("m")).unwrap();
         assert!(aldwin_dir.is_dir());
-        assert!(aldwin_dir.join("permissions.yaml").is_file());
+        assert!(aldwin_dir.join("provider.yaml").is_file());
     }
 
     #[test]
@@ -824,9 +637,9 @@ mod tests {
         }
 
         // In-memory snapshot reflects what was just written, not stale
-        // defaults. A fresh file states neither a rung nor an allow list —
-        // ADR 0009 reads neither — only an empty deny list.
+        // defaults — and a fresh file says nothing a notice would report.
         assert_eq!(config.global_permissions(), PermissionsConfig::empty());
+        assert!(config.stale_permissions().is_empty());
 
         // Idempotent: a second call sees everything already there.
         assert_eq!(
@@ -873,160 +686,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allow_and_deny_stay_separate_lists_never_merged() {
-        let (_project, _global, config) = fresh();
-
-        config
-            .add_grant(
-                Scope::Project,
-                GrantList::Allow,
-                GrantEntry::classed("git", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(
-                Scope::Project,
-                GrantList::Deny,
-                GrantEntry::classed("git", Class::Write),
-            )
-            .unwrap();
-
-        let cfg = config.project_permissions();
-        assert_eq!(cfg.allow, vec![GrantEntry::classed("git", Class::Read)]);
-        assert_eq!(cfg.deny, vec![GrantEntry::classed("git", Class::Write)]);
-    }
-
-    /// Regression: a write lock taken only for the final swap let two
-    /// concurrent writers compute `next` from the same stale snapshot, and
-    /// the second clobbered the first. `with_domain_mut` holds it across the
-    /// whole read-mutate-persist-swap, so every grant here must survive.
-    #[test]
-    fn concurrent_grant_writes_do_not_lose_updates() {
-        let (_project, _global, config) = fresh();
-        let handles: Vec<_> = (0..8)
-            .map(|i| {
-                let config = config.clone();
-                std::thread::spawn(move || {
-                    config
-                        .add_grant(
-                            Scope::Project,
-                            GrantList::Allow,
-                            GrantEntry::classed(format!("prog{i}"), Class::Read),
-                        )
-                        .unwrap();
-                })
-            })
-            .collect();
-        for h in handles {
-            h.join().unwrap();
-        }
-
-        let allow = config.project_permissions().allow;
-        assert_eq!(
-            allow.len(),
-            8,
-            "every concurrent grant must survive, got {allow:?}"
-        );
-        for i in 0..8 {
-            assert!(
-                allow.contains(&GrantEntry::classed(format!("prog{i}"), Class::Read)),
-                "missing grant for prog{i} in {allow:?}"
-            );
-        }
-    }
-
-    /// One program gets one line per list. Re-granting it at a different
-    /// class replaces the line rather than appending a second one, so the
-    /// file never holds two rules for `git` whose combined meaning depends
-    /// on which order a reader takes them in.
-    #[test]
-    fn add_grant_keeps_one_line_per_program_in_a_list() {
-        let (_project, _global, config) = fresh();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("git", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("git", Class::Write),
-            )
-            .unwrap();
-        assert_eq!(
-            config.global_permissions().allow,
-            vec![GrantEntry::classed("git", Class::Write)]
-        );
-    }
-
     /// Regression, reported as "editing permissions.yaml doesn't really
     /// appear to make any sense": a plain re-serialise drops every comment,
-    /// so the annotated explanation survived only until the *first* grant
-    /// was persisted and the developer's real file was a bare `version`/
-    /// `allow`/`deny`.
+    /// so the annotated explanation survived only until the *first* write.
     #[test]
-    fn permissions_yaml_keeps_its_explanatory_header_after_a_grant_is_persisted() {
-        let (project, global, config) = fresh();
-        config
-            .add_grant(
-                Scope::Project,
-                GrantList::Allow,
-                GrantEntry::classed("git", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
-            .unwrap();
-
-        let project_text =
-            std::fs::read_to_string(project.path().join(".aldwin").join("permissions.yaml"))
-                .unwrap();
-        let global_text =
-            std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml"))
-                .unwrap();
-        for text in [&project_text, &global_text] {
-            assert!(
-                text.starts_with("# Aldwin permissions"),
-                "grant persistence must not strip the annotated header: {text:?}"
-            );
-            assert!(
-                text.contains("program"),
-                "header should still explain the entry shape: {text:?}"
-            );
-        }
-        assert!(project_text.contains("git: read"));
-        assert!(global_text.contains("curl"));
-    }
-
-    /// Same bug, the other three annotated domains.
-    #[test]
-    fn provider_mcp_and_tui_yaml_keep_their_headers_after_a_write() {
+    fn provider_and_tui_yaml_keep_their_headers_after_a_write() {
         let (_project, global, config) = fresh();
-        let provider = ProviderConfig {
-            version: PROVIDER_VERSION,
-            provider: crate::domain::ProviderKind::Anthropic,
-            model: "claude-sonnet-5".into(),
-            base_url: None,
-            api_key_env: "ANTHROPIC_API_KEY".into(),
-            extended_thinking_budget: None,
-        };
-        config.set_provider(Scope::Global, provider).unwrap();
         config
-            .add_mcp_server(
-                Scope::Global,
-                McpServer {
-                    name: "fs".into(),
-                    transport: McpTransport::Stdio {
-                        command: "fs-server".into(),
-                        args: vec![],
-                    },
-                    env: Default::default(),
-                },
-            )
+            .set_provider(Scope::Global, provider("claude-sonnet-5"))
             .unwrap();
         config
             .set_tui(TuiConfig {
@@ -1037,8 +704,6 @@ mod tests {
 
         let provider_text =
             std::fs::read_to_string(global.path().join(".aldwin").join("provider.yaml")).unwrap();
-        let mcp_text =
-            std::fs::read_to_string(global.path().join(".aldwin").join("mcp.yaml")).unwrap();
         let tui_text =
             std::fs::read_to_string(global.path().join(".aldwin").join("tui.yaml")).unwrap();
         assert!(
@@ -1046,98 +711,14 @@ mod tests {
             "{provider_text:?}"
         );
         assert!(
-            mcp_text.starts_with("# Aldwin MCP server registry"),
-            "{mcp_text:?}"
-        );
-        assert!(
             tui_text.starts_with("# Aldwin TUI preferences"),
             "{tui_text:?}"
         );
     }
 
-    #[test]
-    fn remove_grant_only_touches_its_own_list() {
-        let (_project, _global, config) = fresh();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("rg", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("rg"))
-            .unwrap();
-
-        config
-            .remove_grant(Scope::Global, GrantList::Allow, "rg")
-            .unwrap();
-
-        let cfg = config.global_permissions();
-        assert!(cfg.allow.is_empty());
-        assert_eq!(cfg.deny, vec![GrantEntry::program("rg")]);
-    }
-
-    /// What a developer actually opens. The file is the model's public
-    /// face — the reason this whole area was reopened was "the permissions
-    /// model is not clear, and editing permissions.yaml doesn't really
-    /// appear to make any sense" — so its shape is pinned rather than left
-    /// to whatever serde happens to emit.
-    #[test]
-    fn a_written_permissions_file_reads_as_the_model_it_implements() {
-        let (_project, global, config) = fresh();
-        config.set_default_rung(Scope::Global, Rung::Read).unwrap();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("git", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("cargo", Class::Write),
-            )
-            .unwrap();
-        config
-            .add_grant(Scope::Global, GrantList::Deny, GrantEntry::program("curl"))
-            .unwrap();
-
-        let text = std::fs::read_to_string(global.path().join(".aldwin").join("permissions.yaml"))
-            .unwrap();
-        let body = text
-            .lines()
-            .filter(|l| !l.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let expected = [
-            "version: 2",
-            "default: read",
-            "allow:",
-            "- git: read",
-            "- cargo: write",
-            "deny:",
-            "- curl",
-        ]
-        .join("\n");
-        assert_eq!(
-            body.trim(),
-            expected,
-            "the file a developer opens must read as program-and-class rules, not as a serialisation: {text}"
-        );
-
-        // And the explanation survives the writes, which is the half that
-        // regressed last time.
-        assert!(text.starts_with("# Aldwin permissions"), "{text}");
-    }
-
-    /// ADR 0007 §1. `roots` is read, an empty one is never written (so a
-    /// file that declares none still reads as the four keys it always had),
-    /// and `deny_unknown_fields` still rejects a misspelling rather than
-    /// silently ignoring the reach a developer thought they had declared.
+    /// ADR 0007 §1. `roots` is read, and `deny_unknown_fields` still rejects
+    /// a misspelling rather than silently ignoring the reach a developer
+    /// thought they had declared.
     #[test]
     fn roots_are_read_from_a_permissions_file_and_a_misspelling_is_an_error() {
         let parsed: PermissionsConfig =
@@ -1150,51 +731,44 @@ mod tests {
 
         let none: PermissionsConfig = serde_yaml_ng::from_str("version: 2\n").unwrap();
         assert!(none.roots.is_empty());
-        let written = serde_yaml_ng::to_string(&none).unwrap();
-        assert!(
-            !written.contains("roots"),
-            "an empty list must not be written: {written}"
-        );
 
         assert!(
             serde_yaml_ng::from_str::<PermissionsConfig>("version: 2\nroot:\n- ../x\n").is_err()
         );
     }
 
-    /// A v1 permissions.yaml described a world ADR 0004 deleted — its entries
-    /// were `kind:pattern` globs over a `shell` tool that took one opaque
-    /// command string. Opening a project that still holds one must not fail
-    /// to start, and must not reinterpret the old lines as if they meant
-    /// something under the new grammar: the file is moved aside intact and
-    /// the developer starts from an empty, annotated v2 file.
+    /// Files from every earlier model still load — a v1 file's `kind:pattern`
+    /// globs, a v2 file's rung and grants, a deny list — because refusing
+    /// one would stop an existing project from starting. What they say is
+    /// reported, once, rather than honoured (ADR 0011).
     #[test]
-    fn a_v1_permissions_file_is_moved_aside_rather_than_reinterpreted() {
-        let project = tempfile::tempdir().unwrap();
-        let global = tempfile::tempdir().unwrap();
-        let dir = project.path().join(".aldwin");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("permissions.yaml"),
+    fn a_permissions_file_from_an_earlier_model_loads_and_is_reported_stale() {
+        for text in [
             "version: 1\nallow: [\"shell:cargo test*\", \"read:./**\"]\ndeny: []\n",
-        )
-        .unwrap();
+            "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\n",
+            "version: 2\ndeny:\n  - curl\n  - npm: write\nroots:\n  - ../libs\n",
+        ] {
+            let (project, _global, _config) = fresh();
+            let path = write_project_permissions(project.path(), text);
+            let config = Config::open_at(project.path(), _global.path().join(".aldwin")).unwrap();
+            assert_eq!(config.stale_permissions(), vec![path], "{text}");
+        }
+    }
 
-        let config = Config::open_at(project.path(), global.path().join(".aldwin")).unwrap();
-
-        assert_eq!(config.project_permissions(), PermissionsConfig::empty());
+    /// The `deny: []` every first launch wrote says nothing, and a notice
+    /// about it would be noise on every existing install.
+    #[test]
+    fn an_empty_list_or_roots_alone_is_not_stale() {
+        let (project, _global, config) = fresh();
+        write_project_permissions(
+            project.path(),
+            "version: 2\nallow: []\ndeny: []\nroots:\n  - ../libs\n",
+        );
+        config.reload_all().unwrap();
+        assert!(config.stale_permissions().is_empty());
         assert_eq!(
-            config.retired_permissions(),
-            [dir.join("permissions.yaml.v1")]
-        );
-
-        let kept = std::fs::read_to_string(dir.join("permissions.yaml.v1")).unwrap();
-        assert!(
-            kept.contains("shell:cargo test*"),
-            "the old file must survive verbatim: {kept:?}"
-        );
-        assert!(
-            !dir.join("permissions.yaml").exists(),
-            "the v1 file is moved, not copied"
+            config.project_permissions().roots,
+            [PathBuf::from("../libs")]
         );
     }
 
@@ -1203,11 +777,7 @@ mod tests {
         let (project, _global, _config) = fresh();
         let dir = project.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("permissions.yaml"),
-            "version: 99\nallow: []\ndeny: []\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("permissions.yaml"), "version: 99\n").unwrap();
 
         let err = Config::open_at(project.path(), _global.path().join(".aldwin")).unwrap_err();
         assert!(matches!(
@@ -1323,99 +893,32 @@ mod tests {
     }
 
     #[test]
-    fn add_mcp_server_upserts_by_name_replacing_wholesale() {
-        let (_project, _global, config) = fresh();
-        config
-            .add_mcp_server(
-                Scope::Global,
-                McpServer {
-                    name: "fs".into(),
-                    transport: McpTransport::Stdio {
-                        command: "fs-server".into(),
-                        args: vec![],
-                    },
-                    env: Default::default(),
-                },
-            )
-            .unwrap();
-        config
-            .add_mcp_server(
-                Scope::Global,
-                McpServer {
-                    name: "fs".into(),
-                    transport: McpTransport::Http {
-                        url: "http://localhost:9/".into(),
-                    },
-                    env: Default::default(),
-                },
-            )
-            .unwrap();
-
-        let servers = config.global_mcp().servers;
-        assert_eq!(servers.len(), 1);
-        assert!(matches!(servers[0].transport, McpTransport::Http { .. }));
-    }
-
-    #[test]
     fn reload_all_retains_previous_snapshot_on_parse_failure_but_names_the_file() {
-        let (project, _global, config) = fresh();
-        config
-            .add_grant(
-                Scope::Project,
-                GrantList::Allow,
-                GrantEntry::classed("rg", Class::Read),
-            )
-            .unwrap();
-        config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("cargo", Class::Write),
-            )
-            .unwrap();
+        let (project, global, config) = fresh();
+        let path = write_project_permissions(project.path(), "version: 2\nroots: [../libs]\n");
+        config.set_tui(TuiConfig::empty()).unwrap();
+        config.reload_all().unwrap();
 
-        // Hand-edit project permissions.yaml into garbage, but leave global alone.
-        let dir = project.path().join(".aldwin");
-        std::fs::write(dir.join("permissions.yaml"), "not: [valid, yaml: at all").unwrap();
-
-        let result = config.reload_all();
-        let failures = result.unwrap_err();
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].path, dir.join("permissions.yaml"));
-
-        // Previous snapshot retained for the broken layer...
-        assert_eq!(
-            config.project_permissions().allow,
-            vec![GrantEntry::classed("rg", Class::Read)]
-        );
-        // ...while an unrelated, still-valid layer still reloads fine.
-        assert_eq!(
-            config.global_permissions().allow,
-            vec![GrantEntry::classed("cargo", Class::Write)]
-        );
-    }
-
-    #[test]
-    fn reload_all_picks_up_hand_edits_that_are_still_valid() {
-        let (project, _global, config) = fresh();
-        let dir = project.path().join(".aldwin");
-        std::fs::create_dir_all(&dir).unwrap();
+        // Hand-edit project permissions.yaml into garbage, and the global
+        // tui.yaml into something new but valid.
+        std::fs::write(&path, "not: [valid, yaml: at all").unwrap();
         std::fs::write(
-            dir.join("permissions.yaml"),
-            "version: 2\ndefault: read\nallow:\n  - git: read\n  - curl\ndeny: []\n",
+            global.path().join(".aldwin").join("tui.yaml"),
+            "version: 1\ntheme: light\n",
         )
         .unwrap();
 
-        config.reload_all().unwrap();
-        let cfg = config.project_permissions();
-        assert_eq!(cfg.default, Some(Rung::Read));
+        let failures = config.reload_all().unwrap_err();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].path, path);
+
+        // Previous snapshot retained for the broken layer...
         assert_eq!(
-            cfg.allow,
-            vec![
-                GrantEntry::classed("git", Class::Read),
-                GrantEntry::program("curl")
-            ]
+            config.project_permissions().roots,
+            [PathBuf::from("../libs")]
         );
+        // ...while an unrelated, still-valid layer still reloads fine.
+        assert_eq!(config.global_tui().theme.as_deref(), Some("light"));
     }
 
     #[test]
@@ -1423,15 +926,35 @@ mod tests {
         let (_project, _global, config) = fresh();
         let other = config.clone();
         config
-            .add_grant(
-                Scope::Global,
-                GrantList::Allow,
-                GrantEntry::classed("rg", Class::Read),
-            )
+            .set_tui(TuiConfig {
+                theme: Some("light".into()),
+                ..TuiConfig::empty()
+            })
             .unwrap();
+        assert_eq!(other.global_tui().theme.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn mcp_servers_are_read_from_their_file() {
+        let (_project, global, _config) = fresh();
+        let dir = global.path().join(".aldwin");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("mcp.yaml"),
+            "version: 1\nservers:\n  - name: fs\n    kind: stdio\n    command: fs-server\n",
+        )
+        .unwrap();
+        let config = Config::open_at(_project.path(), &dir).unwrap();
         assert_eq!(
-            other.global_permissions().allow,
-            vec![GrantEntry::classed("rg", Class::Read)]
+            config.global_mcp().servers,
+            vec![McpServer {
+                name: "fs".into(),
+                transport: crate::domain::McpTransport::Stdio {
+                    command: "fs-server".into(),
+                    args: vec![],
+                },
+                env: Default::default(),
+            }]
         );
     }
 }

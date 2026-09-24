@@ -2,7 +2,6 @@ use futures::{future, StreamExt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
 
 #[allow(unused_imports)]
 use crate::types::{Answer, ReviewDecision};
@@ -77,9 +76,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }
             Some(other) => {
                 pending.insert(call_id.to_string(), other);
-                warn!("answer for {call_id}, which is awaiting a review decision");
             }
-            None => warn!("answer for unknown call_id {call_id}"),
+            None => {}
         }
     }
 
@@ -92,9 +90,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }
             Some(other) => {
                 pending.insert(review_id.to_string(), other);
-                warn!("review decision for {review_id}, which is awaiting an answer");
             }
-            None => warn!("review decision for unknown review {review_id}"),
+            None => {}
         }
     }
 
@@ -119,10 +116,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             Command::ClearHistory => Some("the conversation was not cleared"),
             Command::Resume { .. } => Some("nothing was resumed"),
         };
-        // Said, not only logged: the TUI has already drawn the submission,
-        // and a developer who sees it in the transcript assumes it arrived.
+        // Said: the TUI has already drawn the submission, and a developer
+        // who sees it in the transcript assumes it arrived.
         if let Some(what) = discarded {
-            warn!("command discarded mid-turn: {what}");
             let _ = events
                 .send(Event::Notice {
                     message: format!("a turn is running; {what}"),
@@ -210,7 +206,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
         loop {
             let step_id = StepId::next();
-            debug!("turn {turn_id:?} step {step_id:?}");
 
             let result = self
                 .run_step(turn_id, step_id, &mut messages, events, commands)
@@ -456,13 +451,12 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // reason — `max_tokens` landing after a complete tool_use block
         // reaches here as `EndTurn`.
         //
-        // Said, not only logged: the TUI has already drawn the call as
+        // Said: the TUI has already drawn the call as
         // requested, and a step that also produced text does not reach the
         // silent-turn notice below — so without this the call simply
         // disappears between the reply and the end of the turn.
         if outcome.stop_reason != StopReason::ToolUse && !tool_calls.is_empty() {
             let dropped = tool_calls.len();
-            warn!("step ended without a tool_use stop; dropping {dropped} undispatched call(s)");
             tool_calls.clear();
             let _ = events
                 .send(Event::Notice {

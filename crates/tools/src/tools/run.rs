@@ -1,47 +1,36 @@
-//! `run` — the tool that replaced `shell` (ADR 0004 §1).
+//! `run` — a shell command, confined to the workspace for writes (ADR 0011).
 //!
-//! The difference is not cosmetic. `shell` took one opaque string and handed
-//! it to an interpreter, so a grant could never mean more than "some text
-//! matched a glob": `cargo test*` also matched `cargo test && anything`,
-//! because `&&` was syntax. `run` takes a **program and a list of
-//! arguments** and calls `execve` directly. `&&`, `|`, `;`, backticks and
-//! `$(...)` are ordinary characters with no power to chain a second command
-//! onto an approved first one, because nothing ever parses them.
+//! The command is one string, run as `sh -c`, so pipes, redirection, globs
+//! and `&&` are what the model expects them to be. What contains it is not
+//! a reading of that string — ADR 0004 tried classifying argv and ADR 0007
+//! tried containing path-like arguments, and each left a hole the size of
+//! `sh -c` — but the sandbox every process Aldwin spawns runs in: it may
+//! read anything and write only inside the workspace roots and the
+//! incidental paths (`crate::sandbox`).
 //!
-//! What that buys is the thing the whole model needed: a call is one program,
-//! so a grant can name that program, and the class the agent declares for the
-//! call can be held to its word by running it where writing is impossible.
-//!
-//! What it costs is pipelines and redirection. `cargo test | head` is not
-//! expressible here and is not meant to be — if it comes back it comes back
-//! as a list of stages, each a program with its own grant, never as a string.
-//! `sh` and `bash` are programs like any other: granting one is granting
-//! arbitrary execution, which is now a visible act rather than the default.
-//!
-//! ADR 0007 brought this tool into the model the other three built-ins live
-//! in: path arguments are contained by the same [`Workspace`], a call can name
-//! its working directory (so "work over there" is not `bash -c 'cd … && …'`),
-//! and a timeout keeps what the program had already written.
+//! Two things `run` still decides for itself: its working directory is
+//! resolved through the same [`Workspace`] as every other tool's path, and a
+//! timeout kills the whole process group and keeps what the command had
+//! already written.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
 
-use aldwin_permissions::Class;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
 use crate::error::ToolError;
 use crate::paths::Workspace;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 use crate::sandbox;
 use aldwin_core::DispatchContext;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const OUTPUT_CAP_BYTES: usize = 50 * 1024;
-/// What is *held* per stream while the program runs. Only `OUTPUT_CAP_BYTES`
-/// is ever shown, so holding more is memory a chatty program — `yes`, a build
+/// What is *held* per stream while the command runs. Only `OUTPUT_CAP_BYTES`
+/// is ever shown, so holding more is memory a chatty command — `yes`, a build
 /// log — can grow without bound. The slack keeps a character that straddles
 /// the cap whole, and lets [`cap`] see that there was more.
 const OUTPUT_KEEP_BYTES: usize = OUTPUT_CAP_BYTES + 4;
@@ -53,9 +42,7 @@ pub struct RunTool {
 
 /// One call's parsed input.
 struct RunArgs {
-    program: String,
-    args: Vec<String>,
-    class: Class,
+    command: String,
     timeout: u64,
     /// Working directory as the model wrote it, before containment.
     cwd: Option<String>,
@@ -65,46 +52,36 @@ impl RunTool {
     pub fn new(workspace: Workspace) -> Self {
         Self {
             descriptor: ToolDescriptor {
-                name:        "run".into(),
-                description: "Run a program in the project root. \
-                              Give the program and its arguments separately — there is no shell, so \
-                              pipes, redirection, globbing and `&&` do not apply. \
-                              `args` holds only what follows the program: `ls -la` is \
-                              program \"ls\", args [\"-la\"]. \
+                name: "run".into(),
+                description: "Run a shell command (`sh -c`) in the project root, or in `cwd`. \
+                              Pipes, redirection, globs and `&&` work as in any shell. \
+                              The command can read anything, but it can write only inside the \
+                              workspace — the roots listed in the session context — and to \
+                              temporary files: a write anywhere else fails with a permission \
+                              error. Do not try to route around that; say what you need written \
+                              and where. \
                               A non-zero exit comes back as an error carrying the exit code and \
                               both streams; read the code before concluding anything broke, since \
                               some programs use it to report a result (`grep` exits 1 when nothing \
                               matched). \
-                              Declare `class`: \"read\" if the call only observes, \"write\" if it may \
-                              change anything. A call declared \"read\" is executed with the project \
-                              read-only and the network unreachable, so an inaccurate declaration \
-                              fails rather than causing damage — and comes back telling you to \
-                              declare it \"write\" and run it again. Declare reads as reads: it is what \
-                              lets a mistake cost a retry rather than a tree. \
                               Any edits you have staged this turn are reviewed by the developer \
                               before a run, since the run would see the files as they are on disk. \
-                              `cwd` sets the working directory for this one call; it persists no \
-                              further than the call, so pass it every time rather than expecting an \
-                              earlier one to stick."
+                              `cwd` sets the working directory for this one call; pass it every \
+                              time rather than expecting an earlier one to stick."
                     .into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "program":      { "type": "string", "description": "The program to run, e.g. \"git\"." },
-                        "args":         { "type": "array", "items": { "type": "string" }, "default": [],
-                                          "description": "Arguments after the program name, one element each — \
-                                                          [\"status\", \"--short\"], not [\"git\", \"status\"]. \
-                                                          Do not repeat the program here." },
-                        "class":        { "type": "string", "enum": ["read", "write"] },
-                        "timeout_secs": { "type": "integer", "minimum": 1 },
+                        "command":      { "type": "string", "description": "The shell command, e.g. \"cargo test 2>&1 | tail -20\"." },
                         "cwd":          { "type": "string",
                                           "description": "Working directory for this call. Defaults to the project root. \
                                                           Must be inside the workspace — the roots are listed in \
                                                           the session context, and a refusal names them." },
+                        "timeout_secs": { "type": "integer", "minimum": 1 },
                     },
-                    "required": ["program", "class"],
+                    "required": ["command"],
                 }),
-                source:     ToolSource::Builtin,
+                observes_disk: true,
             },
             workspace,
         }
@@ -112,151 +89,36 @@ impl RunTool {
 }
 
 fn parse(input: &Value) -> Result<RunArgs, ToolError> {
-    let invalid = |message: &str| ToolError::InvalidInput {
-        tool: "run".into(),
-        message: message.into(),
-    };
-
-    let program = input
-        .get("program")
+    let command = input
+        .get("command")
         .and_then(Value::as_str)
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| invalid("missing \"program\" string field"))?
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| ToolError::InvalidInput {
+            tool: "run".into(),
+            message: "missing \"command\" string field".into(),
+        })?
         .to_string();
-
-    // A program is a name, not a command line. Rejecting a whitespace-bearing
-    // program is what stops `{"program": "git status"}` from quietly becoming
-    // a grant for a program called `git status` that no entry will ever match
-    // — and, worse, from reading as though the argv split had happened.
-    if program.split_whitespace().count() != 1 {
-        return Err(invalid(
-            "\"program\" names one program; put its arguments in \"args\"",
-        ));
-    }
-
-    let args = match input.get("args") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| invalid("every entry in \"args\" must be a string"))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(_) => return Err(invalid("\"args\" must be an array of strings")),
-    };
-
-    let class = match input.get("class").and_then(Value::as_str) {
-        Some("read") => Class::Read,
-        Some("write") => Class::Write,
-        _ => {
-            return Err(invalid(
-                "\"class\" must be \"read\" or \"write\" — say what this call does",
-            ))
-        }
-    };
-
     let timeout = input
         .get("timeout_secs")
         .and_then(Value::as_u64)
         .filter(|s| *s > 0)
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
-
     let cwd = input
         .get("cwd")
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
         .map(str::to_string);
-
     Ok(RunArgs {
-        program,
-        args,
-        class,
+        command,
         timeout,
         cwd,
     })
-}
-
-/// Which of a call's arguments name a path we are pointing the program at,
-/// and therefore have to be inside the workspace.
-///
-/// This cannot be exact, and pretending otherwise would rebuild the shipped
-/// classification table ADR 0004 rejected — argv meaning is the program's,
-/// not ours. What it can be is *sound in the direction that matters*: an
-/// argument is checked when it is an absolute path, or when it climbs with
-/// `..`. Everything else is relative without climbing, so it resolves under
-/// a working directory that is itself already contained, and needs no check
-/// of its own.
-///
-/// That leaves globs and patterns alone (`--include=*.kts`, `*/build/*`
-/// never resolve to a real path outside a root) while catching the shape
-/// that actually escaped in the observed session: `find ~
-/// -iname …`, and `rm -rf /…/proton-calendar`.
-///
-/// **The hole, stated rather than papered over.** A path inside a string
-/// argument is invisible here — `bash -c 'cd /elsewhere && …'` is one
-/// argument that neither starts with `/` nor climbs. Granting a shell is
-/// already granting arbitrary execution (ADR 0004 §1) and this does not
-/// change that; it narrows what every *other* program can be pointed at, and
-/// `cwd` removes the main reason to reach for a shell at all.
-fn path_like(arg: &str) -> Option<&str> {
-    let candidate = match arg.split_once('=') {
-        // `--flag=/some/path` — check the value, not the whole token. The
-        // same for a bare `key=value` (`dd of=/etc/x`): taken whole, the key
-        // reads as a directory name, so `of=../../x` normalized to `x` and
-        // passed as contained.
-        Some((key, value)) if !key.contains('/') => value,
-        // `-C/elsewhere`, `-f/etc/x` — a value glued to a short flag. Skipping
-        // every `-…` token let these through to `execve` unchecked.
-        _ if arg.starts_with('-')
-            && !arg.starts_with("--")
-            && arg.len() > 2
-            && arg.is_char_boundary(2) =>
-        {
-            &arg[2..]
-        }
-        _ => arg,
-    };
-    if candidate.is_empty() || candidate.starts_with('-') {
-        return None;
-    }
-    let climbs = Path::new(candidate)
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir));
-    if climbs || (candidate.starts_with('/') && first_component_exists(candidate)) {
-        return Some(candidate);
-    }
-    None
-}
-
-/// Whether an absolute-looking argument points into the real filesystem.
-///
-/// `sed -n /pattern/p` and `grep /api/v1` carry arguments that start with
-/// `/` and are not paths. What separates them from `/etc/passwd` is that
-/// nothing called `/pattern` exists: an argument whose first component is
-/// absent from `/` is not pointing at anything, and creating it would need
-/// write access to `/` itself. One `stat`, no table of programs.
-fn first_component_exists(candidate: &str) -> bool {
-    match Path::new(candidate).components().nth(1) {
-        Some(first) => Path::new("/").join(first.as_os_str()).exists(),
-        None => true, // the argument is `/` itself
-    }
 }
 
 #[async_trait]
 impl Tool for RunTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    fn permission(&self, input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        let args = parse(input)?;
-        Ok(Some(PermissionRequest {
-            program: args.program,
-            class: args.class,
-            argv: args.args,
-        }))
     }
 
     async fn call(
@@ -266,86 +128,27 @@ impl Tool for RunTool {
         _ctx: &DispatchContext,
     ) -> Result<String, ToolError> {
         let args = parse(&input)?;
-
-        // Containment first, before anything is spawned. The working
-        // directory is resolved as a path in its own right, then every
-        // path-like argument is checked against *it* rather than against the
-        // project root — `cat notes.md` with `cwd` set elsewhere means the
-        // file next to that cwd.
         let cwd = match &args.cwd {
             Some(dir) => self.workspace.resolve(dir)?,
             None => self.workspace.project_root(),
         };
-        let roots = self.workspace.roots();
-        for arg in &args.args {
-            let Some(candidate) = path_like(arg) else {
-                continue;
-            };
-            if let Err(refusal) = self.workspace.resolve_against(&cwd, candidate) {
-                // `/dev/null`, `$TMPDIR` and the rest of the sandbox's
-                // incidental list are not an escape: the sandbox already
-                // treats them as writable under a *read*, and refusing them
-                // as arguments broke `grep x file /dev/null` under any class.
-                let incidental = crate::paths::resolved_form(&cwd, candidate)
-                    .is_some_and(|resolved| sandbox::is_incidental(&resolved, &roots));
-                if !incidental {
-                    return Err(refusal);
-                }
-            }
-        }
-
         execute(&self.workspace, &cwd, &args).await
     }
 }
 
-/// Runs the call, confining it when it was declared a read.
-///
-/// The [`ToolError::ReadRefused`] arm is the one that matters: nothing
-/// landed when it is returned — that is the property the sandbox exists to
-/// provide — and the model is told so and told to re-declare, which is safe
-/// precisely because the first attempt could not have half-finished.
 async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<String, ToolError> {
-    let confine = args.class == Class::Read;
-
-    // The sandbox is built first, because on some platforms confining a call
-    // changes *what is spawned* rather than what happens after the fork.
-    // Every root is read-only, not just the project root: a workspace whose
-    // second root stayed writable under a read declaration would be a
-    // read-only guarantee with a hole in exactly the place ADR 0007 widened.
-    let plan = if confine {
-        Some(
-            sandbox::ReadOnly::build(&workspace.roots()).map_err(|source| {
-                ToolError::SandboxUnavailable {
-                    program: args.program.clone(),
-                    args: args.args.clone(),
-                    source,
-                }
-            })?,
-        )
-    } else {
-        None
-    };
-
-    // Linux hands back the program untouched and confines in the child;
-    // macOS hands back `sandbox-exec -p <profile> -- <program>`. Asking for
-    // the command line *before* stdio and `setsid` are configured is what
-    // keeps a wrapping backend from having to rebuild — and silently
-    // discard — settings that `Command` exposes no getter for.
-    let (program, argv) = match &plan {
-        Some(plan) => plan.command_line(&args.program, &args.args),
-        None => (args.program.clone(), args.args.clone()),
-    };
-
-    let mut cmd = tokio::process::Command::new(&program);
-    cmd.args(&argv)
-        .current_dir(cwd)
+    let shell_args = ["-c".to_string(), args.command.clone()];
+    let mut cmd = sandbox::command("/bin/sh", &shell_args, &workspace.roots())
+        .map_err(|source| ToolError::Sandbox { source })?;
+    cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
     // Its own process group, so a timeout kills the whole tree rather than
-    // just the process we happen to hold.
+    // just the shell we happen to hold.
+    // SAFETY: `setsid` is async-signal-safe and allocates nothing.
     unsafe {
         cmd.pre_exec(|| {
             if libc::setsid() < 0 {
@@ -355,24 +158,9 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
         });
     }
 
-    if let Some(plan) = plan {
-        for (key, value) in sandbox::read_only_env() {
-            cmd.env(key, value);
-        }
-        // Installed after `setsid`: `pre_exec` hooks run in the order they
-        // were added, and the confinement has to be the last thing the child
-        // does before `exec`.
-        plan.install(&mut cmd);
-    }
-
-    let mut child = cmd.spawn().map_err(|source| match source.kind() {
-        std::io::ErrorKind::NotFound => ToolError::ProgramNotFound {
-            program: args.program.clone(),
-        },
-        _ => ToolError::Io {
-            path: PathBuf::from(&args.program),
-            source,
-        },
+    let mut child = cmd.spawn().map_err(|source| ToolError::Io {
+        path: cwd.to_path_buf(),
+        source,
     })?;
 
     // `setsid` made the child its own group leader, so its pid is the group
@@ -425,50 +213,19 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     // It exited on its own. Anything it deliberately left running stays.
     group.0 = None;
 
-    let out = take(&out_buf);
-    let err = take(&err_buf);
-
-    // A read declaration only *fails* when the sandbox refused it — not
-    // whenever the program exits non-zero. Conflating the two reported
-    // `grep`'s "nothing matched" (exit 1, no stderr) as a refused read and
-    // told the model a write had been attempted that never was, which
-    // taught it to stop declaring reads at all. A denial reaches the
-    // child as an ordinary permission error, so it is the *evidence on
-    // stderr* — or death by signal — that distinguishes them. A denial this
-    // misses is bounded: it falls through as an ordinary failed command with
-    // its own error in view, which the model can read and re-declare from.
-    if confine && !status.success() && looks_like_denial(&err, &status) {
-        return Err(ToolError::ReadRefused {
-            program: args.program.clone(),
-            args: args.args.clone(),
-        });
-    }
-
-    let mut output = render(&status, &out, &err);
-    if confine && !status.success() {
-        // Reached only when the failure carried no evidence of a denial. It
-        // may still have been one — a program that swallows EACCES and exits
-        // 1 looks exactly like this — and without saying so the model has no
-        // way to know the call ran somewhere writing was impossible.
-        output.push_str(
-            "note: this call was declared a read, so it ran with the workspace read-only and the network \
-             unreachable. If it needed to write or connect, that is why it failed — declare it \"write\".\n",
-        );
-    }
+    let output = render(&status, &take(&out_buf), &take(&err_buf));
     if status.success() {
         Ok(output)
     } else {
         // The dispatcher's `finish` maps every `Ok` to `is_error: false`, so
         // returning the rendered output here would tell the model a command
-        // that exited 2 had succeeded — which is exactly what it did, and the
-        // model then guessed at a different program rather than fixing its
-        // call. See `ToolError::CommandFailed`, which carries this same
-        // string through the error arm instead.
+        // that exited 2 had succeeded. See `ToolError::CommandFailed`, which
+        // carries this same string through the error arm instead.
         Err(ToolError::CommandFailed { output })
     }
 }
 
-/// Kills a call's whole process group unless the program exited by itself.
+/// Kills a call's whole process group unless the command exited by itself.
 ///
 /// `kill_on_drop` reaches only the process we hold, so without this a
 /// timed-out `sh -c 'slow-thing'` left `slow-thing` running — and so did a
@@ -489,7 +246,7 @@ impl Drop for KillGroupOnDrop {
 /// Reads a stream to EOF, appending as it goes so a cancelled read still
 /// leaves everything received so far in the buffer. Past
 /// [`OUTPUT_KEEP_BYTES`] it keeps reading and stops keeping: the pipe has to
-/// stay drained or the program blocks on it.
+/// stay drained or the command blocks on it.
 async fn drain<R>(reader: &mut R, buf: &Mutex<Vec<u8>>) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -515,31 +272,8 @@ fn take(buf: &Mutex<Vec<u8>>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Whether a failed read-declared call looks like the sandbox stopping it,
-/// rather than the program reporting an ordinary non-zero result.
-///
-/// Deliberately evidence-based and deliberately not a table of programs.
-/// Death by signal counts: a process killed rather than exiting did not
-/// choose its status.
-fn looks_like_denial(stderr: &str, status: &std::process::ExitStatus) -> bool {
-    if status.code().is_none() {
-        return true;
-    }
-    let lowered = stderr.to_lowercase();
-    [
-        "permission denied",
-        "read-only file system",
-        "operation not permitted",
-        "network is unreachable",
-        "eacces",
-        "eperm",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
-}
-
 /// What a timed-out call reports: the elapsed budget *and* whatever the
-/// program managed to say before it ran out.
+/// command managed to say before it ran out.
 fn render_partial(out: &str, err: &str) -> String {
     let mut body = String::new();
     if !out.is_empty() {
@@ -551,7 +285,7 @@ fn render_partial(out: &str, err: &str) -> String {
         body.push_str(&cap(err));
     }
     if body.is_empty() {
-        body.push_str("the program produced no output before the timeout");
+        body.push_str("the command produced no output before the timeout");
     }
     body
 }
@@ -591,16 +325,10 @@ fn cap(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::dispatch_context;
+    use crate::test_support::{confinement_or_explicit_skip, dispatch_context, scratch_dir};
 
-    /// Not `tempfile::tempdir()`: `/tmp` is on the sandbox's incidental-write
-    /// list, so a project placed there would let a confined write succeed and
-    /// the read-enforcement tests would pass without testing anything.
     fn tool() -> (tempfile::TempDir, RunTool) {
-        let dir = tempfile::Builder::new()
-            .prefix("aldwin-run-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .unwrap();
+        let dir = scratch_dir();
         let tool = RunTool::new(Workspace::new(dir.path()));
         (dir, tool)
     }
@@ -610,21 +338,156 @@ mod tests {
         tool.call("c1", input, &ctx).await
     }
 
-    /// The defect this pins, seen in a real transcript: the model sent
-    /// `program: "ls", args: ["ls", "-la"]`, which ran `ls ls -la` and
-    /// exited 2 — and the result came back `is_error: false`, so the model
-    /// was told its broken call had worked. It then guessed a different
-    /// program rather than fixing the arguments, costing a second approval.
+    /// The whole of ADR 0011 in one assertion: a command may say it writes
+    /// anywhere, and what it can actually write is the workspace.
+    #[tokio::test]
+    async fn a_run_writing_outside_the_workspace_fails_and_changes_nothing() {
+        if !confinement_or_explicit_skip() {
+            return;
+        }
+        let (_d, tool) = tool();
+        let outside = scratch_dir();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "original\n").unwrap();
+
+        let err = call(
+            &tool,
+            json!({"command": format!("echo changed > {}", victim.display())}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ToolError::CommandFailed { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n");
+    }
+
+    #[tokio::test]
+    async fn a_run_writing_inside_the_workspace_succeeds() {
+        let (dir, tool) = tool();
+        call(
+            &tool,
+            json!({"command": "mkdir -p out && printf built > out/artifact"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out/artifact")).unwrap(),
+            "built"
+        );
+    }
+
+    /// A second declared root is workspace on the same terms as the first —
+    /// reachable as a `cwd`, and writable.
+    #[tokio::test]
+    async fn a_declared_second_root_is_reachable_and_writable() {
+        let project = scratch_dir();
+        let sibling = scratch_dir();
+        let tool = RunTool::new(Workspace::with_roots(
+            project.path(),
+            vec![sibling.path().to_path_buf()],
+        ));
+        call(
+            &tool,
+            json!({"command": "printf here > notes.txt", "cwd": sibling.path().to_str().unwrap()}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(sibling.path().join("notes.txt")).unwrap(),
+            "here"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shell_pipeline_works() {
+        let (dir, tool) = tool();
+        std::fs::write(dir.path().join("words.txt"), "b\na\nc\na\n").unwrap();
+        let out = call(
+            &tool,
+            json!({"command": "sort words.txt | uniq -c | grep ' a' && echo done"}),
+        )
+        .await
+        .unwrap();
+        assert!(out.contains("2 a"), "{out}");
+        assert!(out.contains("done"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_call_runs_in_the_working_directory_it_names() {
+        let (dir, tool) = tool();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/here.txt"), "found").unwrap();
+        let out = call(&tool, json!({"command": "cat here.txt", "cwd": "sub"}))
+            .await
+            .unwrap();
+        assert!(out.contains("found"), "got {out}");
+    }
+
+    #[tokio::test]
+    async fn a_working_directory_outside_the_workspace_is_refused() {
+        let (_d, tool) = tool();
+        for cwd in ["/etc", "../.."] {
+            let err = call(&tool, json!({"command": "pwd", "cwd": cwd}))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ToolError::PathEscapesWorkspace { .. }),
+                "{cwd}: got {err:?}"
+            );
+        }
+    }
+
+    /// A symlink is an ordinary git blob, so a checkout can ship `out ->
+    /// /elsewhere`; naming it as a `cwd` must not start the command there.
+    #[tokio::test]
+    async fn a_symlinked_working_directory_that_escapes_is_refused() {
+        let (dir, tool) = tool();
+        let outside = scratch_dir();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        let err = call(&tool, json!({"command": "pwd", "cwd": "out"}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscapesWorkspace { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// The refusal names the roots, so the model can ask for one rather than
+    /// guessing at a path it can reach.
+    #[tokio::test]
+    async fn the_refusal_names_the_reachable_roots() {
+        let (dir, tool) = tool();
+        let message = call(&tool, json!({"command": "pwd", "cwd": "/etc"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains(&dir.path().canonicalize().unwrap().display().to_string()),
+            "got {message}"
+        );
+        assert!(message.contains("permissions.yaml"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_command_is_refused() {
+        let (_d, tool) = tool();
+        for input in [json!({}), json!({"command": "  "}), json!({"command": 3})] {
+            let err = call(&tool, input).await.unwrap_err();
+            assert!(matches!(err, ToolError::InvalidInput { .. }), "{err:?}");
+        }
+    }
+
+    /// Seen in a real transcript: a failed command came back `is_error:
+    /// false`, and the model was told its broken call had worked.
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error_and_keeps_the_whole_output() {
         let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "ls", "args": ["no-such-entry"], "class": "write"}),
-        )
-        .await
-        .expect_err("a command that exits non-zero has not succeeded");
-
+        let err = call(&tool, json!({"command": "ls no-such-entry"}))
+            .await
+            .expect_err("a command that exits non-zero has not succeeded");
         let ToolError::CommandFailed { output } = &err else {
             panic!("expected CommandFailed, got {err:?}");
         };
@@ -633,234 +496,55 @@ mod tests {
             "the exit code survives: {output}"
         );
         assert!(output.contains("stderr:"), "and so does stderr: {output}");
-        assert_eq!(
-            err.to_string(),
-            *output,
-            "Display carries the whole rendering, so nothing is lost"
-        );
+        assert_eq!(err.to_string(), *output);
     }
 
-    /// The other half: a command that succeeds must stay a success, with no
-    /// error flag and its stdout intact.
     #[tokio::test]
     async fn a_zero_exit_is_still_a_plain_success() {
         let (_d, tool) = tool();
-        let out = call(
-            &tool,
-            json!({"program": "ls", "args": ["-a"], "class": "write"}),
-        )
-        .await
-        .expect("a command that exits 0 succeeded");
+        let out = call(&tool, json!({"command": "ls -a"})).await.unwrap();
         assert!(out.starts_with("exit: 0"), "{out}");
     }
 
-    /// Non-zero is reported as what it is, not interpreted. `grep` exits 1
-    /// when it matched nothing, which is a result rather than a fault — the
-    /// model is told the code and `run`'s description tells it to read it.
+    /// A timeout used to report only that it had timed out, dropping
+    /// everything the command had already written.
     #[tokio::test]
-    async fn a_program_that_reports_by_exit_code_still_carries_its_code() {
-        let (dir, tool) = tool();
-        std::fs::write(dir.path().join("haystack.txt"), "alpha\n").unwrap();
-        let err = call(
-            &tool,
-            json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "write"}),
-        )
-        .await
-        .expect_err("grep exits 1 on no match");
-        assert!(err.to_string().contains("exit: 1"), "{err}");
-    }
-
-    /// The model supplied `args: ["ls", "-la"]` for `program: "ls"` because
-    /// nothing in the schema said `args` excludes the program name — the
-    /// `program` field had a description and `args` had none at all.
-    #[test]
-    fn the_args_schema_says_the_program_is_not_repeated() {
-        let (_d, tool) = tool();
-        let schema = &tool.descriptor().input_schema;
-        let args = &schema["properties"]["args"];
-        let description = args["description"]
-            .as_str()
-            .expect("args carries a description");
-        assert!(
-            description.contains("Do not repeat the program"),
-            "the schema has to say it, not only the prose: {description}"
-        );
-    }
-
-    #[test]
-    fn the_permission_request_names_the_program_not_the_command_line() {
-        let (_d, tool) = tool();
-        let request = tool
-            .permission(&json!({"program": "git", "args": ["status", "--short"], "class": "read"}))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(request.program, "git");
-        assert_eq!(request.class, Class::Read);
-        assert_eq!(request.argv, vec!["status", "--short"]);
-    }
-
-    /// The reason `shell` could not carry a class: its grant was a glob over
-    /// a whole command line, and a glob cannot stop at a metacharacter. Here
-    /// there is no line to chain onto — the operator is just an argument.
-    #[tokio::test]
-    async fn shell_operators_are_arguments_not_syntax() {
-        let (dir, tool) = tool();
-        let out = call(
-            &tool,
-            json!({"program": "echo", "args": ["hello", "&&", "rm", "-rf", "everything"], "class": "read"}),
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            out.contains("hello && rm -rf everything"),
-            "the operator must be inert text: {out}"
-        );
-        assert!(dir.path().exists());
-    }
-
-    /// The same call with a real path outside the workspace does not even
-    /// reach `execve` now — containment refuses it first (ADR 0007). This is
-    /// the gap the tool had: `read`, `edit` and `explain` all checked their
-    /// path arguments and `run`, alone, did not.
-    #[tokio::test]
-    async fn a_path_argument_outside_the_workspace_is_refused_before_the_program_runs() {
+    async fn a_timeout_keeps_what_the_command_already_produced() {
         let (_d, tool) = tool();
         let err = call(
             &tool,
-            json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(err, ToolError::PathEscapesWorkspace { .. }),
-            "got {err:?}"
-        );
-    }
-
-    /// ...and the refusal names the roots, so the model can ask for one
-    /// rather than quietly routing the work through a shell.
-    #[tokio::test]
-    async fn the_refusal_names_the_reachable_roots() {
-        let (dir, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "echo", "args": ["/etc/passwd"], "class": "read"}),
+            json!({"command": "echo progress-so-far; sleep 30", "timeout_secs": 1}),
         )
         .await
         .unwrap_err();
         let message = err.to_string();
-        assert!(
-            message.contains(&dir.path().canonicalize().unwrap().display().to_string()),
-            "got {message}"
-        );
-        assert!(
-            message.contains("permissions.yaml"),
-            "it must name the real mechanism: {message}"
-        );
-        assert!(
-            !message.contains("--root"),
-            "there is no such flag: {message}"
-        );
+        assert!(matches!(err, ToolError::Timeout { .. }), "got {err:?}");
+        assert!(message.contains("progress-so-far"), "{message}");
     }
 
-    /// A relative argument that climbs out is caught by the same check.
+    /// `setsid` exists so a timeout takes the whole tree: a timed-out
+    /// `sh -c` used to leave whatever it had started running.
     #[tokio::test]
-    async fn a_relative_argument_that_climbs_out_is_refused() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "echo", "args": ["../../etc/passwd"], "class": "read"}),
-        )
-        .await
-        .unwrap_err();
+    async fn a_timeout_kills_the_grandchildren_too() {
+        let (dir, tool) = tool();
+        let marker = dir.path().join("still-alive");
+        let command = format!("(sleep 2; touch {}) & sleep 30", marker.display());
+        let _ = call(&tool, json!({"command": command, "timeout_secs": 1})).await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         assert!(
-            matches!(err, ToolError::PathEscapesWorkspace { .. }),
-            "got {err:?}"
+            !marker.exists(),
+            "the backgrounded grandchild outlived the timeout"
         );
     }
 
-    /// Globs and flags are not paths and must not be mistaken for them —
-    /// containment that rejected `--include=*.kts` would be containment
-    /// nobody could run a search under.
-    #[test]
-    fn patterns_and_flags_are_not_treated_as_paths() {
-        assert_eq!(path_like("--include=*.kts"), None);
-        assert_eq!(path_like("-la"), None);
-        assert_eq!(path_like("*/node_modules/*"), None);
-        assert_eq!(
-            path_like("src/main.rs"),
-            None,
-            "relative and not climbing: the cwd already bounds it"
-        );
-        assert_eq!(path_like("/etc/passwd"), Some("/etc/passwd"));
-        assert_eq!(path_like("../../etc"), Some("../../etc"));
-        assert_eq!(
-            path_like("--path=/etc"),
-            Some("/etc"),
-            "the value of a flag is still a path"
-        );
-        assert_eq!(
-            path_like("-C/etc"),
-            Some("/etc"),
-            "so is a value glued to a short flag"
-        );
-        assert_eq!(path_like("-f../../x"), Some("../../x"));
-        assert_eq!(
-            path_like("/no-such-top-level-dir/p"),
-            None,
-            "a sed or grep pattern, not a path"
-        );
-        assert_eq!(
-            path_like("of=/etc/passwd"),
-            Some("/etc/passwd"),
-            "`dd` spells its paths key=value"
-        );
-        assert_eq!(path_like("name=value"), None);
-    }
-
-    /// Audit: taken whole, `of=../../x` reads as a directory called `of=..`
-    /// followed by one climb, which normalizes to `x` inside the cwd — while
-    /// `dd` writes two levels up.
-    #[tokio::test]
-    async fn a_climbing_value_behind_a_bare_key_is_contained_too() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "echo", "args": ["of=../../../../escaped"], "class": "write"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(err, ToolError::PathEscapesWorkspace { .. }),
-            "got {err:?}"
-        );
-    }
-
-    /// Audit: everything a program wrote was held until it exited and capped
-    /// only when rendered, so `yes` could grow the buffer until the timeout.
-    #[tokio::test]
-    async fn output_past_the_cap_is_read_but_not_held() {
-        let flood = vec![b'x'; 4 * OUTPUT_KEEP_BYTES];
-        let buf = Mutex::new(Vec::new());
-        drain(&mut flood.as_slice(), &buf).await.unwrap();
-
-        assert_eq!(buf.lock().unwrap().len(), OUTPUT_KEEP_BYTES);
-        assert!(
-            cap(&take(&buf)).ends_with("bytes]\n"),
-            "and the rendering still says it was cut"
-        );
-    }
-
-    /// Audit: only a timeout killed the group. A call dropped mid-run — the
+    /// Only a timeout killed the group once. A call dropped mid-run — the
     /// developer cancelling the turn — left its grandchildren running.
     #[tokio::test]
     async fn a_cancelled_call_kills_the_grandchildren_too() {
         let (dir, tool) = tool();
         let marker = dir.path().join("still-alive");
-        let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
-        let input = json!({"program": "/bin/sh", "args": ["-c", script], "class": "write", "timeout_secs": 30});
+        let command = format!("(sleep 2; touch {}) & sleep 30", marker.display());
+        let input = json!({"command": command, "timeout_secs": 30});
         let cancelled =
             tokio::time::timeout(std::time::Duration::from_secs(1), call(&tool, input)).await;
         assert!(
@@ -875,155 +559,16 @@ mod tests {
         );
     }
 
-    /// A second declared root is reachable, which is the half of ADR 0007
-    /// that keeps the boundary usable rather than merely strict.
     #[tokio::test]
-    async fn a_declared_second_root_is_reachable() {
-        let project = tempfile::tempdir().unwrap();
-        let sibling = tempfile::tempdir().unwrap();
-        std::fs::write(sibling.path().join("notes.txt"), "hello from over here").unwrap();
-        let tool = RunTool::new(Workspace::with_roots(
-            project.path(),
-            vec![sibling.path().to_path_buf()],
-        ));
-
-        let target = sibling.path().join("notes.txt");
-        let out = call(
-            &tool,
-            json!({"program": "/bin/cat", "args": [target.to_str().unwrap()], "class": "read"}),
-        )
-        .await
-        .unwrap();
-        assert!(out.contains("hello from over here"), "got {out}");
+    async fn output_past_the_cap_is_read_but_not_held() {
+        let flood = vec![b'x'; 4 * OUTPUT_KEEP_BYTES];
+        let buf = Mutex::new(Vec::new());
+        drain(&mut flood.as_slice(), &buf).await.unwrap();
+        assert_eq!(buf.lock().unwrap().len(), OUTPUT_KEEP_BYTES);
+        assert!(cap(&take(&buf)).ends_with("bytes]\n"));
     }
 
-    /// `cwd` is the other half: the reason 46% of the observed session's
-    /// calls were `bash -c 'cd … && …'` was that there was no way to say
-    /// this.
-    #[tokio::test]
-    async fn a_call_runs_in_the_working_directory_it_names() {
-        let (dir, tool) = tool();
-        std::fs::create_dir(dir.path().join("sub")).unwrap();
-        std::fs::write(dir.path().join("sub/here.txt"), "found").unwrap();
-
-        let out = call(
-            &tool,
-            json!({"program": "/bin/cat", "args": ["here.txt"], "class": "read", "cwd": "sub"}),
-        )
-        .await
-        .unwrap();
-        assert!(out.contains("found"), "got {out}");
-    }
-
-    /// The defect that taught the model to stop declaring reads. `grep`
-    /// exits 1 when nothing matched — a *result*, not a refusal — and the
-    /// old code turned any non-zero exit under `class: read` into
-    /// `ReadRefused`, which prompted the developer to allow a write that had
-    /// never been attempted. `run`'s own description warns about this exit
-    /// code two paragraphs above where it happened.
-    #[tokio::test]
-    async fn a_read_that_merely_exits_non_zero_is_not_a_refused_read() {
-        let (dir, tool) = tool();
-        std::fs::write(dir.path().join("haystack.txt"), "nothing of interest").unwrap();
-
-        let err = call(
-            &tool,
-            json!({"program": "grep", "args": ["needle", "haystack.txt"], "class": "read"}),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(
-            !matches!(err, ToolError::ReadRefused { .. }),
-            "a clean no-match must not read as a sandbox refusal: {err:?}"
-        );
-        assert!(
-            matches!(err, ToolError::CommandFailed { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn a_denial_is_told_from_an_ordinary_failure_by_its_evidence() {
-        use std::os::unix::process::ExitStatusExt;
-        let exit_one = std::process::ExitStatus::from_raw(1 << 8);
-
-        assert!(
-            !looks_like_denial("", &exit_one),
-            "grep's silent exit 1 is a result"
-        );
-        assert!(!looks_like_denial("no such file or directory", &exit_one));
-        assert!(looks_like_denial(
-            "mkdir: cannot create directory: Read-only file system",
-            &exit_one
-        ));
-        assert!(looks_like_denial("touch: /x: Permission denied", &exit_one));
-
-        // Killed rather than exited: it did not choose its status.
-        let killed = std::process::ExitStatus::from_raw(9);
-        assert!(looks_like_denial("", &killed));
-    }
-
-    /// A timeout used to report only that it had timed out, dropping
-    /// everything the program had already written — which is exactly the
-    /// diagnostic a 30-minute command needs.
-    #[tokio::test]
-    async fn a_timeout_keeps_what_the_program_already_produced() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({
-                "program": "/bin/sh",
-                "args": ["-c", "echo progress-so-far; sleep 30"],
-                "class": "write",
-                "timeout_secs": 1
-            }),
-        )
-        .await
-        .unwrap_err();
-
-        let message = err.to_string();
-        assert!(matches!(err, ToolError::Timeout { .. }), "got {err:?}");
-        assert!(message.contains("timed out"), "got {message}");
-        assert!(
-            message.contains("progress-so-far"),
-            "the partial output must survive: {message}"
-        );
-    }
-
-    /// Audit: the sandbox exempts `/dev/null` for writes while containment
-    /// refused it as an argument, so this failed under either class.
-    #[tokio::test]
-    async fn an_incidental_path_is_a_legitimate_argument() {
-        let (dir, tool) = tool();
-        std::fs::write(dir.path().join("h.txt"), "needle\n").unwrap();
-        let out = call(
-            &tool,
-            json!({"program": "grep", "args": ["needle", "h.txt", "/dev/null"], "class": "write"}),
-        )
-        .await
-        .unwrap();
-        assert!(out.contains("needle"), "got {out}");
-    }
-
-    /// Audit: every `-…` token was skipped, so a path glued to a short flag
-    /// reached `execve` unchecked.
-    #[tokio::test]
-    async fn a_path_glued_to_a_short_flag_is_contained_too() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "grep", "args": ["-f/etc/hostname", "x"], "class": "write"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(err, ToolError::PathEscapesWorkspace { .. }),
-            "got {err:?}"
-        );
-    }
-
-    /// Audit: output was lossy-decoded one 8 KiB read at a time, so a
+    /// Output was lossy-decoded one 8 KiB read at a time once, so a
     /// multibyte character straddling a read boundary became U+FFFD.
     #[tokio::test]
     async fn a_multibyte_character_across_a_read_boundary_survives() {
@@ -1032,153 +577,8 @@ mod tests {
         text.push('€');
         text.push_str("tail");
         std::fs::write(dir.path().join("u.txt"), &text).unwrap();
-
-        let out = call(
-            &tool,
-            json!({"program": "/bin/cat", "args": ["u.txt"], "class": "write"}),
-        )
-        .await
-        .unwrap();
+        let out = call(&tool, json!({"command": "cat u.txt"})).await.unwrap();
         assert!(out.contains("€tail"), "the character must arrive whole");
         assert!(!out.contains('\u{FFFD}'));
-    }
-
-    /// Audit: a read-only run that fails *without* denial evidence came back
-    /// as a bare failure, with nothing telling the model where it had run.
-    #[tokio::test]
-    async fn a_failed_read_says_it_ran_read_only() {
-        let (dir, tool) = tool();
-        std::fs::write(dir.path().join("h.txt"), "nothing").unwrap();
-        let err = call(
-            &tool,
-            json!({"program": "grep", "args": ["needle", "h.txt"], "class": "read"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("declared a read"), "got {err}");
-    }
-
-    /// `setsid` exists so a timeout takes the whole tree, and until the
-    /// audit only the direct child was killed — a timed-out `sh -c` left
-    /// whatever it had started running.
-    #[tokio::test]
-    async fn a_timeout_kills_the_grandchildren_too() {
-        let (dir, tool) = tool();
-        let marker = dir.path().join("still-alive");
-        let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
-        let _ = call(&tool, json!({"program": "/bin/sh", "args": ["-c", script], "class": "write", "timeout_secs": 1}))
-            .await;
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        assert!(
-            !marker.exists(),
-            "the backgrounded grandchild outlived the timeout"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_working_directory_outside_the_workspace_is_refused() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "/bin/pwd", "class": "read", "cwd": "/etc"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(err, ToolError::PathEscapesWorkspace { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_program_with_arguments_baked_into_it_is_refused() {
-        let (_d, tool) = tool();
-        let err = tool
-            .permission(&json!({"program": "git status", "class": "read"}))
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidInput { .. }));
-    }
-
-    /// The declaration is mandatory. A call that does not say what it does
-    /// cannot be weighed against a grant that is written in those terms.
-    #[tokio::test]
-    async fn a_call_without_a_class_is_refused() {
-        let (_d, tool) = tool();
-        let err = tool.permission(&json!({"program": "ls"})).unwrap_err();
-        assert!(matches!(err, ToolError::InvalidInput { .. }));
-        let err = tool
-            .permission(&json!({"program": "ls", "class": "edit"}))
-            .unwrap_err();
-        assert!(
-            matches!(err, ToolError::InvalidInput { .. }),
-            "edit is not a class a call may declare"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unknown_program_says_so_by_name() {
-        let (_d, tool) = tool();
-        let err = call(
-            &tool,
-            json!({"program": "no-such-program-anywhere", "class": "read"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, ToolError::ProgramNotFound { .. }), "{err:?}");
-    }
-
-    /// The end-to-end shape of ADR 0004 §4, through the real tool: a call
-    /// that declares itself a read and then tries to write comes back as a
-    /// question, and the file it reached for is untouched.
-    #[tokio::test]
-    async fn a_read_declaration_that_writes_comes_back_as_a_question() {
-        if !sandbox::availability().enforcing() {
-            return;
-        }
-        let (dir, tool) = tool();
-        let victim = dir.path().join("untouched.txt");
-        std::fs::write(&victim, "original\n").unwrap();
-
-        let err = call(
-            &tool,
-            json!({"program": "/usr/bin/rm", "args": ["untouched.txt"], "class": "read"}),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, ToolError::ReadRefused { .. }), "{err:?}");
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n");
-    }
-
-    /// ...and the same call, declared honestly, is permitted to do it. The
-    /// sandbox is not a second permission layer; it only holds a *read*
-    /// declaration to its word.
-    #[tokio::test]
-    async fn the_same_call_declared_a_write_is_not_confined() {
-        let (dir, tool) = tool();
-        let victim = dir.path().join("doomed.txt");
-        std::fs::write(&victim, "original\n").unwrap();
-
-        call(
-            &tool,
-            json!({"program": "/usr/bin/rm", "args": ["doomed.txt"], "class": "write"}),
-        )
-        .await
-        .unwrap();
-        assert!(!victim.exists(), "a declared write is allowed to write");
-    }
-
-    #[tokio::test]
-    async fn a_read_still_reads() {
-        let (dir, tool) = tool();
-        std::fs::write(dir.path().join("a.txt"), "contents\n").unwrap();
-
-        let out = call(
-            &tool,
-            json!({"program": "/usr/bin/cat", "args": ["a.txt"], "class": "read"}),
-        )
-        .await
-        .unwrap();
-        assert!(out.contains("contents"), "{out}");
     }
 }

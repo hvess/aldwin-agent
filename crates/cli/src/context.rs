@@ -27,7 +27,7 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
             .map(|r| r.display().to_string())
             .collect();
         sections.push(format!(
-            "Also reachable (declared in .aldwin/permissions.yaml): {}\nEvery other path is out of reach for every tool, run included.",
+            "Also in the workspace (declared in .aldwin/permissions.yaml): {}\nEvery tool refuses a path outside the workspace, and a command you run cannot write outside it.",
             extra.join(", ")
         ));
     }
@@ -35,11 +35,8 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     sections.push(platform_facts());
 
     for path in approved {
-        // A path that's approved but no longer exists (renamed, deleted
-        // since approval) is skipped rather than treated as an error —
-        // GC of stale approved-path entries is explicitly deferred past V0
-        // per aldwin-permissions.md's Pitfalls; this is just the read
-        // side tolerating that gap gracefully.
+        // A file that went away between the caller finding it and this read
+        // is skipped rather than treated as an error.
         if let Ok(contents) = std::fs::read_to_string(path) {
             sections.push(format!("--- {} ---\n{}", path.display(), contents));
         }
@@ -138,7 +135,7 @@ mod tests {
             &[],
         );
         assert!(out.contains("/other/checkout"));
-        assert!(out.contains("run included"));
+        assert!(out.contains("cannot write outside it"));
     }
 
     #[test]

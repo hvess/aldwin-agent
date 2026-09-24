@@ -5,7 +5,7 @@ mod plan;
 mod read;
 mod run;
 
-pub use ask::{AskTool, CHAT_ABOUT_THIS};
+pub use ask::AskTool;
 pub use edit::EditTool;
 pub use explain::ExplainTool;
 pub use plan::PlanTool;

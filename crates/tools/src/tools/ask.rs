@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
-use crate::registry::{PermissionRequest, Tool, ToolDescriptor, ToolSource};
+use crate::registry::{Tool, ToolDescriptor};
 
 /// The row every question ends with. Sentence case, the design's copy.
 pub const CHAT_ABOUT_THIS: &str = "Chat about this";
@@ -48,7 +48,7 @@ impl AskTool {
                     },
                     "required": ["question", "options"],
                 }),
-                source: ToolSource::Builtin,
+                observes_disk: false,
             },
         }
     }
@@ -112,10 +112,6 @@ fn parse(input: &Value) -> Result<Question, ToolError> {
 impl Tool for AskTool {
     fn descriptor(&self) -> &ToolDescriptor {
         &self.descriptor
-    }
-
-    fn permission(&self, _input: &Value) -> Result<Option<PermissionRequest>, ToolError> {
-        Ok(None)
     }
 
     async fn call(

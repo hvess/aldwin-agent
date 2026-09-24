@@ -4,15 +4,12 @@
 //! because it is the developer's way out of a question that was wrongly
 //! framed, and it is not the model's to omit.
 
-use aldwin_core::{Answer, DispatchContext, Question};
+use aldwin_core::{DispatchContext, Question};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::registry::{Tool, ToolDescriptor};
-
-/// The row every question ends with. Sentence case, the design's copy.
-pub const CHAT_ABOUT_THIS: &str = "Chat about this";
 
 /// Beyond this the list is a menu, and a menu is a sign the question was
 /// not one question.
@@ -89,16 +86,14 @@ fn parse(input: &Value) -> Result<Question, ToolError> {
     if options.is_empty() {
         return Err(invalid("give at least one answer"));
     }
-    if !options
-        .iter()
-        .any(|o| o.eq_ignore_ascii_case(CHAT_ABOUT_THIS))
-    {
-        options.push(CHAT_ABOUT_THIS.into());
+    if !options.iter().any(|o| Question::is_chat_about_this(o)) {
+        options.push(Question::CHAT_ABOUT_THIS.into());
     }
     if options.len() > MAX_OPTIONS {
         return Err(invalid(format!(
-            "at most {} answers plus \"{CHAT_ABOUT_THIS}\"",
-            MAX_OPTIONS - 1
+            "at most {} answers plus \"{}\"",
+            MAX_OPTIONS - 1,
+            Question::CHAT_ABOUT_THIS
         )));
     }
     Ok(Question {
@@ -122,17 +117,16 @@ impl Tool for AskTool {
     ) -> Result<String, ToolError> {
         let question = parse(&input)?;
         let options = question.options.clone();
-        match ctx.ask(call_id.to_string(), question).await {
-            Some(Answer::Chose { index }) => match options.get(index) {
-                Some(option) => Ok(format!("The developer chose: {option}")),
-                None => Err(invalid(format!(
-                    "answer {index} is not one of the {} options",
-                    options.len()
-                ))),
-            },
-            Some(Answer::Said { text }) => Ok(format!("The developer said: {text}")),
-            None => Err(ToolError::Unanswered),
-        }
+        let answer = ctx
+            .ask(call_id.to_string(), question)
+            .await
+            .ok_or(ToolError::Unanswered)?;
+        answer.to_result(&options).ok_or_else(|| {
+            invalid(format!(
+                "the answer is not one of the {} options",
+                options.len()
+            ))
+        })
     }
 }
 
@@ -140,7 +134,7 @@ impl Tool for AskTool {
 mod tests {
     use super::*;
     use crate::test_support::dispatch_context;
-    use aldwin_core::{Event, PendingReply};
+    use aldwin_core::{Answer, Event, PendingReply};
 
     #[tokio::test]
     async fn chat_about_this_is_always_offered_and_a_choice_comes_back_as_its_text() {
@@ -152,7 +146,10 @@ mod tests {
             let Some(Event::QuestionAsked { call_id, question }) = events.recv().await else {
                 panic!("expected a question")
             };
-            assert_eq!(question.options, vec!["Yes", "No", CHAT_ABOUT_THIS]);
+            assert_eq!(
+                question.options,
+                vec!["Yes", "No", Question::CHAT_ABOUT_THIS]
+            );
             let Some(PendingReply::Answer(tx)) = pending.lock().unwrap().remove(&call_id) else {
                 panic!("no pending answer")
             };

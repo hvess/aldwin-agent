@@ -180,6 +180,19 @@ pub struct Question {
     pub options: Vec<String>,
 }
 
+impl Question {
+    /// The row every question ends with — the developer's way out of a
+    /// question that was wrongly framed. Sentence case, the design's copy.
+    pub const CHAT_ABOUT_THIS: &'static str = "Chat about this";
+
+    /// Whether `option` is that row, however the model cased it. The one
+    /// comparison: the tool that appends the row and the screen that
+    /// answers it must agree on what it is.
+    pub fn is_chat_about_this(option: &str) -> bool {
+        option.trim().eq_ignore_ascii_case(Self::CHAT_ABOUT_THIS)
+    }
+}
+
 /// The developer's answer to a [`Question`]: the option they chose, or —
 /// for "Chat about this" — what they typed instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +200,29 @@ pub struct Question {
 pub enum Answer {
     Chose { index: usize },
     Said { text: String },
+}
+
+impl Answer {
+    const CHOSE: &'static str = "The developer chose: ";
+    const SAID: &'static str = "The developer said: ";
+
+    /// The tool result this answer becomes for the model, or `None` for a
+    /// choice that is not one of `options`.
+    pub fn to_result(&self, options: &[String]) -> Option<String> {
+        match self {
+            Answer::Chose { index } => options.get(*index).map(|o| format!("{}{o}", Self::CHOSE)),
+            Answer::Said { text } => Some(format!("{}{text}", Self::SAID)),
+        }
+    }
+
+    /// The developer's own words back out of such a result — what the
+    /// transcript shows as the answer.
+    pub fn words_of(result: &str) -> &str {
+        result
+            .strip_prefix(Self::CHOSE)
+            .or_else(|| result.strip_prefix(Self::SAID))
+            .unwrap_or(result)
+    }
 }
 
 /// One file of a staged changeset, as the review draws it: the whole file

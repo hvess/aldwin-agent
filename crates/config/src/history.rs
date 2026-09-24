@@ -15,7 +15,7 @@
 //! function for why the drop is load-bearing rather than tidiness.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -67,7 +67,7 @@ const TITLE_MAX: usize = 72;
 enum Sink {
     /// The header is composed but nothing is on disk. A session that says
     /// nothing must leave no file — see [`HistoryStore::create`].
-    Pending(String),
+    Pending(SessionHeader),
     Open(File),
     /// A write failed. The first failure is reported by whoever owns the
     /// event channel (aldwin-cli's sink wrapper); every subsequent record is
@@ -108,10 +108,9 @@ impl HistoryStore {
             path: dir.to_path_buf(),
             source: e,
         })?;
-        let line = serde_json::to_string(header).expect("SessionHeader is always serialisable");
         Ok(Self {
             path: transcript_path(dir, id),
-            sink: Mutex::new(Sink::Pending(line)),
+            sink: Mutex::new(Sink::Pending(header.clone())),
         })
     }
 
@@ -122,7 +121,7 @@ impl HistoryStore {
     /// carried — file contents, command output, anything a `.env` held — so
     /// it is readable by its owner and nobody else. See aldwin-history.md's
     /// Pitfalls.
-    fn materialise(path: &Path, header: &str) -> Result<File, ConfigError> {
+    fn materialise(path: &Path, header: &SessionHeader) -> Result<File, ConfigError> {
         // `create_new`, not `create`: an id that already has a transcript is
         // a collision, and appending onto one would merge two conversations
         // into a file `load` then resumes as a single history. Loud is the
@@ -139,7 +138,7 @@ impl HistoryStore {
             path: path.to_path_buf(),
             source: e,
         })?;
-        writeln!(file, "{header}").map_err(|e| ConfigError::Io {
+        write_line(&mut file, header).map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -206,8 +205,7 @@ impl HistoryStore {
             return Ok(());
         };
 
-        let line = serde_json::to_string(record).expect("LogRecord is always serialisable");
-        match writeln!(file, "{line}") {
+        match write_line(file, record) {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Drop the handle so the next record short-circuits above
@@ -220,6 +218,30 @@ impl HistoryStore {
             }
         }
     }
+}
+
+/// Writes `value` as one line, in **one** `write` call.
+///
+/// A `writeln!` on a `File` is two writes — the text, then the newline —
+/// and `O_APPEND` makes each write atomic, not the pair: a second process
+/// continuing the same transcript (ADR 0005 accepts two) can land its
+/// record between them, and both lines are then lost to [`load`]. One
+/// buffer, one `write_all`, is one append.
+fn write_line(out: &mut impl Write, value: &impl Serialize) -> io::Result<()> {
+    let mut line = serde_json::to_vec(value).expect("transcript lines are always serialisable");
+    line.push(b'\n');
+    out.write_all(&line)
+}
+
+/// A transcript's lines, as bytes.
+///
+/// Split on `\n` rather than read as text: a record torn in the middle of a
+/// multi-byte character is not UTF-8, and `BufRead::lines` ends the whole
+/// read with an error there — every turn after it lost. As bytes, the torn
+/// line merely fails to parse and is skipped like any other. An I/O error
+/// still ends the read: there is nothing after it to recover.
+fn lines(file: File) -> impl Iterator<Item = Vec<u8>> {
+    BufReader::new(file).split(b'\n').map_while(Result::ok)
 }
 
 /// Every *resumable* session in this project, newest first.
@@ -278,11 +300,9 @@ pub fn load(dir: &Path, id: &SessionId) -> Result<Vec<LogRecord>, ConfigError> {
 
     let mut records = Vec::new();
     let mut turn = Vec::new();
-    let parsed = BufReader::new(file)
-        .lines()
+    let parsed = lines(file)
         .skip(1) // the header
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<LogRecord>(&line).ok());
+        .filter_map(|line| serde_json::from_slice::<LogRecord>(&line).ok());
     for record in parsed {
         if matches!(record, LogRecord::TurnStarted { .. }) {
             turn.clear();
@@ -336,24 +356,40 @@ fn project_slug(project_root: &Path) -> String {
     format!("{safe}-{hash:016x}")
 }
 
+/// How a `TurnEnded` and a `UserMessage` line begin. `LogRecord` is
+/// internally tagged, and serde writes the tag first.
+const TURN_ENDED: &[u8] = br#"{"type":"turn_ended""#;
+const USER_MESSAGE: &[u8] = br#"{"type":"user_message""#;
+
+/// One row of the listing, read without parsing the whole transcript.
+///
+/// Every transcript in the project is summarised when a session starts, and
+/// most of a transcript is tool results and replies the row does not need.
+/// So a line is parsed only when its tag says it is one the row counts — a
+/// `TurnEnded`, which is small, or the first `UserMessage` — and the rest
+/// are passed over on the tag alone.
 fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
     let file = File::open(path).ok()?;
-    let mut lines = BufReader::new(file).lines().map_while(Result::ok);
+    let mut lines = lines(file);
 
-    let header: SessionHeader = serde_json::from_str(&lines.next()?).ok()?;
+    let header: SessionHeader = serde_json::from_slice(&lines.next()?).ok()?;
     if header.version != HISTORY_VERSION {
         return None;
     }
 
     let mut title = None;
     let mut turns = 0;
-    for record in lines.filter_map(|l| serde_json::from_str::<LogRecord>(&l).ok()) {
-        match record {
-            LogRecord::TurnEnded { .. } => turns += 1,
-            LogRecord::UserMessage { text, .. } if title.is_none() => {
-                title = Some(derive_title(&text))
+    for line in lines {
+        if line.starts_with(TURN_ENDED) {
+            // Parsed, not only matched: a torn `TurnEnded` does not end its
+            // turn for `load`, so it must not count one here.
+            if serde_json::from_slice::<LogRecord>(&line).is_ok() {
+                turns += 1;
             }
-            _ => {}
+        } else if title.is_none() && line.starts_with(USER_MESSAGE) {
+            if let Ok(LogRecord::UserMessage { text, .. }) = serde_json::from_slice(&line) {
+                title = Some(derive_title(&text));
+            }
         }
     }
 
@@ -437,6 +473,87 @@ mod tests {
             store.append(record).unwrap();
         }
         assert_eq!(load(dir.path(), &id).unwrap(), records);
+    }
+
+    /// Counts the `write` calls it is given, the way `O_APPEND` sees them.
+    #[derive(Default)]
+    struct Writes(Vec<Vec<u8>>);
+
+    impl Write for Writes {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.push(buf.to_vec());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `writeln!` wrote the record and its newline as two writes, and a
+    /// second process appending to the same transcript could land between
+    /// them. The header and every record go through `write_line`.
+    #[test]
+    fn a_line_is_one_write_newline_included() {
+        let mut out = Writes::default();
+        write_line(&mut out, &header()).unwrap();
+        for record in turn(1, "hello") {
+            write_line(&mut out, &record).unwrap();
+        }
+        assert_eq!(out.0.len(), 1 + 4, "one write per line");
+        for write in &out.0 {
+            assert_eq!(write.iter().filter(|b| **b == b'\n').count(), 1);
+            assert_eq!(
+                write.last(),
+                Some(&b'\n'),
+                "the newline is in the same write"
+            );
+        }
+    }
+
+    /// A record torn in the middle of a multi-byte character is not UTF-8,
+    /// and reading lines as text ended the read there: every turn after it
+    /// was lost to `load` and to the listing both.
+    #[test]
+    fn a_record_torn_mid_character_costs_that_line_and_nothing_after_it() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000009-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "before") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+
+        let path = transcript_path(dir.path(), &id);
+        let mut raw = fs::read(&path).unwrap();
+        // "café", cut after the first byte of `é`.
+        raw.extend_from_slice(b"{\"type\":\"user_message\",\"turn_id\":2,\"text\":\"caf\xC3");
+        fs::write(&path, raw).unwrap();
+
+        let store = HistoryStore::reopen(dir.path(), &id).unwrap();
+        for record in turn(3, "after") {
+            store.append(&record).unwrap();
+        }
+
+        let loaded = load(dir.path(), &id).unwrap();
+        assert_eq!(loaded, [turn(1, "before"), turn(3, "after")].concat());
+        assert_eq!(
+            list(dir.path())[0].turns,
+            2,
+            "the listing reads past it too"
+        );
+    }
+
+    /// The listing counts turns and finds the title by a line's opening
+    /// bytes, which holds only while serde writes the tag first.
+    #[test]
+    fn the_tags_the_listing_matches_are_the_ones_serde_writes() {
+        let [started, said, _, ended] = &turn(1, "hi")[..] else {
+            unreachable!()
+        };
+        let line = |r: &LogRecord| serde_json::to_vec(r).unwrap();
+        assert!(line(ended).starts_with(TURN_ENDED));
+        assert!(line(said).starts_with(USER_MESSAGE));
+        assert!(!line(started).starts_with(TURN_ENDED));
     }
 
     /// Verify for Step 2: a killed process leaves a file whose earlier lines

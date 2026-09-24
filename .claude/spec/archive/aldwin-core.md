@@ -56,6 +56,23 @@ variant on the existing "layer above core needs a vehicle to reach the
 TUI" pattern `Notice`/`PermissionsChanged`/`HistoryCleared` already
 established, not a new mechanism.
 
+**Post-archive fix (2026-09-24, audit):** Four gaps closed. Turn and step
+ids were process-global atomics; the `Agent` now mints them, and a
+`Command::Resume` moves its counters past the highest id the resumed records
+carry. `LlmRequest.model` was never read by either client (each builds from
+its own provider config) and went stale after `/model` — removed, and with
+it `Agent::new`'s model argument. `cache_breakpoints: &[usize]` carried
+`[0, n-1]` of which only the last was ever read; it is `cache_breakpoint:
+Option<usize>` now — the tool-definition marker was always placed by the
+wire, not by this index. And `RecordSink` gained `cleared` and
+`resumed(&SessionId)`, called by `ConversationLog::clear`/`replace` when core
+*acts* on `/clear` or `/resume`: aldwin-cli used to move the transcript
+writer as the command passed its interceptor, and a `/clear` landing between
+a review's follow-up turns moved it though core then refused the command.
+`Command::Resume` carries the `SessionId` for that reason.
+`LlmError::Terminal` reads "after N attempts" (it counted attempts, and
+said retries).
+
 ## Why
 
 The narrow heart of Aldwin — the agent loop, the canonical conversation log, and the typed boundary the LlmClient and ToolDispatcher live behind. The core drives turns and steps and assembles the log. It does not know how to talk to Anthropic, render a TUI, what tools exist, what permissions apply, or what is in CLAUDE.md. Those concerns live in sibling crates so the core stays small, testable, and reusable from both V0's TUI and V1's web client.

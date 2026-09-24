@@ -61,6 +61,17 @@ tests) and `cargo clippy -p aldwin-config --all-targets -- -D warnings`
 both clean. This crate stays archived — the fix corrects a real gap in "no
 known gaps" above but didn't reopen a design question this spec owns.
 
+**Post-archive fix (2026-09-24, audit):** `Config::effective_provider` is
+the one project-over-global overlay (`ProviderConfig::over`); see
+aldwin-llm.md's same-day entry. And two transcript defects in `history.rs`:
+a record was written with `writeln!`, which is two `write` calls, so a
+second process continuing the same transcript could land a line between
+them — every line is now one buffer and one `write_all`; and reading used
+`BufRead::lines`, which stops at the first line that is not UTF-8, so a
+record torn mid-character lost every turn after it — lines are split as
+bytes now, and the torn one alone is skipped. The listing counts turns by a
+line's tag and parses only the lines it counts.
+
 ## Why
 
 Aldwin's persistent state — permission grants, context-file decisions, provider settings, MCP server entries, TUI preferences — lives on disk in per-domain YAML across two scopes. This crate owns the format, the read/write surface, and first-launch init. It does not know what permissions mean, how the agent loop uses provider config, or how MCP servers are spawned. Keeping the persistence layer as a leaf crate (`depends_on: []`) means policy crates can test without real YAML and the format can evolve without touching typed consumers.

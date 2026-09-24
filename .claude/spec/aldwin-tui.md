@@ -44,8 +44,9 @@ what each thing was measured against:
   `60/n` step, checked against the two bars the frame draws.
 - **The field** carries a `›` in accent and a blinking `label` caret; its
   right edge carries an action only in the review (`Approve  ⌃↩` grey until
-  every file is read, `Send N Comments  ⌃↩` in accent). The placeholder
-  says what the field is for in each state, in the design's words.
+  every file is read, `Send N Comments  ⌃↩` in accent). An empty field
+  carries no placeholder in any state (the developer's call, 2026-09-24;
+  `baseline.json` records the frames that draw one).
 - **The plan** is `LogEntry::Plan`, one per turn, replaced in place:
   `✓` accent over `label2`, `●` amber over `label`, `○` `label3` over
   `label3`. **Work** is `LogEntry::Work`, a disclosure whose summary counts

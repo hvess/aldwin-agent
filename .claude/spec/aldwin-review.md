@@ -199,6 +199,16 @@ The loop's shape is unchanged; what it measures moved with the design.
   grid is read back after the shot to prove it — a mismatch retakes on the
   next edge, three times before giving up. A screen with no caret falls
   through the wait and costs 1.3s.
+- **The shown half, always** (2026-09-24). The blink is timed from launch,
+  so a scene at rest since then lands on the same phase every run: the
+  launch and commands frames were always the hidden half, and once the
+  field's placeholder was removed a judge reported the launch field as
+  having no caret, blocking. `caret_hidden` compares the grid either side
+  of an edge — the cells whose ground changed are the caret, and hidden,
+  a caret cell is the ground of its left neighbour — and capture skips
+  that half-period. Five half-periods before giving up, not three shots.
+  The same run found the commands field's `/` unpadded, putting its caret
+  and filter on cell 4 rather than the body column.
 
 ## Progress (2026-09-20, the rebuild)
 

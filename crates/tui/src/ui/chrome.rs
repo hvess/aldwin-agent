@@ -137,27 +137,10 @@ impl Action {
     }
 }
 
-/// What the field says when it is empty.
-fn placeholder(app: &App) -> &'static str {
-    if app.answering.is_some() {
-        return "Say what you're thinking";
-    }
-    if matches!(app.mode, Mode::Review(_)) {
-        return "Ask for a change, or select lines to comment";
-    }
-    if app.turn_active || app.awaiting_turn {
-        return "Add anything while it works";
-    }
-    if app.log.is_empty() {
-        "Describe a change, like adding rate limiting"
-    } else {
-        "What next?"
-    }
-}
-
 /// The field: `margin: 0 3ch`, on `--field`, the accent `›` in the mark
-/// column, then the draft or its placeholder, with an optional action flush
-/// right. In the commands mode the draft is the `/` and the filter.
+/// column, then the draft, with an optional action flush right. An empty
+/// field is the `›` and the caret and nothing else — no placeholder in any
+/// state. In the commands mode the draft is the `/` and the filter.
 pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer: &Composer, action: Option<Action>) {
     let pal = app.theme.palette();
     let field = Style::default().bg(pal.field);
@@ -166,11 +149,11 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
 
     let prompt = |glyph: &str| Span::styled(format!("{glyph:<width$}", width = MARK_COL), Style::default().fg(pal.accent).bg(pal.field));
 
-    // The commands mode: `/` and whatever was typed after it, the caret
-    // after that.
+    // The commands mode: `/` in the mark column like the `›` it replaces,
+    // whatever was typed after it on the body column, the caret after that.
     if let Mode::Commands(menu) = &app.mode {
         let line = Line::from(vec![
-            Span::styled("/", Style::default().fg(pal.accent).bg(pal.field)),
+            prompt("/"),
             Span::styled(menu.filter.clone(), Style::default().fg(pal.label).bg(pal.field)),
             caret(pal, app.tick),
         ]);
@@ -186,7 +169,7 @@ pub(super) fn draw_field(frame: &mut Frame, area: Rect, app: &mut App, composer:
 
     if app.input.is_empty() {
         app.composer_top = 0;
-        let mut spans = vec![prompt("›"), Span::styled(placeholder(app), Style::default().fg(pal.label2).bg(pal.field)), caret(pal, app.tick)];
+        let mut spans = vec![prompt("›"), caret(pal, app.tick)];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         if let Some(action) = action_spans {
             let gap = (inner.width as usize).saturating_sub(used).saturating_sub(action_width as usize);

@@ -69,10 +69,11 @@ fn the_launch_card_leads_with_the_mark_and_the_four_facts() {
 fn the_field_is_at_the_margin_with_the_prompt_in_the_mark_column() {
     let mut a = app();
     let buf = render(&mut a, 100, 36);
-    let y = find_row(&buf, "Describe a change").expect("the placeholder");
+    let y = find_row(&buf, "›").expect("the prompt");
     assert_eq!(col_of(&buf, y, "›"), Some(MARGIN_X));
-    assert_eq!(col_of(&buf, y, "Describe"), Some(BODY_X));
+    assert_eq!(row_text(&buf, y).trim(), "›", "an empty field carries no placeholder");
     let pal = Theme::Dark.palette();
+    assert_eq!(buf[(BODY_X as u16, y)].bg, pal.label, "the caret sits on the body column");
     assert_eq!(buf[(MARGIN_X as u16, y)].fg, pal.accent, "blue means you");
     assert_eq!(buf[(MARGIN_X as u16, y)].bg, pal.field);
     assert_eq!(buf[(MARGIN_X as u16 - 1, y)].bg, pal.win, "the margin is the window ground");
@@ -175,6 +176,8 @@ fn the_command_menu_lists_the_four_commands_above_the_field() {
     assert!(!row_text(&buf, y + 3).contains('⌃'), "no shortcut column");
     let field = y + 5;
     assert_eq!(col_of(&buf, field, "/"), Some(MARGIN_X), "the field shows the slash");
+    assert_eq!(buf[(MARGIN_X as u16 + 1, field)].bg, pal.field, "the slash fills the mark column");
+    assert_eq!(buf[(BODY_X as u16, field)].bg, pal.label, "the caret sits on the body column");
     assert!(row_text(&buf, field + 2).contains("↩  Run") && row_text(&buf, field + 2).contains("⎋  Close"));
 }
 
@@ -227,8 +230,9 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
     let add = find_row(&buf, "line ten").unwrap();
     assert_eq!(buf[(32, add)].bg, pal.addrow);
     assert_eq!(col_of(&buf, add, "10"), Some(32 + 3), "the line number right-aligned in 5");
-    // The field says what it is for, and the approve is grey.
-    let field = find_row(&buf, "Ask for a change").unwrap();
+    // The field carries no placeholder, and the approve is grey.
+    let field = find_row(&buf, "Approve  ⌃↩").unwrap();
+    assert!(!row_text(&buf, field).contains("Ask"), "an empty field carries no placeholder");
     assert_eq!(buf[(col_of(&buf, field, "Approve").unwrap() as u16, field)].fg, pal.label3);
     assert!(row_text(&buf, field + 2).contains("?  Keys"));
 }

@@ -20,6 +20,7 @@ use crate::compositor::Compositor;
 use crate::geometry::{Cell, Size, Theme};
 use crate::proxy::{foot_command, shell_quote, verify_against_pixels, Proxy};
 use crate::pty::Pty;
+use crate::vt::Grid;
 use crate::{fake, png, scene};
 
 /// Measure foot's cell for the pinned font.
@@ -162,13 +163,23 @@ fn take_frame(
     // The picture and the grid have to be taken inside one half-period of
     // the caret's blink (`Proxy::wait_for_change`), and the grid read back
     // after the shot proves they were: a mismatch means the blink landed
-    // between them, and the shot is retaken on the next edge.
+    // between them, and the shot is retaken on the next edge. The half-period
+    // is always the one with the caret shown (`caret_hidden`): the blink is
+    // timed from launch, so a scene at rest since then lands on the same
+    // phase every run, and a judge shown the hidden half reports a field
+    // with no caret.
     let path = run_dir.join(format!("{scene_name}-{size}-{theme}.png"));
     let mut grid = None;
-    for _ in 0..3 {
+    let mut prev = proxy.grid();
+    for _ in 0..5 {
         let _ = std::fs::remove_file(&path);
         proxy.wait_for_change(Duration::from_millis(1300));
         let before = proxy.grid();
+        if caret_hidden(&prev, &before) {
+            prev = before;
+            continue;
+        }
+        prev = before.clone();
         comp.exec(&format!("grim {}", shell_quote(&path.display().to_string())))?;
         wait_for_png(&path)?;
         if proxy.grid().fingerprint() == before.fingerprint() {
@@ -177,7 +188,7 @@ fn take_frame(
         }
     }
     let Some(grid) = grid else {
-        return Err(Error::other("the screen changed under the camera three shots running — something faster than the caret is animating"));
+        return Err(Error::other("no still frame with the caret shown in five half-periods — something faster than the caret is animating"));
     };
 
     let (w, h) = png::size(&path)?;
@@ -208,6 +219,17 @@ fn take_frame(
     Ok(Frame { path, grid: grid_path, scene: scene_name.to_string(), size, theme, checked })
 }
 
+/// Whether `now` is the hidden half of the caret's blink, judged against
+/// `prev`, the grid one edge earlier. The caret is the cells whose ground
+/// changed between the two — the one blink that moves a ground rather than a
+/// glyph. Hidden, such a cell is the ground of the cell on its left, since
+/// the field runs straight through it; shown, it is not. Nothing blinking,
+/// or a blinking cell at column 0 with no left to compare, reads as shown.
+fn caret_hidden(prev: &Grid, now: &Grid) -> bool {
+    let mut blinking = now.cells().filter(|&(r, c, cell)| c > 0 && cell.effective().1 != prev.get(r, c).effective().1).peekable();
+    blinking.peek().is_some() && blinking.all(|(r, c, cell)| cell.effective().1 == now.get(r, c - 1).effective().1)
+}
+
 fn wait_for_png(path: &Path) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut stable = 0;
@@ -228,4 +250,31 @@ fn wait_for_png(path: &Path) -> Result<()> {
         sleep(Duration::from_millis(100));
     }
     Err(Error::new(ErrorKind::TimedOut, format!("grim wrote no frame at {}", path.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caret_hidden;
+    use crate::vt::{Grid, Vt};
+
+    /// A field row: `›` and a space on the field ground (48;2;37;40;44), then
+    /// the caret cell on `ground`, then more field.
+    fn field(caret_ground: &str) -> Grid {
+        let mut vt = Vt::new(12, 1);
+        vt.feed(format!("\x1b[48;2;37;40;44m\u{203a} \x1b[48;2;{caret_ground}m \x1b[48;2;37;40;44m     ").as_bytes());
+        vt.grid().clone()
+    }
+
+    #[test]
+    fn the_hidden_half_is_the_one_where_the_field_runs_through_the_caret() {
+        let (shown, hidden) = (field("230;232;235"), field("37;40;44"));
+        assert!(caret_hidden(&shown, &hidden));
+        assert!(!caret_hidden(&hidden, &shown));
+    }
+
+    #[test]
+    fn a_screen_with_nothing_blinking_is_never_waited_on() {
+        let still = field("230;232;235");
+        assert!(!caret_hidden(&still, &still));
+    }
 }

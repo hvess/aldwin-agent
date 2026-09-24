@@ -135,7 +135,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         if let Some(what) = discarded {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("a turn is running; {what}"),
+                    message: format!("A turn is running, so {what}. Stop it with ⎋ first."),
                 })
                 .await;
         }
@@ -197,7 +197,19 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 Command::Resume { session, records } => {
                     self.continue_ids(&records);
                     self.log.replace(&session, records.clone());
+                    let turns = records
+                        .iter()
+                        .filter(|r| matches!(r, LogRecord::TurnStarted { .. }))
+                        .count();
                     let _ = events.send(Event::HistoryLoaded { records }).await;
+                    let _ = events
+                        .send(Event::Notice {
+                            message: match turns {
+                                1 => "Resumed the conversation: 1 turn restored.".to_string(),
+                                n => format!("Resumed the conversation: {n} turns restored."),
+                            },
+                        })
+                        .await;
                 }
             }
         }
@@ -1553,7 +1565,7 @@ mod tests {
             cmd_tx.send(cmd).await.unwrap();
             let event = ev_rx.recv().await.expect("agent dropped the event channel");
             assert!(
-                matches!(&event, Event::Notice { message } if message.starts_with("a turn is running")),
+                matches!(&event, Event::Notice { message } if message.starts_with("A turn is running")),
                 "{event:?}"
             );
         }
@@ -2352,7 +2364,7 @@ mod tests {
                 _ => None,
             })
             .await;
-            assert!(message.starts_with("a turn is running"), "{message}");
+            assert!(message.starts_with("A turn is running"), "{message}");
         }
         assert!(
             sink.moves.lock().unwrap().is_empty(),
@@ -2414,6 +2426,14 @@ mod tests {
             })
             .await
             .unwrap();
+        // Said by core, once it has acted — never by the interceptor ahead
+        // of a resume core may refuse.
+        let said = until(&mut ev_rx, |e| match e {
+            Event::Notice { message } => Some(message),
+            _ => None,
+        })
+        .await;
+        assert_eq!(said, "Resumed the conversation: 1 turn restored.");
         cmd_tx
             .send(Command::Submit {
                 text: "again".into(),

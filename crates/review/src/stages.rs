@@ -138,7 +138,7 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 /// Stage 4 — the rendered frames.
 ///
 /// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
-/// `TestBackend` buffers for thirteen scenes at three sizes in both themes:
+/// `TestBackend` buffers for sixteen scenes at three sizes in both themes:
 ///
 /// * **the baseline** — every cell's symbol, foreground, background and
 ///   modifiers, serialised and diffed against `tests/snapshots/render.snap`;
@@ -167,7 +167,7 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
-            format!("{passed} checks over 13 scenes x 3 sizes x 2 themes")
+            format!("{passed} checks over 16 scenes x 3 sizes x 2 themes")
         },
     );
     Ok(vec![if outcome.passed {

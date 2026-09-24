@@ -364,18 +364,8 @@ async fn handle_resume(
         return None;
     }
 
-    let turns = records
-        .iter()
-        .filter(|r| matches!(r, aldwin_core::LogRecord::TurnStarted { .. }))
-        .count();
-    let _ = events
-        .send(Event::Notice {
-            message: match turns {
-                1 => "Resumed the conversation: 1 turn restored.".to_string(),
-                n => format!("Resumed the conversation: {n} turns restored."),
-            },
-        })
-        .await;
+    // Core says "Resumed" when it acts on this: a turn can still be running
+    // when it arrives, and then nothing is resumed.
     Some(Command::Resume {
         session: id,
         records,

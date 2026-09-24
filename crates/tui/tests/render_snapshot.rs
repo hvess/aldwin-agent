@@ -22,8 +22,12 @@
 
 use std::fmt::Write as _;
 
-use aldwin_core::{ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState};
-use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, WorkItem};
+use aldwin_core::{
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnId,
+};
+use aldwin_tui::{
+    App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem,
+};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -39,7 +43,7 @@ const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
 /// The ten frames of `Aldwin Agent TUI.dc.html`, by their letters, plus
 /// the states the design leaves to the product.
-const SCENES: [&str; 13] = [
+const SCENES: [&str; 16] = [
     "launch",    // A
     "working",   // B
     "details",   // C
@@ -50,10 +54,17 @@ const SCENES: [&str; 13] = [
     "selecting", // H
     "commented", // I
     "saved",     // J
-    "markdown",  // a table and a fence — ADR 0002
+    "markdown",  // a table, a fence, a list and a quote — ADR 0002
     "failure",   // ADR 0009 §5: a sentence, no red
     "long",      // an overflowing transcript
+    "wrapped",   // a diff line wider than the pane — baseline long-diff-lines-wrap
+    "stopping",  // ⎋ mid-turn: stopped, and nothing else
+    "answering", // "Chat about this": the question stays, the turn waits on you
 ];
+
+/// The scenes that are the full-window review, whose tree runs from the
+/// frame's edge.
+const REVIEW_SCENES: [&str; 4] = ["review", "selecting", "commented", "wrapped"];
 
 /// The catalogue the questions offer. Pinned, like the identity.
 fn catalogue() -> Vec<ProviderChoice> {
@@ -86,11 +97,29 @@ fn catalogue() -> Vec<ProviderChoice> {
     ]
 }
 
+/// The `/` menu's rows, as aldwin-cli hands them in. Pinned, like the
+/// catalogue.
+fn commands() -> Vec<CommandChoice> {
+    [
+        ("resume", "Pick up an earlier conversation"),
+        ("model", "Change the model"),
+        ("quit", "Leave Aldwin"),
+        ("clear", "Start a fresh conversation in this project"),
+    ]
+    .into_iter()
+    .map(|(name, summary)| CommandChoice {
+        name: name.into(),
+        summary: summary.into(),
+    })
+    .collect()
+}
+
 fn fixed_identity(mut app: App) -> App {
-    app.status.version = "1.0.0".into();
-    app.status.commit = "0000000".into();
-    app = app.with_facts("gateway", Some("main"));
-    app.with_catalogue(catalogue(), Some("anthropic".into()))
+    app.status_mut().version = "1.0.0".into();
+    app.status_mut().commit = "0000000".into();
+    app.with_facts("gateway", Some("main"))
+        .with_commands(commands())
+        .with_catalogue(catalogue(), Some("anthropic".into()))
 }
 
 fn app(theme: Theme) -> App {
@@ -137,7 +166,7 @@ fn every_scene_renders_exactly_as_recorded() {
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {
-        let allowed: Vec<ratatui::style::Color> = aldwin_tui::__design_palette(theme).to_vec();
+        let allowed: Vec<ratatui::style::Color> = aldwin_tui::design_palette(theme).to_vec();
         for scene_name in SCENES {
             for (width, height) in SIZES {
                 let mut app = app(theme);
@@ -158,10 +187,11 @@ fn every_cell_carries_a_colour_from_the_design_system() {
 }
 
 /// Every non-ASCII glyph comes from the design's closed table, or from the
-/// one exception a recorded contradiction licenses (ADR 0002's table).
+/// one exception a recorded contradiction licenses (ADR 0002's table) —
+/// and that only in the scene that draws a table.
 #[test]
 fn every_glyph_comes_from_the_closed_table() {
-    let (marks, by_exception) = aldwin_tui::__design_glyphs();
+    let (marks, by_exception) = aldwin_tui::design_glyphs();
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
             for (width, height) in SIZES {
@@ -171,7 +201,7 @@ fn every_glyph_comes_from_the_closed_table() {
                 for y in 0..height {
                     for x in 0..width {
                         for ch in buffer[(x, y)].symbol().chars() {
-                            if ch.is_ascii() || marks.contains(&ch) || by_exception.contains(&ch) {
+                            if ch.is_ascii() || marks.contains(&ch) {
                                 continue;
                             }
                             let licensed = by_exception.contains(&ch) && scene_name == "markdown";
@@ -189,9 +219,11 @@ fn every_glyph_comes_from_the_closed_table() {
 #[test]
 fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
     for theme in [Theme::Dark, Theme::Light] {
-        let pal = aldwin_tui::__design_palette(theme);
+        let pal = aldwin_tui::design_palette(theme);
         let (accent, del, add) = (pal[0], pal[5], pal[1]); // alphabetical: accent, add, addcode, addrow, amber, del …
-        for scene_name in ["working", "details", "running", "failure", "saved", "long"] {
+        for scene_name in [
+            "working", "details", "running", "failure", "saved", "long", "markdown", "stopping",
+        ] {
             let mut app = app(theme);
             scene(scene_name, &mut app);
             let buffer = render(&mut app, 104, 32);
@@ -230,10 +262,7 @@ fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
 fn every_conversation_scene_respects_the_three_cell_margins() {
     const MARGIN: usize = 3;
     for theme in [Theme::Dark, Theme::Light] {
-        for scene_name in SCENES
-            .iter()
-            .filter(|s| !matches!(**s, "review" | "selecting" | "commented"))
-        {
+        for scene_name in SCENES.iter().filter(|s| !REVIEW_SCENES.contains(s)) {
             let mut app = app(theme);
             scene(scene_name, &mut app);
             let buffer = render(&mut app, 104, 32);
@@ -303,9 +332,7 @@ fn no_cell_is_underlined() {
 
 fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|f| aldwin_tui::__preview_draw(f, app))
-        .expect("draw");
+    terminal.draw(|f| aldwin_tui::draw(f, app)).expect("draw");
     terminal.backend().buffer().clone()
 }
 
@@ -314,24 +341,24 @@ fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
 }
 
 fn echo(app: &mut App) {
-    app.log.push(LogEntry::UserMessage {
+    app.seed(LogEntry::UserMessage {
         text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into(),
     });
 }
 
 fn work(open: bool) -> LogEntry {
-    let item = |verb: &str, target: &str, fact: &str| WorkItem {
+    let item = |verb, target: &str, fact: &str| WorkItem {
         call_id: target.into(),
-        verb: verb.into(),
+        verb,
         target: target.into(),
         fact: Some(fact.into()),
         failed: false,
     };
     LogEntry::Work {
         items: vec![
-            item("Read", "src/gateway/mod.rs", "412 lines"),
-            item("Read", "src/gateway/router.rs", "188 lines"),
-            item("Searched", "tower::limit", "7 matches"),
+            item(Verb::Read, "src/gateway/mod.rs", "412 lines"),
+            item(Verb::Read, "src/gateway/router.rs", "188 lines"),
+            item(Verb::Searched, "tower::limit", "7 matches"),
         ],
         open,
     }
@@ -387,10 +414,10 @@ fn changeset() -> Changeset {
 
 fn open_review(app: &mut App) {
     echo(app);
-    app.log.push(LogEntry::AssistantText {
+    app.seed(LogEntry::AssistantText {
         text: "Each key gets 100 requests a minute; the rest are turned away before auth.".into(),
     });
-    app.status.context_used = Some(410_000);
+    app.status_mut().context_used = Some(410_000);
     app.apply_event(Event::ReviewRequested {
         review_id: "review-1".into(),
         changeset: changeset(),
@@ -407,20 +434,20 @@ fn scene(name: &str, app: &mut App) {
         "launch" => {}
         "working" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Looking at how requests move through the gateway.".into(),
             });
-            app.log.push(work(false));
-            app.log.push(LogEntry::AssistantText {
+            app.seed(work(false));
+            app.seed(LogEntry::AssistantText {
                 text: "Nothing limits requests yet. Adding a limit for each key.".into(),
             });
-            app.log.push(plan([
+            app.seed(plan([
                 StepState::Done,
                 StepState::Running,
                 StepState::Pending,
             ]));
-            app.turn_active = true;
-            app.status.context_used = Some(380_000);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            app.status_mut().context_used = Some(380_000);
         }
         "details" => {
             scene("working", app);
@@ -428,24 +455,23 @@ fn scene(name: &str, app: &mut App) {
         }
         "running" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "The limit is in place. Checking that it works.".into(),
             });
-            app.log
-                .push(plan([StepState::Done, StepState::Done, StepState::Running]));
-            app.log.push(LogEntry::AssistantText {
+            app.seed(plan([StepState::Done, StepState::Done, StepState::Running]));
+            app.seed(LogEntry::AssistantText {
                 text: "Running the tests. About ten seconds.".into(),
             });
-            app.turn_active = true;
-            app.status.context_used = Some(410_000);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            app.status_mut().context_used = Some(410_000);
         }
         "question" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "The limit works for every request that carries a key.".into(),
             });
-            app.log.push(work(false));
-            app.status.context_used = Some(440_000);
+            app.seed(work(false));
+            app.status_mut().context_used = Some(440_000);
             app.apply_event(Event::QuestionAsked {
                 call_id:  "q1".into(),
                 question: Question {
@@ -456,11 +482,11 @@ fn scene(name: &str, app: &mut App) {
             });
         }
         "commands" => {
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
             });
-            app.log.push(work(false));
-            app.status.context_used = Some(440_000);
+            app.seed(work(false));
+            app.status_mut().context_used = Some(440_000);
             press(app, KeyCode::Char('/'), KeyModifiers::NONE);
         }
         "review" => open_review(app),
@@ -483,45 +509,67 @@ fn scene(name: &str, app: &mut App) {
         }
         "saved" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
-                text: "Ready for you to review: rate limiting for the gateway.".into(),
-            });
             app.apply_event(Event::ReviewClosed {
                 outcome: ReviewOutcome::Saved {
                     files: vec!["a".into(), "b".into(), "c".into()],
                     comments_resolved: 1,
                 },
             });
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
             });
-            app.log.push(LogEntry::TurnBreak);
-            app.status.context_used = Some(460_000);
+            app.seed(LogEntry::TurnBreak);
+            app.status_mut().context_used = Some(460_000);
         }
         "markdown" => {
-            app.log.push(LogEntry::UserMessage {
+            app.seed(LogEntry::UserMessage {
                 text: "which providers are set up?".into(),
             });
-            app.log.push(LogEntry::AssistantText {
-                text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
+            app.seed(LogEntry::AssistantText {
+                text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nEach one needs:\n\n- its key exported\n- a model it offers\n\n> The key never goes in a file.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
             });
-            app.log.push(LogEntry::TurnBreak);
+            app.seed(LogEntry::TurnBreak);
         }
         "failure" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Running the tests.".into(),
             });
-            app.log.push(LogEntry::Failure { message: "The tests failed, 2 of 6.".into(), detail: Some("---- limit::rejects_over_quota stdout ----\nthread panicked at src/gateway/limit.rs:44".into()), open: true });
-            app.log.push(LogEntry::TurnBreak);
+            app.seed(LogEntry::Failure { message: "The tests failed, 2 of 6.".into(), detail: Some("---- limit::rejects_over_quota stdout ----\nthread panicked at src/gateway/limit.rs:44".into()), open: true });
+            app.seed(LogEntry::TurnBreak);
         }
         "long" => {
             for i in 0..8 {
-                app.log.push(LogEntry::UserMessage {
+                app.seed(LogEntry::UserMessage {
                     text: format!("message {i}"),
                 });
-                app.log.push(LogEntry::AssistantText { text: format!("reply {i} with a bit more text to see wrapping behavior across the pane width") });
-                app.log.push(LogEntry::TurnBreak);
+                app.seed(LogEntry::AssistantText { text: format!("reply {i} with a bit more text to see wrapping behavior across the pane width") });
+                app.seed(LogEntry::TurnBreak);
+            }
+        }
+        "wrapped" => {
+            echo(app);
+            app.apply_event(Event::ReviewRequested {
+                review_id: "review-1".into(),
+                changeset: Changeset {
+                    files: vec![ChangedFile {
+                        path: "src/gateway/limit.rs".into(),
+                        before: Some("pub struct Limit;\n".into()),
+                        after: "pub struct Limit;\n\nconst MESSAGE: &str = \"This key has made more than its 100 requests this minute; wait for the next minute, or ask for a higher limit.\";\n".into(),
+                    }],
+                },
+            });
+        }
+        "stopping" => {
+            scene("running", app);
+            press(app, KeyCode::Esc, KeyModifiers::NONE);
+        }
+        "answering" => {
+            scene("question", app);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            press(app, KeyCode::Char('3'), KeyModifiers::NONE);
+            for c in "Only the ones".chars() {
+                press(app, KeyCode::Char(c), KeyModifiers::NONE);
             }
         }
         other => panic!("unknown scene {other:?}"),

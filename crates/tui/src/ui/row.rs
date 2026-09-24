@@ -1,7 +1,7 @@
 //! The one filled-row primitive every surface in the UI is built from.
 //!
-//! A card row, a diff row inside its recessed field, a selectable option
-//! row flush to the frame's left edge and a blank spacer are all the same
+//! The echoed prompt's band, a fenced code block's row, a question's
+//! option row inset inside its panel and a blank spacer are all the same
 //! shape:
 //!
 //! ```text
@@ -29,8 +29,8 @@ pub(super) struct Row {
     /// how far a box sits in from the surface it is quoted inside.
     margin: usize,
     surround: Color,
-    /// Cells of `bg` between the edge and the content — the reference's
-    /// `padding: 0 27px` on every card row.
+    /// Cells of `bg` between the edge and the content — a fence's one cell
+    /// of padding.
     pad: usize,
     /// The surface this row fills, edge to edge.
     bg: Color,
@@ -83,12 +83,11 @@ impl Row {
     /// Paints this row's own fill onto every span that didn't already ask
     /// for a background of its own.
     ///
-    /// Spans that *do* carry one (a diff row's `add_row` fill) are left
-    /// exactly as they are, which is what lets a caller mix a semantic tint
-    /// into an otherwise-plain row. Done here because as the caller's job
-    /// it was quietly missed at three sites, and a span with no `bg` shows
-    /// the frame's `ground` through the panel — reported as "the title
-    /// 'permission' has a dark background."
+    /// Spans that *do* carry one (inline code's `tint`) are left exactly as
+    /// they are, which is what lets a caller mix a ground into an
+    /// otherwise-plain row. Done here because as the caller's job it was
+    /// quietly missed at three sites, and a span with no `bg` shows the
+    /// window's ground through the band.
     fn on_field(self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         spans
             .into_iter()
@@ -113,10 +112,8 @@ impl Row {
     /// line — each already `ctx.width` cells wide, inset, padded and
     /// filled, so nothing downstream needs to wrap it again.
     ///
-    /// A span that already carries a `bg` keeps it, so a caller mixing a
-    /// semantic tint — a diff row's `add_bg` over the box's own `diff_box`
-    /// — still reads correctly; one that doesn't gets this row's fill (see
-    /// [`Row::on_field`]).
+    /// A span that already carries a `bg` keeps it; one that doesn't gets
+    /// this row's fill (see [`Row::on_field`]).
     pub fn build(self, spans: Vec<Span<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
         let avail = self.avail(ctx.width);
         wrap_line(Line::from(spans), avail)
@@ -157,10 +154,9 @@ impl Row {
             .collect()
     }
 
-    /// A blank filled row — a leading/trailing spacer inside a card so its
-    /// content doesn't sit flush against the card's own top/bottom edge.
-    /// Always exactly one row (empty content never wraps), so this stays
-    /// single-`Line` for its many `push` call sites.
+    /// A blank filled row — what an entry with no text of its own still
+    /// draws, so its band is not missing. Always exactly one row (empty
+    /// content never wraps).
     pub fn blank(self, ctx: Ctx) -> Line<'static> {
         self.assemble(Vec::new(), ctx)
     }

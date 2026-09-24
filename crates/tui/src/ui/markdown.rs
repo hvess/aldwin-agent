@@ -17,7 +17,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use super::grid::{truncate_spans, Ctx};
+use super::grid::{truncate_spans, Ctx, MARK_COL};
 use super::row::band_row;
 use super::wrap::wrap_line;
 
@@ -373,8 +373,8 @@ fn span_width(spans: &[Span<'static>]) -> usize {
 
 /// Renders one prose line (never a fenced-code line — those are already
 /// pulled out by `split_code_fences`). Styling is modifiers only
-/// (bold/italic/underline/crossed-out): blue means you, so the agent's
-/// prose never takes the accent.
+/// (bold/italic/crossed-out — never underline, which is a stroke): blue
+/// means you, so the agent's prose never takes the accent.
 pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
     let base = Style::default().fg(pal.label);
@@ -396,17 +396,18 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
         // line is the model's own emphasis and keeps its weight.
         return Line::from(parse_inline(rest, base, ctx));
     }
+    // A quote is set in by the mark column's width and nothing else: `▎` is
+    // the developer's selection edge, and blue means you.
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
-        let mut spans = vec![Span::styled(
-            format!("{indent}▎ "),
-            Style::default().fg(pal.label3),
-        )];
+        let mut spans = vec![Span::raw(format!("{indent}{}", " ".repeat(MARK_COL)))];
         spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC), ctx));
         return Line::from(spans);
     }
+    // A list item's mark is `·`, the design's own small separator: the
+    // glyph table is closed and has no bullet.
     if let Some(rest) = parse_bullet(trimmed_start) {
-        let mut spans = vec![Span::styled(format!("{indent}• "), base)];
+        let mut spans = vec![Span::styled(format!("{indent}· "), base)];
         spans.extend(parse_inline(rest, base, ctx));
         return Line::from(spans);
     }

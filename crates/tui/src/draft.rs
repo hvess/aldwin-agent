@@ -15,10 +15,11 @@
 //! *source* line and column.
 //!
 //! Positions are **character** indices into the draft, matching
-//! `App::cursor`; columns are **display cells**, matching the screen.
+//! [`Draft::cursor`]; columns are **display cells**, matching the screen.
 
 use std::borrow::Cow;
 
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
 
 /// One visual row: the half-open character range of the draft it shows.
@@ -254,9 +255,103 @@ fn needs_rewriting(c: char) -> bool {
     c.is_control() && c != '\n'
 }
 
-/// What a tab becomes. Four, matching the code most of the transcript
+/// What a tab becomes — in a paste, and wherever a tab would otherwise be
+/// drawn (a fence, a diff). Four, matching the code most of the transcript
 /// renders.
-const TAB: &str = "    ";
+pub(crate) const TAB: &str = "    ";
+
+/// `text` with each tab as [`TAB`]: a tab has no cell of its own, so left
+/// in place it deletes a Go or Makefile line's indentation.
+pub(crate) fn expand_tabs(text: &str) -> String {
+    text.replace('\t', TAB)
+}
+
+/// Text being typed and the caret in it. The field's draft and a review
+/// comment's are both one of these, so every field edits the same way.
+///
+/// The caret is a **character** index, matching [`Layout`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Draft {
+    text: String,
+    cursor: usize,
+}
+
+impl Draft {
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub(crate) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Replaces the text, the caret at its end.
+    pub(crate) fn set(&mut self, text: String) {
+        self.cursor = text.chars().count();
+        self.text = text;
+    }
+
+    /// Empties the draft and hands back what it held.
+    pub(crate) fn take(&mut self) -> String {
+        self.cursor = 0;
+        std::mem::take(&mut self.text)
+    }
+
+    pub(crate) fn move_to(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.text.chars().count());
+    }
+
+    pub(crate) fn insert(&mut self, c: char) {
+        let at = self.byte_at(self.cursor);
+        self.text.insert(at, c);
+        self.cursor += 1;
+    }
+
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        let at = self.byte_at(self.cursor);
+        self.text.insert_str(at, text);
+        self.cursor += text.chars().count();
+    }
+
+    /// The keys every field edits with: characters, `⌫`, `⌦`, `←` `→`, and
+    /// Home and End within the line the caret is on. `false` for any other
+    /// key, which the caller then has for itself.
+    pub(crate) fn edit(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        match code {
+            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => self.insert(c),
+            KeyCode::Backspace => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                    let at = self.byte_at(self.cursor);
+                    self.text.remove(at);
+                }
+            }
+            KeyCode::Delete => {
+                if self.cursor < self.text.chars().count() {
+                    let at = self.byte_at(self.cursor);
+                    self.text.remove(at);
+                }
+            }
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.move_to(self.cursor + 1),
+            KeyCode::Home => self.cursor = source_line(&self.text, self.cursor).0,
+            KeyCode::End => self.cursor = source_line(&self.text, self.cursor).1,
+            _ => return false,
+        }
+        true
+    }
+
+    fn byte_at(&self, index: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(index)
+            .map_or(self.text.len(), |(i, _)| i)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -395,5 +490,32 @@ mod tests {
                 "and the rewrite must actually change it"
             );
         }
+    }
+
+    /// The one editor both fields use: typing, deleting either way, and
+    /// moving within the line, by character rather than by byte.
+    #[test]
+    fn a_draft_edits_by_character() {
+        let mut d = Draft::default();
+        for c in "héllo".chars() {
+            assert!(d.edit(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        d.edit(KeyCode::Left, KeyModifiers::NONE);
+        d.edit(KeyCode::Left, KeyModifiers::NONE);
+        d.edit(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!((d.text(), d.cursor()), ("hélo", 2));
+        d.edit(KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(d.text(), "héo");
+        d.edit(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(d.cursor(), 0);
+        d.edit(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(d.cursor(), 3);
+        assert!(
+            !d.edit(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            "a control chord is the caller's"
+        );
+        assert!(!d.edit(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(d.take(), "héo");
+        assert!(d.is_empty() && d.cursor() == 0);
     }
 }

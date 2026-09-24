@@ -17,7 +17,9 @@ use super::wrap::wrap_line;
 use aldwin_core::{ReviewOutcome, StepState};
 
 use crate::app::App;
-use crate::log::{summarise_work, LogEntry};
+use crate::draft::expand_tabs;
+use crate::log::{plural, summarise_work, LogEntry};
+use crate::palette::Theme;
 
 /// One entry's rows, at `ctx.width` (the body's width). Every line this
 /// returns is **already one screen row**: no caller wraps afterwards, so
@@ -54,7 +56,7 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
 #[derive(Default)]
 pub(crate) struct Transcript {
     width: u16,
-    theme: Option<crate::palette::Theme>,
+    theme: Option<Theme>,
     blocks: Vec<CachedBlock>,
     /// `starts[i]` is the screen row `blocks[i]` begins on; one longer than
     /// `blocks`, so the last element is the total row count.
@@ -151,7 +153,7 @@ impl Transcript {
 /// Renders the log band: the rows `super::draw` already sliced out of the
 /// [`Transcript`], from the top. No scrollbar — the design lists none, and
 /// the live end of the conversation is what is on screen unless you moved.
-pub(super) fn draw_log(frame: &mut Frame, area: Rect, visible: Vec<Line<'static>>, _ctx: Ctx) {
+pub(super) fn draw_log(frame: &mut Frame, area: Rect, visible: Vec<Line<'static>>) {
     frame.render_widget(Paragraph::new(Text::from(visible)), area);
 }
 
@@ -201,7 +203,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                     let fact = item.fact.clone().unwrap_or_else(|| "…".into());
                     let left = vec![
                         Span::styled(
-                            column(&item.verb, DETAIL_COL),
+                            column(item.verb.word(), DETAIL_COL),
                             Style::default().fg(pal.label2),
                         ),
                         Span::styled(
@@ -262,21 +264,13 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 files,
                 comments_resolved,
             } => {
-                let n = files.len();
                 let mut content = vec![Span::styled(
-                    format!("Saved {n} {}", if n == 1 { "file" } else { "files" }),
+                    format!("Saved {}", plural(files.len(), "file")),
                     Style::default().fg(pal.label),
                 )];
                 if *comments_resolved > 0 {
                     content.push(Span::styled(
-                        format!(
-                            " · {comments_resolved} {} resolved",
-                            if *comments_resolved == 1 {
-                                "comment"
-                            } else {
-                                "comments"
-                            }
-                        ),
+                        format!(" · {} resolved", plural(*comments_resolved, "comment")),
                         Style::default().fg(pal.label2),
                     ));
                 }
@@ -286,25 +280,14 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 )]
             }
             ReviewOutcome::Discarded { files } => {
-                let n = files.len();
-                let text = format!(
-                    "Nothing saved; {n} {} discarded.",
-                    if n == 1 { "file" } else { "files" }
-                );
+                let text = format!("Nothing saved; {} discarded.", plural(files.len(), "file"));
                 at_body(vec![Line::from(Span::styled(
                     text,
                     Style::default().fg(pal.label2),
                 ))])
             }
             ReviewOutcome::Commented { comments } => {
-                let text = format!(
-                    "Sent {comments} {}.",
-                    if *comments == 1 {
-                        "comment"
-                    } else {
-                        "comments"
-                    }
-                );
+                let text = format!("Sent {}.", plural(*comments, "comment"));
                 at_body(vec![Line::from(Span::styled(
                     text,
                     Style::default().fg(pal.label2),
@@ -381,11 +364,7 @@ fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let rows: Vec<&str> = code.lines().collect();
     let caption = if lang.is_empty() { "code" } else { lang };
-    let count = format!(
-        "{} line{}",
-        rows.len(),
-        if rows.len() == 1 { "" } else { "s" }
-    );
+    let count = plural(rows.len(), "line");
     let mut lines = vec![justified(
         vec![Span::styled(
             caption.to_string(),
@@ -396,10 +375,7 @@ fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
     )];
     let field = Row::field(pal.tint).pad(1);
     for row in rows {
-        let text = elide(
-            &row.replace('\t', "    "),
-            (ctx.width as usize).saturating_sub(2),
-        );
+        let text = elide(&expand_tabs(row), (ctx.width as usize).saturating_sub(2));
         lines.push(
             field
                 .build(

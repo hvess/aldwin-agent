@@ -7,8 +7,10 @@
 
 use std::io;
 
-use aldwin_core::{ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState};
-use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, WorkItem};
+use aldwin_core::{
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnId,
+};
+use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::crossterm::terminal::{
@@ -39,7 +41,7 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-    terminal.draw(|f| aldwin_tui::__preview_draw(f, &mut app))?;
+    terminal.draw(|f| aldwin_tui::draw(f, &mut app))?;
 
     let mut buf = [0u8; 1];
     let _ = io::Read::read(&mut io::stdin(), &mut buf);
@@ -50,7 +52,7 @@ fn main() -> io::Result<()> {
 }
 
 fn echo(app: &mut App) {
-    app.log.push(LogEntry::UserMessage {
+    app.seed(LogEntry::UserMessage {
         text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into(),
     });
 }
@@ -60,24 +62,24 @@ fn scene(name: &str, app: &mut App) {
         "launch" => {}
         "working" => {
             echo(app);
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Looking at how requests move through the gateway.".into(),
             });
-            let item = |verb: &str, target: &str, fact: &str| WorkItem {
+            let item = |verb, target: &str, fact: &str| WorkItem {
                 call_id: target.into(),
-                verb: verb.into(),
+                verb,
                 target: target.into(),
                 fact: Some(fact.into()),
                 failed: false,
             };
-            app.log.push(LogEntry::Work {
+            app.seed(LogEntry::Work {
                 items: vec![
-                    item("Read", "src/gateway/mod.rs", "412 lines"),
-                    item("Searched", "tower::limit", "7 matches"),
+                    item(Verb::Read, "src/gateway/mod.rs", "412 lines"),
+                    item(Verb::Searched, "tower::limit", "7 matches"),
                 ],
                 open: true,
             });
-            app.log.push(LogEntry::Plan {
+            app.seed(LogEntry::Plan {
                 steps: vec![
                     PlanStep {
                         text: "Count requests per key".into(),
@@ -93,8 +95,8 @@ fn scene(name: &str, app: &mut App) {
                     },
                 ],
             });
-            app.turn_active = true;
-            app.status.context_used = Some(380_000);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            app.status_mut().context_used = Some(380_000);
         }
         "question" => {
             echo(app);
@@ -138,7 +140,7 @@ fn scene(name: &str, app: &mut App) {
                     comments_resolved: 1,
                 },
             });
-            app.log.push(LogEntry::AssistantText {
+            app.seed(LogEntry::AssistantText {
                 text: "Done. Each key now gets 100 requests a minute, read from settings.".into(),
             });
         }

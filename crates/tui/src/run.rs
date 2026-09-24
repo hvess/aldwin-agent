@@ -18,7 +18,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
-use crate::app::{App, ProviderChoice};
+use crate::app::{App, CommandChoice, ProviderChoice};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
 use crate::ui;
@@ -41,10 +41,20 @@ type Out = Terminal<CrosstermBackend<BufWriter<io::Stdout>>>;
 const OUT_BUFFER: usize = 1 << 20;
 
 /// What the session needs to know about *where* it is running, beyond the
-/// model id the launch card shows: the catalogue bare `/model` offers (and
-/// the first message asks over, when nothing is configured), which of its
-/// rows the session is actually on, and the sessions `/resume` offers.
+/// model id the launch card shows: the project and branch the launch card
+/// states, the commands the `/` menu offers, the catalogue bare `/model`
+/// offers (and the first message asks over, when nothing is configured),
+/// which of its rows the session is actually on, and the sessions
+/// `/resume` offers. All of it read by aldwin-cli: this crate reads no
+/// files.
 pub struct SessionProvider {
+    /// The project — the working directory's own name.
+    pub project: String,
+    /// The checked-out git branch, when the project is a checkout.
+    pub branch: Option<String>,
+    /// The `/` menu's rows, in the order drawn. aldwin-cli owns the
+    /// commands; this is the part of its table the menu shows.
+    pub commands: Vec<CommandChoice>,
     /// Display halves only, in catalogue order. Empty means no question:
     /// bare `/model` is then forwarded to aldwin-cli, which reports rather
     /// than asks.
@@ -136,10 +146,7 @@ pub async fn run(
     // The design's title bar is the terminal's own — `gateway — aldwin`,
     // set once and never drawn. Best-effort: a terminal that ignores the
     // title ignores the sequence.
-    let _ = execute!(
-        stdout,
-        SetTitle(format!("{} — aldwin", crate::app::project_name()))
-    );
+    let _ = execute!(stdout, SetTitle(format!("{} — aldwin", session.project)));
     let _ = execute!(stdout, EnableBracketedPaste);
     // Pushed after the alternate screen is up, because the keyboard mode is
     // part of the screen's own state — the flags have to land on the screen
@@ -295,7 +302,7 @@ fn sync_mouse(out: &mut impl Write, wanted: bool, captured: &mut bool) {
 /// A `Resize` needs no handling of its own — ratatui re-reads the terminal
 /// size on the next draw — but it does need the *redraw*, which is why it
 /// is `true` rather than swallowed: the frame it invalidates would
-/// otherwise sit stale until some unrelated event or the next spinner tick
+/// otherwise sit stale until some unrelated event or the next tick
 /// came along.
 fn apply_input(app: &mut App, event: Option<io::Result<CtEvent>>) -> bool {
     match event {
@@ -324,7 +331,7 @@ fn apply_input(app: &mut App, event: Option<io::Result<CtEvent>>) -> bool {
 /// at all.
 ///
 /// It still moved, which is why this survived review: the loop was woken by
-/// whatever else happened to fire — the 120ms spinner tick, a core event,
+/// whatever else happened to fire — the 120ms tick, a core event,
 /// the pending-redraw timer — and drained the backlog when it got there.
 /// Measured against a pty driven at an ordinary scroll rate, that put a
 /// **median 42ms and a worst case of 100ms** between a wheel notch and the
@@ -386,21 +393,21 @@ async fn run_loop(
 ) -> io::Result<()> {
     let mut app = App::new(model_name)
         .with_theme(theme)
+        .with_facts(&session.project, session.branch.as_deref())
+        .with_commands(session.commands)
         .with_sessions(session.sessions)
         .with_catalogue(session.catalogue, session.current_provider);
     let mut input = spawn_input_reader();
-    // Drives the "working"/"thinking" spinner's animation frame — a plain
-    // redraw timer, not tied to any core event, since there'd otherwise be
-    // no way to animate anything between events (per explicit developer
-    // feedback that waiting for the next turn gave no loading/progress
-    // feedback at all).
+    // Drives the caret's blink — a plain redraw timer, not tied to any core
+    // event, since there'd otherwise be no way to animate anything between
+    // events — and the double-Ctrl+C window, which is measured in ticks.
     //
     // `Delay`, not the default `Burst`: a tick that arrives while the loop
     // is busy must not queue up behind the ones after it. `Burst` replays
     // every missed tick back to back the moment the loop is free, so one
     // slow frame turns into a run of catch-up frames that have nothing new
     // to draw — the loop falls behind and then thrashes trying not to be.
-    let mut ticker = tokio::time::interval(SPINNER_TICK);
+    let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     present(terminal, &mut app)?;
@@ -441,8 +448,7 @@ async fn run_loop(
 
             // The counter always advances (the double-Ctrl+C window is
             // measured in it), but a tick is only worth a frame while the
-            // spinner is on screen — an idle session used to repaint an
-            // unchanged frame eight times a second.
+            // caret is on screen.
             _ = ticker.tick() => { app.tick(); dirty |= app.is_animating(); }
 
             _ = tokio::time::sleep_until(flush_at.into()), if dirty => {}
@@ -521,13 +527,14 @@ async fn run_loop(
     Ok(())
 }
 
-/// How often the spinner advances a frame.
-const SPINNER_TICK: Duration = Duration::from_millis(120);
+/// How often the tick advances: the caret's blink and the double-Ctrl+C
+/// window are both counted in it.
+const TICK: Duration = Duration::from_millis(120);
 
 /// The floor on the gap between two redraws — 60fps. Not a target: the loop
 /// draws as soon as something changes and it has been this long, so an idle
-/// session does not draw at all, a working one draws 8 times a second (the
-/// spinner) and a keystroke paints immediately. It is only a ceiling on how
+/// session with no field on screen does not draw at all, one with the
+/// caret draws 8 times a second, and a keystroke paints immediately. It is only a ceiling on how
 /// fast a *burst* can drive the renderer, and a terminal cannot show more
 /// than this anyway.
 const MIN_FRAME: Duration = Duration::from_millis(16);

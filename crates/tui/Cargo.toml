@@ -3,15 +3,18 @@ name    = "aldwin-tui"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Exposes the seams `tests/render_snapshot.rs` and `examples/preview.rs`
+# seed an `App` through. Dev-only; enabled for this crate's own tests and
+# examples by the dev-dependency below. Mirrors aldwin-core's `test-util`.
+test-util = []
+
 [dependencies]
 aldwin-core        = { path = "../core" }
 tokio                = { workspace = true }
-futures              = { workspace = true }
 serde_json           = { workspace = true }
-ratatui              = { version = "0.30", default-features = false, features = ["crossterm", "underline-color", "unstable-rendered-line-info"] }
-crossterm            = { version = "0.29", features = ["event-stream"] }
-unicode-width        = "0.2"
+ratatui              = { version = "0.30", default-features = false, features = ["crossterm"] }
+unicode-width        = { workspace = true }
 
 [dev-dependencies]
-tempfile        = "3"
-aldwin-config = { path = "../config" }
+aldwin-tui = { path = ".", features = ["test-util"] }

@@ -13,7 +13,7 @@ use super::grid::{truncate_spans, Ctx, GROUP_GAP, MARGIN_X, MARK_COL};
 use super::question;
 use aldwin_core::ReviewOutcome;
 
-use crate::app::{App, Mode};
+use crate::app::{App, Asker, Mode};
 use crate::draft;
 use crate::log::LogEntry;
 use crate::palette::Palette;
@@ -26,6 +26,12 @@ pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
 /// The cell the drawn caret takes, held back from the draft's column so a
 /// row filled to its last character still has somewhere to put it.
 const CARET_LEN: u16 = 1;
+
+/// Ticks the caret stays on, then off: motion.css's `--caret-period` of
+/// 1.05s, stepped, over `run.rs`'s 120ms tick. The design's motion tokens
+/// are not generated into `tokens.rs`, so this is the one place the
+/// period is restated.
+const CARET_TICKS: u64 = 9;
 
 /// The draft, wrapped to the field's column — measured **once** per frame
 /// and used for everything downstream of that measurement.
@@ -65,21 +71,27 @@ pub(super) enum Bottom {
     Question { rows: u16 },
     /// blank / rows / blank / field / blank / footer / blank
     Commands { rows: u16, composer: Composer },
+    /// The agent's question, answered in words: the question alone on
+    /// `--panel`, then blank / field / blank / footer / blank beneath it.
+    Answering { rows: u16, composer: Composer },
 }
 
 impl Bottom {
     pub(super) fn measure(app: &App, width: u16) -> Self {
-        match &app.mode {
-            Mode::Question(asking) => Bottom::Question {
-                rows: question::panel_rows(asking, width),
+        let composer = Composer::new(app.draft.text(), width, 0);
+        match (&app.mode, &app.answering) {
+            (Mode::Question(asking), _) => Bottom::Question {
+                rows: question::panel_rows(&asking.question, Some(&asking.list), width),
             },
-            Mode::Commands(menu) => Bottom::Commands {
+            (Mode::Commands(menu), _) => Bottom::Commands {
                 rows: menu.list.rows.len() as u16,
-                composer: Composer::new(&app.input, width, 0),
+                composer,
             },
-            Mode::Conversation | Mode::Review(_) => {
-                Bottom::Field(Composer::new(&app.input, width, 0))
-            }
+            (_, Some(asking)) => Bottom::Answering {
+                rows: question::panel_rows(&asking.question, None, width),
+                composer,
+            },
+            _ => Bottom::Field(composer),
         }
     }
 
@@ -88,6 +100,7 @@ impl Bottom {
             Bottom::Field(c) => c.height() + 4,
             Bottom::Question { rows } => rows + 3,
             Bottom::Commands { rows, composer } => rows + composer.height() + 5,
+            Bottom::Answering { rows, composer } => rows + composer.height() + 4,
         }
     }
 
@@ -114,8 +127,30 @@ impl Bottom {
                 ])
                 .areas(area);
                 if let Mode::Question(asking) = &app.mode {
-                    question::draw_panel(frame, panel, asking, app.theme.palette());
+                    question::draw_panel(
+                        frame,
+                        panel,
+                        &asking.question,
+                        Some(&asking.list),
+                        app.theme.palette(),
+                    );
                 }
+                draw_footer(frame, footer, app);
+            }
+            Bottom::Answering { rows, composer } => {
+                let [panel, _, field, _, footer, _] = Layout::vertical([
+                    Constraint::Length(rows),
+                    Constraint::Length(1),
+                    Constraint::Length(composer.height()),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .areas(area);
+                if let Some(asking) = &app.answering {
+                    question::draw_panel(frame, panel, &asking.question, None, app.theme.palette());
+                }
+                draw_field(frame, field, app, &composer, None);
                 draw_footer(frame, footer, app);
             }
             Bottom::Commands { rows, composer } => {
@@ -209,7 +244,7 @@ pub(super) fn draw_field(
     });
     let action_width = action.as_ref().map_or(0, Action::width);
 
-    if app.input.is_empty() {
+    if app.draft.is_empty() {
         app.composer_top = 0;
         let mut spans = vec![prompt("›"), caret(pal, app.tick)];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
@@ -226,7 +261,7 @@ pub(super) fn draw_field(
 
     let layout = &composer.layout;
     app.composer_width = composer.width;
-    let (cursor_row, cursor_col) = layout.position(app.cursor);
+    let (cursor_row, cursor_col) = layout.position(app.draft.cursor());
     let height = inner.height.max(1) as usize;
     let last_top = layout.row_count().saturating_sub(height);
     let mut top = app.composer_top.min(last_top);
@@ -287,11 +322,14 @@ pub(super) fn draw_field(
     frame.render_widget(Paragraph::new(Text::from(lines)).style(field), inner);
 }
 
-/// The caret: a `label` block, blinking on the tick (`--caret-period`
-/// 1.05s, stepped — ~9 ticks on, 9 off at 120ms).
+/// Whether the blinking caret is showing at `tick`.
+fn caret_on(tick: u64) -> bool {
+    (tick / CARET_TICKS).is_multiple_of(2)
+}
+
+/// The caret: a `label` block, blinking on the tick.
 fn caret(pal: &Palette, tick: u64) -> Span<'static> {
-    let on = (tick / 9).is_multiple_of(2);
-    let bg = if on { pal.label } else { pal.field };
+    let bg = if caret_on(tick) { pal.label } else { pal.field };
     Span::styled(" ", Style::default().bg(bg))
 }
 
@@ -320,8 +358,7 @@ fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
     match under {
         // Mid-text the caret takes the cell of the character it sits on.
         Some(c) => {
-            let on = (tick / 9).is_multiple_of(2);
-            let s = if on {
+            let s = if caret_on(tick) {
                 Style::default().fg(pal.field).bg(pal.label)
             } else {
                 style
@@ -390,21 +427,26 @@ fn footer_state(app: &App) -> Footer {
             KeyHint::new("Space", "Show Details")
         }
     };
+    // Every list names the same two keys, whichever list it is: `↩` and
+    // the way out. The arrows go unsaid — a list moves with them in every
+    // app — and only what `⎋` does differs, so it is named.
+    let list = |close: &'static str| vec![KeyHint::new("↩", "Select"), KeyHint::new("⎋", close)];
     match &app.mode {
-        Mode::Question(_) => Footer::new(
-            Status::Waiting,
-            vec![KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")],
-        ),
-        Mode::Commands(_) => Footer::new(
-            Status::Ready,
-            vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")],
-        ),
+        // The agent is waiting on the answer, and its question cannot be
+        // dismissed: `⎋` is "Chat about this", the way to answer in words.
+        Mode::Question(asking) if matches!(asking.asker, Asker::Agent { .. }) => {
+            Footer::new(Status::Waiting, list("Chat"))
+        }
+        Mode::Question(_) | Mode::Commands(_) => Footer::new(Status::Ready, list("Close")),
+        Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, list("Close")),
         // Shift and Tab are words, as Space is: the glyph table has no mark
-        // for either, and "if it is not in the table, do not draw one."
+        // for either, and "if it is not in the table, do not draw one." A
+        // click is named too: the mouse is the quick way to a run of lines
+        // (ADR 0010), and a key list that left it out would hide it.
         Mode::Review(r) if r.keys_shown => {
             let mut keys = vec![
                 KeyHint::new("↑↓", "Scroll"),
-                KeyHint::new("Shift ↑↓", "Select"),
+                KeyHint::new("Click, drag or Shift ↑↓", "Select"),
             ];
             if r.file().has_folds() {
                 keys.push(KeyHint::new("Space", "Show All Lines"));
@@ -418,17 +460,19 @@ fn footer_state(app: &App) -> Footer {
             Footer::new(Status::None, keys)
         }
         Mode::Review(_) => Footer::new(Status::None, vec![KeyHint::new("?", "Keys")]),
+        // Before `Working…`: the turn runs, but it is waiting on you.
+        Mode::Conversation if app.answering.is_some() => Footer::new(
+            Status::Waiting,
+            vec![KeyHint::new("↩", "Send"), KeyHint::new("⎋", "Back")],
+        ),
         Mode::Conversation if app.turn_active || app.awaiting_turn => {
             let mut keys = vec![KeyHint::new("⎋", "Stop")];
-            if app.input.is_empty() && has_details(app) {
+            if app.draft.is_empty() && has_details(app) {
                 keys.push(details());
             }
             Footer::new(Status::Working, keys)
         }
-        Mode::Conversation if app.answering.is_some() => {
-            Footer::new(Status::Waiting, vec![KeyHint::new("↩", "Send")])
-        }
-        Mode::Conversation if !app.input.is_empty() => {
+        Mode::Conversation if !app.draft.is_empty() => {
             Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
         }
         // Frame J: after a turn that saved, the footer is the context bar
@@ -463,16 +507,7 @@ fn just_saved(app: &App) -> bool {
 }
 
 fn has_details(app: &App) -> bool {
-    app.this_turn().iter().any(|e| {
-        matches!(
-            e,
-            LogEntry::Work { .. }
-                | LogEntry::Failure {
-                    detail: Some(_),
-                    ..
-                }
-        )
-    })
+    app.this_turn().iter().any(LogEntry::has_details)
 }
 
 /// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
@@ -507,8 +542,8 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("Waiting for you", dim),
         ]),
         Status::Working => {
-            // The dot blinks with the tick, as the caret does — the one
-            // thing the design animates besides it.
+            // The dot is steady: the caret is the one thing the design
+            // animates (motion.css, "Nothing else animates").
             groups.push(vec![
                 Span::styled(
                     format!("{:<width$}", "●", width = MARK_COL),
@@ -520,6 +555,33 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Status::None => groups.push(vec![Span::raw(" ".repeat(MARK_COL))]),
     }
     groups.extend(keys.into_iter().map(group));
+
+    // The context bar is never cut, and the status and the keys of the
+    // moment come before the aside: when the row cannot hold all three, the
+    // aside goes first — the way to the commands is `/` whether it is
+    // named or not. Then the last keys, whole: a key is named in full or
+    // not at all.
+    let width = area.width as usize;
+    let bar = context_bar(app.status.context_percent(), pal);
+    let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
+    let groups_w = |groups: &[Vec<Span<'static>>]| {
+        groups.iter().map(|g| span_w(g)).sum::<usize>() + GROUP_GAP * groups.len().saturating_sub(1)
+    };
+    let row = width.saturating_sub(MARGIN_X * 2);
+    let mut right: Vec<Span<'static>> = Vec::new();
+    if let Some(aside) = aside {
+        let aside = group(aside);
+        if groups_w(&groups) + GROUP_GAP + span_w(&aside) + GROUP_GAP + span_w(&bar) <= row {
+            right.extend(aside);
+            right.push(Span::raw(" ".repeat(GROUP_GAP)));
+        }
+    }
+    right.extend(bar);
+    let right_w = span_w(&right);
+    let budget = row.saturating_sub(GROUP_GAP).saturating_sub(right_w);
+    while groups.len() > 1 && groups_w(&groups) > budget {
+        groups.pop();
+    }
 
     let mut left: Vec<Span<'static>> = Vec::new();
     for (i, group) in groups.into_iter().enumerate() {
@@ -535,30 +597,6 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             left.remove(1);
         }
     }
-
-    // The context bar is never cut, and the status and the keys of the
-    // moment come before the aside: when the row cannot hold all three, the
-    // aside goes first — the way to the commands is `/` whether it is
-    // named or not.
-    let width = area.width as usize;
-    let bar = context_bar(app.status.context_percent(), pal);
-    let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
-    let mut right: Vec<Span<'static>> = Vec::new();
-    if let Some(aside) = aside {
-        let aside = group(aside);
-        let fits = span_w(&left) + GROUP_GAP + span_w(&aside) + GROUP_GAP + span_w(&bar)
-            <= width.saturating_sub(MARGIN_X * 2);
-        if fits {
-            right.extend(aside);
-            right.push(Span::raw(" ".repeat(GROUP_GAP)));
-        }
-    }
-    right.extend(bar);
-    let right_w = span_w(&right);
-    let budget = width
-        .saturating_sub(MARGIN_X * 2)
-        .saturating_sub(GROUP_GAP)
-        .saturating_sub(right_w);
     let left = truncate_spans(left, budget);
     let used: usize = left.iter().map(|s| s.content.width()).sum();
     let gap = width
@@ -633,7 +671,7 @@ pub(super) fn draw_comment_field(
         ),
     ];
     let right = vec![Span::styled(
-        "esc ",
+        "⎋ ",
         Style::default().fg(pal.label2).bg(pal.select),
     )];
     frame.render_widget(Block::new().style(on_select), label_row);

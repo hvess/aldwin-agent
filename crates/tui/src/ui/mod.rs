@@ -40,7 +40,6 @@ use ratatui::widgets::Block;
 use ratatui::Frame;
 
 use crate::app::{App, Mode};
-use grid::Ctx;
 
 pub(crate) use transcript::Transcript;
 
@@ -61,22 +60,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // The bottom band: what holds it decides its height, measured once.
     let bottom = chrome::Bottom::measure(app, area.width);
-    let [top_pad, body, bottom_area] = Layout::vertical([
+    let [_, body, bottom_area] = Layout::vertical([
         Constraint::Length(BODY_PAD_ROWS),
         Constraint::Min(1),
         Constraint::Length(bottom.height()),
     ])
     .areas(area);
-    let _ = top_pad;
 
     app.render_width = body.width;
     if app.log.is_empty() {
         // The launch card, two blank rows under the top padding.
         launch::draw(frame, body, app);
     } else {
-        let ctx = Ctx::new(pal, body.width);
         let visible = app.transcript_view(body.height as usize);
-        transcript::draw_log(frame, body, visible, ctx);
+        transcript::draw_log(frame, body, visible);
     }
 
     bottom.draw(frame, bottom_area, app);

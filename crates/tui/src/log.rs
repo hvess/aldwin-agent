@@ -48,6 +48,19 @@ pub enum LogEntry {
 }
 
 impl LogEntry {
+    /// Whether Space has something here to open: a work disclosure, or a
+    /// failure's detail.
+    pub(crate) fn has_details(&self) -> bool {
+        matches!(
+            self,
+            LogEntry::Work { .. }
+                | LogEntry::Failure {
+                    detail: Some(_),
+                    ..
+                }
+        )
+    }
+
     /// A provider retry, said as a failure with the provider's own message
     /// as the detail.
     pub fn retry(info: &RetryInfo) -> Self {
@@ -80,13 +93,58 @@ fn ordinal(n: u32) -> String {
     }
 }
 
-/// One call inside a `Work` disclosure — the verb the design writes
-/// (`Read`, `Searched`, `Ran`), what it was pointed at, and the fact that
-/// came back (`412 lines`, `7 matches`, `exit 1`).
+/// What a call did, in the design's words — outcomes, never tool names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Read,
+    Changed,
+    Ran,
+    /// The design's own verb for a lookup — and eight characters, which is
+    /// what fits the 9-cell `--detail-col` with its gap.
+    Searched,
+    /// A tool the vocabulary has no word for: an MCP server's.
+    Used,
+}
+
+impl Verb {
+    pub fn word(self) -> &'static str {
+        match self {
+            Verb::Read => "Read",
+            Verb::Changed => "Changed",
+            Verb::Ran => "Ran",
+            Verb::Searched => "Searched",
+            Verb::Used => "Used",
+        }
+    }
+
+    /// What the summary counts: `Read 3 files`, `Ran 1 command`.
+    fn noun(self) -> &'static str {
+        match self {
+            Verb::Read | Verb::Changed => "file",
+            Verb::Ran => "command",
+            Verb::Searched => "symbol",
+            Verb::Used => "tool",
+        }
+    }
+
+    /// The fact a finished call reports, from its result: a line count for
+    /// a read, `ok` for a run that exited cleanly, otherwise the first line.
+    pub fn fact(self, content: &str, failed: bool) -> String {
+        match (self, failed) {
+            (Verb::Read, false) => plural(content.lines().count(), "line"),
+            (Verb::Ran, false) => "ok".into(),
+            (Verb::Changed, false) => "staged".into(),
+            _ => first_line(content, 24),
+        }
+    }
+}
+
+/// One call inside a `Work` disclosure — what it did, what it was pointed
+/// at, and the fact that came back (`412 lines`, `7 matches`, `exit 1`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkItem {
     pub call_id: String,
-    pub verb: String,
+    pub verb: Verb,
     pub target: String,
     /// Right-flush, once the call has finished.
     pub fact: Option<String>,
@@ -94,107 +152,71 @@ pub struct WorkItem {
 }
 
 impl WorkItem {
-    /// The verb and target for a tool call, from its name and input. The
-    /// vocabulary is the design's: outcomes, never tool names — `run` is
-    /// what it ran, `explain` is what it looked up.
-    pub fn describe(name: &str, input: &serde_json::Value) -> (String, String) {
-        let s = |key: &str| {
+    /// The verb and target for a tool call, from its name and input — the
+    /// one place a tool's name is read. `None` for `plan` and `ask`, which
+    /// are not work: the plan is drawn as itself and a question is its own
+    /// row.
+    pub fn describe(name: &str, input: &serde_json::Value) -> Option<(Verb, String)> {
+        let field = |key: &str| {
             input
                 .get(key)
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
+                .unwrap_or_default()
                 .to_string()
         };
-        match name {
-            "read" => ("Read".into(), s("path")),
-            "edit" => ("Changed".into(), s("path")),
-            "run" => {
-                let mut target = s("program");
-                if let Some(args) = input.get("args").and_then(serde_json::Value::as_array) {
-                    for a in args.iter().filter_map(serde_json::Value::as_str) {
-                        target.push(' ');
-                        target.push_str(a);
-                    }
-                }
-                ("Ran".into(), target)
-            }
-            // The design's own verb for a lookup — and eight characters,
-            // which is what fits the 9-cell `--detail-col` with its gap.
+        Some(match name {
+            "read" => (Verb::Read, field("path")),
+            "edit" => (Verb::Changed, field("path")),
+            "run" => (Verb::Ran, field("command")),
             "explain" => {
-                let target = if !s("path").is_empty() {
-                    s("path")
-                } else {
-                    s("query")
-                };
-                ("Searched".into(), target)
+                let path = field("path");
+                (
+                    Verb::Searched,
+                    if path.is_empty() {
+                        field("query")
+                    } else {
+                        path
+                    },
+                )
             }
-            "plan" => ("Planned".into(), String::new()),
-            "ask" => ("Asked".into(), s("question")),
-            other => ("Used".into(), other.to_string()),
-        }
-    }
-
-    /// The fact a finished call reports, from its result: a line count for
-    /// a read, the exit for a run, otherwise the first line.
-    pub fn fact_for(verb: &str, content: &str, failed: bool) -> String {
-        match verb {
-            "Read" if !failed => {
-                let n = content.lines().count();
-                format!("{n} {}", if n == 1 { "line" } else { "lines" })
-            }
-            "Ran" => {
-                if failed {
-                    first_line(content, 24)
-                } else {
-                    "ok".into()
-                }
-            }
-            "Changed" if !failed => "staged".into(),
-            _ => first_line(content, 24),
-        }
+            "plan" | "ask" => return None,
+            other => (Verb::Used, other.to_string()),
+        })
     }
 }
 
 /// The collapsed summary of a `Work` entry: one clause per verb, counted,
-/// joined with ` · `. `Read 3 files · Ran 2 programs`.
+/// joined with ` · `, in the order the verbs first appear. `Read 3 files ·
+/// Ran 2 commands`.
 pub fn summarise_work(items: &[WorkItem]) -> String {
-    let mut order: Vec<&str> = Vec::new();
-    let mut counts: std::collections::HashMap<&str, (usize, usize)> =
-        std::collections::HashMap::new();
+    let mut counts: Vec<(Verb, usize, usize)> = Vec::new();
     for item in items {
-        let entry = counts.entry(item.verb.as_str()).or_insert_with(|| {
-            order.push(item.verb.as_str());
-            (0, 0)
-        });
-        entry.0 += 1;
-        if item.failed {
-            entry.1 += 1;
-        }
+        let at = match counts.iter().position(|(verb, ..)| *verb == item.verb) {
+            Some(at) => at,
+            None => {
+                counts.push((item.verb, 0, 0));
+                counts.len() - 1
+            }
+        };
+        counts[at].1 += 1;
+        counts[at].2 += usize::from(item.failed);
     }
-    order
+    counts
         .into_iter()
-        .map(|verb| {
-            let (n, failed) = counts[verb];
-            let noun = match verb {
-                "Read" => plural(n, "file"),
-                "Ran" => plural(n, "program"),
-                "Searched" => plural(n, "symbol"),
-                "Changed" => plural(n, "file"),
-                "Asked" => plural(n, "question"),
-                "Planned" => return "Planned".to_string(),
-                _ => plural(n, "tool"),
-            };
+        .map(|(verb, n, failed)| {
+            let clause = format!("{} {}", verb.word(), plural(n, verb.noun()));
             if failed > 0 {
-                format!("{verb} {noun}, {failed} failed")
+                format!("{clause}, {failed} failed")
             } else {
-                format!("{verb} {noun}")
+                clause
             }
         })
         .collect::<Vec<_>>()
         .join(" · ")
 }
 
-fn plural(n: usize, noun: &str) -> String {
+/// `1 file`, `3 files` — every count the app writes.
+pub(crate) fn plural(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
     } else {
@@ -210,7 +232,7 @@ fn plural(n: usize, noun: &str) -> String {
 /// `TurnEndReason::Error` carries a string, so this reads `LlmError`'s
 /// `Display` (`aldwin-core`, `client.rs`): `network error: …`,
 /// `provider error 429: …`, `stream interrupted: …`, `terminal error after
-/// N retries: …`. Anything else — an error from the loop itself — gets the
+/// N attempts: …`. Anything else — an error from the loop itself — gets the
 /// plain fallback. Open-tasks 32 is carrying the kind instead.
 pub fn failure_sentence(error: &str) -> &'static str {
     const FALLBACK: &str = "The turn stopped before it finished. The detail says why.";
@@ -290,11 +312,11 @@ mod tests {
                 "The reply was cut off partway. Send again to have it retried.",
             ),
             (
-                "terminal error after 3 retries: provider error 529: overloaded",
+                "terminal error after 3 attempts: provider error 529: overloaded",
                 "The provider had a problem on its side. Send again in a moment.",
             ),
             (
-                "terminal error after 3 retries: something else",
+                "terminal error after 3 attempts: something else",
                 "The provider kept failing. Send again in a moment.",
             ),
             (
@@ -313,45 +335,53 @@ mod tests {
     fn calls_are_described_as_outcomes_not_tool_names() {
         assert_eq!(
             WorkItem::describe("read", &json!({"path": "src/x.rs"})),
-            ("Read".into(), "src/x.rs".into())
+            Some((Verb::Read, "src/x.rs".into()))
         );
         assert_eq!(
-            WorkItem::describe("run", &json!({"program": "cargo", "args": ["test", "-q"]})),
-            ("Ran".into(), "cargo test -q".into())
+            WorkItem::describe("run", &json!({"command": "cargo test -q 2>&1 | tail"})),
+            Some((Verb::Ran, "cargo test -q 2>&1 | tail".into())),
+            "a run is the command it ran (ADR 0011 §2)"
         );
         assert_eq!(
             WorkItem::describe("explain", &json!({"query": "tower::limit"})),
-            ("Searched".into(), "tower::limit".into())
+            Some((Verb::Searched, "tower::limit".into()))
         );
+        assert_eq!(
+            WorkItem::describe("fs_read", &json!({})),
+            Some((Verb::Used, "fs_read".into()))
+        );
+        assert_eq!(WorkItem::describe("plan", &json!({})), None);
+        assert_eq!(WorkItem::describe("ask", &json!({})), None);
     }
 
     #[test]
     fn the_summary_counts_by_verb_in_first_seen_order() {
-        let item = |verb: &str, failed: bool| WorkItem {
+        let item = |verb, failed| WorkItem {
             call_id: "c".into(),
-            verb: verb.into(),
+            verb,
             target: String::new(),
             fact: None,
             failed,
         };
         let items = vec![
-            item("Read", false),
-            item("Read", false),
-            item("Ran", true),
-            item("Read", false),
+            item(Verb::Read, false),
+            item(Verb::Read, false),
+            item(Verb::Ran, true),
+            item(Verb::Read, false),
         ];
         assert_eq!(
             summarise_work(&items),
-            "Read 3 files · Ran 1 program, 1 failed"
+            "Read 3 files · Ran 1 command, 1 failed"
         );
-        assert_eq!(summarise_work(&[item("Read", false)]), "Read 1 file");
+        assert_eq!(summarise_work(&[item(Verb::Read, false)]), "Read 1 file");
     }
 
     #[test]
     fn facts_are_short_and_right() {
-        assert_eq!(WorkItem::fact_for("Read", "a\nb\nc", false), "3 lines");
-        assert_eq!(WorkItem::fact_for("Ran", "anything", false), "ok");
-        assert_eq!(WorkItem::fact_for("Ran", "exit 1\nstderr", true), "exit 1");
+        assert_eq!(Verb::Read.fact("a\nb\nc", false), "3 lines");
+        assert_eq!(Verb::Read.fact("a", false), "1 line");
+        assert_eq!(Verb::Ran.fact("anything", false), "ok");
+        assert_eq!(Verb::Ran.fact("exit 1\nstderr", true), "exit 1");
         assert_eq!(
             first_line(&"x".repeat(40), 10),
             format!("{}…", "x".repeat(9))

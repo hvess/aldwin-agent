@@ -2,9 +2,9 @@
 //! filled.
 //!
 //! This exists instead of leaning on a `Paragraph`'s own
-//! `Wrap { trim: false }` because `Wrap` has no concept of the label-column
-//! inset `grid::with_label_column` applies afterward, nor of the
-//! padding/border columns `row::Row` adds: it treats one logical `Line`'s
+//! `Wrap { trim: false }` because `Wrap` has no concept of the body-column
+//! inset `grid::at_body` applies afterward, nor of the margin and padding
+//! columns `row::Row` adds: it treats one logical `Line`'s
 //! spans as a single continuous run of styled graphemes, so a wrapped
 //! continuation row it produced came out flush against the panel edge
 //! instead of under the rest of the turn's content (reported as: "the first
@@ -26,18 +26,16 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-/// Cells a tab expands to — `draft::sanitize`'s own four, so pasted and
-/// model-written indentation agree.
-const TAB_WIDTH: usize = 4;
+use crate::draft;
 
 /// Word-wraps one logical `Line` to `max_width` display columns, breaking
 /// only at whitespace and preserving each span's style across a break, into
 /// however many `Line`s it takes.
 ///
 /// Doesn't hang-indent list/blockquote markers under wrapped continuation
-/// text (a wrapped `• ` bullet's second row starts at the same column every
+/// text (a wrapped `· ` item's second row starts at the same column every
 /// other prose row does, not under the first row's text) — only the flat
-/// inset every prose row gets from `with_label_column` regardless of what
+/// inset every prose row gets from `grid::at_body` regardless of what
 /// produced it.
 pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
     // One per `char`, and `Copy`: this runs over every character of every
@@ -63,15 +61,15 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
             match ch {
                 // A tab has no width of its own and ratatui draws no cell
                 // for it, so left in place it deleted a Go or Makefile
-                // line's indentation outright. Expanded to the same four
-                // spaces `draft::sanitize` gives a typed one.
+                // line's indentation outright. Expanded to `draft::TAB`, as
+                // everywhere else a tab is drawn.
                 '\t' => graphemes.extend(
                     [Grapheme {
                         ch: ' ',
                         style,
                         width: 1,
                         is_space: true,
-                    }; TAB_WIDTH],
+                    }; draft::TAB.len()],
                 ),
                 // Any other control character is dropped: ratatui skips it
                 // too, but `UnicodeWidthStr` counts it as one cell, so

@@ -140,9 +140,8 @@ impl WireContentBlock {
 
 /// Builds the request body. Cache placement per aldwin-llm.md: one
 /// breakpoint on the last tool definition (covers system + tools), one on
-/// the last content block of the message at `request.cache_breakpoints`'
-/// highest index (covers the last completed turn) — at most two total, the
-/// V0 ceiling, even if core ever supplied more than one breakpoint index.
+/// the last content block of the message at `request.cache_breakpoint`
+/// (covers the conversation so far) — two in all, the V0 ceiling.
 ///
 /// Known cost, not fixed here: `WireRequest` owns everything, so this
 /// deep-clones every message once per step. A borrowing `Serialize` is
@@ -166,7 +165,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     // Indices are kept aligned with `request.messages` until the breakpoint
     // is placed; a message that mapped to nothing is removed only afterwards.
     let mut messages: Vec<WireMessage> = request.messages.iter().map(map_message).collect();
-    if let Some(&break_at) = request.cache_breakpoints.last() {
+    if let Some(break_at) = request.cache_breakpoint {
         // The provider refuses `cache_control` on a thinking block, and a
         // message may have been emptied by `map_message`. So: the last block
         // that can carry one, in the nearest message at or before the index
@@ -184,7 +183,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     }
     messages.retain(|m| !m.content.is_empty());
 
-    let budget = config.extended_thinking_budget;
+    let budget = config.thinking_budget();
     WireRequest {
         model: config.model.clone(),
         system: request.system.to_string(),
@@ -459,10 +458,6 @@ pub struct Assembler {
 }
 
 impl Assembler {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Zero, one, or (for `content_block_stop` closing a tool block) exactly
     /// one `LlmEvent` for this wire event; `Err` on a malformed payload or an
     /// upstream `error` event.
@@ -631,7 +626,7 @@ mod tests {
 
     #[test]
     fn text_delta_passes_through() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
         ))
@@ -645,7 +640,7 @@ mod tests {
     /// and only its brackets crossed. It is now buffered across deltas and
     /// handed over whole on stop, signature included.
     fn thinking_buffers_across_deltas_and_closes_with_its_signature() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let start = a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#)).unwrap();
         assert!(matches!(&start[..], [LlmEvent::ThinkingStart]));
 
@@ -681,7 +676,7 @@ mod tests {
     /// The encrypted counterpart arrives whole on the start event rather than
     /// in deltas, and is passed straight through.
     fn redacted_thinking_is_carried_opaquely() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"EncRypTed=="}}"#))
             .unwrap();
@@ -709,11 +704,10 @@ mod tests {
             ],
         }];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let wire = build_request(&anthropic(), &request);
         let json = serde_json::to_value(&wire).unwrap();
@@ -725,7 +719,7 @@ mod tests {
 
     #[test]
     fn tool_input_buffers_across_deltas_and_emits_once_on_stop() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"read"}}"#)).unwrap();
         assert!(a
             .handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\""}}"#))
@@ -749,7 +743,7 @@ mod tests {
 
     #[test]
     fn empty_tool_input_becomes_an_empty_object() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"noop"}}"#)).unwrap();
         let out = a
             .handle(ev(r#"{"type":"content_block_stop","index":0}"#))
@@ -762,7 +756,7 @@ mod tests {
 
     #[test]
     fn malformed_tool_json_is_a_structured_error_not_a_panic() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"read"}}"#)).unwrap();
         a.handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{not json"}}"#)).unwrap();
         let err = a
@@ -773,7 +767,7 @@ mod tests {
 
     #[test]
     fn usage_folds_from_message_start_and_message_delta() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}"#))
             .unwrap();
         a.handle(ev(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}"#)).unwrap();
@@ -790,7 +784,7 @@ mod tests {
 
     #[test]
     fn tool_use_stop_reason_maps_through() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(
             r#"{"type":"message_start","message":{"usage":{"input_tokens":1}}}"#,
         ))
@@ -808,7 +802,7 @@ mod tests {
 
     #[test]
     fn an_unmapped_stop_reason_falls_back_to_end_turn() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(ev(
             r#"{"type":"message_start","message":{"usage":{"input_tokens":1}}}"#,
         ))
@@ -826,7 +820,7 @@ mod tests {
 
     #[test]
     fn error_event_is_a_wire_error_not_a_step_ended() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let err = a
             .handle(ev(
                 r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
@@ -837,7 +831,7 @@ mod tests {
 
     #[test]
     fn ping_and_unknown_event_types_are_ignored() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         assert!(a.handle(ev(r#"{"type":"ping"}"#)).unwrap().is_empty());
         assert!(a
             .handle(ev(r#"{"type":"some_future_event"}"#))
@@ -851,7 +845,7 @@ mod tests {
             model: "claude-sonnet-5".into(),
             api_key_env: "X".into(),
             base_url: None,
-            extended_thinking_budget: 1000,
+            extended_thinking_budget: Some(1000),
         }
     }
 
@@ -879,11 +873,10 @@ mod tests {
             user("continue"),
         ];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[1],
+            cache_breakpoint: Some(1),
         };
         let wire = build_request(&anthropic(), &request);
 
@@ -922,11 +915,10 @@ mod tests {
             ],
         }];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[0],
+            cache_breakpoint: Some(0),
         };
         let wire = build_request(&anthropic(), &request);
 
@@ -969,11 +961,10 @@ mod tests {
             },
         ];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &tools,
             messages: &messages,
-            cache_breakpoints: &[1],
+            cache_breakpoint: Some(1),
         };
 
         let wire = build_request(&anthropic(), &request);
@@ -1012,17 +1003,16 @@ mod tests {
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: None,
-            extended_thinking_budget: 8000,
+            extended_thinking_budget: Some(8000),
         };
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let wire = build_request(&config, &request);
-        assert!(wire.max_tokens > config.extended_thinking_budget);
+        assert!(wire.max_tokens > config.thinking_budget());
     }
 
     /// The budget is a developer-typed `u32`; the headroom sum must not
@@ -1030,15 +1020,14 @@ mod tests {
     #[test]
     fn build_request_max_tokens_saturates_rather_than_overflowing() {
         let config = crate::config::ProviderConfig {
-            extended_thinking_budget: u32::MAX,
+            extended_thinking_budget: Some(u32::MAX),
             ..anthropic()
         };
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         assert_eq!(build_request(&config, &request).max_tokens, u32::MAX);
     }
@@ -1056,14 +1045,13 @@ mod tests {
             model: "claude-sonnet-5".into(),
             api_key_env: "X".into(),
             base_url: None,
-            extended_thinking_budget: 8000,
+            extended_thinking_budget: Some(8000),
         };
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let wire = build_request(&config, &request);
         assert_eq!(wire.thinking.kind, "adaptive");

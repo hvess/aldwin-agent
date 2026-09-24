@@ -25,7 +25,7 @@ fn config() -> ProviderConfig {
         model: std::env::var("LUMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
         api_key_env: "LUMO_API_KEY".into(),
         base_url: Some(std::env::var("LUMO_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into())),
-        extended_thinking_budget: 256,
+        extended_thinking_budget: Some(256),
     }
 }
 
@@ -54,11 +54,10 @@ async fn text_turn_streams_and_reports_usage() {
     let events = collect(
         &client,
         LlmRequest {
-            model: "unused",
             system: "You are terse.",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         },
     )
     .await;
@@ -108,11 +107,10 @@ async fn tool_turn_yields_a_parsed_tool_call() {
     let events = collect(
         &client,
         LlmRequest {
-            model: "unused",
             system: "Use the provided tools.",
             tools: &tools,
             messages: &messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         },
     )
     .await;

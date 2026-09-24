@@ -68,7 +68,7 @@ pub struct WireFunctionCall {
 }
 
 /// Builds the request body. No cache/thinking fields: OpenAI-compatible has
-/// neither concept, so `request.cache_breakpoints` is deliberately unused
+/// neither concept, so `request.cache_breakpoint` is deliberately unused
 /// here — not an oversight, this provider has nothing to place a breakpoint
 /// on. `max_tokens` reuses `config.extended_thinking_budget` verbatim (no
 /// Anthropic-style headroom math): for this provider the field is just "max
@@ -100,7 +100,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     WireRequest {
         model: config.model.clone(),
         messages,
-        max_tokens: config.extended_thinking_budget,
+        max_tokens: config.thinking_budget(),
         stream: true,
         tools,
     }
@@ -309,10 +309,6 @@ pub struct Assembler {
 }
 
 impl Assembler {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn handle(&mut self, chunk: WireChunk) -> Result<Vec<aldwin_core::LlmEvent>, WireError> {
         use aldwin_core::LlmEvent;
 
@@ -467,7 +463,7 @@ mod tests {
 
     #[test]
     fn text_delta_passes_through() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}"#,
@@ -478,14 +474,14 @@ mod tests {
 
     #[test]
     fn empty_content_delta_emits_nothing() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a.handle(chunk(r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}"#)).unwrap();
         assert!(out.is_empty());
     }
 
     #[test]
     fn tool_call_arriving_whole_in_one_delta_emits_one_tool_use_requested() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"},"index":0}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#,
@@ -503,7 +499,7 @@ mod tests {
 
     #[test]
     fn tool_call_arguments_fragmented_across_deltas_still_assembles() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         assert!(a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{\"path\""},"index":0}]},"finish_reason":null}]}"#
@@ -525,7 +521,7 @@ mod tests {
 
     #[test]
     fn empty_tool_arguments_become_an_empty_object() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"noop"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
@@ -539,7 +535,7 @@ mod tests {
 
     #[test]
     fn malformed_tool_json_is_a_structured_error_not_a_panic() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(chunk(
             r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{not json"},"index":0}]},"finish_reason":null}]}"#,
         ))
@@ -571,7 +567,7 @@ mod tests {
 
     #[test]
     fn stop_finish_reason_maps_to_end_turn() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(r#"{"choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#))
             .unwrap();
@@ -585,7 +581,7 @@ mod tests {
 
     #[test]
     fn an_unmapped_finish_reason_falls_back_to_end_turn() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         // No usage anywhere in this stream, so StepEnded waits for the end of
         // it — the mapping is what's under test, not the timing.
         assert!(a
@@ -605,7 +601,7 @@ mod tests {
     /// the first would report zero tokens for every turn.
     #[test]
     fn usage_arriving_after_finish_reason_still_reaches_step_ended() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         assert_eq!(
             a.handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#
@@ -635,7 +631,7 @@ mod tests {
 
     #[test]
     fn tool_use_step_deferred_for_usage_keeps_its_stop_reason() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c1","function":{"name":"read","arguments":"{}"},"index":0}]},"finish_reason":"tool_calls"}]}"#,
@@ -664,7 +660,7 @@ mod tests {
     /// empty one rather than a fabricated stamp.
     #[test]
     fn reasoning_deltas_bracket_and_carry_their_text() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         let out = a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{"content":null,"reasoning":"17*"}}]}"#,
@@ -739,7 +735,7 @@ mod tests {
 
     #[test]
     fn a_finish_reason_closes_an_open_thinking_bracket() {
-        let mut a = Assembler::new();
+        let mut a = Assembler::default();
         a.handle(chunk(
             r#"{"choices":[{"index":0,"delta":{"reasoning":"hmm"}}]}"#,
         ))
@@ -780,7 +776,7 @@ mod tests {
             model: "mistral-small-latest".into(),
             api_key_env: "X".into(),
             base_url: Some("https://api.mistral.ai/v1/chat/completions".into()),
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         };
         let messages = vec![Message {
             role: Role::User,
@@ -791,11 +787,10 @@ mod tests {
             })],
         }];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
 
         let wire = build_request(&config, &request);
@@ -812,7 +807,7 @@ mod tests {
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         };
         let messages = vec![Message {
             role: Role::Assistant,
@@ -828,11 +823,10 @@ mod tests {
             ],
         }];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
 
         let wire = build_request(&config, &request);
@@ -853,14 +847,13 @@ mod tests {
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         };
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let wire = build_request(&config, &request);
         assert_eq!(wire.max_tokens, 4096);
@@ -873,7 +866,7 @@ mod tests {
             model: "m".into(),
             api_key_env: "X".into(),
             base_url: Some("https://x".into()),
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         };
         let tools = vec![ToolDefinition {
             name: "read".into(),
@@ -881,11 +874,10 @@ mod tests {
             input_schema: json!({"type":"object"}),
         }];
         let request = LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &tools,
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let wire = build_request(&config, &request);
         assert_eq!(wire.tools.len(), 1);

@@ -189,6 +189,16 @@ seeded `provider.yaml`, so `needs_provider` was never true).
   which is the message the report was about.
 
 
+**Post-archive fix (2026-09-24, audit):** A panic in the agent or the
+interceptor task was awaited with `let _ =` and the process exited 0; it is
+`StartupError::TaskFailed`, printed after the terminal is restored, with a
+non-zero exit. `/clear` and `/resume` no longer move the transcript writer
+themselves — core does, through `RecordSink`, when it acts (aldwin-core.md's
+same-day entry). `History` takes the project root rather than re-reading the
+working directory, and `ModelSwitch` and `History::open` return typed errors.
+`tests/binary.rs` runs the binary through `assert_cmd`: `--version`, a
+refused argument, and a malformed `provider.yaml` refusing to start.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `aldwin` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.

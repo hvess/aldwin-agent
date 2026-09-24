@@ -295,3 +295,14 @@ All done, 2026-09-20.
   from `LogRecord` and the gap between them is chosen, not discovered. What was
   added is the last-complete-turn truncation rule, which removes the unmatched
   tool-use failure the old draft would have hit on the first `kill -9`.
+
+- **2026-09-24 — the swap moved into core.** `/clear` and `/resume` moved the
+  writer as they passed the interceptor, guarded by a "turn in flight" flag
+  that is false between a review's follow-up turns; a command landing there
+  moved the writer, core then refused it, and the rest of the conversation
+  went into another session's file. `RecordSink` now has `cleared` and
+  `resumed(&SessionId)`, which `ConversationLog` calls when core acts, and
+  `Command::Resume` carries the id. The interceptor's flag stays as the early
+  word only. Two read/write defects closed with it — see aldwin-config.md's
+  same-day entry: one `write` per line, and a non-UTF-8 torn line costs that
+  line alone.

@@ -18,6 +18,4 @@ tempfile      = "3"
 clap          = { version = "4", features = ["derive"] }
 libc          = "0.2"
 unicode-width = "0.2"
-# Only aldwin-llm's manifest still names it, and nothing in that crate calls
-# it; this entry goes when that line does.
-tracing       = "0.1"
+assert_cmd    = "2"

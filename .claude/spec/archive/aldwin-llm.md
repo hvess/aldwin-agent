@@ -130,6 +130,20 @@ that was weighed and deferred rather than worked around, and the row is
 absent rather than present-and-broken.
 
 
+**Post-archive change (2026-09-24, audit):** Two Decisions below are
+amended. *Provider config resolution no longer lives in this crate*:
+`resolve` required a global `provider.yaml`, so a project-only one booted
+the session unconfigured, and `/model` overlaid the layers its own way. The
+overlay is `aldwin_config::ProviderConfig::over`, applied once by
+`Config::effective_provider`; aldwin-cli maps the result onto this crate's
+`ProviderConfig`, whose `extended_thinking_budget` is now an `Option` that
+takes the private default here. `identify` takes `(kind, base_url)`, so the
+crate depends on aldwin-config for `ProviderKind` alone. And the retry + SSE
+loop, written twice and drifted (only the OpenAI copy flushed a held-back
+step), is one loop in `transport.rs`, generic over a small `Dialect` trait
+each wire's `Assembler` implements. `CURATED`, `Provider::offers_model` and
+the first-run layout test went with the screen they served.
+
 ## Why
 
 Writing the Anthropic client by hand is what makes caching, streaming, and retry behaviour controllable rather than abstract. This crate owns the wire and translates Anthropic SSE into the core's normalised event stream. No Anthropic type crosses its public surface, so the V0.5 OpenAI-compatible adapter is a sibling impl behind the same trait, not a refactor.

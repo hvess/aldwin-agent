@@ -8,6 +8,7 @@ mod client;
 mod client_openai;
 mod config;
 mod retry;
+mod transport;
 mod wire;
 mod wire_openai;
 
@@ -23,7 +24,7 @@ mod wire_openai;
 #[cfg(any(test, feature = "test-server"))]
 pub mod test_server;
 
-pub use catalog::{identify, provider, provider_ids, Model, Provider, CURATED, PROVIDERS};
+pub use catalog::{identify, provider, provider_ids, Model, Provider, PROVIDERS};
 pub use client::{AnthropicClient, LlmClientInitError};
 pub use client_openai::OpenAiCompatibleClient;
-pub use config::{resolve, ProviderConfig};
+pub use config::ProviderConfig;

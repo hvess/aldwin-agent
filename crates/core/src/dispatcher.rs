@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
@@ -57,8 +56,6 @@ pub enum PendingReply {
 }
 
 pub type PendingMap = Arc<Mutex<HashMap<String, PendingReply>>>;
-
-static NEXT_REVIEW: AtomicU64 = AtomicU64::new(1);
 
 /// Given to a dispatch future so it can reach the developer without reaching
 /// into the agent's internals. Concrete policy — when a review opens, what a
@@ -123,8 +120,13 @@ impl DispatchContext {
     /// Emit `ReviewRequested` and await the developer's decision. Resolves to
     /// `None` on shutdown or cancellation — the caller treats that as
     /// "nothing was written", which is also what it means.
+    ///
+    /// Keyed by the step it opens in. A review opens at a step's boundary —
+    /// before its calls run, or as the turn ends — and is answered before
+    /// the step goes on, so a step has at most one open at a time; the
+    /// agent mints step ids, so no second counter is needed.
     pub async fn review(&self, changeset: Changeset) -> Option<ReviewDecision> {
-        let review_id = format!("review-{}", NEXT_REVIEW.fetch_add(1, Ordering::Relaxed));
+        let review_id = format!("review-{}", self.step_id.0);
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
@@ -143,12 +145,6 @@ impl DispatchContext {
     /// Announce how a review ended, once the decision has been acted on.
     pub async fn review_closed(&self, outcome: ReviewOutcome) {
         let _ = self.events.send(Event::ReviewClosed { outcome }).await;
-    }
-
-    /// The step this context was built for — for a dispatcher that wants
-    /// to key something by step.
-    pub fn step_id(&self) -> StepId {
-        self.step_id
     }
 
     /// Announce the plan as it now stands.

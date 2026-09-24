@@ -3,13 +3,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-#[allow(unused_imports)]
-use crate::types::{Answer, ReviewDecision};
 use crate::{
     client::{LlmClient, LlmRequest},
     dispatcher::{DispatchContext, PendingMap, PendingReply, ToolDispatcher},
     event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason},
-    log::ConversationLog,
+    log::{ConversationLog, RecordSink},
     prompt,
     types::*,
 };
@@ -18,7 +16,6 @@ pub struct Agent<C, D> {
     client: C,
     dispatcher: D,
     log: ConversationLog,
-    model: String,
     system: String,
     // Pending questions (keyed by the `ask` call's id) and reviews (keyed by
     // their own id) — see `PendingReply`. Shared rather than owned
@@ -26,26 +23,28 @@ pub struct Agent<C, D> {
     // that runs concurrently with the command loop — can register into the
     // same map the loop resolves against.
     pending: PendingMap,
+    /// The last turn and step ids minted. The agent is the only thing that
+    /// mints them, so the counters live here rather than in a global; a
+    /// resumed conversation moves them past the highest id it carries.
+    last_turn: u64,
+    last_step: u64,
 }
 
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
-    pub fn new(
-        client: C,
-        dispatcher: D,
-        model: impl Into<String>,
-        additional_context: Option<&str>,
-    ) -> Self {
+    pub fn new(client: C, dispatcher: D, additional_context: Option<&str>) -> Self {
         Self {
             client,
             dispatcher,
             log: ConversationLog::new(),
-            model: model.into(),
             system: prompt::compose(additional_context),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            last_turn: 0,
+            last_step: 0,
         }
     }
 
-    pub fn log(&self) -> &ConversationLog {
+    #[cfg(test)]
+    fn log(&self) -> &ConversationLog {
         &self.log
     }
 
@@ -53,16 +52,31 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     /// memory. Builder-style rather than a `new` argument because every
     /// caller but aldwin-cli's bootstrap — every test in this crate
     /// included — wants the historyless log `new` already builds.
-    pub fn with_sink(mut self, sink: Arc<dyn crate::log::RecordSink>) -> Self {
+    pub fn with_sink(mut self, sink: Arc<dyn RecordSink>) -> Self {
         self.log = ConversationLog::with_sink(sink);
         self
     }
 
-    /// Point the transcript writer at a different file. `/resume` moves it
-    /// onto the resumed session's transcript so the continued conversation
-    /// lands in the file it came from; `/clear` moves it onto a fresh one.
-    pub fn set_sink(&mut self, sink: Option<Arc<dyn crate::log::RecordSink>>) {
-        self.log.set_sink(sink);
+    fn next_turn(&mut self) -> TurnId {
+        self.last_turn += 1;
+        TurnId(self.last_turn)
+    }
+
+    fn next_step(&mut self) -> StepId {
+        self.last_step += 1;
+        StepId(self.last_step)
+    }
+
+    /// Moves the counters past every id in `records`, so a turn started
+    /// after a resume never reuses an id the resumed conversation carries.
+    fn continue_ids(&mut self, records: &[LogRecord]) {
+        for record in records {
+            let (turn, step) = record.ids();
+            self.last_turn = self.last_turn.max(turn.0);
+            if let Some(step) = step {
+                self.last_step = self.last_step.max(step.0);
+            }
+        }
     }
 
     /// Resolve a pending question. An entry that turns out to be a review is
@@ -139,7 +153,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     let mut next = Some(text);
                     let mut typed = true;
                     while let Some(text) = next.take() {
-                        let turn_id = TurnId::next();
+                        let turn_id = self.next_turn();
                         if !typed {
                             let _ = events
                                 .send(Event::FollowUp {
@@ -180,8 +194,9 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 // `ConversationLog::replace`. The event carries the records
                 // back out so the TUI rebuilds from the copy core just took
                 // rather than from a second read of the file.
-                Command::Resume { records } => {
-                    self.log.replace(records.clone());
+                Command::Resume { session, records } => {
+                    self.continue_ids(&records);
+                    self.log.replace(&session, records.clone());
                     let _ = events.send(Event::HistoryLoaded { records }).await;
                 }
             }
@@ -205,7 +220,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         let mut messages = self.messages_from_log();
 
         loop {
-            let step_id = StepId::next();
+            let step_id = self.next_step();
 
             let result = self
                 .run_step(turn_id, step_id, &mut messages, events, commands)
@@ -327,7 +342,6 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         events: &mpsc::Sender<Event>,
         commands: &mut mpsc::Receiver<Command>,
     ) -> StepResult {
-        let cache_breakpoints = cache_breakpoints(messages);
         let tools = self.dispatcher.definitions();
 
         let mut text_buf = String::new();
@@ -343,11 +357,11 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         // `messages` at the end so the step's output can be pushed onto it.
         let stream_terminal: StepTerminal = {
             let request = LlmRequest {
-                model: &self.model,
                 system: &self.system,
                 tools: &tools,
                 messages: messages.as_slice(),
-                cache_breakpoints: &cache_breakpoints,
+                // The whole conversation so far is the cached prefix.
+                cache_breakpoint: messages.len().checked_sub(1),
             };
             let mut stream = self.client.stream(request);
 
@@ -748,16 +762,6 @@ fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
     }
 }
 
-/// The first message and the last: the stable prefix, and the whole
-/// conversation so far.
-fn cache_breakpoints(messages: &[Message]) -> Vec<usize> {
-    match messages.len() {
-        0 => vec![],
-        1 => vec![0],
-        n => vec![0, n - 1],
-    }
-}
-
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 enum StepTerminal {
@@ -1019,7 +1023,7 @@ mod tests {
                 outcome: outcome(StopReason::EndTurn),
             },
         ]]);
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1069,7 +1073,7 @@ mod tests {
                 outcome: outcome(StopReason::EndTurn),
             },
         ]]);
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1139,7 +1143,7 @@ mod tests {
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -1214,7 +1218,7 @@ mod tests {
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(64);
@@ -1263,7 +1267,7 @@ mod tests {
             },
         ]]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -1313,7 +1317,7 @@ mod tests {
                 outcome: outcome(StopReason::EndTurn),
             },
         ]]);
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1371,7 +1375,7 @@ mod tests {
                 },
             ],
         ]);
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1431,7 +1435,7 @@ mod tests {
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1487,7 +1491,7 @@ mod tests {
             },
         ]]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -1516,7 +1520,7 @@ mod tests {
     /// throws away has to be said out loud.
     #[tokio::test]
     async fn a_command_discarded_mid_turn_is_said_not_only_logged() {
-        let agent = Agent::new(StallingClient, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(StallingClient, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1541,7 +1545,10 @@ mod tests {
                 text: "and another".into(),
             },
             Command::ClearHistory,
-            Command::Resume { records: vec![] },
+            Command::Resume {
+                session: SessionId("s".into()),
+                records: vec![],
+            },
         ] {
             cmd_tx.send(cmd).await.unwrap();
             let event = ev_rx.recv().await.expect("agent dropped the event channel");
@@ -1559,7 +1566,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_leaves_well_formed_log_not_a_torn_one() {
-        let agent = Agent::new(StallingClient, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(StallingClient, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1606,12 +1613,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_after_tool_use_requested_leaves_no_orphaned_tool_use() {
-        let agent = Agent::new(
-            StallingAfterToolUseClient,
-            EchoDispatcher,
-            "test-model",
-            None,
-        );
+        let agent = Agent::new(StallingAfterToolUseClient, EchoDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1669,7 +1671,7 @@ mod tests {
                 outcome: outcome(StopReason::ToolUse),
             },
         ]]);
-        let agent = Agent::new(client, StallingDispatcher, "test-model", None);
+        let agent = Agent::new(client, StallingDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1760,12 +1762,7 @@ mod tests {
     /// approve is answered with `ReviewClosed` before `TurnEnded`.
     #[tokio::test]
     async fn the_review_opens_at_the_end_of_the_turn_and_an_approve_closes_it() {
-        let agent = Agent::new(
-            one_edit_then_done(),
-            ReviewingDispatcher,
-            "test-model",
-            None,
-        );
+        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -1848,7 +1845,7 @@ mod tests {
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, ReviewingDispatcher, "test-model", None);
+        let agent = Agent::new(client, ReviewingDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -1961,7 +1958,7 @@ mod tests {
                 },
             ],
         ]);
-        let agent = Agent::new(client, RefusingDispatcher, "test-model", None);
+        let agent = Agent::new(client, RefusingDispatcher, None);
         let log = agent.log().clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -2016,7 +2013,7 @@ mod tests {
                 outcome: outcome(StopReason::EndTurn),
             }],
         ]);
-        let agent = Agent::new(client, AskingDispatcher, "test-model", None);
+        let agent = Agent::new(client, AskingDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -2075,7 +2072,7 @@ mod tests {
                 outcome: outcome(StopReason::ToolUse),
             },
         ]]);
-        let agent = Agent::new(client, AskingDispatcher, "test-model", None);
+        let agent = Agent::new(client, AskingDispatcher, None);
         let pending = agent.pending.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -2119,12 +2116,7 @@ mod tests {
     /// call's and so needs its own clearing.
     #[tokio::test]
     async fn cancel_during_a_pending_review_does_not_leak_its_entry() {
-        let agent = Agent::new(
-            one_edit_then_done(),
-            ReviewingDispatcher,
-            "test-model",
-            None,
-        );
+        let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, None);
         let pending = agent.pending.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
@@ -2185,7 +2177,7 @@ mod tests {
             ],
         ]);
         let seen_messages = client.seen_messages_handle();
-        let agent = Agent::new(client, EchoDispatcher, "test-model", None);
+        let agent = Agent::new(client, EchoDispatcher, None);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (ev_tx, mut ev_rx) = mpsc::channel(32);
@@ -2235,5 +2227,210 @@ mod tests {
             tool_use_idx + 1,
             "tool_use must be immediately followed by its tool_result, with nothing in between"
         );
+    }
+
+    /// What the log told its sink: every record, and every time the sink
+    /// was moved.
+    #[derive(Debug, Default)]
+    struct SpySink {
+        records: Mutex<Vec<LogRecord>>,
+        moves: Mutex<Vec<String>>,
+    }
+
+    impl RecordSink for SpySink {
+        fn append(&self, record: &LogRecord) {
+            self.records.lock().unwrap().push(record.clone());
+        }
+        fn cleared(&self) {
+            self.moves.lock().unwrap().push("cleared".into());
+        }
+        fn resumed(&self, session: &SessionId) {
+            self.moves
+                .lock()
+                .unwrap()
+                .push(format!("resumed {session}"));
+        }
+    }
+
+    /// Answers each step from a script, and stalls once the script is spent
+    /// — a turn that stays open for as long as a test needs it to.
+    struct ScriptedThenStallingClient(Mutex<VecDeque<Vec<LlmEvent>>>);
+
+    impl LlmClient for ScriptedThenStallingClient {
+        fn stream<'a>(
+            &'a self,
+            _request: LlmRequest<'a>,
+        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            match self.0.lock().unwrap().pop_front() {
+                Some(events) => Box::pin(stream::iter(events.into_iter().map(Ok))),
+                None => Box::pin(stream::pending()),
+            }
+        }
+    }
+
+    /// Hands back one follow-up at the end of the first turn, as a review
+    /// with comments does, and none after.
+    #[derive(Default)]
+    struct FollowingUpDispatcher(std::sync::atomic::AtomicBool);
+
+    #[async_trait]
+    impl ToolDispatcher for FollowingUpDispatcher {
+        async fn dispatch(&self, call: ToolCall, _ctx: &DispatchContext) -> ToolResult {
+            ToolResult {
+                call_id: call.id,
+                content: "ok".into(),
+                is_error: false,
+            }
+        }
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn turn_ending(&self, _ctx: &DispatchContext) -> Option<String> {
+            let already = self.0.swap(true, std::sync::atomic::Ordering::Relaxed);
+            (!already).then(|| "follow-up".to_string())
+        }
+    }
+
+    async fn until<T>(
+        ev_rx: &mut mpsc::Receiver<Event>,
+        mut wanted: impl FnMut(Event) -> Option<T>,
+    ) -> T {
+        loop {
+            let event = ev_rx.recv().await.expect("agent dropped the event channel");
+            if let Some(found) = wanted(event) {
+                return found;
+            }
+        }
+    }
+
+    /// `/clear` or `/resume` sent in the gap between a review's follow-up
+    /// turns — after one turn's `TurnEnded`, before the next one's
+    /// `TurnStarted` — used to move the transcript writer on the way past,
+    /// though core then refused the command: the rest of the conversation
+    /// went into another session's file. The sink moves only when core acts,
+    /// and core does not act while the conversation is still going.
+    #[tokio::test]
+    async fn the_sink_moves_only_when_core_acts_and_never_between_follow_up_turns() {
+        let client = ScriptedThenStallingClient(Mutex::new(VecDeque::from([vec![
+            LlmEvent::TextDelta {
+                text: "first".into(),
+            },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
+        ]])));
+        let sink = Arc::new(SpySink::default());
+        let agent =
+            Agent::new(client, FollowingUpDispatcher::default(), None).with_sink(sink.clone());
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
+
+        // The gap: the first turn has ended and its follow-up is announced,
+        // ahead of the follow-up turn's own `TurnStarted`.
+        until(&mut ev_rx, |e| {
+            matches!(e, Event::FollowUp { .. }).then_some(())
+        })
+        .await;
+        cmd_tx.send(Command::ClearHistory).await.unwrap();
+        cmd_tx
+            .send(Command::Resume {
+                session: SessionId("elsewhere".into()),
+                records: vec![],
+            })
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            let message = until(&mut ev_rx, |e| match e {
+                Event::Notice { message } => Some(message),
+                _ => None,
+            })
+            .await;
+            assert!(message.starts_with("a turn is running"), "{message}");
+        }
+        assert!(
+            sink.moves.lock().unwrap().is_empty(),
+            "the writer stays on this conversation's file"
+        );
+        assert!(
+            sink.records
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| matches!(r, LogRecord::UserMessage { text, .. } if text == "follow-up")),
+            "and the follow-up turn is written to it"
+        );
+
+        // Once the conversation is idle, the same command moves the writer.
+        cmd_tx.send(Command::Cancel).await.unwrap();
+        until(&mut ev_rx, |e| {
+            matches!(e, Event::TurnEnded { .. }).then_some(())
+        })
+        .await;
+        cmd_tx.send(Command::ClearHistory).await.unwrap();
+        until(&mut ev_rx, |e| {
+            matches!(e, Event::HistoryCleared).then_some(())
+        })
+        .await;
+        assert_eq!(*sink.moves.lock().unwrap(), ["cleared"]);
+    }
+
+    /// Turn and step ids are minted by the agent, and a resumed conversation
+    /// carries its own: the next turn must not reuse one of them.
+    #[tokio::test]
+    async fn a_resumed_conversation_continues_past_its_highest_ids() {
+        let client = ScriptedClient::new(vec![vec![
+            LlmEvent::TextDelta { text: "hi".into() },
+            LlmEvent::StepEnded {
+                outcome: outcome(StopReason::EndTurn),
+            },
+        ]]);
+        let agent = Agent::new(client, EchoDispatcher, None);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx
+            .send(Command::Resume {
+                session: SessionId("earlier".into()),
+                records: vec![
+                    LogRecord::TurnStarted { turn_id: TurnId(7) },
+                    LogRecord::AssistantMessage {
+                        turn_id: TurnId(7),
+                        step_id: StepId(12),
+                        text: "from disk".into(),
+                    },
+                    LogRecord::TurnEnded {
+                        turn_id: TurnId(7),
+                        reason: TurnEndReason::EndTurn,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+        cmd_tx
+            .send(Command::Submit {
+                text: "again".into(),
+            })
+            .await
+            .unwrap();
+
+        let turn = until(&mut ev_rx, |e| match e {
+            Event::TurnStarted { turn_id } => Some(turn_id),
+            _ => None,
+        })
+        .await;
+        let step = until(&mut ev_rx, |e| match e {
+            Event::StepEnded { step_id, .. } => Some(step_id),
+            _ => None,
+        })
+        .await;
+        assert_eq!((turn, step), (TurnId(8), StepId(13)));
     }
 }

@@ -14,17 +14,18 @@ pub enum LlmError {
     Provider { status: u16, message: String },
     #[error("stream interrupted: {0}")]
     StreamInterrupted(String),
-    #[error("terminal error after {attempts} retries: {message}")]
+    #[error("terminal error after {attempts} attempts: {message}")]
     Terminal { attempts: u32, message: String },
 }
 
 pub struct LlmRequest<'a> {
-    pub model: &'a str,
     pub system: &'a str,
     pub tools: &'a [ToolDefinition],
     pub messages: &'a [Message],
-    /// Indices into `messages` after which the provider should insert a cache breakpoint.
-    pub cache_breakpoints: &'a [usize],
+    /// The index into `messages` after which the provider should insert a
+    /// cache breakpoint — the last message, so the whole conversation so far
+    /// is the cached prefix. `None` for an empty conversation.
+    pub cache_breakpoint: Option<usize>,
 }
 
 pub trait LlmClient: Send + Sync {

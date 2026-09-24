@@ -6,16 +6,19 @@
 //!    and the only vehicle for that is the session's `Event` channel — which
 //!    aldwin-config, having no tokio dependency, cannot hold.
 //! 2. **The swap.** `/clear` seals the current transcript and opens a fresh
-//!    one; `/resume` moves the writer onto the transcript it just loaded.
-//!    The agent holds this sink for the life of the process, so the file
-//!    underneath it is what changes — the same shape as `ClientHandle`,
-//!    which is how `/model` swaps a client the agent already owns.
+//!    one; `/resume` moves the writer onto the transcript it loaded. Both
+//!    happen when core acts on the command and tells its sink
+//!    (`RecordSink::cleared`, `RecordSink::resumed`) — never on the way
+//!    past, since core refuses either one while a turn runs. The agent holds
+//!    this sink for the life of the process, so the file underneath it is
+//!    what changes — the same shape as `ClientHandle`, which is how `/model`
+//!    swaps a client the agent already owns.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aldwin_config::{HistoryStore, SessionHeader, SessionSummary, HISTORY_VERSION};
+use aldwin_config::{ConfigError, HistoryStore, SessionHeader, SessionSummary, HISTORY_VERSION};
 use aldwin_core::{Event, LogRecord, RecordSink, SessionId};
 use aldwin_tui::SessionChoice;
 use tokio::sync::mpsc;
@@ -25,6 +28,8 @@ use tokio::sync::mpsc;
 #[derive(Debug)]
 pub struct History {
     dir: PathBuf,
+    /// The project root, for each new transcript's header.
+    cwd: PathBuf,
     model: String,
     /// Which transcript is being written *now* — the session the developer
     /// is sitting in, or the one they resumed onto. Excluded from every
@@ -40,20 +45,21 @@ pub struct History {
 }
 
 impl History {
-    /// Open this session's transcript. `Err` — a line for the developer —
-    /// when the history directory cannot be written: the session then runs
-    /// without one, having said so once. History must never be able to stop
-    /// a session starting, let alone fail a turn.
+    /// Open this session's transcript. `Err` when the history directory
+    /// cannot be written: the session then runs without one, having said
+    /// so once. History must never be able to stop a session starting, let
+    /// alone fail a turn.
     pub fn open(
         dir: PathBuf,
+        cwd: &Path,
         model: String,
         events: mpsc::Sender<Event>,
-    ) -> Result<Arc<Self>, String> {
+    ) -> Result<Arc<Self>, ConfigError> {
         let id = SessionId::mint();
-        let store = HistoryStore::create(&dir, &id, &header(&model))
-            .map_err(|e| format!("history is off for this session: {e}"))?;
+        let store = HistoryStore::create(&dir, &id, &header(cwd, &model))?;
         Ok(Arc::new(Self {
             dir,
+            cwd: cwd.to_path_buf(),
             model,
             current: Mutex::new(id),
             store: Mutex::new(Some(store)),
@@ -61,31 +67,6 @@ impl History {
             reported: AtomicBool::new(false),
             in_turn: AtomicBool::new(false),
         }))
-    }
-
-    /// `/clear` — seal this transcript and begin a new one.
-    ///
-    /// Sealing is implicit: nothing is written to close the old file. The
-    /// developer clears to manage the model's context, not to shred the
-    /// record, so the old transcript stays exactly as it is and remains
-    /// resumable.
-    pub fn seal_and_open_new(&self) {
-        let id = SessionId::mint();
-        let opened = match HistoryStore::create(&self.dir, &id, &header(&self.model)) {
-            Ok(store) => {
-                // A new file is a new chance to fail, and to be told about it.
-                self.reported.store(false, Ordering::Relaxed);
-                Some(store)
-            }
-            // The old transcript is sealed either way; what is lost is the
-            // recording from here on, and the developer is owed that once.
-            Err(e) => {
-                self.report(format!("history is off from here; the cleared conversation is kept, but no new transcript could be opened: {e}"));
-                None
-            }
-        };
-        *self.store.lock().expect("history lock poisoned") = opened;
-        *self.current.lock().expect("history lock poisoned") = id;
     }
 
     /// Says `message` once per transcript. A disk that is full at record 200
@@ -100,16 +81,6 @@ impl History {
         if !self.reported.swap(true, Ordering::Relaxed) {
             let _ = self.events.try_send(Event::Notice { message });
         }
-    }
-
-    /// `/resume` — continue writing into the transcript that was just
-    /// loaded, rather than forking a second file for the same conversation.
-    pub fn continue_session(&self, id: &SessionId) -> Result<(), String> {
-        let store = HistoryStore::reopen(&self.dir, id).map_err(|e| e.to_string())?;
-        *self.store.lock().expect("history lock poisoned") = Some(store);
-        *self.current.lock().expect("history lock poisoned") = id.clone();
-        self.reported.store(false, Ordering::Relaxed);
-        Ok(())
     }
 
     /// The transcript being written right now.
@@ -144,10 +115,12 @@ impl History {
         self.in_turn.store(true, Ordering::Relaxed);
     }
 
-    /// Is a turn still being written? The writer must not move while one is:
-    /// core discards a mid-turn `/clear` or `/resume`, so a swap made on the
-    /// way past would send the rest of the running conversation into another
-    /// session's file.
+    /// Is a turn still being written? The interceptor's early answer to a
+    /// `/clear` or `/resume` while one runs: it says so at once, rather than
+    /// reading a transcript that core would then refuse to take. Core's own
+    /// refusal is what keeps the writer where it is (`RecordSink::cleared`
+    /// and `resumed` are called only when core acts); this flag is only the
+    /// earlier word.
     pub fn turn_in_flight(&self) -> bool {
         self.in_turn.load(Ordering::Relaxed)
     }
@@ -167,6 +140,52 @@ impl RecordSink for History {
                 "history write failed; this session is no longer being recorded: {e}"
             ));
         }
+    }
+
+    /// `/clear` — seal this transcript and begin a new one.
+    ///
+    /// Sealing is implicit: nothing is written to close the old file. The
+    /// developer clears to manage the model's context, not to shred the
+    /// record, so the old transcript stays exactly as it is and remains
+    /// resumable.
+    fn cleared(&self) {
+        let id = SessionId::mint();
+        let opened = match HistoryStore::create(&self.dir, &id, &header(&self.cwd, &self.model)) {
+            Ok(store) => {
+                // A new file is a new chance to fail, and to be told about it.
+                self.reported.store(false, Ordering::Relaxed);
+                Some(store)
+            }
+            // The old transcript is sealed either way; what is lost is the
+            // recording from here on, and the developer is owed that once.
+            Err(e) => {
+                self.report(format!("history is off from here; the cleared conversation is kept, but no new transcript could be opened: {e}"));
+                None
+            }
+        };
+        *self.store.lock().expect("history lock poisoned") = opened;
+        *self.current.lock().expect("history lock poisoned") = id;
+    }
+
+    /// `/resume` — continue writing into the transcript that was just
+    /// loaded, rather than forking a second file for the same conversation.
+    fn resumed(&self, session: &SessionId) {
+        let reopened = HistoryStore::reopen(&self.dir, session);
+        self.reported.store(false, Ordering::Relaxed);
+        let store = match reopened {
+            Ok(store) => Some(store),
+            // The conversation is resumed either way; what cannot happen is
+            // writing its continuation into the file it came from — and
+            // writing it into the one before would mix two conversations.
+            Err(e) => {
+                self.report(format!(
+                    "history is off from here; session {session} could not be reopened: {e}"
+                ));
+                None
+            }
+        };
+        *self.store.lock().expect("history lock poisoned") = store;
+        *self.current.lock().expect("history lock poisoned") = session.clone();
     }
 }
 
@@ -211,14 +230,11 @@ fn format_when(epoch_secs: u64) -> String {
     }
 }
 
-fn header(model: &str) -> SessionHeader {
+fn header(cwd: &Path, model: &str) -> SessionHeader {
     SessionHeader {
         version: HISTORY_VERSION,
         started_at: now(),
-        cwd: std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned(),
+        cwd: cwd.to_string_lossy().into_owned(),
         model: model.to_string(),
     }
 }
@@ -239,7 +255,7 @@ mod tests {
     fn history(dir: &Path) -> (Arc<History>, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel(8);
         (
-            History::open(dir.to_path_buf(), "m".into(), tx).expect("a store"),
+            History::open(dir.to_path_buf(), Path::new("/p"), "m".into(), tx).expect("a store"),
             rx,
         )
     }
@@ -281,7 +297,7 @@ mod tests {
             history.append(&record);
         }
 
-        history.seal_and_open_new();
+        history.cleared();
         for record in turn(2, "after the clear") {
             history.append(&record);
         }
@@ -311,10 +327,8 @@ mod tests {
         }
         let id = SessionId(session_choices(dir.path())[0].id.clone());
 
-        history.seal_and_open_new(); // a second session, as a new launch would
-        history
-            .continue_session(&id)
-            .expect("the transcript reopens");
+        history.cleared(); // a second session, as a new launch would
+        history.resumed(&id);
         for record in turn(2, "second") {
             history.append(&record);
         }
@@ -342,8 +356,11 @@ mod tests {
         std::fs::write(&blocked, "not a directory").unwrap();
 
         let (tx, _rx) = mpsc::channel(8);
-        let failure = History::open(blocked.join("history"), "m".into(), tx).expect_err("a reason");
-        assert!(failure.contains("history is off"));
+        let failure = History::open(blocked.join("history"), Path::new("/p"), "m".into(), tx);
+        assert!(
+            failure.is_err(),
+            "the store reports why rather than panicking"
+        );
     }
 
     /// A sink whose file has gone away keeps accepting records — silently,
@@ -370,6 +387,28 @@ mod tests {
         );
     }
 
+    /// A resume whose transcript cannot be reopened stops recording rather
+    /// than writing the resumed conversation into the file before it.
+    #[test]
+    fn a_resume_that_cannot_reopen_its_transcript_says_so_and_records_nothing() {
+        let dir = tempdir().unwrap();
+        let (history, mut rx) = history(dir.path());
+        let gone = SessionId("0000000000-0-000000".into());
+
+        history.resumed(&gone);
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("could not be reopened"))
+        );
+        assert!(history.is_current(&gone));
+        for record in turn(1, "unrecorded") {
+            history.append(&record);
+        }
+        assert!(
+            session_choices(dir.path()).is_empty(),
+            "nothing was written"
+        );
+    }
+
     /// `/clear` with nowhere to open the next transcript used to switch
     /// history off without a word.
     #[test]
@@ -380,8 +419,8 @@ mod tests {
 
         std::fs::remove_dir_all(&store).unwrap();
         std::fs::write(&store, "not a directory").unwrap();
-        history.seal_and_open_new();
-        history.seal_and_open_new();
+        history.cleared();
+        history.cleared();
 
         assert!(
             matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("history is off from here"))

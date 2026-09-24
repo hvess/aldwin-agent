@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT_TURN: AtomicU64 = AtomicU64::new(1);
-static NEXT_STEP: AtomicU64 = AtomicU64::new(1);
+/// Process-wide, unlike turn and step ids (which the `Agent` mints): a
+/// session id names a file every process in the project shares a directory
+/// with, and `/clear` mints a second one inside the same process — see
+/// [`SessionId`].
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -43,18 +45,6 @@ impl SessionId {
 impl std::fmt::Display for SessionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl TurnId {
-    pub fn next() -> Self {
-        Self(NEXT_TURN.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl StepId {
-    pub fn next() -> Self {
-        Self(NEXT_STEP.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -116,7 +106,7 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn user(text: impl Into<String>) -> Self {
+    pub(crate) fn user(text: impl Into<String>) -> Self {
         Self {
             role: Role::User,
             content: vec![ContentBlock::Text { text: text.into() }],

@@ -1,28 +1,21 @@
 use std::pin::Pin;
 
-use aldwin_core::{LlmClient, LlmError, LlmEvent, LlmRequest, RetryInfo};
-use async_stream::try_stream;
-use eventsource_stream::Eventsource;
-use futures::{Stream, StreamExt};
+use aldwin_core::{LlmClient, LlmError, LlmEvent, LlmRequest};
+use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::client::LlmClientInitError;
 use crate::config::ProviderConfig;
-use crate::retry::{backoff, is_retryable_status, should_retry, terminal_error, AttemptOutcome};
+use crate::transport::{self, Dialect, Transport};
 use crate::wire_openai::{self, Assembler, WireChunk};
-
-const PROVIDER_NAME: &str = "openai-compatible";
 
 /// V0.5 OpenAI-compatible client implementing core's `LlmClient` — a sibling
 /// impl to `AnthropicClient` behind the same trait, not a refactor of it
 /// (see aldwin-llm.md). No OpenAI wire type crosses this struct's public
 /// surface — see `wire_openai.rs`.
 pub struct OpenAiCompatibleClient {
-    http: reqwest::Client,
     config: ProviderConfig,
-    headers: HeaderMap,
-    endpoint: String,
-    idle_timeout: std::time::Duration,
+    transport: Transport,
 }
 
 impl std::fmt::Debug for OpenAiCompatibleClient {
@@ -42,36 +35,9 @@ impl OpenAiCompatibleClient {
             .base_url
             .clone()
             .ok_or(LlmClientInitError::MissingBaseUrl)?;
-
-        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
-            LlmClientInitError::MissingApiKeyEnv {
-                var: config.api_key_env.clone(),
-            }
-        })?;
-
-        let mut headers = HeaderMap::new();
-        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
-            LlmClientInitError::InvalidApiKeyValue {
-                var: config.api_key_env.clone(),
-            }
-        })?;
-        headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-
-        let http = reqwest::Client::builder()
-            .build()
-            .map_err(LlmClientInitError::HttpClient)?;
-
-        Ok(Self {
-            http,
-            config,
-            headers,
-            endpoint,
-            idle_timeout: crate::retry::IDLE_TIMEOUT,
-        })
+        let headers = headers(&transport::api_key(&config.api_key_env)?, &config)?;
+        let transport = Transport::new(endpoint, headers)?;
+        Ok(Self { config, transport })
     }
 
     /// Test-only: points at a local fake server instead of a real endpoint,
@@ -83,23 +49,50 @@ impl OpenAiCompatibleClient {
         endpoint: String,
         idle_timeout: std::time::Duration,
     ) -> Self {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
-        );
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        let http = reqwest::Client::builder().build().unwrap();
-        Self {
-            http,
-            config,
-            headers,
-            endpoint,
-            idle_timeout,
+        let headers = headers(api_key, &config).unwrap();
+        let transport = Transport::new(endpoint, headers)
+            .unwrap()
+            .with_idle_timeout(idle_timeout);
+        Self { config, transport }
+    }
+}
+
+/// The bearer key. `Content-Type` is left to reqwest's `json`, which sets it.
+fn headers(api_key: &str, config: &ProviderConfig) -> Result<HeaderMap, LlmClientInitError> {
+    let bearer = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
+        LlmClientInitError::InvalidApiKeyValue {
+            var: config.api_key_env.clone(),
         }
+    })?;
+    let mut headers = HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, bearer);
+    Ok(headers)
+}
+
+impl Dialect for Assembler {
+    const PROVIDER: &'static str = "openai-compatible";
+    const STEP_END: &'static str = "finish_reason";
+
+    fn error_message(body: &str) -> Option<String> {
+        wire_openai::parse_error_body(body)
+    }
+
+    fn read(&mut self, data: &str) -> Result<Vec<LlmEvent>, String> {
+        // The literal end-of-stream marker. A finished step has already
+        // returned on its StepEnded, or is held back for usage and completed
+        // by `close` — so reaching it means the stream is over.
+        if data == "[DONE]" {
+            return Err(format!("stream closed before {}", Self::STEP_END));
+        }
+        let chunk: WireChunk =
+            serde_json::from_str(data).map_err(|e| format!("malformed SSE JSON: {e}"))?;
+        self.handle(chunk).map_err(|e| e.to_string())
+    }
+
+    /// The assembler holds StepEnded back when `finish_reason` arrives
+    /// before usage does; the stream ending is what completes it.
+    fn close(&mut self) -> Option<LlmEvent> {
+        self.finish()
     }
 }
 
@@ -108,117 +101,8 @@ impl LlmClient for OpenAiCompatibleClient {
         &'a self,
         request: LlmRequest<'a>,
     ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-        let body = wire_openai::build_request(&self.config, &request);
-
-        Box::pin(try_stream! {
-            let mut attempt: u32 = 0;
-
-            'attempts: loop {
-                attempt += 1;
-
-                let sent = self.http.post(&self.endpoint).headers(self.headers.clone()).json(&body).send().await;
-                let resp = match sent {
-                    Ok(r) => r,
-                    Err(e) => {
-                        if should_retry(attempt) {
-                            yield LlmEvent::RetryAttempt {
-                                info: RetryInfo { provider: PROVIDER_NAME.into(), status: None, message: e.to_string(), attempt },
-                            };
-                            tokio::time::sleep(backoff(attempt)).await;
-                            continue 'attempts;
-                        }
-                        Err(terminal_error(attempt, None, e.to_string()))?;
-                        continue;
-                    }
-                };
-
-                let status = resp.status();
-                if !status.is_success() {
-                    let text = resp.text().await.unwrap_or_default();
-                    let message = wire_openai::parse_error_body(&text).unwrap_or(text);
-                    if is_retryable_status(status.as_u16()) && should_retry(attempt) {
-                        yield LlmEvent::RetryAttempt {
-                            info: RetryInfo { provider: PROVIDER_NAME.into(), status: Some(status.as_u16()), message, attempt },
-                        };
-                        tokio::time::sleep(backoff(attempt)).await;
-                        continue 'attempts;
-                    }
-                    Err(terminal_error(attempt, Some(status.as_u16()), message))?;
-                    continue;
-                }
-
-                let mut sse = resp.bytes_stream().eventsource();
-                let mut assembler = Assembler::new();
-                let mut emitted_any = false;
-
-                loop {
-                    let outcome = match tokio::time::timeout(self.idle_timeout, sse.next()).await {
-                        Err(_elapsed) => AttemptOutcome::Failed("idle timeout: no SSE activity for 60s".to_string()),
-                        Ok(None) => AttemptOutcome::Failed("stream closed before finish_reason".to_string()),
-                        Ok(Some(Err(e))) => AttemptOutcome::Failed(format!("SSE framing error: {e}")),
-                        Ok(Some(Ok(raw))) if raw.data.is_empty() => continue,
-                        // The literal end-of-stream marker: the expected path
-                        // already returns on `finish_reason`'s StepEnded
-                        // before ever reaching this line, so getting here
-                        // means the stream ended without one — treat like a
-                        // closed connection, not like valid JSON.
-                        Ok(Some(Ok(raw))) if raw.data == "[DONE]" => AttemptOutcome::Failed("stream closed before finish_reason".to_string()),
-                        Ok(Some(Ok(raw))) => match serde_json::from_str::<WireChunk>(&raw.data) {
-                            Err(e) => AttemptOutcome::Failed(format!("malformed SSE JSON: {e}")),
-                            Ok(wire_chunk) => match assembler.handle(wire_chunk) {
-                                Ok(events) => AttemptOutcome::Events(events),
-                                Err(e) => AttemptOutcome::Failed(e.to_string()),
-                            },
-                        },
-                    };
-
-                    match outcome {
-                        AttemptOutcome::Events(events) => {
-                            let mut step_ended = false;
-                            for event in events {
-                                if matches!(event, LlmEvent::StepEnded { .. }) {
-                                    step_ended = true;
-                                }
-                                emitted_any = true;
-                                yield event;
-                            }
-                            if step_ended {
-                                return;
-                            }
-                        }
-                        AttemptOutcome::Failed(message) => {
-                            // The assembler holds StepEnded back when
-                            // finish_reason arrives before usage does; every
-                            // way a stream can end reaches this arm, so this
-                            // is where that turn gets completed. Only a
-                            // stream that ended *without* a finish_reason
-                            // falls through to the failure paths below.
-                            if let Some(event) = assembler.finish() {
-                                yield event;
-                                return;
-                            }
-                            if !emitted_any && should_retry(attempt) {
-                                yield LlmEvent::RetryAttempt {
-                                    info: RetryInfo { provider: PROVIDER_NAME.into(), status: None, message, attempt },
-                                };
-                                tokio::time::sleep(backoff(attempt)).await;
-                                continue 'attempts;
-                            }
-                            // Mid-stream errors after the first event are
-                            // never retried, matching AnthropicClient's rule
-                            // — retrying now would splice two completions
-                            // into one log entry.
-                            if emitted_any {
-                                Err(LlmError::StreamInterrupted(message))?;
-                            } else {
-                                Err(LlmError::Terminal { attempts: attempt, message })?;
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-        })
+        self.transport
+            .stream::<Assembler>(wire_openai::build_request(&self.config, &request))
     }
 }
 
@@ -227,6 +111,7 @@ mod tests {
     use super::*;
     use crate::test_server::{self, Canned};
     use aldwin_core::Message;
+    use futures::StreamExt;
     use std::time::Duration;
 
     fn config() -> ProviderConfig {
@@ -235,7 +120,7 @@ mod tests {
             model: "mistral-small-latest".into(),
             api_key_env: "UNUSED".into(),
             base_url: Some("https://x".into()),
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         }
     }
 
@@ -253,11 +138,10 @@ mod tests {
 
     fn request<'a>(messages: &'a [Message]) -> LlmRequest<'a> {
         LlmRequest {
-            model: "unused",
             system: "sys",
             tools: &[],
             messages,
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         }
     }
 
@@ -417,7 +301,7 @@ mod tests {
             model: "m".into(),
             api_key_env: "UNUSED".into(),
             base_url: None,
-            extended_thinking_budget: 4096,
+            extended_thinking_budget: Some(4096),
         };
         assert!(matches!(
             OpenAiCompatibleClient::new(config),

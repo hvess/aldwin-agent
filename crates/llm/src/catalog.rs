@@ -60,18 +60,9 @@ impl Provider {
     pub fn default_model(&self) -> &'static str {
         self.models[0].id
     }
-
-    pub fn offers_model(&self, id: &str) -> bool {
-        self.models.iter().any(|m| m.id == id)
-    }
 }
 
-/// How many of [`PROVIDERS`] a short list would show before a `more` row.
-/// The current provider question lists every row; this survives from the
-/// first-run screen for a caller that wants the curated prefix.
-pub const CURATED: usize = 3;
-
-/// Ordered: the curated rows first, then everything the `more` row reveals.
+/// In the order the provider question lists them.
 pub static PROVIDERS: &[Provider] = &[
     Provider {
         id: "anthropic",
@@ -135,7 +126,6 @@ pub static PROVIDERS: &[Provider] = &[
             },
         ],
     },
-    // Everything below here is behind the `more` row.
     Provider {
         id: "lumo",
         kind: ProviderKind::OpenaiCompatible,
@@ -207,26 +197,24 @@ pub fn provider_ids() -> Vec<&'static str> {
     PROVIDERS.iter().map(|p| p.id).collect()
 }
 
-/// The catalogue entry whose `kind` and `base_url` match a `provider.yaml`
-/// already on disk, or `None` when the developer has
-/// hand-written an endpoint the catalogue has never heard of.
+/// The catalogue entry whose `kind` and `base_url` match a `provider.yaml`'s,
+/// or `None` when the developer has hand-written an endpoint the catalogue
+/// has never heard of.
 ///
 /// Matching on the endpoint rather than on a name stored in the file is
 /// deliberate: `provider.yaml` records what to *call*, not which row of a
 /// menu was clicked, and adding a name field would create a second source
 /// of truth that could disagree with the URL beside it.
-pub fn identify(config: &aldwin_config::ProviderConfig) -> Option<&'static Provider> {
+pub fn identify(kind: ProviderKind, base_url: Option<&str>) -> Option<&'static Provider> {
     PROVIDERS
         .iter()
-        .find(|p| p.kind == config.provider && p.base_url == config.base_url.as_deref())
+        .find(|p| p.kind == kind && p.base_url == base_url)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `default_model()` indexes `[0]`, so an empty list would panic on
-    /// first run rather than at compile time.
     /// The context bar divides by this, so a zero would be a bar that never
     /// moves — or a divide by zero, depending on who reads it.
     #[test]
@@ -244,6 +232,8 @@ mod tests {
         }
     }
 
+    /// `default_model()` indexes `[0]`, so an empty list would panic at
+    /// `/model provider` rather than at compile time.
     #[test]
     fn every_provider_offers_a_model() {
         for p in PROVIDERS {
@@ -253,20 +243,6 @@ mod tests {
                 p.id
             );
         }
-    }
-
-    /// The curated rows are a prefix of the catalogue, not a separate list —
-    /// first run shows `PROVIDERS[..CURATED]` and then everything.
-    #[test]
-    fn the_curated_rows_are_a_prefix_and_leave_something_behind_more() {
-        assert!(
-            CURATED < PROVIDERS.len(),
-            "the `more` row must reveal something"
-        );
-        assert_eq!(
-            PROVIDERS[0].id, "anthropic",
-            "the curated list opens on the provider the harness was built against"
-        );
     }
 
     /// Ids reach `/model` as the half before a `/`, and land in
@@ -372,46 +348,22 @@ mod tests {
         }
     }
 
-    /// First run draws the whole catalogue once `more` is taken, on a frame
-    /// that is 36 rows and does not scroll. Everything but the provider
-    /// options is fixed: 3 top bar, 4 wordmark block, 3 gap, 2 for the
-    /// provider prose and its blank row, 3 gap, 6 for the access step, 3
-    /// footer — 24 rows, leaving 12.
     #[test]
-    fn the_whole_catalogue_fits_the_expanded_first_run_screen() {
-        assert!(
-            PROVIDERS.len() <= 12,
-            "{} providers would be clipped by the 36-row frame",
-            PROVIDERS.len()
+    fn identify_recovers_the_catalogue_row_from_a_written_config() {
+        let google = provider("google").unwrap();
+        assert_eq!(
+            identify(google.kind, google.base_url).map(|p| p.id),
+            Some("google")
         );
     }
 
     #[test]
-    fn identify_recovers_the_catalogue_row_from_a_written_config() {
-        let anthropic = provider("anthropic").unwrap();
-        let written = aldwin_config::ProviderConfig {
-            version: aldwin_config::PROVIDER_VERSION,
-            provider: anthropic.kind,
-            model: anthropic.default_model().into(),
-            base_url: anthropic.base_url.map(String::from),
-            api_key_env: anthropic.api_key_env.into(),
-            extended_thinking_budget: None,
-        };
-        assert_eq!(identify(&written).map(|p| p.id), Some("anthropic"));
-    }
-
-    #[test]
     fn identify_returns_none_for_a_hand_written_endpoint() {
-        let written = aldwin_config::ProviderConfig {
-            version: aldwin_config::PROVIDER_VERSION,
-            provider: ProviderKind::OpenaiCompatible,
-            model: "qwen3-coder".into(),
-            base_url: Some("http://localhost:8000/v1/chat/completions".into()),
-            api_key_env: "VLLM_API_KEY".into(),
-            extended_thinking_budget: None,
-        };
         assert_eq!(
-            identify(&written),
+            identify(
+                ProviderKind::OpenaiCompatible,
+                Some("http://localhost:8000/v1/chat/completions")
+            ),
             None,
             "a developer's own endpoint must not be reported as a catalogue provider"
         );

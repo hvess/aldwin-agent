@@ -2,21 +2,13 @@ use std::time::Duration;
 
 use aldwin_core::LlmError;
 
-/// What one read off the SSE stream produced this iteration — shared by both
-/// clients' attempt loops since neither variant is wire-type-specific
-/// (`LlmEvent` is core's normalised type, `String` is a plain error message).
-pub enum AttemptOutcome {
-    Events(Vec<aldwin_core::LlmEvent>),
-    Failed(String),
-}
-
 /// Chooses the terminal error variant for a failure we're not retrying.
 /// `attempt == 1` means nothing was ever retried — surface the specific
 /// cause (`Provider`/`Network`). `attempt > 1` means retries were exhausted
-/// — surface `Terminal`, core's "gave up after N tries" bucket, since by
+/// — surface `Terminal`, core's "gave up after N attempts" bucket, since by
 /// that point the specific final-attempt cause is less useful than the
-/// retry count. Shared by both `AnthropicClient` and `OpenAiCompatibleClient`
-/// — the rule is provider-agnostic.
+/// attempt count. The rule is provider-agnostic; `transport.rs` applies it
+/// for both clients.
 pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> LlmError {
     if attempt == 1 {
         match status {

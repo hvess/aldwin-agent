@@ -239,16 +239,19 @@ pub enum Command {
     /// next turn's `messages_from_log()` sees the resumed conversation.
     /// Core acknowledges with `Event::HistoryLoaded`.
     ///
-    /// It carries the records rather than a `SessionId` because core owns no
-    /// filesystem dependency: aldwin-cli's interceptor reads the file (it
+    /// It carries the records as well as the `SessionId` because core owns
+    /// no filesystem dependency: aldwin-cli's interceptor reads the file (it
     /// holds the `Config` that knows where history lives) and core is handed
-    /// the result. Same division as `ClearHistory`, which core acts on
-    /// without knowing what `/clear` is.
+    /// the result. The id goes on to the `RecordSink`, which continues that
+    /// session's transcript — at the moment core acts, not before. Same
+    /// division as `ClearHistory`, which core acts on without knowing what
+    /// `/clear` is.
     ///
     /// Refused with a `Notice` mid-turn, exactly as `ClearHistory` is:
     /// there is no sound meaning for "replace the history" while a turn is
     /// in flight using it.
     Resume {
+        session: SessionId,
         records: Vec<LogRecord>,
     },
 }
@@ -308,4 +311,33 @@ pub enum LogRecord {
         turn_id: TurnId,
         reason: TurnEndReason,
     },
+}
+
+impl LogRecord {
+    /// The turn this record belongs to, and its step when it has one.
+    pub(crate) fn ids(&self) -> (TurnId, Option<StepId>) {
+        match self {
+            Self::TurnStarted { turn_id }
+            | Self::UserMessage { turn_id, .. }
+            | Self::TurnEnded { turn_id, .. } => (*turn_id, None),
+            Self::AssistantMessage {
+                turn_id, step_id, ..
+            }
+            | Self::Thinking {
+                turn_id, step_id, ..
+            }
+            | Self::RedactedThinking {
+                turn_id, step_id, ..
+            }
+            | Self::ToolUse {
+                turn_id, step_id, ..
+            }
+            | Self::ToolResult {
+                turn_id, step_id, ..
+            }
+            | Self::StepBoundary {
+                turn_id, step_id, ..
+            } => (*turn_id, Some(*step_id)),
+        }
+    }
 }

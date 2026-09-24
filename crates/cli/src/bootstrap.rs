@@ -8,18 +8,29 @@ use aldwin_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
 use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging, Workspace};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
+use tokio::task::JoinError;
 
 use crate::context;
 use crate::error::StartupError;
 use crate::history::History;
 use crate::slash;
 
-/// Whichever client `provider_config` selects, built the same way at
-/// startup and on every `/model` after it — so a model swapped into a
+/// Whichever client the provider settings in force select, built the same
+/// way at startup and on every `/model` after it — so a model swapped into a
 /// running session is reached exactly as one chosen at launch would be.
+///
+/// The one place a `provider.yaml`'s settings become aldwin-llm's: that
+/// crate knows nothing of files, scopes or overlays.
 fn build_client(
-    config: aldwin_llm::ProviderConfig,
+    provider: &aldwin_config::ProviderConfig,
 ) -> Result<Arc<dyn LlmClient>, aldwin_llm::LlmClientInitError> {
+    let config = aldwin_llm::ProviderConfig {
+        kind: provider.provider,
+        model: provider.model.clone(),
+        api_key_env: provider.api_key_env.clone(),
+        base_url: provider.base_url.clone(),
+        extended_thinking_budget: provider.extended_thinking_budget,
+    };
     Ok(match config.kind {
         ProviderKind::Anthropic => Arc::new(aldwin_llm::AnthropicClient::new(config)?),
         ProviderKind::OpenaiCompatible => {
@@ -90,8 +101,11 @@ impl slash::ModelSwitch for ClientHandle {
     /// Builds first and stores second, so a client that cannot be
     /// constructed — the new provider's `api_key_env` is not exported —
     /// leaves the session on the one it has.
-    fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String> {
-        self.store(build_client(config.clone()).map_err(|e| e.to_string())?);
+    fn switch(
+        &self,
+        config: &aldwin_config::ProviderConfig,
+    ) -> Result<(), aldwin_llm::LlmClientInitError> {
+        self.store(build_client(config)?);
         Ok(())
     }
 }
@@ -165,21 +179,14 @@ pub async fn run() -> Result<(), StartupError> {
     // What the session boots on. Nothing configured is not an error any
     // more: the launch card says `Model  not set` and the first message
     // asks, and `/model` moves the session onto the answer.
-    let project_provider = config.project_provider();
-    let global_provider = config.global_provider().ok();
-    let effective_provider = project_provider.clone().or_else(|| global_provider.clone());
-    let (client, model_name, session_model) = match (&effective_provider, &global_provider) {
-        (Some(effective), Some(global)) => {
-            let provider_config = aldwin_llm::resolve(project_provider.as_ref(), global);
-            let model_name = provider_config.model.clone();
-            let session_model = slash::qualified(effective, aldwin_llm::identify(effective));
-            (
-                ClientHandle::new(build_client(provider_config)?),
-                model_name,
-                session_model,
-            )
-        }
-        _ => (
+    let effective_provider = config.effective_provider();
+    let (client, model_name, session_model) = match &effective_provider {
+        Some(effective) => (
+            ClientHandle::new(build_client(effective)?),
+            effective.model.clone(),
+            slash::qualified(effective, slash::identify(effective)),
+        ),
+        None => (
             ClientHandle::new(Arc::new(Unconfigured)),
             String::new(),
             String::new(),
@@ -228,9 +235,15 @@ pub async fn run() -> Result<(), StartupError> {
     // This session's transcript. `None` when the history directory cannot be
     // written — the session then runs without one, having said so once.
     // History must never be able to stop a session starting.
-    let history = match History::open(config.history_dir(), model_name.clone(), event_tx.clone()) {
+    let history = match History::open(
+        config.history_dir(),
+        &cwd,
+        model_name.clone(),
+        event_tx.clone(),
+    ) {
         Ok(history) => Some(history),
-        Err(message) => {
+        Err(e) => {
+            let message = format!("history is off for this session: {e}");
             let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
             None
         }
@@ -240,7 +253,6 @@ pub async fn run() -> Result<(), StartupError> {
     let agent = Agent::new(
         client.clone(),
         dispatcher,
-        model_name.clone(),
         Some(additional_context.as_str()),
     );
     let agent = match history.clone() {
@@ -279,16 +291,26 @@ pub async fn run() -> Result<(), StartupError> {
         catalogue: catalogue_choices(),
         current_provider: effective_provider
             .as_ref()
-            .and_then(|p| aldwin_llm::identify(p))
+            .and_then(slash::identify)
             .map(|p| p.id.to_string()),
         sessions,
     };
     let tui_result = aldwin_tui::run(event_rx, tui_cmd_tx, model_name, theme, session).await;
 
-    let _ = interceptor.await;
-    let _ = agent_task.await;
+    let interceptor = interceptor.await;
+    let agent = agent_task.await;
 
-    tui_result.map_err(StartupError::Io)
+    tui_result?;
+    finished("interceptor", interceptor)?;
+    finished("agent", agent)
+}
+
+/// How a session task ended, once the terminal is the developer's again. A
+/// task that panicked is an error the process exits on, said after the
+/// TUI has restored the screen — not a quiet exit 0 over a session that
+/// had stopped answering.
+fn finished(task: &'static str, joined: Result<(), JoinError>) -> Result<(), StartupError> {
+    joined.map_err(|source| StartupError::TaskFailed { task, source })
 }
 
 /// A project-scope server entry replaces a global one of the same name
@@ -431,11 +453,10 @@ mod tests {
 
     async fn stream_text(handle: &ClientHandle) -> String {
         let request = LlmRequest {
-            model: "m",
             system: "s",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let mut text = String::new();
         let mut stream = handle.stream(request);
@@ -457,11 +478,10 @@ mod tests {
     async fn a_swap_does_not_reach_a_request_already_in_flight() {
         let handle = ClientHandle::new(Arc::new(NamedClient("first")));
         let request = LlmRequest {
-            model: "m",
             system: "s",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let mut in_flight = handle.stream(request);
         handle.store(Arc::new(NamedClient("second")));
@@ -478,11 +498,10 @@ mod tests {
     async fn an_unconfigured_session_answers_with_how_to_configure_it() {
         let handle = ClientHandle::new(Arc::new(Unconfigured));
         let request = LlmRequest {
-            model: "",
             system: "s",
             tools: &[],
             messages: &[],
-            cache_breakpoints: &[],
+            cache_breakpoint: None,
         };
         let mut stream = handle.stream(request);
         match stream.next().await {
@@ -498,17 +517,18 @@ mod tests {
         const KEY: &str = "ALDWIN_SWAP_TEST_KEY";
         const ABSENT: &str = "ALDWIN_SWAP_TEST_KEY_NEVER_SET";
         std::env::set_var(KEY, "not-a-real-key");
-        let config = |key: &str| aldwin_llm::ProviderConfig {
-            kind: ProviderKind::Anthropic,
+        let config = |key: &str| aldwin_config::ProviderConfig {
+            version: aldwin_config::PROVIDER_VERSION,
+            provider: ProviderKind::Anthropic,
             model: "a-model".into(),
             api_key_env: key.to_string(),
             base_url: None,
-            extended_thinking_budget: 1_000,
+            extended_thinking_budget: Some(1_000),
         };
         let handle = ClientHandle::new(Arc::new(NamedClient("the session's own")));
         let error = slash::ModelSwitch::switch(&handle, &config(ABSENT))
             .expect_err("no key is exported for this one");
-        assert!(error.contains(ABSENT), "{error}");
+        assert!(error.to_string().contains(ABSENT), "{error}");
         assert_eq!(stream_text(&handle).await, "the session's own");
         slash::ModelSwitch::switch(&handle, &config(KEY))
             .expect("a client that builds replaces the one in place");
@@ -532,6 +552,22 @@ mod tests {
             );
             assert!(choice.models.iter().all(|m| m.context > 0));
         }
+    }
+
+    /// A panicking agent task used to be awaited with `let _ =`, and the
+    /// process exited 0 over a session that had stopped answering.
+    #[tokio::test]
+    async fn a_task_that_panicked_is_an_error_not_a_clean_exit() {
+        let panicked = tokio::spawn(async { panic!("the agent fell over") }).await;
+        let error = finished("agent", panicked).expect_err("a panic is not a clean exit");
+        assert!(
+            matches!(error, StartupError::TaskFailed { task: "agent", .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("the agent fell over"), "{error}");
+
+        let clean = tokio::spawn(async {}).await;
+        assert!(finished("agent", clean).is_ok());
     }
 
     #[test]

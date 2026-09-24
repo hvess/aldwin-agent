@@ -99,6 +99,22 @@ impl ProviderConfig {
     pub fn has_valid_api_key_env(&self) -> bool {
         !self.api_key_env.trim().is_empty()
     }
+
+    /// This file laid over `below` — a project `provider.yaml` over the
+    /// global one. The required fields come from this file wholesale (a
+    /// file that names a provider names all of them); the two optional
+    /// ones fall back to `below` one at a time.
+    pub fn over(self, below: Option<&ProviderConfig>) -> ProviderConfig {
+        ProviderConfig {
+            base_url: self
+                .base_url
+                .or_else(|| below.and_then(|b| b.base_url.clone())),
+            extended_thinking_budget: self
+                .extended_thinking_budget
+                .or_else(|| below.and_then(|b| b.extended_thinking_budget)),
+            ..self
+        }
+    }
 }
 
 /// Unknown fields are refused here, rather than on

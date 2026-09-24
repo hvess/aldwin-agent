@@ -230,6 +230,17 @@ impl Config {
             })
     }
 
+    /// The provider settings in force: the project file over the global one
+    /// ([`ProviderConfig::over`]), either alone, or `None` when neither
+    /// exists. What a session is built on, at startup and after `/model`.
+    pub fn effective_provider(&self) -> Option<ProviderConfig> {
+        let global = self.global_provider().ok();
+        match self.project_provider() {
+            Some(project) => Some(project.over(global.as_ref())),
+            None => global,
+        }
+    }
+
     pub fn project_mcp(&self) -> McpConfig {
         self.inner
             .project_mcp
@@ -841,6 +852,52 @@ mod tests {
             config.global_provider().unwrap().extended_thinking_budget,
             Some(16_000)
         );
+    }
+
+    /// A project `provider.yaml` with no global one used to boot the
+    /// session unconfigured: the overlay needed a global file to lay the
+    /// project over.
+    #[test]
+    fn a_project_provider_alone_is_in_force() {
+        let (_project, _global, config) = fresh();
+        assert_eq!(config.effective_provider(), None);
+        config
+            .set_provider(Scope::Project, provider("project-model"))
+            .unwrap();
+        assert_eq!(
+            config.effective_provider().map(|p| p.model),
+            Some("project-model".to_string())
+        );
+    }
+
+    #[test]
+    fn the_project_provider_wins_and_its_unset_fields_fall_back_to_global() {
+        let (_project, _global, config) = fresh();
+        let global = ProviderConfig {
+            base_url: Some("https://global".into()),
+            extended_thinking_budget: Some(20_000),
+            ..provider("global-model")
+        };
+        config.set_provider(Scope::Global, global.clone()).unwrap();
+        assert_eq!(config.effective_provider(), Some(global));
+
+        config
+            .set_provider(Scope::Project, provider("project-model"))
+            .unwrap();
+        let effective = config.effective_provider().unwrap();
+        assert_eq!(effective.model, "project-model");
+        assert_eq!(effective.base_url.as_deref(), Some("https://global"));
+        assert_eq!(effective.extended_thinking_budget, Some(20_000));
+
+        let project = ProviderConfig {
+            base_url: Some("https://project".into()),
+            extended_thinking_budget: Some(1_000),
+            ..provider("project-model")
+        };
+        config
+            .set_provider(Scope::Project, project.clone())
+            .unwrap();
+        assert_eq!(config.effective_provider(), Some(project));
     }
 
     #[test]

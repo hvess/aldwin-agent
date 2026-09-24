@@ -62,7 +62,12 @@ const VALID_THEMES: [&str; 2] = ["dark", "light"];
 /// rather than swapping blind. A failed swap leaves the session on the
 /// client it already had.
 pub trait ModelSwitch: Send + Sync {
-    fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String>;
+    /// `config` is the provider settings in force — the file being written
+    /// over any layer below it (`ProviderConfig::over`).
+    fn switch(
+        &self,
+        config: &aldwin_config::ProviderConfig,
+    ) -> Result<(), aldwin_llm::LlmClientInitError>;
 }
 
 /// The running session, as `/model` has to see it: what it is on right now,
@@ -101,8 +106,9 @@ impl Session {
 }
 
 /// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
-/// the core, per aldwin-cli.md: "the core's only input is Submit, Cancel,
-/// ApproveTool — it has no slash-command semantics." Runs synchronously in
+/// the core, per aldwin-cli.md: core has no slash-command semantics, and a
+/// `/` command reaches it only as the `Command` it translates to (`/clear`
+/// as `ClearHistory`, `/resume` as `Resume`). Runs synchronously in
 /// the interceptor's own recv loop (`run_interceptor`), before any forward
 /// send — not a post-send hook, per the spec's explicit Pitfall.
 async fn intercept(
@@ -148,20 +154,18 @@ async fn intercept(
         // once done, which is what actually tells the TUI to wipe its own
         // rendered log (see aldwin_tui::App::apply_event).
         //
-        // The transcript is sealed on the way past, before core is told:
-        // "forget everything" is about the model's context, and the record
+        // The transcript is sealed when core acts, not here: core tells its
+        // sink (`History`), and refuses the command while a turn runs.
+        // "Forget everything" is about the model's context, and the record
         // of what was said stays on disk and stays resumable.
         ("clear", None) => {
-            if let Some(history) = history {
-                if history.turn_in_flight() {
-                    let _ = events
-                        .send(Event::Notice {
-                            message: TURN_IN_FLIGHT.into(),
-                        })
-                        .await;
-                    return Intercepted::Handled;
-                }
-                history.seal_and_open_new();
+            if history.is_some_and(|h| h.turn_in_flight()) {
+                let _ = events
+                    .send(Event::Notice {
+                        message: TURN_IN_FLIGHT.into(),
+                    })
+                    .await;
+                return Intercepted::Handled;
             }
             Intercepted::Forward(Command::ClearHistory)
         }
@@ -202,12 +206,12 @@ async fn intercept(
 /// Returns the command core needs rather than sending it, because the caller
 /// is the one holding `forward`; everything else here is reporting.
 ///
-/// Three things happen in order, and the order matters. The records are read
-/// first, because a read that fails must change nothing. The writer is moved
-/// onto that transcript second, so the continued conversation lands in the
-/// file it came from rather than forking a new one. Core is told last, and
-/// its acknowledgement (`Event::HistoryLoaded`) is what the TUI redraws
-/// from.
+/// The records are read here, because a read that fails must change
+/// nothing. Core is handed them with the session's id; when it takes them it
+/// moves its sink (`History`) onto that transcript, so the continued
+/// conversation lands in the file it came from rather than forking a new
+/// one, and its acknowledgement (`Event::HistoryLoaded`) is what the TUI
+/// redraws from.
 ///
 /// What is deliberately *not* restored: anything staged. A resumed session
 /// starts with an empty changeset; the review it left open is gone.
@@ -281,15 +285,6 @@ async fn handle_resume(
         return None;
     }
 
-    if let Err(e) = history.continue_session(&id) {
-        let _ = events
-            .send(Event::Notice {
-                message: format!("cannot continue session {arg}: {e}"),
-            })
-            .await;
-        return None;
-    }
-
     let turns = records
         .iter()
         .filter(|r| matches!(r, aldwin_core::LogRecord::TurnStarted { .. }))
@@ -299,7 +294,10 @@ async fn handle_resume(
             message: format!("resumed session {arg} — {turns} turn(s) restored"),
         })
         .await;
-    Some(Command::Resume { records })
+    Some(Command::Resume {
+        session: id,
+        records,
+    })
 }
 
 /// `/theme [light|dark]`. Unlike `/clear`, this never needs core at all —
@@ -413,19 +411,19 @@ async fn handle_model(
     // would report a change the next start would ignore.
     //
     // The global layer is kept even when the project one shadows it, because
-    // the resolved config the new client is built from overlays the two —
+    // the settings the new client is built from overlay the two —
     // `base_url` and `extended_thinking_budget` fall back to global (see
-    // `aldwin_llm::resolve`), so building from the project file alone would
+    // `ProviderConfig::over`), so building from the project file alone would
     // hand the session a client the next start would not reproduce.
     // Nothing configured is a state the session can be in now (ADR 0009
     // §6): the answer then lands in the global file, since there is no
     // other default for every other directory to inherit.
-    let global = config.global_provider();
+    let global = config.global_provider().ok();
     let (scope, current) = match config.project_provider() {
         Some(project) => (aldwin_config::Scope::Project, Some(project)),
-        None => (aldwin_config::Scope::Global, global.as_ref().ok().cloned()),
+        None => (aldwin_config::Scope::Global, global.clone()),
     };
-    let known = current.as_ref().and_then(|c| aldwin_llm::identify(c));
+    let known = current.as_ref().and_then(identify);
 
     let Some(arg) = arg.filter(|a| !a.is_empty()) else {
         let message = match &current {
@@ -479,7 +477,7 @@ async fn handle_model(
         },
     };
 
-    let now = qualified(&next, aldwin_llm::identify(&next));
+    let now = qualified(&next, identify(&next));
 
     // "Already on" has to be true of the *session*, not only of the file.
     // The two can disagree — a hand-edited `provider.yaml` picked up by
@@ -498,14 +496,14 @@ async fn handle_model(
         return;
     }
 
-    // What the session would actually run on, resolved the same way startup
-    // resolves it — the file just chosen over the layer below it.
-    let resolved = match scope {
-        aldwin_config::Scope::Project => {
-            aldwin_llm::resolve(Some(&next), global.as_ref().unwrap_or(&next))
-        }
-        aldwin_config::Scope::Global => aldwin_llm::resolve(None, &next),
+    // What the session would actually run on, overlaid the same way startup
+    // overlays it (`Config::effective_provider`) — the file just chosen over
+    // the layer below it.
+    let below = match scope {
+        aldwin_config::Scope::Project => global.as_ref(),
+        aldwin_config::Scope::Global => None,
     };
+    let resolved = next.clone().over(below);
 
     // Before the write, not after: a provider the session cannot actually
     // reach must not be left on disk for the next start to fail on.
@@ -528,10 +526,9 @@ async fn handle_model(
         // model — it is only the next start that will not be.
         Err(e) => format!(
             "now on {now}, but it could not be saved to {where_}: {e} · the next start will use {}",
-            current.as_ref().map_or_else(
-                || "nothing".to_string(),
-                |c| qualified(c, aldwin_llm::identify(c))
-            )
+            current
+                .as_ref()
+                .map_or_else(|| "nothing".to_string(), |c| qualified(c, identify(c)))
         ),
     };
     let _ = events.send(Event::Notice { message }).await;
@@ -539,7 +536,7 @@ async fn handle_model(
     // The bare model id, not the qualified name: it is what the session
     // started with in `StatusInfo::model_name`, and the picker matches the
     // provider half against catalogue ids separately.
-    let identified = aldwin_llm::identify(&next);
+    let identified = identify(&next);
     let context_window = identified
         .and_then(|p| p.models.iter().find(|m| m.id == next.model))
         .map(|m| m.context);
@@ -591,8 +588,7 @@ pub(crate) fn catalogue_provider_config(
     model: Option<&str>,
     current: Option<&aldwin_config::ProviderConfig>,
 ) -> aldwin_config::ProviderConfig {
-    let on_this_provider =
-        current.filter(|c| aldwin_llm::identify(c).map(|p| p.id) == Some(provider.id));
+    let on_this_provider = current.filter(|c| identify(c).map(|p| p.id) == Some(provider.id));
     aldwin_config::ProviderConfig {
         version: aldwin_config::PROVIDER_VERSION,
         provider: provider.kind,
@@ -606,6 +602,14 @@ pub(crate) fn catalogue_provider_config(
         ),
         extended_thinking_budget: current.and_then(|c| c.extended_thinking_budget),
     }
+}
+
+/// The catalogue row a `provider.yaml` points at — see
+/// [`aldwin_llm::identify`].
+pub(crate) fn identify(
+    config: &aldwin_config::ProviderConfig,
+) -> Option<&'static aldwin_llm::Provider> {
+    aldwin_llm::identify(config.provider, config.base_url.as_deref())
 }
 
 /// `provider/model` when the endpoint is one the catalogue knows, and the
@@ -718,6 +722,8 @@ pub async fn run_interceptor(
 mod tests {
     use super::*;
 
+    use aldwin_core::RecordSink;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     /// What the process booted on — where every test's session starts.
@@ -728,16 +734,19 @@ mod tests {
     /// resolved configs available to assert on afterwards.
     #[derive(Clone, Default)]
     struct FakeSwitch {
-        seen: Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>,
+        seen: Arc<Mutex<Vec<aldwin_config::ProviderConfig>>>,
         /// Set to stand in for the one failure a real swap has: a provider
-        /// whose `api_key_env` is not exported.
-        fails_with: Option<String>,
+        /// whose `api_key_env` — this variable — is not exported.
+        fails_with: Option<&'static str>,
     }
 
     impl ModelSwitch for FakeSwitch {
-        fn switch(&self, config: &aldwin_llm::ProviderConfig) -> Result<(), String> {
-            if let Some(e) = &self.fails_with {
-                return Err(e.clone());
+        fn switch(
+            &self,
+            config: &aldwin_config::ProviderConfig,
+        ) -> Result<(), aldwin_llm::LlmClientInitError> {
+            if let Some(var) = self.fails_with {
+                return Err(aldwin_llm::LlmClientInitError::MissingApiKeyEnv { var: var.into() });
             }
             self.seen.lock().unwrap().push(config.clone());
             Ok(())
@@ -750,7 +759,7 @@ mod tests {
 
     /// A session whose switch records, and the record itself — for the tests
     /// that care about what the client was actually rebuilt on.
-    fn recording_session() -> (Session, Arc<Mutex<Vec<aldwin_llm::ProviderConfig>>>) {
+    fn recording_session() -> (Session, Arc<Mutex<Vec<aldwin_config::ProviderConfig>>>) {
         let switch = FakeSwitch::default();
         let seen = switch.seen.clone();
         (Session::new(SESSION_MODEL.into(), Box::new(switch)), seen)
@@ -782,8 +791,13 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel(8);
-        let history =
-            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history = History::open(
+            dir.path().to_path_buf(),
+            Path::new("/p"),
+            "m".into(),
+            tx.clone(),
+        )
+        .expect("a store");
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(1) },
             LogRecord::UserMessage {
@@ -804,8 +818,8 @@ mod tests {
         }
         // The session under test is a *new* one, as a fresh launch would be:
         // the recorded turn is now a past session to resume.
-        history.seal_and_open_new();
-        // The recorded one, not whichever is newest — `seal_and_open_new`
+        history.cleared();
+        // The recorded one, not whichever is newest — `cleared`
         // just made a newer, empty one.
         let id = SessionId(
             history
@@ -837,9 +851,10 @@ mod tests {
         };
         let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
 
-        let Intercepted::Forward(Command::Resume { records }) = result else {
+        let Intercepted::Forward(Command::Resume { session, records }) = result else {
             panic!("a resume must reach core");
         };
+        assert_eq!(session, id, "with the session it continues");
         assert!(
             records.iter().any(|r| matches!(r, aldwin_core::LogRecord::UserMessage { text, .. } if text == "the question I asked")),
             "the conversation came back"
@@ -847,18 +862,29 @@ mod tests {
     }
 
     /// The fork-free Decision: the writer moves onto the resumed transcript,
-    /// so the continued conversation lands in the file it came from.
+    /// so the continued conversation lands in the file it came from. It
+    /// moves when core takes the records and tells its sink — the
+    /// interceptor only hands them over, since core may yet refuse them.
     #[tokio::test]
     async fn resuming_moves_the_writer_onto_the_resumed_transcript() {
         use aldwin_core::{LogRecord, TurnEndReason, TurnId};
 
         let (_project, _global, cfg) = config();
         let (dir, history, id, events, _rx) = recorded_history("first");
+        let writing = history.current();
 
         let cmd = Command::Submit {
             text: format!("/resume {id}"),
         };
-        intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
+        let result = intercept(cmd, &cfg, &mut session(), Some(&history), &events).await;
+        let Intercepted::Forward(Command::Resume { session, .. }) = result else {
+            panic!("a resume must reach core");
+        };
+        assert!(
+            history.is_current(&writing),
+            "nothing moves before core acts"
+        );
+        history.resumed(&session); // what core does when it takes the records
 
         for record in [
             LogRecord::TurnStarted { turn_id: TurnId(2) },
@@ -914,15 +940,25 @@ mod tests {
         // Another process's transcript, as a crash leaves it. Its id is taken
         // from the handle: an unfinished session is not listed, which is the
         // point of `an_unfinished_session_is_not_listed` below.
-        let crashed =
-            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let crashed = History::open(
+            dir.path().to_path_buf(),
+            Path::new("/p"),
+            "m".into(),
+            tx.clone(),
+        )
+        .expect("a store");
         aldwin_core::RecordSink::append(
             crashed.as_ref(),
             &LogRecord::TurnStarted { turn_id: TurnId(1) },
         );
         let id = crashed.current();
-        let history =
-            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history = History::open(
+            dir.path().to_path_buf(),
+            Path::new("/p"),
+            "m".into(),
+            tx.clone(),
+        )
+        .expect("a store");
 
         let cmd = Command::Submit {
             text: format!("/resume {id}"),
@@ -942,8 +978,13 @@ mod tests {
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        let history =
-            History::open(dir.path().to_path_buf(), "m".into(), tx.clone()).expect("a store");
+        let history = History::open(
+            dir.path().to_path_buf(),
+            Path::new("/p"),
+            "m".into(),
+            tx.clone(),
+        )
+        .expect("a store");
 
         let cmd = Command::Submit {
             text: "/resume".into(),
@@ -978,13 +1019,14 @@ mod tests {
         );
     }
 
-    /// Step 6: `/clear` seals the transcript and opens a new one on the way
-    /// past, and still reaches core to wipe the in-memory log.
+    /// Step 6: `/clear` reaches core to wipe the in-memory log, and the
+    /// transcript is sealed when core does — through its sink, not here.
     #[tokio::test]
-    async fn clear_seals_the_transcript_and_still_reaches_core() {
+    async fn clear_reaches_core_and_leaves_the_sealing_to_it() {
         let (_project, _global, cfg) = config();
         let (dir, history, _id, events, _rx) = recorded_history("before");
         let before = crate::history::session_choices(dir.path()).len();
+        let writing = history.current();
 
         let result = intercept(
             Command::Submit {
@@ -1001,6 +1043,12 @@ mod tests {
             matches!(result, Intercepted::Forward(Command::ClearHistory)),
             "core still wipes its log"
         );
+        assert!(
+            history.is_current(&writing),
+            "the writer moves when core acts, not on the way past"
+        );
+        history.cleared(); // what core does when it wipes the log
+        assert!(!history.is_current(&writing));
         assert!(
             crate::history::session_choices(dir.path()).len() >= before,
             "clearing does not delete the record it seals"
@@ -1591,7 +1639,7 @@ mod tests {
         let built = seen.lock().unwrap().clone();
         assert_eq!(built.len(), 1, "the client is rebuilt exactly once");
         assert_eq!(built[0].model, "claude-opus-5");
-        assert_eq!(built[0].kind, aldwin_config::ProviderKind::Anthropic);
+        assert_eq!(built[0].provider, aldwin_config::ProviderKind::Anthropic);
 
         match rx.recv().await {
             Some(Event::ModelChanged {
@@ -1627,7 +1675,7 @@ mod tests {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
         let switch = FakeSwitch {
-            fails_with: Some("GOOGLE_API_KEY is not set".into()),
+            fails_with: Some("GOOGLE_API_KEY"),
             ..Default::default()
         };
         let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
@@ -1645,7 +1693,7 @@ mod tests {
 
         let message = notice(&mut rx).await;
         assert!(
-            message.contains("GOOGLE_API_KEY is not set"),
+            message.contains("GOOGLE_API_KEY"),
             "the reason has to survive verbatim: {message}"
         );
         assert!(
@@ -2175,7 +2223,7 @@ mod tests {
         // And a third that cannot be built names the *second* as where the
         // session still is.
         let switch = FakeSwitch {
-            fails_with: Some("no key".into()),
+            fails_with: Some("NO_KEY"),
             ..Default::default()
         };
         session = Session::new(session.model.clone(), Box::new(switch));

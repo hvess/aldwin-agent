@@ -61,8 +61,12 @@ transcript cost more than the wheel was worth (`run.rs`, `aldwin-tui.md`).
    what is marked is the selection, drawn as frame H draws one.
 6. **The keys:** `↑↓`, `PgUp`/`PgDn` and the wheel scroll the diff, or move
    a selection. `Shift ↑↓` selects. `Space` opens every fold in the file —
-   the keyboard's way to the lines a click would unfold. `↩` comments on
-   the selection. `⌃↩` approves, or sends the comments. `Tab`/`→` and
+   the keyboard's way to the lines a click would unfold, while nothing is
+   selected. A selection opens the comment field at once, as frame H draws
+   it (amended 2026-09-25: the field used to wait for a `↩` of its own, so
+   a click showed only the `▎` edge); `↩` adds the comment, and `⌃↩` adds
+   what is typed and sends it with the rest. `⌃↩` approves, or sends the
+   comments. `Tab`/`→` and
    `Shift Tab`/`←` move between files. `⎋` clears the selection and then
    asks before discarding. `?` shows the keys. Shift and Tab are named in
    words, as Space is: the glyph table has no mark for either.

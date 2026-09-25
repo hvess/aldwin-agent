@@ -1090,7 +1090,6 @@ fn the_comment_field_names_escape_as_the_footers_do() {
     one_file_review(&mut a, "a\nb\n".into());
     render(&mut a, 100, 30);
     a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
-    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let buf = render(&mut a, 100, 30);
     let label = find_row(&buf, "Commenting on").unwrap();
     assert!(row_text(&buf, label).trim_end().ends_with("esc"));

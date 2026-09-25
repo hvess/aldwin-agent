@@ -46,7 +46,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     // The bottom band: the field, or the comment field, or the discard
     // question.
     let typed = !app.draft.text().trim().is_empty();
-    let field_rows: u16 = match (&review.confirm, review.commenting) {
+    let field_rows: u16 = match (&review.confirm, review.commenting()) {
         (Some(list), _) => question::panel_rows(&review.discard_question(), Some(list), area.width),
         (None, true) => 2,
         (None, false) => Composer::new(
@@ -120,7 +120,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(review) = app.review() else { return };
 
     // The bottom band.
-    match (&review.confirm, review.commenting) {
+    match (&review.confirm, review.commenting()) {
         (Some(list), _) => question::draw_panel(
             frame,
             field_area,

@@ -221,10 +221,8 @@ pub struct Review {
     /// Where the drawing side put the diff's rows on screen last frame —
     /// what a click is measured against.
     pub(crate) pane: Option<Pane>,
-    /// The comment field is open for the selection.
-    pub(crate) commenting: bool,
-    /// What is typed into it. `esc` closes the field and keeps this, so a
-    /// comment half-written is never lost to a key.
+    /// What is typed into the comment field. `esc` closes the field and
+    /// keeps this, so a comment half-written is never lost to a key.
     pub(crate) comment: Draft,
     /// `esc` with nothing selected asks before dropping the changes: the
     /// question's list, while it is open.
@@ -248,7 +246,6 @@ impl Review {
             dragging: false,
             scroll: 0,
             pane: None,
-            commenting: false,
             comment: Draft::default(),
             confirm: None,
             keys_shown: false,
@@ -270,6 +267,13 @@ impl Review {
 
     pub fn all_read(&self) -> bool {
         self.files.iter().all(|f| f.read)
+    }
+
+    /// The comment field is open whenever lines are selected: frame H
+    /// draws the two together, so a click shows what it selected at once
+    /// and `↩` adds the comment.
+    pub(crate) fn commenting(&self) -> bool {
+        self.selected.is_some()
     }
 
     pub fn comment_count(&self) -> usize {
@@ -356,9 +360,11 @@ impl Review {
     /// One mouse event over the review. Only the diff pane answers: a press
     /// on a line selects it and starts a drag, a drag carries the selection
     /// to the row under the pointer, a release ends it, and a press on a
-    /// fold opens it. The wheel scrolls the diff wherever it is.
+    /// fold opens it. The wheel scrolls the diff wherever it is. The comment
+    /// field being open does not stop a click: it moves the selection, and
+    /// the words typed stay.
     pub fn handle_mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
-        if self.commenting || self.confirm.is_some() {
+        if self.confirm.is_some() {
             return;
         }
         match kind {
@@ -514,59 +520,55 @@ impl Review {
                 }
             };
         }
-        if self.commenting {
-            match code {
-                KeyCode::Esc => self.commenting = false,
-                KeyCode::Enter => self.add_comment(),
-                code => {
-                    self.comment.edit(code, modifiers);
-                }
-            }
-            return ReviewOutcome::Stay;
-        }
-
         let shift = modifiers.contains(KeyModifiers::SHIFT);
         match code {
             // The keyboard's way to a selection (HIG, "Keyboards": Shift and
             // an arrow extends a selection). With nothing selected the
             // arrows scroll; once a line is selected they move it.
-            KeyCode::Up | KeyCode::Down if shift || self.selected.is_some() => {
+            KeyCode::Up | KeyCode::Down if shift || self.commenting() => {
                 self.step_selection(code == KeyCode::Up, shift)
             }
             KeyCode::Up => self.scroll_by(-1),
             KeyCode::Down => self.scroll_by(1),
             KeyCode::PageUp => self.scroll_by(-(PAGE_ROWS as isize)),
             KeyCode::PageDown => self.scroll_by(PAGE_ROWS as isize),
+            KeyCode::Tab => self.go_to_file((self.current + 1) % self.files.len().max(1)),
+            KeyCode::BackTab => self.previous_file(),
+            // `⌃↩` with the comment field open adds what is typed first, so
+            // it is sent with the rest rather than left behind in the field.
+            KeyCode::Enter if modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.commenting() {
+                    self.add_comment();
+                }
+                return self.act(general);
+            }
+            KeyCode::Enter if self.commenting() => self.add_comment(),
+            KeyCode::Esc if self.commenting() => {
+                self.selected = None;
+                self.dragging = false;
+            }
+            // Everything else in the comment field is typing — `←→` move
+            // its caret, and Space and `?` are characters.
+            code if self.commenting() => {
+                self.comment.edit(code, modifiers);
+            }
+            KeyCode::Right => self.go_to_file((self.current + 1) % self.files.len().max(1)),
+            KeyCode::Left => self.previous_file(),
             // Folds open with a click; this is the keyboard's way to the
             // same lines, and the only one where the mouse is not captured.
             KeyCode::Char(' ') if general.is_empty() && self.file().has_folds() => {
                 self.file_mut().expand_all();
                 self.rows_changed();
             }
-            KeyCode::Tab | KeyCode::Right => {
-                self.go_to_file((self.current + 1) % self.files.len().max(1))
-            }
-            KeyCode::BackTab | KeyCode::Left => self
-                .go_to_file((self.current + self.files.len().max(1) - 1) % self.files.len().max(1)),
             KeyCode::Char('?') if general.is_empty() => self.keys_shown = !self.keys_shown,
-            KeyCode::Enter if modifiers.contains(KeyModifiers::CONTROL) => {
-                return self.act(general)
-            }
-            // `↩` opens a comment on a selection, sends what was typed, and
-            // — with nothing selected and nothing typed — stands in for
-            // `⌃↩`: a terminal without the Kitty keyboard protocol cannot
-            // tell the two apart, and a review with no way to approve is a
-            // review that cannot end.
-            KeyCode::Enter if self.selected.is_some() => self.commenting = true,
+            // `↩` with nothing selected sends what was typed and — with
+            // nothing typed — stands in for `⌃↩`: a terminal without the
+            // Kitty keyboard protocol cannot tell the two apart, and a
+            // review with no way to approve is a review that cannot end.
             KeyCode::Enter => return self.act(general),
             KeyCode::Esc => {
-                if self.selected.is_some() {
-                    self.selected = None;
-                    self.dragging = false;
-                } else {
-                    let rows = self.discard_question().options;
-                    self.confirm = Some(List::new(rows.into_iter().map(ListRow::new).collect()));
-                }
+                let rows = self.discard_question().options;
+                self.confirm = Some(List::new(rows.into_iter().map(ListRow::new).collect()));
             }
             _ => {}
         }
@@ -599,8 +601,12 @@ impl Review {
                 .comments
                 .push(PendingComment { lines, text });
         }
-        self.commenting = false;
         self.selected = None;
+    }
+
+    fn previous_file(&mut self) {
+        let n = self.files.len().max(1);
+        self.go_to_file((self.current + n - 1) % n);
     }
 
     fn go_to_file(&mut self, i: usize) {
@@ -1022,11 +1028,15 @@ mod tests {
     }
 
     #[test]
-    fn space_opens_every_fold_and_keeps_the_selection() {
+    fn space_opens_every_fold_and_opening_one_keeps_the_selection() {
+        let mut r = one_change_in_thirty();
+        r.handle_key(KeyCode::Char(' '), KeyModifiers::NONE, "");
+        assert!(!r.file().has_folds(), "Space with nothing selected");
+
         let mut r = one_change_in_thirty();
         r.select(3, 3);
-        r.handle_key(KeyCode::Char(' '), KeyModifiers::NONE, "");
-        assert!(!r.file().has_folds());
+        r.file_mut().expand_all();
+        r.rows_changed();
         assert_eq!(
             r.file().rows().len(),
             31,
@@ -1126,8 +1136,11 @@ mod tests {
         assert_eq!((r.current, r.selection(), r.pane), (1, None, None));
     }
 
+    /// A selection opens the comment field at once, as frame H draws it;
+    /// `↩` adds the comment. The field once waited for a `↩` of its own,
+    /// so a click showed no more than the `▎` edge.
     #[test]
-    fn a_selection_and_enter_open_a_comment_on_the_new_file_lines() {
+    fn a_selection_opens_a_comment_on_the_new_file_lines() {
         let before = numbered(5);
         let after = "line 1\nline 2 changed\nline 3 changed\nline 4\nline 5\n";
         let mut r = review_of(Some(&before), after);
@@ -1139,8 +1152,7 @@ mod tests {
             Some(("2 lines".into(), "x.rs · 2–3".into()))
         );
 
-        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
-        assert!(r.commenting);
+        assert!(r.commenting());
         for c in "Use config".chars() {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
@@ -1213,7 +1225,6 @@ mod tests {
         let mut r = review_of(Some("x\n"), "y\n");
         r.mark_read();
         r.select(0, 1);
-        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
         for c in "no".chars() {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
@@ -1275,15 +1286,38 @@ mod tests {
     fn escape_leaves_the_comment_field_and_the_words_survive() {
         let mut r = review_of(Some("x\n"), "y\n");
         r.select(1, 1);
-        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
         for c in "use config".chars() {
             r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
         }
+        assert_eq!(r.comment.text(), "use config", "Space is typed, not a key");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
-        assert!(!r.commenting);
-        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
-        assert!(r.commenting);
+        assert!(!r.commenting());
+        r.select(1, 1);
         assert_eq!(r.comment.text(), "use config");
+    }
+
+    /// With the field open the arrows still move the selection, and `⌃↩`
+    /// sends what was typed rather than leaving it in the field.
+    #[test]
+    fn the_comment_field_leaves_the_selection_keys_working() {
+        let mut r = review_of(None, &numbered(40));
+        pane_at(&mut r, 0);
+        r.select(2, 2);
+        r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
+        assert_eq!(r.selection(), Some((2, 3)));
+        for c in "why".chars() {
+            r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
+        }
+        assert_eq!(
+            r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),
+            ReviewOutcome::Decide(ReviewDecision::Comment {
+                comments: vec![ReviewComment {
+                    path: "src/x.rs".into(),
+                    lines: (3, 4),
+                    text: "why".into(),
+                }]
+            })
+        );
     }
 
     /// The bug: `⌃↩` before every file was read did nothing at all.

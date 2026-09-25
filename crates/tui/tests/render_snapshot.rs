@@ -511,7 +511,6 @@ fn scene(name: &str, app: &mut App) {
             if let Some(r) = app.review_for_tests() {
                 r.select(3, 4);
             }
-            press(app, KeyCode::Enter, KeyModifiers::NONE);
             for c in "Read the limit from config, not 100.".chars() {
                 press(app, KeyCode::Char(c), KeyModifiers::NONE);
             }

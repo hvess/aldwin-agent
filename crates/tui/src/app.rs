@@ -980,7 +980,7 @@ impl App {
         let general = self.draft.text().to_string();
         let typing = self
             .review()
-            .is_some_and(|r| !r.commenting && r.confirm.is_none());
+            .is_some_and(|r| !r.commenting() && r.confirm.is_none());
         // Text keys go to the review's own field unless a comment draft has
         // them; everything else is the review's. Space and `?` are keys of
         // their own until something is typed.

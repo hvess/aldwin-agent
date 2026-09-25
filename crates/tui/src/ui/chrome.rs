@@ -442,7 +442,7 @@ fn footer_state(app: &App) -> Footer {
                 KeyHint::new("↑↓", "Scroll"),
                 KeyHint::new("Click, drag or Shift ↑↓", "Select"),
             ];
-            if r.file().has_folds() {
+            if r.file().has_folds() && !r.commenting() {
                 keys.push(KeyHint::new("Space", "Show All Lines"));
             }
             keys.extend([

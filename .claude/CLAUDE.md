@@ -117,8 +117,8 @@ and became the problem it was built to solve.
 
 **Where the design disagrees with a decision, the decision wins and the
 disagreement is recorded.** The frame's command list names `/changes`,
-`/undo` and `/settings`; the product ships `/resume`, `/model`, `/quit` and
-`/clear` (the developer's call, 2026-09-23), and frame `J`'s `↺ Undo` is
+`/undo` and `/settings`; the product ships `/resume`, `/model`, `/quit`,
+`/clear` (the developer's call, 2026-09-23) and `/theme` (2026-09-25), and frame `J`'s `↺ Undo` is
 open-tasks 27. Both are in `baseline.json`. A frame is authority on tone and
 position, not on scope.
 

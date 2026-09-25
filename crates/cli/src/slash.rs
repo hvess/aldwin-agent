@@ -38,7 +38,7 @@ pub(crate) struct SlashCommand {
 }
 
 /// Every command `intercept` answers — the one table the `/` menu and
-/// `/help` are both drawn from. The menu offers the developer's four, in
+/// `/help` are both drawn from. The menu offers the developer's five, in
 /// this order (`crates/review/baseline.json`,
 /// `frame-command-list-is-not-the-products`). `/exit` is `/quit` under the
 /// name it always had, and is not listed twice.
@@ -69,9 +69,9 @@ const COMMANDS: [SlashCommand; 7] = [
     },
     SlashCommand {
         name: "theme",
-        argument: " light or dark",
-        summary: "Change the theme",
-        in_menu: false,
+        argument: "",
+        summary: "Switch between the light and dark theme",
+        in_menu: true,
     },
     SlashCommand {
         name: "reload-config",
@@ -249,8 +249,9 @@ async fn intercept(
         // `/quit` is the menu's word; `/exit` the one the interceptor has
         // always known. Both leave.
         ("exit", None) | ("quit", None) => Intercepted::Quit,
-        // Bare `/theme` and `/model` report where the developer stands; an
-        // argument changes it.
+        // Bare `/model` reports where the developer stands; an argument
+        // changes it. Bare `/theme` switches, since that is what picking it
+        // from the menu asks for.
         ("theme", arg) => {
             handle_theme(arg, config, events).await;
             Intercepted::Handled
@@ -372,7 +373,8 @@ async fn handle_resume(
     })
 }
 
-/// `/theme [light|dark]`. Unlike `/clear`, this never needs core at all —
+/// `/theme [light|dark]` — bare, the other theme from the one in effect;
+/// with an argument, that one. Unlike `/clear`, this never needs core at all —
 /// it's a config write (`Config::set_tui`, persisting the choice so it
 /// survives the developer's next launch, not just this session) plus an
 /// `Event::ThemeChanged` sent directly into the same channel the TUI reads
@@ -381,22 +383,21 @@ async fn handle_resume(
 /// `App::theme` is read fresh by `ui::draw` on every frame, so the change
 /// is visible on the very next redraw — no restart needed.
 async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<Event>) {
-    let Some(arg) = arg else {
-        let current = config.global_tui().theme.unwrap_or_else(|| "dark".into());
-        let _ = events
-            .send(Event::Notice {
-                message: format!(
-                    "The theme is {current}. Change it with /theme light or /theme dark."
-                ),
-            })
-            .await;
-        return;
+    let normalized = match arg {
+        Some(arg) => arg.to_ascii_lowercase(),
+        // Read the way startup reads it, so the switch is from what is on
+        // screen.
+        None => match aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref()) {
+            aldwin_tui::Theme::Light => "dark".into(),
+            aldwin_tui::Theme::Dark => "light".into(),
+        },
     };
-    let normalized = arg.to_ascii_lowercase();
     if !VALID_THEMES.contains(&normalized.as_str()) {
         let _ = events
             .send(Event::Notice {
-                message: format!("There is no {arg} theme. Use /theme light or /theme dark."),
+                message: format!(
+                    "There is no {normalized} theme. Use /theme light or /theme dark."
+                ),
             })
             .await;
         return;
@@ -1255,8 +1256,8 @@ mod tests {
         let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
         assert_eq!(
             menu,
-            ["resume", "model", "quit", "clear"],
-            "the developer's four, in order"
+            ["resume", "model", "quit", "clear", "theme"],
+            "the developer's five, in order"
         );
         let help = help_text();
         for command in COMMANDS {
@@ -1444,31 +1445,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn theme_with_no_argument_reports_the_current_default() {
+    async fn theme_with_no_argument_switches_to_the_other_and_persists_it() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
-        let result = intercept(
-            Command::Submit {
-                text: "/theme".into(),
-            },
-            &cfg,
-            &mut session(),
-            None,
-            &tx,
-        )
-        .await;
-        assert!(matches!(result, Intercepted::Handled));
-        match rx.recv().await {
-            Some(Event::Notice { message }) => assert!(
-                message.contains("The theme is dark"),
-                "message was: {message}"
-            ),
-            other => panic!("expected a Notice, got {other:?}"),
+        for expected in ["light", "dark"] {
+            let result = intercept(
+                Command::Submit {
+                    text: "/theme".into(),
+                },
+                &cfg,
+                &mut session(),
+                None,
+                &tx,
+            )
+            .await;
+            assert!(matches!(result, Intercepted::Handled));
+            assert!(notice(&mut rx)
+                .await
+                .contains(&format!("The theme is now {expected}")));
+            match rx.recv().await {
+                Some(Event::ThemeChanged { theme }) => assert_eq!(theme, expected),
+                other => panic!("expected ThemeChanged, got {other:?}"),
+            }
+            assert_eq!(cfg.global_tui().theme.as_deref(), Some(expected));
         }
-        assert!(
-            rx.try_recv().is_err(),
-            "no-argument /theme must not persist or emit ThemeChanged"
-        );
     }
 
     #[tokio::test]

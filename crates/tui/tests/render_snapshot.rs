@@ -104,6 +104,7 @@ fn commands() -> Vec<CommandChoice> {
         ("resume", "Pick up an earlier conversation"),
         ("model", "Change the model"),
         ("quit", "Leave Aldwin"),
+        ("exit", "Leave Aldwin"),
         ("clear", "Start a fresh conversation in this project"),
     ]
     .into_iter()

@@ -1177,12 +1177,13 @@ pub(crate) mod tests {
 
     const CHAT_ABOUT_THIS: &str = Question::CHAT_ABOUT_THIS;
 
-    /// The four the menu offers, as aldwin-cli hands them in.
+    /// Rows of the menu, as aldwin-cli hands them in.
     pub(crate) fn commands() -> Vec<CommandChoice> {
         [
             ("resume", "Pick up an earlier conversation"),
             ("model", "Change the model"),
             ("quit", "Leave Aldwin"),
+            ("exit", "Leave Aldwin"),
             ("clear", "Start a fresh conversation in this project"),
         ]
         .into_iter()
@@ -1270,7 +1271,7 @@ pub(crate) mod tests {
         let Mode::Commands(menu) = &a.mode else {
             panic!("the menu opens")
         };
-        assert_eq!(menu.list.rows.len(), 4);
+        assert_eq!(menu.list.rows.len(), 5);
         assert_eq!(menu.list.rows[0].label, "/resume");
     }
 
@@ -1307,6 +1308,26 @@ pub(crate) mod tests {
             a.outbox,
             vec![Command::Submit {
                 text: "/quit".into()
+            }]
+        );
+    }
+
+    /// `/exit` is a menu row too: `/e` narrows to it rather than stepping
+    /// the menu aside, and `↩` runs it.
+    #[test]
+    fn exit_is_offered_by_the_menu_as_well_as_quit() {
+        let mut a = app();
+        a.handle_key(press(KeyCode::Char('/')));
+        a.handle_key(press(KeyCode::Char('e')));
+        let Mode::Commands(menu) = &a.mode else {
+            panic!("the menu stays open")
+        };
+        assert_eq!(menu.completion(), "xit");
+        a.handle_key(press(KeyCode::Enter));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "/exit".into()
             }]
         );
     }

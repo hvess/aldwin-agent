@@ -18,7 +18,7 @@
       "id": "frame-command-list-is-not-the-products",
       "design_says": "Frame `F commands` types `/c` and the list narrows to `changes` and `clear`, with no shortcut column; the design system's `CommandRow` still shows `changes`, `undo` (`↺`) and `quit` (`⌃D`), a key right-flush like a menu.",
       "design_also_says": "Nothing in the design names `/resume` (ADR 0005, a shipped feature), `/model` or `/theme`, and the product has neither `/changes` nor `/undo`.",
-      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/quit` (with `/exit` as an alias), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` are open-tasks entry 27.",
+      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` are open-tasks entry 27.",
       "glyphs": ""
     },
     {

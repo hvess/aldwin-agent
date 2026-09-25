@@ -38,11 +38,11 @@ pub(crate) struct SlashCommand {
 }
 
 /// Every command `intercept` answers — the one table the `/` menu and
-/// `/help` are both drawn from. The menu offers the developer's five, in
+/// `/help` are both drawn from. The menu offers the developer's six, in
 /// this order (`crates/review/baseline.json`,
-/// `frame-command-list-is-not-the-products`). `/exit` is `/quit` under the
-/// name it always had, and is not listed twice.
-const COMMANDS: [SlashCommand; 7] = [
+/// `frame-command-list-is-not-the-products`). `/quit` and `/exit` are one
+/// command under two names, and the menu offers both.
+const COMMANDS: [SlashCommand; 8] = [
     SlashCommand {
         name: "resume",
         argument: "",
@@ -57,6 +57,12 @@ const COMMANDS: [SlashCommand; 7] = [
     },
     SlashCommand {
         name: "quit",
+        argument: "",
+        summary: "Leave Aldwin",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "exit",
         argument: "",
         summary: "Leave Aldwin",
         in_menu: true,
@@ -246,8 +252,7 @@ async fn intercept(
             }
             Intercepted::Forward(Command::ClearHistory)
         }
-        // `/quit` is the menu's word; `/exit` the one the interceptor has
-        // always known. Both leave.
+        // `/quit` and `/exit` are one command; the menu offers both.
         ("exit", None) | ("quit", None) => Intercepted::Quit,
         // Bare `/model` reports where the developer stands; an argument
         // changes it. Bare `/theme` switches, since that is what picking it
@@ -1256,8 +1261,8 @@ mod tests {
         let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
         assert_eq!(
             menu,
-            ["resume", "model", "quit", "clear", "theme"],
-            "the developer's five, in order"
+            ["resume", "model", "quit", "exit", "clear", "theme"],
+            "the developer's six, in order"
         );
         let help = help_text();
         for command in COMMANDS {
@@ -1333,6 +1338,7 @@ mod tests {
                     "/help",
                     "/clear",
                     "/quit",
+                    "/exit",
                     "/model",
                     "/reload-config",
                     "/theme",
@@ -1384,7 +1390,7 @@ mod tests {
         );
     }
 
-    /// The menu says `/quit`; the interceptor always said `/exit`. Both leave.
+    /// `/quit` and `/exit` are one command; `/exit` has its own test below.
     #[tokio::test]
     async fn quit_and_exit_both_leave() {
         let (_project, _global, cfg) = config();

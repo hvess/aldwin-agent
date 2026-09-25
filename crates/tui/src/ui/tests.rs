@@ -495,10 +495,11 @@ fn the_command_menu_is_a_panel_on_the_field() {
         pal.panel
     );
     assert!(row_text(&buf, y + 2).contains("quit"));
-    assert!(row_text(&buf, y + 3).contains("clear"));
-    assert!(!row_text(&buf, y + 3).contains('⌃'), "no shortcut column");
-    assert_eq!(buf[(MARGIN_X as u16, y + 4)].bg, pal.panel, "and one below");
-    let field = y + 5;
+    assert!(row_text(&buf, y + 3).contains("exit"));
+    assert!(row_text(&buf, y + 4).contains("clear"));
+    assert!(!row_text(&buf, y + 4).contains('⌃'), "no shortcut column");
+    assert_eq!(buf[(MARGIN_X as u16, y + 5)].bg, pal.panel, "and one below");
+    let field = y + 6;
     assert_eq!(
         buf[(MARGIN_X as u16, field)].bg,
         pal.field,

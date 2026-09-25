@@ -71,7 +71,7 @@ const ROUTER_RS: &str = "pub fn app(cfg: &Config) -> Router {\n    Router::new()
 
 const PROSE: &str = "Looking at how requests move through the gateway. Every request passes auth and tracing and nothing counts them, so a limit belongs beside the auth layer where the key is already known.";
 
-const TABLE: &str = "Three providers are configured here:\n\n| provider | key variable | streaming |\n| --- | --- | --- |\n| anthropic | ANTHROPIC_API_KEY | yes |\n| openai | OPENAI_API_KEY | yes |\n| google | GOOGLE_API_KEY | no |\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```";
+const TABLE: &str = "Three providers are configured here:\n\n| provider | key variable | streaming |\n| --- | --- | --- |\n| anthropic | ANTHROPIC_API_KEY | yes |\n| openai | OPENAI_API_KEY | yes |\n| google | GOOGLE_API_KEY | no |\n\n- `google` has no streaming yet\n- the others stream\n\n> A key variable must be exported before launch.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```";
 
 /// `⌃↩` under the Kitty keyboard protocol, which the app pushes at startup
 /// (`CSI > 1 u`), so foot reports Enter with the control modifier as
@@ -171,7 +171,7 @@ pub fn script(name: &str) -> Result<Script> {
                         "before": "        .layer(auth_layer(cfg))\n",
                         "after":  "        .layer(RateLimitLayer::new(\n            Quota::per_minute(100),\n            cfg.limit_store.clone(),\n        ))\n        .layer(auth_layer(cfg))\n",
                     })),
-                    ("call-new", "edit", serde_json::json!({ "path": "src/gateway/limit.rs", "before": "", "after": "pub struct Limit;\n" })),
+                    ("call-new", "edit", serde_json::json!({ "path": "src/gateway/limit.rs", "before": "", "after": "pub struct Limit { per_minute: u32, store: Arc<dyn LimitStore> }\n" })),
                 ]),
                 fake::text("Each key gets 100 requests a minute; the rest are turned away before auth."),
             ],

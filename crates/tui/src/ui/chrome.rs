@@ -377,6 +377,7 @@ fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
 }
 
 /// A footer key: glyph, two spaces, verb.
+#[derive(Clone, Copy)]
 pub(super) struct KeyHint {
     pub glyph: &'static str,
     pub verb: &'static str,
@@ -427,18 +428,27 @@ fn footer_state(app: &App) -> Footer {
             KeyHint::new("Space", "Show Details")
         }
     };
-    // Every list names the same two keys, whichever list it is: `↩` and
-    // the way out. The arrows go unsaid — a list moves with them in every
-    // app — and only what `⎋` does differs, so it is named.
-    let list = |close: &'static str| vec![KeyHint::new("↩", "Select"), KeyHint::new("⎋", close)];
+    // A list reads as frame E draws the agent's question: `↑↓  Choose` and
+    // `↩  Select`. A list you can dismiss adds the way out, `⎋  Close`.
+    let choose = [KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")];
+    let dismissible = || {
+        let mut keys = choose.to_vec();
+        keys.push(KeyHint::new("⎋", "Close"));
+        keys
+    };
     match &app.mode {
         // The agent is waiting on the answer, and its question cannot be
-        // dismissed: `⎋` is "Chat about this", the way to answer in words.
+        // dismissed — "Chat about this" is on the list itself (frame E).
         Mode::Question(asking) if matches!(asking.asker, Asker::Agent { .. }) => {
-            Footer::new(Status::Waiting, list("Chat"))
+            Footer::new(Status::Waiting, choose.to_vec())
         }
-        Mode::Question(_) | Mode::Commands(_) => Footer::new(Status::Ready, list("Close")),
-        Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, list("Close")),
+        Mode::Question(_) => Footer::new(Status::Ready, dismissible()),
+        // Frame F: a command is run, not selected.
+        Mode::Commands(_) => Footer::new(
+            Status::Ready,
+            vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")],
+        ),
+        Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, dismissible()),
         // Shift and Tab are words, as Space is: the glyph table has no mark
         // for either, and "if it is not in the table, do not draw one." A
         // click is named too: the mouse is the quick way to a run of lines

@@ -345,7 +345,9 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     assert_eq!(buf[(option_x, opt + 1)].bg, pal.panel);
     let footer = find_row(&buf, "Waiting for you").unwrap();
     assert!(
-        row_text(&buf, footer).contains("⎋  Chat") && row_text(&buf, footer).contains("↩  Select")
+        row_text(&buf, footer).contains("↑↓  Choose")
+            && row_text(&buf, footer).contains("↩  Select"),
+        "frame E's footer"
     );
     assert!(
         !row_text(&buf, footer).contains("›"),
@@ -402,8 +404,8 @@ fn the_command_menu_lists_the_four_commands_above_the_field() {
     );
     let footer = row_text(&buf, field + 2);
     assert!(
-        footer.contains("↩  Select") && footer.contains("⎋  Close"),
-        "the menu names its keys as every list does: {footer:?}"
+        footer.contains("↩  Run") && footer.contains("⎋  Close"),
+        "frame F's footer: {footer:?}"
     );
 }
 

@@ -135,7 +135,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         if let Some(what) = discarded {
             let _ = events
                 .send(Event::Notice {
-                    message: format!("A turn is running, so {what}. Stop it with ⎋ first."),
+                    message: format!("A turn is running, so {what}. Stop it with esc first."),
                 })
                 .await;
         }

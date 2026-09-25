@@ -109,9 +109,9 @@ fn help_text() -> String {
 }
 
 /// What `/clear` and `/resume` say while a turn runs — see
-/// `History::turn_in_flight`. `⎋` because it is the key the footer offers
+/// `History::turn_in_flight`. `esc` because it is the key the footer offers
 /// for stopping.
-const TURN_IN_FLIGHT: &str = "A turn is running. Stop it with ⎋ first, then try again.";
+const TURN_IN_FLIGHT: &str = "A turn is running. Stop it with esc first, then try again.";
 
 /// How to resume, quoted by the branches that cannot act — same "never
 /// make them go and find /help" rule as `MODEL_USAGE`.

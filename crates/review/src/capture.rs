@@ -233,18 +233,11 @@ fn take_frame(
 }
 
 /// Whether `now` is the hidden half of the caret's blink, judged against
-/// `prev`, the grid one edge earlier. The caret is the cells whose ground
-/// changed between the two — the one blink that moves a ground rather than a
-/// glyph. Hidden, such a cell is the ground of the cell on its left, since
-/// the field runs straight through it; shown, it is not. Nothing blinking,
-/// or a blinking cell at column 0 with no left to compare, reads as shown.
+/// `prev`, the grid one edge earlier. The caret is the terminal's cursor,
+/// and the blink hides it: hidden now, shown a half-period ago. A screen
+/// with no caret in either reads as shown — nothing there blinks.
 fn caret_hidden(prev: &Grid, now: &Grid) -> bool {
-    let mut blinking = now
-        .cells()
-        .filter(|&(r, c, cell)| c > 0 && cell.effective().1 != prev.get(r, c).effective().1)
-        .peekable();
-    blinking.peek().is_some()
-        && blinking.all(|(r, c, cell)| cell.effective().1 == now.get(r, c - 1).effective().1)
+    now.caret().is_none() && prev.caret().is_some()
 }
 
 fn wait_for_png(path: &Path) -> Result<()> {
@@ -277,29 +270,26 @@ mod tests {
     use super::caret_hidden;
     use crate::vt::{Grid, Vt};
 
-    /// A field row: `›` and a space on the field ground (48;2;37;40;44), then
-    /// the caret cell on `ground`, then more field.
-    fn field(caret_ground: &str) -> Grid {
+    /// A field row, `›` and a space, with the cursor at the caret's cell
+    /// shown or hidden.
+    fn field(shown: bool) -> Grid {
         let mut vt = Vt::new(12, 1);
-        vt.feed(
-            format!(
-                "\x1b[48;2;37;40;44m\u{203a} \x1b[48;2;{caret_ground}m \x1b[48;2;37;40;44m     "
-            )
-            .as_bytes(),
-        );
+        let cursor = if shown { "\x1b[?25h" } else { "\x1b[?25l" };
+        vt.feed(format!("\x1b[48;2;37;40;44m\u{203a}      \x1b[1;3H{cursor}").as_bytes());
         vt.grid().clone()
     }
 
     #[test]
-    fn the_hidden_half_is_the_one_where_the_field_runs_through_the_caret() {
-        let (shown, hidden) = (field("230;232;235"), field("37;40;44"));
+    fn the_hidden_half_is_the_one_where_the_cursor_is_hidden() {
+        let (shown, hidden) = (field(true), field(false));
+        assert_eq!(shown.caret(), Some((0, 2)));
         assert!(caret_hidden(&shown, &hidden));
         assert!(!caret_hidden(&hidden, &shown));
     }
 
     #[test]
     fn a_screen_with_nothing_blinking_is_never_waited_on() {
-        let still = field("230;232;235");
+        let still = field(false);
         assert!(!caret_hidden(&still, &still));
     }
 }

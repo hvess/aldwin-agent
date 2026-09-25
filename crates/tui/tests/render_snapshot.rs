@@ -58,7 +58,7 @@ const SCENES: [&str; 16] = [
     "failure",   // ADR 0009 §5: a sentence, no red
     "long",      // an overflowing transcript
     "wrapped",   // a diff line wider than the pane — baseline long-diff-lines-wrap
-    "stopping",  // ⎋ mid-turn: stopped, and nothing else
+    "stopping",  // esc mid-turn: stopped, and nothing else
     "answering", // "Chat about this": the question stays, the turn waits on you
 ];
 
@@ -134,8 +134,9 @@ fn every_scene_renders_exactly_as_recorded() {
             for (width, height) in SIZES {
                 let mut app = app(theme);
                 scene(scene_name, &mut app);
-                let buffer = render(&mut app, width, height);
+                let (buffer, caret) = render_with_caret(&mut app, width, height);
                 let _ = writeln!(out, "=== {theme:?} {scene_name} {width}x{height}");
+                let _ = writeln!(out, "caret {caret:?}");
                 out.push_str(&serialize(&buffer));
             }
         }
@@ -331,9 +332,18 @@ fn no_cell_is_underlined() {
 }
 
 fn render(app: &mut App, width: u16, height: u16) -> Buffer {
+    render_with_caret(app, width, height).0
+}
+
+/// The buffer, and the caret: the terminal's own cursor, which no cell
+/// carries, as `(x, y)` when it is shown.
+fn render_with_caret(app: &mut App, width: u16, height: u16) -> (Buffer, Option<(u16, u16)>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal.draw(|f| aldwin_tui::draw(f, app)).expect("draw");
-    terminal.backend().buffer().clone()
+    let backend = terminal.backend();
+    let at = backend.cursor_position();
+    let caret = backend.cursor_visible().then_some((at.x, at.y));
+    (backend.buffer().clone(), caret)
 }
 
 fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
@@ -487,7 +497,9 @@ fn scene(name: &str, app: &mut App) {
             });
             app.seed(work(false));
             app.status_mut().context_used = Some(440_000);
+            // Frame F types `/c`: narrowed, and completed in grey.
             press(app, KeyCode::Char('/'), KeyModifiers::NONE);
+            press(app, KeyCode::Char('c'), KeyModifiers::NONE);
         }
         "review" => open_review(app),
         "selecting" => {

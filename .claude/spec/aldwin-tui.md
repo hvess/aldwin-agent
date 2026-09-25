@@ -10,7 +10,40 @@ the top bar, the permission panel and first run are gone, and the entries
 that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-09-25
+
+**Progress (2026-09-25, the frame re-synced):** The design-system project
+was unchanged; `Aldwin Agent TUI.dc.html` moved, and the app followed it.
+
+- **The caret is a bar.** The frame draws a 2px accent bar between cells
+  where it drew a `label` block. No cell can draw that and the glyph table
+  has no mark for it, so the caret is the terminal's own cursor
+  (`chrome::place_caret`): `run.rs` sets it to a steady bar and colours it
+  with the theme's accent (OSC 12, again after `/theme`, and reset on exit),
+  and the app blinks it on `--caret-period` by showing and hiding it. The
+  bar stands at the left edge of its cell, so mid-text it stands before
+  the character and does not repaint it. The snapshot records the caret's
+  position per scene. The review loop's `vt.rs` tracks DECTCEM, capture
+  waits for the shown half by that, and the pixel cross-check skips the
+  caret's cell, where foot draws the bar.
+- **`esc`, not `⎋`.** Every key hint, the comment field's label and the
+  two "Stop it with esc first" refusals. The README's glyph list still
+  names `⎋`; the frame outranks it.
+- **Space is not named.** Frame C's footer is `esc  Stop` alone. Space
+  still opens and closes the turn's work on an empty field (the
+  developer's call), but no footer names it.
+- **The commands are a panel (frame F).** On `--panel`, directly on the
+  field, a blank row inside above and below, rows inset a cell like frame
+  E's options. Names have no slash, the typed part `label` and the rest
+  `label2`; the current row is on `--field` with the `›`, its purpose
+  `label`. The field keeps its `›`: `/` and the filter, then the current
+  command's rest in `label3`, and the text turns accent once it spells a
+  command. Typing puts the current row back on the top match, `↑↓` moves
+  it, and the completion follows it (the developer's call). The footer
+  has no status word: `↑↓  Choose  ↩  Run  esc  Close`.
+- **Two contradictions retire.** The frames drop their placeholders and
+  frame J its `↺  Undo`, so `field-has-no-placeholder` and
+  `frame-j-offers-undo` leave `baseline.json`.
 
 **Progress (2026-09-24, the audit's TUI and HIG findings):** Each fix
 landed with the test that would have caught it.
@@ -79,7 +112,8 @@ ethos, quality — found the rest. What changed, each against its source:
 - **The footer:** every glyph `label2` (frames A–J; the accent is the
   field's ready action only); `/  Commands` right-flush beside the context
   bar (frame A), and the first thing to go on a narrow row; after a turn
-  that saved, the context bar alone (baseline `frame-j-offers-undo`).
+  that saved, the context bar alone (frame J; the baseline entry
+  `frame-j-offers-undo` it cited retired 2026-09-25).
 - **Tones and widths:** the echo's `›` `label3`, the disclosure glyph and a
   pending step's text `label2`; prose, detail facts and the review's
   summary end `BODY_X` from the right edge (`padding: 0 5ch`).

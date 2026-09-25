@@ -83,6 +83,10 @@ pub struct Grid {
     pub cols: u16,
     pub rows: u16,
     cells: Vec<Cell>,
+    /// Where the terminal's cursor stands while it is shown. The app's
+    /// caret is that cursor, a bar no cell carries, so it is read here
+    /// rather than off a ground.
+    caret: Option<(u16, u16)>,
 }
 
 impl Grid {
@@ -91,7 +95,13 @@ impl Grid {
             cols,
             rows,
             cells: vec![Cell::default(); cols as usize * rows as usize],
+            caret: None,
         }
+    }
+
+    /// The shown cursor's `(row, col)`, or `None` while it is hidden.
+    pub fn caret(&self) -> Option<(u16, u16)> {
+        self.caret
     }
 
     pub fn get(&self, row: u16, col: u16) -> Cell {
@@ -135,6 +145,7 @@ impl Grid {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.cells.hash(&mut hasher);
+        self.caret.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -168,6 +179,8 @@ pub struct Vt {
     colons: bool,
     utf8: Vec<u8>,
     need: usize,
+    /// DECTCEM: whether the cursor is shown. A terminal starts with it on.
+    shown: bool,
 }
 
 impl Vt {
@@ -184,6 +197,7 @@ impl Vt {
             colons: false,
             utf8: Vec::new(),
             need: 0,
+            shown: true,
         }
     }
 
@@ -195,6 +209,9 @@ impl Vt {
         for &b in bytes {
             self.byte(b);
         }
+        // Where the cursor has come to rest once the bytes are in — a frame
+        // hides it, paints, then shows it where the caret goes.
+        self.grid.caret = self.shown.then_some((self.row, self.col));
     }
 
     fn byte(&mut self, b: u8) {
@@ -412,6 +429,10 @@ impl Vt {
                 }
             }
             b'm' => self.sgr(),
+            // 25 is DECTCEM, the cursor shown or hidden: the caret's blink.
+            b'h' | b'l' if self.private && self.params.first() == Some(&25) => {
+                self.shown = final_byte == b'h';
+            }
             // 1049 is the alternate screen. ratatui enters it at startup and
             // leaves on exit; either way the buffer it switches to is blank,
             // which is all this parser needs to model.

@@ -223,10 +223,10 @@ pub struct Review {
     pub(crate) pane: Option<Pane>,
     /// The comment field is open for the selection.
     pub(crate) commenting: bool,
-    /// What is typed into it. `⎋` closes the field and keeps this, so a
+    /// What is typed into it. `esc` closes the field and keeps this, so a
     /// comment half-written is never lost to a key.
     pub(crate) comment: Draft,
-    /// `⎋` with nothing selected asks before dropping the changes: the
+    /// `esc` with nothing selected asks before dropping the changes: the
     /// question's list, while it is open.
     pub(crate) confirm: Option<List>,
     /// `?` toggles the key list in the footer.
@@ -459,7 +459,7 @@ impl Review {
         }
     }
 
-    /// The question `⎋` asks before the changes are dropped.
+    /// The question `esc` asks before the changes are dropped.
     pub fn discard_question(&self) -> Question {
         Question {
             question: "Discard these changes?".into(),
@@ -1253,7 +1253,7 @@ mod tests {
         );
     }
 
-    /// The bug: the discard question took `1`, `2` and `⎋` and nothing
+    /// The bug: the discard question took `1`, `2` and `esc` and nothing
     /// else, where every other list answers the arrows and `↩`.
     #[test]
     fn the_discard_question_is_a_list_like_any_other() {
@@ -1267,10 +1267,10 @@ mod tests {
         let mut r = review_of(Some("x\n"), "y\n");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
         r.handle_key(KeyCode::Esc, KeyModifiers::NONE, "");
-        assert!(r.confirm.is_none(), "⎋ closes it, keeping the review");
+        assert!(r.confirm.is_none(), "esc closes it, keeping the review");
     }
 
-    /// The bug: `⎋` in the comment field threw away what was typed.
+    /// The bug: `esc` in the comment field threw away what was typed.
     #[test]
     fn escape_leaves_the_comment_field_and_the_words_survive() {
         let mut r = review_of(Some("x\n"), "y\n");

@@ -45,6 +45,15 @@ fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
+/// Where the caret is after a draw: the terminal's cursor, if shown.
+fn caret(app: &mut App, width: u16, height: u16) -> Option<(u16, u16)> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| super::draw(f, app)).unwrap();
+    let backend = terminal.backend();
+    let at = backend.cursor_position();
+    backend.cursor_visible().then_some((at.x, at.y))
+}
+
 fn row_text(buf: &Buffer, y: u16) -> String {
     (0..buf.area.width)
         .map(|x| buf[(x, y)].symbol().to_string())
@@ -117,9 +126,14 @@ fn the_field_is_at_the_margin_with_the_prompt_in_the_mark_column() {
     );
     let pal = Theme::Dark.palette();
     assert_eq!(
-        buf[(BODY_X as u16, y)].bg,
-        pal.label,
+        caret(&mut a, 100, 36),
+        Some((BODY_X as u16, y)),
         "the caret sits on the body column"
+    );
+    assert_eq!(
+        buf[(BODY_X as u16, y)].bg,
+        pal.field,
+        "the caret is the cursor's bar, not a painted cell"
     );
     assert_eq!(buf[(MARGIN_X as u16, y)].fg, pal.accent, "blue means you");
     assert_eq!(buf[(MARGIN_X as u16, y)].bg, pal.field);
@@ -235,6 +249,71 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     let y = find_row(&buf, "Read 1 file").unwrap();
     let glyph = col_of(&buf, y, "›").unwrap() as u16;
     assert_eq!(buf[(glyph, y)].fg, pal.label2);
+}
+
+/// Frame J: after a save the empty field offers `Send  ↩` right-flush in
+/// `label3`, one cell in from its edge; it turns blue once there is a
+/// draft.
+#[test]
+fn after_a_save_the_field_offers_send() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.apply_event(Event::ReviewClosed {
+        outcome: ReviewOutcome::Saved {
+            files: vec!["a".into()],
+            comments_resolved: 0,
+        },
+    });
+    a.apply_event(Event::TurnEnded {
+        turn_id: TurnId(1),
+        reason: TurnEndReason::EndTurn,
+    });
+    let pal = Theme::Dark.palette();
+    let buf = render(&mut a, 100, 36);
+    let y = find_row(&buf, "Send  ↩").expect("the action");
+    let right = buf.area.width - MARGIN_X as u16;
+    assert_eq!(buf[(right - 2, y)].symbol(), "↩");
+    assert_eq!(buf[(right - 2, y)].fg, pal.label3, "grey while empty");
+    a.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 36);
+    assert_eq!(buf[(right - 2, y)].fg, pal.accent, "ready once typed");
+}
+
+/// Frames B and C: Space still opens the work, but the footer names only
+/// `esc  Stop` — shut or open, working or not.
+#[test]
+fn no_footer_names_the_details_key() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.log.push(LogEntry::Work {
+        items: vec![crate::log::WorkItem {
+            call_id: "c".into(),
+            verb: crate::log::Verb::Read,
+            target: "src/x.rs".into(),
+            fact: Some("6 lines".into()),
+            failed: false,
+        }],
+        open: false,
+    });
+    let footer = |a: &mut App| {
+        let buf = render(a, 100, 36);
+        row_text(&buf, find_row(&buf, "Context").unwrap())
+    };
+    assert_eq!(
+        footer(&mut a).split("Context").next().unwrap().trim(),
+        "● Working…     esc  Stop"
+    );
+    a.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert!(a.details_open, "Space still opens the work");
+    assert!(!footer(&mut a).contains("Space"));
+    a.apply_event(Event::TurnEnded {
+        turn_id: TurnId(1),
+        reason: TurnEndReason::EndTurn,
+    });
+    assert!(
+        !footer(&mut a).contains("Space"),
+        "nor once the turn is over"
+    );
 }
 
 /// Prose is `padding: 0 5ch` in every frame: it wraps `BODY_X` short of the
@@ -355,58 +434,180 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     );
 }
 
+/// Frame F: the commands on a `--panel` band sitting on the field, a blank
+/// row inside it above and below, each row inset a cell into it; the
+/// current one on `--field` with the `›`, its purpose in `label`.
 #[test]
-fn the_command_menu_lists_the_four_commands_above_the_field() {
+fn the_command_menu_is_a_panel_on_the_field() {
     let mut a = app();
     a.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
-    let y = find_row(&buf, "/resume").unwrap();
-    assert_eq!(col_of(&buf, y, "›"), Some(MARGIN_X));
-    assert_eq!(col_of(&buf, y, "/"), Some(BODY_X));
-    assert_eq!(buf[(BODY_X as u16, y)].fg, pal.accent);
+    let y = find_row(&buf, "resume").unwrap();
+    assert!(!row_text(&buf, y).contains('/'), "no slash on the names");
+    assert_eq!(col_of(&buf, y, "›"), Some(MARGIN_X + OPTION_INSET));
+    assert_eq!(col_of(&buf, y, "resume"), Some(BODY_X + OPTION_INSET));
     assert_eq!(
         col_of(&buf, y, "Pick up"),
-        Some(BODY_X + COMMAND_COL),
+        Some(BODY_X + OPTION_INSET + COMMAND_COL),
         "purpose at --command-col"
     );
+    assert_eq!(
+        buf[(MARGIN_X as u16 + OPTION_INSET as u16, y)].fg,
+        pal.accent
+    );
+    assert_eq!(
+        buf[(MARGIN_X as u16 + OPTION_INSET as u16, y)].bg,
+        pal.field
+    );
+    let purpose = col_of(&buf, y, "Pick up").unwrap() as u16;
+    assert_eq!(buf[(purpose, y)].fg, pal.label, "the current purpose");
     let right = buf.area.width - 1;
     assert_eq!(
-        buf[(MARGIN_X as u16, y)].bg,
-        pal.tint,
-        "frame F: the current command is an idle selection, on --tint"
+        (
+            buf[(MARGIN_X as u16, y)].bg,
+            buf[(right - MARGIN_X as u16, y)].bg
+        ),
+        (pal.panel, pal.panel),
+        "the current row is inset a cell into the panel"
     );
-    assert_eq!(buf[(right - MARGIN_X as u16, y)].bg, pal.tint);
     assert_eq!(
         (buf[(0, y)].bg, buf[(right, y)].bg),
         (pal.win, pal.win),
         "between the margins, not edge to edge"
     );
-    assert!(row_text(&buf, y + 1).contains("/model"));
-    assert!(row_text(&buf, y + 2).contains("/quit"));
-    assert!(row_text(&buf, y + 3).contains("/clear"));
+    assert_eq!(
+        buf[(MARGIN_X as u16, y - 1)].bg,
+        pal.panel,
+        "a blank row on the panel above"
+    );
+    assert_eq!(buf[(MARGIN_X as u16, y - 2)].bg, pal.win);
+    let model = y + 1;
+    assert!(row_text(&buf, model).contains("model"));
+    assert_eq!(
+        buf[(BODY_X as u16 + OPTION_INSET as u16, model)].fg,
+        pal.label2
+    );
+    let at = col_of(&buf, model, "Change").unwrap() as u16;
+    assert_eq!(buf[(at, model)].fg, pal.label2);
+    assert_eq!(
+        buf[(MARGIN_X as u16 + OPTION_INSET as u16, model)].bg,
+        pal.panel
+    );
+    assert!(row_text(&buf, y + 2).contains("quit"));
+    assert!(row_text(&buf, y + 3).contains("clear"));
     assert!(!row_text(&buf, y + 3).contains('⌃'), "no shortcut column");
+    assert_eq!(buf[(MARGIN_X as u16, y + 4)].bg, pal.panel, "and one below");
     let field = y + 5;
     assert_eq!(
-        col_of(&buf, field, "/"),
-        Some(MARGIN_X),
-        "the field shows the slash"
-    );
-    assert_eq!(
-        buf[(MARGIN_X as u16 + 1, field)].bg,
+        buf[(MARGIN_X as u16, field)].bg,
         pal.field,
-        "the slash fills the mark column"
+        "the panel sits on the field"
     );
     assert_eq!(
-        buf[(BODY_X as u16, field)].bg,
-        pal.label,
-        "the caret sits on the body column"
+        col_of(&buf, field, "›"),
+        Some(MARGIN_X),
+        "the field keeps its prompt"
+    );
+    assert_eq!(col_of(&buf, field, "/"), Some(BODY_X));
+    assert_eq!(
+        caret(&mut a, 100, 36),
+        Some((BODY_X as u16 + 1, field)),
+        "the caret after the slash"
     );
     let footer = row_text(&buf, field + 2);
-    assert!(
-        footer.contains("↩  Run") && footer.contains("⎋  Close"),
-        "frame F's footer: {footer:?}"
+    assert_eq!(
+        footer.split("Context").next().unwrap().trim(),
+        "↑↓  Choose     ↩  Run     esc  Close",
+        "frame F's footer, with no status word"
     );
+}
+
+/// Typing narrows the list and the current command completes the field
+/// in `label3`; the text turns blue once it spells a command.
+#[test]
+fn the_command_field_completes_the_current_command_in_grey() {
+    let mut a = app();
+    for c in ['/', 'c'] {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let buf = render(&mut a, 100, 36);
+    let pal = Theme::Dark.palette();
+    let y = find_row(&buf, "clear").unwrap();
+    assert!(find_row(&buf, "resume").is_none(), "narrowed to the match");
+    let name = (BODY_X + OPTION_INSET) as u16;
+    assert_eq!(buf[(name, y)].fg, pal.label, "what is typed of it");
+    assert_eq!(buf[(name + 1, y)].fg, pal.label2, "and the rest");
+    let field = y + 2;
+    assert_eq!(row_text(&buf, field).trim(), "› /clear");
+    assert_eq!(
+        buf[(BODY_X as u16 + 1, field)].fg,
+        pal.label,
+        "not yet a command"
+    );
+    assert_eq!(
+        buf[(BODY_X as u16 + 2, field)].fg,
+        pal.label3,
+        "the completion"
+    );
+    assert_eq!(caret(&mut a, 100, 36), Some((BODY_X as u16 + 2, field)));
+
+    for c in "lear".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let buf = render(&mut a, 100, 36);
+    let field = find_row(&buf, "› /clear").unwrap();
+    assert_eq!(
+        buf[(BODY_X as u16, field)].fg,
+        pal.accent,
+        "a real command is blue"
+    );
+    assert_eq!(buf[(BODY_X as u16 + 5, field)].fg, pal.accent);
+}
+
+/// The completion follows the current row, not only the top match.
+#[test]
+fn the_completion_follows_the_current_row() {
+    let mut a = app();
+    a.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 36);
+    assert!(find_row(&buf, "› /model").is_some());
+    a.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 36);
+    assert!(
+        find_row(&buf, "› /quit").is_some(),
+        "typing goes back to the top match"
+    );
+}
+
+/// The caret stands at the left edge of the character after it: mid-text
+/// it is the cursor on that character's cell, which keeps its own paint.
+#[test]
+fn the_caret_stands_before_the_character_it_is_at() {
+    let mut a = app();
+    for c in "abc".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    let buf = render(&mut a, 100, 36);
+    let pal = Theme::Dark.palette();
+    let y = find_row(&buf, "› abc").unwrap();
+    assert_eq!(caret(&mut a, 100, 36), Some((BODY_X as u16 + 2, y)));
+    assert_eq!(buf[(BODY_X as u16 + 2, y)].bg, pal.field);
+    assert_eq!(buf[(BODY_X as u16 + 2, y)].fg, pal.label);
+}
+
+/// The caret blinks on `--caret-period`: the cursor is hidden for the
+/// other half.
+#[test]
+fn the_caret_blinks_by_hiding_the_cursor() {
+    let mut a = app();
+    assert!(caret(&mut a, 100, 36).is_some());
+    for _ in 0..9 {
+        a.tick();
+    }
+    assert_eq!(caret(&mut a, 100, 36), None);
 }
 
 #[test]
@@ -850,7 +1051,7 @@ fn a_wrapped_file_is_read_only_when_its_last_row_is_seen() {
 }
 
 /// M4: after "Chat about this" the question stays above the field, the
-/// footer says the turn is waiting on you, and `⎋` is named as the way
+/// footer says the turn is waiting on you, and `esc` is named as the way
 /// back to the options.
 #[test]
 fn answering_in_words_keeps_the_question_on_screen() {
@@ -875,15 +1076,15 @@ fn answering_in_words_keeps_the_question_on_screen() {
     );
     let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
     assert!(
-        footer.contains("Waiting for you") && footer.contains("⎋  Back"),
+        footer.contains("Waiting for you") && footer.contains("esc  Back"),
         "{footer:?}"
     );
     assert!(!footer.contains("Working"), "{footer:?}");
 }
 
-/// m3: the comment field names `⎋` with the glyph every other footer uses.
+/// The comment field names escape as every footer does, `esc`.
 #[test]
-fn the_comment_field_names_escape_by_its_glyph() {
+fn the_comment_field_names_escape_as_the_footers_do() {
     let mut a = app();
     one_file_review(&mut a, "a\nb\n".into());
     render(&mut a, 100, 30);
@@ -891,6 +1092,11 @@ fn the_comment_field_names_escape_by_its_glyph() {
     a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let buf = render(&mut a, 100, 30);
     let label = find_row(&buf, "Commenting on").unwrap();
-    assert!(row_text(&buf, label).trim_end().ends_with('⎋'));
-    assert!(!row_text(&buf, label).contains("esc"));
+    assert!(row_text(&buf, label).trim_end().ends_with("esc"));
+    let draft = label + 1;
+    assert_eq!(
+        caret(&mut a, 100, 30),
+        Some((MARGIN_X as u16 + 1, draft)),
+        "the caret after the edge"
+    );
 }

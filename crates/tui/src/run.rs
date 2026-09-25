@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use aldwin_core::{Command, Event};
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::cursor::{Hide, Show};
+use ratatui::crossterm::cursor::{Hide, SetCursorStyle, Show};
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as CtEvent,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -14,6 +14,7 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use ratatui::crossterm::{execute, queue, ExecutableCommand};
+use ratatui::style::Color;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -162,6 +163,9 @@ pub async fn run(
     let _ = stdout
         .write_all(ALTERNATE_SCROLL_ON)
         .and_then(|()| stdout.flush());
+    // The caret is the terminal's cursor, drawn as the design's bar;
+    // `sync_caret` gives it the accent. Best-effort, like every mode here.
+    let _ = execute!(stdout, SetCursorStyle::SteadyBar);
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
 
@@ -238,12 +242,16 @@ fn restore_terminal() -> io::Result<()> {
         .and_then(|()| io::stdout().flush());
     let mouse = execute!(io::stdout(), DisableMouseCapture);
     let alt = execute!(io::stdout(), LeaveAlternateScreen);
+    let caret = io::stdout()
+        .write_all(CARET_COLOUR_RESET)
+        .and_then(|()| execute!(io::stdout(), SetCursorStyle::DefaultUserShape));
     let cursor = execute!(io::stdout(), Show);
     raw.and(pop)
         .and(paste)
         .and(scroll)
         .and(mouse)
         .and(alt)
+        .and(caret)
         .and(cursor)
 }
 
@@ -294,6 +302,24 @@ fn sync_mouse(out: &mut impl Write, wanted: bool, captured: &mut bool) {
         .write_all(if wanted { MOUSE_ON } else { MOUSE_OFF })
         .and_then(|()| out.flush());
     *captured = wanted;
+}
+
+/// OSC 112: the cursor's colour back to the terminal's own.
+const CARET_COLOUR_RESET: &[u8] = b"\x1b]112\x07";
+
+/// Colours the cursor — the caret — with the theme's accent (OSC 12), once
+/// at the start and again whenever `/theme` changes the palette, since
+/// blue means you. Queued into the frame's own buffer, so it goes out with
+/// the next paint. A terminal without OSC 12 ignores it and keeps its own
+/// cursor colour; the caret is still a bar in the right cell.
+fn sync_caret(out: &mut impl Write, theme: Theme, painted: &mut Option<Theme>) {
+    if *painted == Some(theme) {
+        return;
+    }
+    if let Color::Rgb(r, g, b) = theme.palette().accent {
+        let _ = write!(out, "\x1b]12;#{r:02x}{g:02x}{b:02x}\x07");
+    }
+    *painted = Some(theme);
 }
 
 /// One crossterm event applied to the app. `false` means the input stream
@@ -410,6 +436,8 @@ async fn run_loop(
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    let mut caret_theme = None;
+    sync_caret(terminal.backend_mut(), app.theme, &mut caret_theme);
     present(terminal, &mut app)?;
     let mut mouse_captured = false;
     let mut last_draw = Instant::now();
@@ -518,6 +546,7 @@ async fn run_loop(
         // the next frame instead, and the `sleep_until` branch above
         // guarantees the last one is still painted promptly.
         if dirty && last_draw.elapsed() >= MIN_FRAME {
+            sync_caret(terminal.backend_mut(), app.theme, &mut caret_theme);
             present(terminal, &mut app)?;
             last_draw = Instant::now();
             dirty = false;

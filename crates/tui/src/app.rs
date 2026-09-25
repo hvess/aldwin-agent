@@ -94,19 +94,43 @@ impl CommandMenu {
         menu
     }
 
+    /// Narrows the rows to the filter, the current row back on the top
+    /// match: frame F completes the top match, and `↑↓` moves on from it.
     fn refilter(&mut self, commands: &[CommandChoice]) {
         let rows = commands
             .iter()
             .filter(|c| c.name.starts_with(self.filter.as_str()))
             .map(|c| ListRow::with_detail(format!("/{}", c.name), c.summary.clone()))
             .collect();
-        let selected = self.list.selected;
-        self.list = List::new(rows).opened_on(selected);
+        self.list = List::new(rows);
     }
 
     /// What is typed so far, as the field would hold it.
     fn typed(&self) -> String {
         format!("/{}", self.filter)
+    }
+
+    /// The current row's name, less its slash.
+    fn current(&self) -> Option<&str> {
+        let row = self.list.rows.get(self.list.selected)?;
+        Some(row.label.strip_prefix('/').unwrap_or(&row.label))
+    }
+
+    /// The rest of the current command after what is typed: the field's
+    /// grey completion, and what `↩` would run.
+    pub(crate) fn completion(&self) -> &str {
+        self.current()
+            .and_then(|name| name.strip_prefix(self.filter.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Whether what is typed spells a command whole — the one time the
+    /// field's text turns blue.
+    pub(crate) fn spells_a_command(&self) -> bool {
+        self.list
+            .rows
+            .iter()
+            .any(|row| row.label.strip_prefix('/') == Some(self.filter.as_str()))
     }
 }
 
@@ -179,14 +203,14 @@ pub struct App {
     /// slash command).
     pub(crate) awaiting_turn: bool,
     /// A stop has been asked for and the turn has not ended yet — a second
-    /// `⎋` asks nothing more.
+    /// `esc` asks nothing more.
     stopping: bool,
     /// The agent's question the next submission answers in words — the
-    /// developer chose "Chat about this". Kept whole, so `⎋` can go back
+    /// developer chose "Chat about this". Kept whole, so `esc` can go back
     /// to its options.
     pub(crate) answering: Option<Asking>,
     /// Whether the work disclosures of the current turn are open. Space
-    /// toggles it (`Space  Hide Details`).
+    /// toggles it, a key no footer names (frames B, C and J).
     pub(crate) details_open: bool,
     /// Where the current (or last) turn begins in `log`: the message that
     /// opened it. Not simply the last `UserMessage` — an answer given
@@ -675,8 +699,8 @@ impl App {
             (KeyCode::Enter, _) => self.submit(),
             (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.draft.insert('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.interrupt(),
-            // Answering in words: `⎋` goes back to the options, the draft
-            // kept. Otherwise `⎋  Stop` while working, and nothing idle.
+            // Answering in words: `esc` goes back to the options, the draft
+            // kept. Otherwise `esc  Stop` while working, and nothing idle.
             (KeyCode::Esc, _) => {
                 if let Some(asking) = self.answering.take() {
                     self.mode = Mode::Question(asking);
@@ -688,8 +712,8 @@ impl App {
             (KeyCode::Char('/'), _) if self.draft.is_empty() => {
                 self.mode = Mode::Commands(CommandMenu::open(&self.commands))
             }
-            // `Space  Hide Details` — on an empty field only; otherwise it
-            // is a space.
+            // Space opens or closes the work — on an empty field only;
+            // otherwise it is a space.
             (KeyCode::Char(' '), _) if self.draft.is_empty() && self.has_work() => {
                 self.toggle_details()
             }
@@ -815,7 +839,7 @@ impl App {
         }
     }
 
-    /// `⎋` on a question. The agent's cannot be dismissed — the tool is
+    /// `esc` on a question. The agent's cannot be dismissed — the tool is
     /// waiting — so it is "Chat about this". Any other puts back the
     /// message it was holding, so closing it loses nothing.
     fn close_question(&mut self, asking: Asking) {
@@ -1857,7 +1881,7 @@ pub(crate) mod tests {
         });
     }
 
-    /// The bug: `⎋` called the same function as `⌃C`, so a second `⎋`
+    /// The bug: `esc` called the same function as `⌃C`, so a second `esc`
     /// inside two seconds counted as "again" and quit mid-turn.
     #[test]
     fn escape_only_ever_stops_and_asks_once() {
@@ -1865,7 +1889,7 @@ pub(crate) mod tests {
         a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
         a.handle_key(press(KeyCode::Esc));
         a.handle_key(press(KeyCode::Esc));
-        assert!(!a.should_quit, "a second ⎋ does not leave Aldwin");
+        assert!(!a.should_quit, "a second esc does not leave Aldwin");
         assert_eq!(a.outbox, vec![Command::Cancel], "and asks for one stop");
         assert!(
             matches!(a.log.last(), Some(LogEntry::Notice { message }) if message == "Stopping."),
@@ -1926,7 +1950,7 @@ pub(crate) mod tests {
     }
 
     /// The bug: after "Chat about this" the question vanished, the footer
-    /// said `Working…`, and `⎋` stopped the whole turn.
+    /// said `Working…`, and `esc` stopped the whole turn.
     #[test]
     fn escape_while_answering_in_words_goes_back_to_the_options() {
         let mut a = app();

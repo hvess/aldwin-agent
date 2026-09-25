@@ -1,5 +1,35 @@
 # Design import — provenance
 
+## Re-sync — 2026-09-25, the frame only
+
+`Aldwin Agent TUI.dc.html` was fetched from the discussion project and
+replaces the local copy verbatim. Nothing else moved: the README, all five
+token files and `glyphs.html` were fetched and match this directory byte
+for byte. The frame's stylesheet link now points at the bound copy,
+`_ds/aldwin-b9de8837-…/styles.css`, rather than `Aldwin Design System/`.
+
+What the frame changed:
+
+- **The caret** is a 2px `--accent` bar between cells
+  (`width:2px;margin-right:-2px`), not a `label` block.
+- **No placeholders.** Every empty field is the `›` and the caret.
+- **`esc`, not `⎋`.** Every footer (`esc  Stop`, `esc  Close`) and frame
+  D's caption. The README and `glyphs.html` still list `⎋` as "stop,
+  close"; the frame no longer draws it.
+- **Frame C** drops `Space  Hide Details`: its footer is `esc  Stop`, as
+  B's is.
+- **Frame F** is rebuilt: the commands on a `--panel` band directly on the
+  field (`padding:24px 0`, rows `margin:0 1ch`), the current row on
+  `--field`; names without a slash, the typed part `label` and the rest
+  `label2`; the field shows `/c`, the caret and the top match's rest in
+  `label3` ("The text turns blue only once it spells a real command"); the
+  footer is `↑↓  Choose  ↩  Run  esc  Close`, with no status word and no
+  shortcut column.
+- **Frame J** drops `↺  Undo`; its footer is the context bar alone.
+
+`tokens.rs` regenerates unchanged: the glyph table still comes from
+`glyphs.html`, and the new frame draws no codepoint the old one did not.
+
 ## The Aldwin Design System — 2026-09-23, a replacement
 
 The design system was **replaced, not revised**. Its own README says so:
@@ -92,11 +122,12 @@ per-row positions of every component. The generator reads it.
 ### Where the design and the product disagree
 
 Recorded in `crates/review/baseline.json` under `contradictions`. As of the
-import there are two, both about scope rather than paint: the frame's
-command list names `/changes`, `/undo` and `/settings` with shortcut keys,
-where the product ships `/resume /model /quit /clear` with none (the
-developer's call, 2026-09-23); and frame `J` offers `↺ Undo`, which is
-open-tasks entry 27, not this pass.
+2026-09-25 re-sync the one about scope is the command list: the design's
+commands include `/changes` and `/undo` (frame F, `CommandRow`), where the
+product ships `/resume /model /quit /clear /theme` (the developer's calls,
+2026-09-23 and 2026-09-25); both are open-tasks entry 27. The frames'
+placeholders and frame J's `↺ Undo`, which the import recorded against the
+product, are gone from the frame.
 
 ## Traps that survived the replacement
 

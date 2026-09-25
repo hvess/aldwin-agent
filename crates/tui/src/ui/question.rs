@@ -7,9 +7,11 @@
 //! is. The current option sits on `--field` with the accent `›` in the mark
 //! column and a `label2` number; the other numbers are `label3`.
 //!
-//! The commands: rows on the window ground above the field, `/name` in the
-//! `--command-col` field (the slash in accent), the purpose in `label2`;
-//! the current row on `--tint` with the `›`, between the margins.
+//! The commands: the same panel, directly above the field — a blank row,
+//! the matching commands inset as the options are, a blank row. Each name
+//! fills the `--command-col` column with no slash, what is typed of it in
+//! `label` and the rest in `label2`, then its purpose. The current row sits
+//! on `--field` with the `›` and its purpose in `label`.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -190,39 +192,63 @@ fn one_row(row: Row, spans: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
 }
 
 pub(super) fn draw_commands(frame: &mut Frame, area: Rect, menu: &CommandMenu, pal: &Palette) {
-    let ctx = Ctx::new(pal, area.width);
-    let lines: Vec<Line<'static>> = menu
-        .list
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| command_row(&row.label, &row.detail, i == menu.list.selected, ctx))
-        .collect();
-    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+    let inner = Rect {
+        x: area.x + MARGIN_X as u16,
+        width: area.width.saturating_sub(2 * MARGIN_X as u16),
+        ..area
+    };
+    let on_panel = Style::default().bg(pal.panel);
+    frame.render_widget(Block::new().style(Style::default().bg(pal.win)), area);
+    frame.render_widget(Block::new().style(on_panel), inner);
+    let ctx = Ctx::new(pal, inner.width);
+    let mut lines: Vec<Line<'static>> = vec![Line::default()];
+    lines.extend(menu.list.rows.iter().enumerate().map(|(i, row)| {
+        command_row(
+            &row.label,
+            &row.detail,
+            &menu.filter,
+            i == menu.list.selected,
+            ctx,
+        )
+    }));
+    lines.push(Line::default());
+    frame.render_widget(Paragraph::new(Text::from(lines)).style(on_panel), inner);
 }
 
-/// `› /changes     Everything changed since you started` — the slash in
-/// accent, the name in `label`, the purpose at `--command-col` in
-/// `label2`. The current row on `--tint`, frame F's "idle selection":
-/// the focus stays in the `/` field below, which is what holds `--field`.
-fn command_row(name: &str, purpose: &str, current: bool, ctx: Ctx) -> Line<'static> {
+/// Rows the command panel takes: a blank row, the rows, a blank row.
+pub(super) fn commands_rows(menu: &CommandMenu) -> u16 {
+    menu.list.rows.len() as u16 + 2
+}
+
+/// `› changes     Everything changed since you started` — built across the
+/// panel's width and inset `OPTION_INSET` inside it, like an option. The
+/// name fills `--command-col`, `typed` of it in `label` and the rest in
+/// `label2`; the purpose follows, `label` on the current row and `label2`
+/// on the others, with the frame's empty `--mark-col` held at the end.
+fn command_row(name: &str, purpose: &str, typed: &str, current: bool, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
-    let row = Row::band(if current { pal.tint } else { pal.win }, pal.win);
+    let bg = if current { pal.field } else { pal.panel };
+    let row = Row::band(bg, pal.panel).inset(OPTION_INSET);
     let mark = if current {
         Span::styled(column("›", MARK_COL), Style::default().fg(pal.accent))
     } else {
         Span::raw(" ".repeat(MARK_COL))
     };
     let bare = name.strip_prefix('/').unwrap_or(name);
-    let room = (ctx.width as usize).saturating_sub(2 * MARGIN_X + MARK_COL + COMMAND_COL);
+    let rest = bare.strip_prefix(typed).unwrap_or(bare);
+    let typed = &bare[..bare.len() - rest.len()];
+    let room = (ctx.width as usize).saturating_sub(2 * OPTION_INSET + 2 * MARK_COL + COMMAND_COL);
     let spans = vec![
         mark,
-        Span::styled("/", Style::default().fg(pal.accent)),
+        Span::styled(typed.to_string(), Style::default().fg(pal.label)),
         Span::styled(
-            column(bare, COMMAND_COL.saturating_sub(1)),
-            Style::default().fg(pal.label),
+            column(rest, COMMAND_COL.saturating_sub(typed.width())),
+            Style::default().fg(pal.label2),
         ),
-        Span::styled(elide(purpose, room), Style::default().fg(pal.label2)),
+        Span::styled(
+            elide(purpose, room),
+            Style::default().fg(if current { pal.label } else { pal.label2 }),
+        ),
     ];
     one_row(row, spans, ctx)
 }

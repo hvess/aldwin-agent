@@ -1,5 +1,5 @@
 //! The one list control every question is asked with: numbered rows, `↑↓`
-//! to choose, `↩` or the number to pick, `⎋` to close. The design draws a
+//! to choose, `↩` or the number to pick, `esc` to close. The design draws a
 //! `QuestionPanel` and a `CommandRow` list; a provider or a session picker
 //! is the same control with different rows, so there is one of these and
 //! not four.

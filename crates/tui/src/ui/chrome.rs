@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::grid::{truncate_spans, Ctx, GROUP_GAP, MARGIN_X, MARK_COL};
+use super::grid::{truncate_spans, GROUP_GAP, MARGIN_X, MARK_COL};
 use super::question;
 use aldwin_core::ReviewOutcome;
 
@@ -23,8 +23,9 @@ use crate::tokens::{gauge_filled, GAUGE_SEGMENTS};
 /// the draft scrolls inside the band, keeping the caret in view.
 pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
 
-/// The cell the drawn caret takes, held back from the draft's column so a
-/// row filled to its last character still has somewhere to put it.
+/// The cell the caret's cursor sits in after the last character, held back
+/// from the draft's column so a row filled to its last character still has
+/// somewhere to put it.
 const CARET_LEN: u16 = 1;
 
 /// Ticks the caret stays on, then off: motion.css's `--caret-period` of
@@ -64,12 +65,14 @@ impl Composer {
 /// What the bottom band holds, and the rows it needs — decided once so the
 /// layout and the draw cannot disagree.
 pub(super) enum Bottom {
-    /// blank / field / blank / footer / blank
-    Field(Composer),
+    /// blank / field / blank / footer / blank, the field with its action
+    /// when it has one.
+    Field(Composer, Option<Action>),
     /// blank / question / detail / blank / options / blank, then blank /
     /// footer / blank on the window ground.
     Question { rows: u16 },
-    /// blank / rows / blank / field / blank / footer / blank
+    /// blank / the command panel / field / blank / footer / blank — the
+    /// panel sits on the field, as frame F draws it.
     Commands { rows: u16, composer: Composer },
     /// The agent's question, answered in words: the question alone on
     /// `--panel`, then blank / field / blank / footer / blank beneath it.
@@ -84,29 +87,35 @@ impl Bottom {
                 rows: question::panel_rows(&asking.question, Some(&asking.list), width),
             },
             (Mode::Commands(menu), _) => Bottom::Commands {
-                rows: menu.list.rows.len() as u16,
+                rows: question::commands_rows(menu),
                 composer,
             },
             (_, Some(asking)) => Bottom::Answering {
                 rows: question::panel_rows(&asking.question, None, width),
                 composer,
             },
-            _ => Bottom::Field(composer),
+            _ => match send_action(app) {
+                Some(action) => Bottom::Field(
+                    Composer::new(app.draft.text(), width, action.width()),
+                    Some(action),
+                ),
+                None => Bottom::Field(composer, None),
+            },
         }
     }
 
     pub(super) fn height(&self) -> u16 {
         match self {
-            Bottom::Field(c) => c.height() + 4,
+            Bottom::Field(c, _) => c.height() + 4,
             Bottom::Question { rows } => rows + 3,
-            Bottom::Commands { rows, composer } => rows + composer.height() + 5,
+            Bottom::Commands { rows, composer } => rows + composer.height() + 4,
             Bottom::Answering { rows, composer } => rows + composer.height() + 4,
         }
     }
 
     pub(super) fn draw(self, frame: &mut Frame, area: Rect, app: &mut App) {
         match self {
-            Bottom::Field(composer) => {
+            Bottom::Field(composer, action) => {
                 let [_, field, _, footer, _] = Layout::vertical([
                     Constraint::Length(1),
                     Constraint::Length(composer.height()),
@@ -115,7 +124,7 @@ impl Bottom {
                     Constraint::Length(1),
                 ])
                 .areas(area);
-                draw_field(frame, field, app, &composer, None);
+                draw_field(frame, field, app, &composer, action);
                 draw_footer(frame, footer, app);
             }
             Bottom::Question { rows } => {
@@ -154,10 +163,9 @@ impl Bottom {
                 draw_footer(frame, footer, app);
             }
             Bottom::Commands { rows, composer } => {
-                let [_, list, _, field, _, footer, _] = Layout::vertical([
+                let [_, list, field, _, footer, _] = Layout::vertical([
                     Constraint::Length(1),
                     Constraint::Length(rows),
-                    Constraint::Length(1),
                     Constraint::Length(composer.height()),
                     Constraint::Length(1),
                     Constraint::Length(1),
@@ -192,7 +200,8 @@ impl Action {
 /// The field: `margin: 0 3ch`, on `--field`, the accent `›` in the mark
 /// column, then the draft, with an optional action flush right. An empty
 /// field is the `›` and the caret and nothing else — no placeholder in any
-/// state. In the commands mode the draft is the `/` and the filter.
+/// state. In the commands mode the draft is the `/` and the filter, and
+/// the current command completes it in grey (frame F).
 pub(super) fn draw_field(
     frame: &mut Frame,
     area: Rect,
@@ -216,18 +225,28 @@ pub(super) fn draw_field(
         )
     };
 
-    // The commands mode: `/` in the mark column like the `›` it replaces,
-    // whatever was typed after it on the body column, the caret after that.
+    // The commands mode: the `›` as ever, then what was typed — `/` and
+    // the filter, in `label` until it spells a real command and in the
+    // accent once it does — the caret, and the current command's rest in
+    // `label3`.
     if let Mode::Commands(menu) = &app.mode {
+        let typed = format!("/{}", menu.filter);
+        let typed_fg = if menu.spells_a_command() {
+            pal.accent
+        } else {
+            pal.label
+        };
+        let caret_x = inner.x + (MARK_COL + typed.width()) as u16;
         let line = Line::from(vec![
-            prompt("/"),
+            prompt("›"),
+            Span::styled(typed, Style::default().fg(typed_fg).bg(pal.field)),
             Span::styled(
-                menu.filter.clone(),
-                Style::default().fg(pal.label).bg(pal.field),
+                menu.completion().to_string(),
+                Style::default().fg(pal.label3).bg(pal.field),
             ),
-            caret(pal, app.tick),
         ]);
         frame.render_widget(Paragraph::new(line).style(field), inner);
+        place_caret(frame, caret_x, inner.y, app.tick);
         return;
     }
 
@@ -246,16 +265,16 @@ pub(super) fn draw_field(
 
     if app.draft.is_empty() {
         app.composer_top = 0;
-        let mut spans = vec![prompt("›"), caret(pal, app.tick)];
-        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let mut spans = vec![prompt("›")];
         if let Some(action) = action_spans {
             let gap = (inner.width as usize)
-                .saturating_sub(used)
+                .saturating_sub(MARK_COL)
                 .saturating_sub(action_width as usize);
             spans.push(Span::styled(" ".repeat(gap), field));
             spans.extend(action);
         }
         frame.render_widget(Paragraph::new(Line::from(spans)).style(field), inner);
+        place_caret(frame, inner.x + MARK_COL as u16, inner.y, app.tick);
         return;
     }
 
@@ -269,18 +288,12 @@ pub(super) fn draw_field(
     top = top.max((cursor_row + 1).saturating_sub(height));
     app.composer_top = top;
 
-    let ctx = Ctx::new(pal, inner.width);
     let mut lines: Vec<Line<'static>> = (top..(top + height).min(layout.row_count()))
         .map(|i| {
-            let text = layout.row_text(i);
-            let mut line = if i == cursor_row {
-                caret_row(&text, cursor_col, ctx, app.tick)
-            } else {
-                Line::from(Span::styled(
-                    text,
-                    Style::default().fg(pal.label).bg(pal.field),
-                ))
-            };
+            let mut line = Line::from(Span::styled(
+                layout.row_text(i),
+                Style::default().fg(pal.label).bg(pal.field),
+            ));
             line.spans.insert(
                 0,
                 if i == 0 {
@@ -320,6 +333,12 @@ pub(super) fn draw_field(
         }
     }
     frame.render_widget(Paragraph::new(Text::from(lines)).style(field), inner);
+    place_caret(
+        frame,
+        inner.x + (MARK_COL + cursor_col) as u16,
+        inner.y + (cursor_row - top) as u16,
+        app.tick,
+    );
 }
 
 /// Whether the blinking caret is showing at `tick`.
@@ -327,53 +346,15 @@ fn caret_on(tick: u64) -> bool {
     (tick / CARET_TICKS).is_multiple_of(2)
 }
 
-/// The caret: a `label` block, blinking on the tick.
-fn caret(pal: &Palette, tick: u64) -> Span<'static> {
-    let bg = if caret_on(tick) { pal.label } else { pal.field };
-    Span::styled(" ", Style::default().bg(bg))
-}
-
-/// One draft row with the caret drawn into it at display column `col`.
-fn caret_row(text: &str, col: usize, ctx: Ctx, tick: u64) -> Line<'static> {
-    let pal = ctx.pal;
-    let style = Style::default().fg(pal.label).bg(pal.field);
-    let mut out: Vec<Span<'static>> = Vec::new();
-    let (mut before, mut after) = (String::new(), String::new());
-    let mut under = None;
-    let mut at = 0;
-    for c in text.chars() {
-        let w = c.width().unwrap_or(1);
-        if at < col {
-            before.push(c);
-        } else if under.is_none() {
-            under = Some(c);
-        } else {
-            after.push(c);
-        }
-        at += w;
+/// The caret: the design's 2px accent bar between two cells, which a cell
+/// cannot draw and the glyph table has no mark for, so it is the
+/// terminal's own cursor — a bar in the accent, set up by `run.rs` — put
+/// on the cell whose left edge it stands at. Shown on the tick's shown
+/// half only: the blink is `--caret-period`, not the terminal's own.
+fn place_caret(frame: &mut Frame, x: u16, y: u16, tick: u64) {
+    if caret_on(tick) {
+        frame.set_cursor_position((x, y));
     }
-    if !before.is_empty() {
-        out.push(Span::styled(before, style));
-    }
-    match under {
-        // Mid-text the caret takes the cell of the character it sits on.
-        Some(c) => {
-            let s = if caret_on(tick) {
-                Style::default().fg(pal.field).bg(pal.label)
-            } else {
-                style
-            };
-            out.push(Span::styled(c.to_string(), s));
-            if let Some(pad) = c.width().map(|w| w.saturating_sub(1)).filter(|&p| p > 0) {
-                out.push(Span::styled(" ".repeat(pad), style));
-            }
-        }
-        None => out.push(caret(pal, tick)),
-    }
-    if !after.is_empty() {
-        out.push(Span::styled(after, style));
-    }
-    Line::from(out)
 }
 
 /// A footer key: glyph, two spaces, verb.
@@ -420,20 +401,19 @@ impl Footer {
     }
 }
 
+/// Escape, named as every frame names it: the word, not `⎋`.
+const ESC: &str = "esc";
+
+/// Space still opens and closes the turn's work on an empty field, but no
+/// footer names it: frames B, C and J offer only the keys of the moment,
+/// and the disclosure's own `›` or `⌄` is what says it opens.
 fn footer_state(app: &App) -> Footer {
-    let details = || {
-        if app.details_open {
-            KeyHint::new("Space", "Hide Details")
-        } else {
-            KeyHint::new("Space", "Show Details")
-        }
-    };
     // A list reads as frame E draws the agent's question: `↑↓  Choose` and
-    // `↩  Select`. A list you can dismiss adds the way out, `⎋  Close`.
+    // `↩  Select`. A list you can dismiss adds the way out, `esc  Close`.
     let choose = [KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")];
     let dismissible = || {
         let mut keys = choose.to_vec();
-        keys.push(KeyHint::new("⎋", "Close"));
+        keys.push(KeyHint::new(ESC, "Close"));
         keys
     };
     match &app.mode {
@@ -443,10 +423,14 @@ fn footer_state(app: &App) -> Footer {
             Footer::new(Status::Waiting, choose.to_vec())
         }
         Mode::Question(_) => Footer::new(Status::Ready, dismissible()),
-        // Frame F: a command is run, not selected.
+        // Frame F: no status word, and a command is run, not selected.
         Mode::Commands(_) => Footer::new(
-            Status::Ready,
-            vec![KeyHint::new("↩", "Run"), KeyHint::new("⎋", "Close")],
+            Status::None,
+            vec![
+                KeyHint::new("↑↓", "Choose"),
+                KeyHint::new("↩", "Run"),
+                KeyHint::new(ESC, "Close"),
+            ],
         ),
         Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, dismissible()),
         // Shift and Tab are words, as Space is: the glyph table has no mark
@@ -465,7 +449,7 @@ fn footer_state(app: &App) -> Footer {
                 KeyHint::new("↩", "Comment"),
                 KeyHint::new("⌃↩", "Approve"),
                 KeyHint::new("Tab", "Next file"),
-                KeyHint::new("⎋", "Discard"),
+                KeyHint::new(ESC, "Discard"),
             ]);
             Footer::new(Status::None, keys)
         }
@@ -473,35 +457,37 @@ fn footer_state(app: &App) -> Footer {
         // Before `Working…`: the turn runs, but it is waiting on you.
         Mode::Conversation if app.answering.is_some() => Footer::new(
             Status::Waiting,
-            vec![KeyHint::new("↩", "Send"), KeyHint::new("⎋", "Back")],
+            vec![KeyHint::new("↩", "Send"), KeyHint::new(ESC, "Back")],
         ),
         Mode::Conversation if app.turn_active || app.awaiting_turn => {
-            let mut keys = vec![KeyHint::new("⎋", "Stop")];
-            if app.draft.is_empty() && has_details(app) {
-                keys.push(details());
-            }
-            Footer::new(Status::Working, keys)
+            Footer::new(Status::Working, vec![KeyHint::new(ESC, "Stop")])
         }
         Mode::Conversation if !app.draft.is_empty() => {
             Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
         }
         // Frame J: after a turn that saved, the footer is the context bar
-        // alone — `↺  Undo` is not offered (baseline `frame-j-offers-undo`)
-        // and nothing takes its place.
+        // alone.
         Mode::Conversation if just_saved(app) => Footer::new(Status::None, Vec::new()),
-        Mode::Conversation => {
-            let keys = if has_details(app) {
-                vec![details()]
-            } else {
-                Vec::new()
-            };
-            Footer {
-                status: Status::Ready,
-                keys,
-                aside: Some(KeyHint::new("/", "Commands")),
-            }
-        }
+        Mode::Conversation => Footer {
+            status: Status::Ready,
+            keys: Vec::new(),
+            aside: Some(KeyHint::new("/", "Commands")),
+        },
     }
+}
+
+/// Frame J: after a turn that saved, the field offers `Send  ↩` at its
+/// right edge, grey until there is something to send. No other frame's
+/// field carries it.
+fn send_action(app: &App) -> Option<Action> {
+    let idle = matches!(app.mode, Mode::Conversation)
+        && app.answering.is_none()
+        && !(app.turn_active || app.awaiting_turn);
+    (idle && just_saved(app)).then(|| Action {
+        label: "Send".into(),
+        key: "↩",
+        ready: !app.draft.is_empty(),
+    })
 }
 
 /// The last turn ended in an approve: it holds a `Saved` review row.
@@ -514,10 +500,6 @@ fn just_saved(app: &App) -> bool {
             }
         )
     })
-}
-
-fn has_details(app: &App) -> bool {
-    app.this_turn().iter().any(LogEntry::has_details)
 }
 
 /// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
@@ -681,7 +663,7 @@ pub(super) fn draw_comment_field(
         ),
     ];
     let right = vec![Span::styled(
-        "⎋ ",
+        format!("{ESC} "),
         Style::default().fg(pal.label2).bg(pal.select),
     )];
     frame.render_widget(Block::new().style(on_select), label_row);
@@ -692,9 +674,13 @@ pub(super) fn draw_comment_field(
 
     let on_field = Style::default().bg(pal.field);
     frame.render_widget(Block::new().style(on_field), draft_row);
-    let ctx = Ctx::new(pal, inner.width);
-    let mut row = caret_row(draft, cursor, ctx, app.tick);
-    row.spans.insert(0, edge(pal.field));
+    let mut row = Line::from(vec![
+        edge(pal.field),
+        Span::styled(
+            draft.to_string(),
+            Style::default().fg(pal.label).bg(pal.field),
+        ),
+    ]);
     let used: usize = row.spans.iter().map(|s| s.content.width()).sum();
     let gap = (inner.width as usize)
         .saturating_sub(used)
@@ -705,6 +691,19 @@ pub(super) fn draw_comment_field(
         Style::default().fg(pal.accent).bg(pal.field),
     ));
     frame.render_widget(Paragraph::new(row).style(on_field), draft_row);
+    // After the `▎`, at the display column of the draft's `cursor`th
+    // character.
+    let column: usize = draft
+        .chars()
+        .take(cursor)
+        .map(|c| c.width().unwrap_or(0))
+        .sum();
+    place_caret(
+        frame,
+        draft_row.x + 1 + column as u16,
+        draft_row.y,
+        app.tick,
+    );
 }
 
 fn justify(

@@ -48,9 +48,14 @@ pub struct Proxy {
 /// foot, pinned, attached to a pty the harness owns rather than one it makes.
 /// Nothing is read from the developer's own `foot.ini`: their font, padding
 /// and colours are theirs, not the test's.
+///
+/// The headless compositor has no keyboard, so foot never has focus and
+/// would draw its cursor — the app's caret — as an unfocused hollow block.
+/// `unfocused-style=unchanged` draws it as the focused terminal the
+/// developer types into does: the bar the app asked for.
 pub(crate) fn foot_command(font: &str, pts: &Path) -> String {
     format!(
-        "foot --config=/dev/null -o main.pad=0x0 -o {} --pty={}",
+        "foot --config=/dev/null -o main.pad=0x0 -o cursor.unfocused-style=unchanged -o {} --pty={}",
         shell_quote(&format!("main.font={font}")),
         shell_quote(&pts.display().to_string())
     )
@@ -292,7 +297,9 @@ pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Resul
         let Color::Rgb(r, g, b) = c.effective().1 else {
             continue;
         };
-        if c.ch != ' ' {
+        // The caret's cell carries the terminal's bar cursor over its
+        // ground, which is exactly the pixel sampled below.
+        if c.ch != ' ' || grid.caret() == Some((row, col)) {
             continue;
         }
         // Inset by a pixel: a cell's own edge can carry the neighbouring

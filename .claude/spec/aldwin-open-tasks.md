@@ -49,9 +49,10 @@ contradicts) and the entry says so before it goes.
     launch card carries version, project, branch and model. There is no
     cost figure and the design draws none.
 
-27. **No undo, and no `/changes`.** Frame `J` offers `↺ Undo` after a save
-    and frame `F` lists `/changes` ("everything changed since you started")
-    and `/undo`. The developer decided against both for this pass
+27. **No undo, and no `/changes`.** Frame `F` completes `/changes`
+    ("everything changed since you started"), and the design system's
+    `CommandRow` shows `/undo`; frame `J` offered `↺ Undo` after a save
+    until the 2026-09-25 re-sync dropped it. The developer decided against both for this pass
     (2026-09-23): ADR 0009 §4 makes undo unnecessary for safety — nothing is
     written before an approve — and a change ledger is a feature, not a
     guard. `baseline.json` records the frame's side. Closing it means a

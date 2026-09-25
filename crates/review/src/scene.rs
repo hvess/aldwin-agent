@@ -158,7 +158,8 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        "commands" => Script { replies: vec![], history: &[], files: vec![], keys: "\"/\"", provider: true },
+        // Frame F types `/c`: the list narrowed, the field completed in grey.
+        "commands" => Script { replies: vec![], history: &[], files: vec![], keys: "\"/\",\"c\"", provider: true },
 
         // The review, opened by the real dispatcher at the end of a turn
         // that staged one edit and created one file (ADR 0009 §4).

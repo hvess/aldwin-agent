@@ -10,6 +10,7 @@ pub const PERMISSIONS_VERSION: u32 = 2;
 pub const PROVIDER_VERSION: u32 = 1;
 pub const MCP_VERSION: u32 = 1;
 pub const TUI_VERSION: u32 = 1;
+pub const CONNECTIONS_VERSION: u32 = 1;
 
 /// Permissions for one scope. Since ADR 0011 the workspace is the only
 /// boundary, and `roots:` — which widens it — is the only key read.
@@ -76,7 +77,10 @@ pub enum ProviderKind {
 
 /// `api_key_env` names an environment variable; resolving it is aldwin-llm's
 /// job. A raw `api_key` field is rejected by `deny_unknown_fields` — there is
-/// deliberately no field a plaintext key could go in.
+/// deliberately no field a plaintext key could go in. A provider's connected
+/// account (ADR 0012) is not named here either: it lives in
+/// `connections.yaml`, and whether the provider is reached through it or
+/// through the variable is decided when the client is built.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
@@ -157,6 +161,47 @@ impl McpConfig {
             version: MCP_VERSION,
             servers: vec![],
         }
+    }
+}
+
+/// The accounts `/connect` has connected, keyed by provider id (ADR 0012).
+/// Global only, and never seeded: an empty file says nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionsConfig {
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, ConnectionRecord>,
+}
+
+impl ConnectionsConfig {
+    pub fn empty() -> Self {
+        Self {
+            version: CONNECTIONS_VERSION,
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+/// One connected account's tokens, as aldwin-login hands them over and
+/// reads them back. Its own type rather than aldwin-login's, for the
+/// reason `TuiConfig` is not aldwin-tui's: this crate persists, it does
+/// not depend.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionRecord {
+    pub access_token: String,
+    pub refresh_token: String,
+    /// Unix seconds.
+    pub expires_at: u64,
+}
+
+/// The tokens are the one thing here that must not reach a log.
+impl std::fmt::Debug for ConnectionRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionRecord")
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
     }
 }
 

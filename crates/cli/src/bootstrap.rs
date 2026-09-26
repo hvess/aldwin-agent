@@ -4,12 +4,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use aldwin_config::{Config, InitOutcome, McpServer, ProviderKind};
-use aldwin_core::{Agent, LlmClient, LlmError, LlmEvent, LlmRequest};
+use aldwin_core::{Agent, Event, LlmClient, LlmError, LlmEvent, LlmRequest};
+use aldwin_llm::LlmClientInitError;
 use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging, Workspace};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
+use crate::connect::{self, Reach};
 use crate::context;
 use crate::error::StartupError;
 use crate::history::History;
@@ -20,14 +22,25 @@ use crate::slash;
 /// running session is reached exactly as one chosen at launch would be.
 ///
 /// The one place a `provider.yaml`'s settings become aldwin-llm's: that
-/// crate knows nothing of files, scopes or overlays.
+/// crate knows nothing of files, scopes or overlays. How the provider is
+/// reached is decided here too (ADR 0012, `connect::reach`): a connected
+/// account first, the key second, and — on a provider that offers an
+/// account — a client that only says so when there is neither. `notices`
+/// is where a session says a rotated token could not be written back.
 fn build_client(
     provider: &aldwin_config::ProviderConfig,
-) -> Result<Arc<dyn LlmClient>, aldwin_llm::LlmClientInitError> {
+    config: &Config,
+    notices: &mpsc::Sender<Event>,
+) -> Result<Arc<dyn LlmClient>, LlmClientInitError> {
+    let account = slash::identify(provider).and_then(|row| row.account);
+    let auth = match connect::reach(&provider.api_key_env, account, config, notices)? {
+        Reach::Through(auth) => auth,
+        Reach::Neither(sentence) => return Ok(Arc::new(Said(sentence))),
+    };
     let config = aldwin_llm::ProviderConfig {
         kind: provider.provider,
         model: provider.model.clone(),
-        api_key_env: provider.api_key_env.clone(),
+        auth,
         base_url: provider.base_url.clone(),
         extended_thinking_budget: provider.extended_thinking_budget,
     };
@@ -39,23 +52,27 @@ fn build_client(
     })
 }
 
-/// The client a session starts on when no provider is configured (ADR
-/// 0009 §6: there is no first-run screen, so the launch card opens with
-/// `Model  not set` and the first message asks). Any request through it
-/// answers with the one thing that is true.
-struct Unconfigured;
+/// The client a session runs on when it cannot reach a model yet: no
+/// provider configured (ADR 0009 §6: there is no first-run screen, so the
+/// launch card opens with `Model  not set` and the first message asks), or
+/// a provider whose account is not connected and whose key is not set
+/// (ADR 0012). Any request through it answers with the one thing that is
+/// true.
+struct Said(String);
 
-impl LlmClient for Unconfigured {
+impl LlmClient for Said {
     fn stream<'a>(
         &'a self,
         _: LlmRequest<'a>,
     ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
         Box::pin(futures::stream::iter([Err(LlmError::Terminal {
             attempts: 0,
-            message: "no model is configured yet — pick one with /model".into(),
+            message: self.0.clone(),
         })]))
     }
 }
+
+const NO_MODEL: &str = "No model is configured yet. Pick one with /model.";
 
 /// The session's client, behind a swap.
 ///
@@ -65,17 +82,27 @@ impl LlmClient for Unconfigured {
 /// handle, `/model` rebuilds the client in it, and core stays generic over
 /// `C: LlmClient` without learning that providers exist (see
 /// `slash::ModelSwitch`). A trait object, so both provider clients fit and
-/// a test can put one of its own in there and stream through it.
+/// a test can put one of its own in there and stream through it. It
+/// carries the `Config` and the notice channel because a rebuild reads a
+/// connected account and needs somewhere to say a refresh could not be saved.
 #[derive(Clone)]
-struct ClientHandle(Arc<std::sync::RwLock<Arc<dyn LlmClient>>>);
+struct ClientHandle {
+    client: Arc<std::sync::RwLock<Arc<dyn LlmClient>>>,
+    config: Config,
+    notices: mpsc::Sender<Event>,
+}
 
 impl ClientHandle {
-    fn new(client: Arc<dyn LlmClient>) -> Self {
-        Self(Arc::new(std::sync::RwLock::new(client)))
+    fn new(client: Arc<dyn LlmClient>, config: Config, notices: mpsc::Sender<Event>) -> Self {
+        Self {
+            client: Arc::new(std::sync::RwLock::new(client)),
+            config,
+            notices,
+        }
     }
 
     fn store(&self, client: Arc<dyn LlmClient>) {
-        *self.0.write().expect("client lock poisoned") = client;
+        *self.client.write().expect("client lock poisoned") = client;
     }
 }
 
@@ -87,7 +114,7 @@ impl LlmClient for ClientHandle {
         // Resolved once, when the request starts, and held by the stream
         // for as long as it runs: a swap landing mid-turn cannot pull the
         // client out from under a request already in flight.
-        let client = self.0.read().expect("client lock poisoned").clone();
+        let client = self.client.read().expect("client lock poisoned").clone();
         Box::pin(async_stream::stream! {
             let mut inner = client.stream(request);
             while let Some(event) = inner.next().await {
@@ -101,11 +128,8 @@ impl slash::ModelSwitch for ClientHandle {
     /// Builds first and stores second, so a client that cannot be
     /// constructed — the new provider's `api_key_env` is not exported —
     /// leaves the session on the one it has.
-    fn switch(
-        &self,
-        config: &aldwin_config::ProviderConfig,
-    ) -> Result<(), aldwin_llm::LlmClientInitError> {
-        self.store(build_client(config)?);
+    fn switch(&self, config: &aldwin_config::ProviderConfig) -> Result<(), LlmClientInitError> {
+        self.store(build_client(config, &self.config, &self.notices)?);
         Ok(())
     }
 }
@@ -113,11 +137,11 @@ impl slash::ModelSwitch for ClientHandle {
 const CHANNEL_CAPACITY: usize = 64;
 
 /// The display halves of the whole catalogue, in catalogue order — what
-/// the `/model` question and the first message's two questions list.
-/// aldwin-tui is handed ids, purposes and context sizes and nothing else:
-/// it renders the list, it does not know what an endpoint or a key
-/// variable is, and it does not depend on this crate or on aldwin-llm to
-/// find out.
+/// the `/model` question, the first message's two questions and the
+/// `/connect` list draw from. aldwin-tui is handed ids, purposes, context
+/// sizes and the subscription an account needs, and nothing else: it
+/// renders the list, it does not know what an endpoint or a key variable
+/// is, and it does not depend on this crate or on aldwin-llm to find out.
 fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
     aldwin_llm::PROVIDERS
         .iter()
@@ -133,6 +157,7 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
                     context: m.context,
                 })
                 .collect(),
+            account: p.account.map(|a| a.subscription().to_string()),
         })
         .collect()
 }
@@ -190,18 +215,25 @@ pub async fn run() -> Result<(), StartupError> {
     // `theme` is global-only — resolved once, before anything draws.
     let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
 
+    // TUI -> interceptor -> core, so slash commands never reach Submit;
+    // core -> TUI directly for events (no interception needed there).
+    let (tui_cmd_tx, tui_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (agent_cmd_tx, agent_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+
     // What the session boots on. Nothing configured is not an error any
     // more: the launch card says `Model  not set` and the first message
     // asks, and `/model` moves the session onto the answer.
     let effective_provider = config.effective_provider();
+    let handle = |client| ClientHandle::new(client, config.clone(), event_tx.clone());
     let (client, model_name, session_model) = match &effective_provider {
         Some(effective) => (
-            ClientHandle::new(build_client(effective)?),
+            handle(build_client(effective, &config, &event_tx)?),
             effective.model.clone(),
             slash::qualified(effective, slash::identify(effective)),
         ),
         None => (
-            ClientHandle::new(Arc::new(Unconfigured)),
+            handle(Arc::new(Said(NO_MODEL.into()))),
             String::new(),
             String::new(),
         ),
@@ -213,12 +245,6 @@ pub async fn run() -> Result<(), StartupError> {
     let workspace = Workspace::new(cwd.clone());
     let reach_notice = apply_roots(&config, &cwd, &workspace);
     let additional_context = context::build(&cwd, &workspace.roots(), &context_files(&cwd));
-
-    // TUI -> interceptor -> core, so slash commands never reach Submit;
-    // core -> TUI directly for events (no interception needed there).
-    let (tui_cmd_tx, tui_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (agent_cmd_tx, agent_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
     // Every edit of a turn waits here for the review (ADR 0009 §4).
     let staging = Arc::new(Staging::new(workspace.clone()));
@@ -275,7 +301,7 @@ pub async fn run() -> Result<(), StartupError> {
     };
     let session_state = {
         let (config, cwd, workspace) = (config.clone(), cwd.clone(), workspace.clone());
-        slash::Session::new(session_model, Box::new(client))
+        slash::Session::new(session_model, Arc::new(client))
             .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
     };
 
@@ -471,6 +497,16 @@ mod tests {
         }
     }
 
+    /// A handle over `client`, on a fresh config and a channel nobody
+    /// reads — what the tests here need of the composition root.
+    fn handle(client: Arc<dyn LlmClient>) -> (ClientHandle, tempfile::TempDir, tempfile::TempDir) {
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let config = Config::open_at(project.path(), global.path()).unwrap();
+        let (tx, _rx) = mpsc::channel(8);
+        (ClientHandle::new(client, config, tx), project, global)
+    }
+
     async fn stream_text(handle: &ClientHandle) -> String {
         let request = LlmRequest {
             system: "s",
@@ -488,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_handle_streams_through_the_client_currently_in_it() {
-        let handle = ClientHandle::new(Arc::new(NamedClient("first")));
+        let (handle, _project, _global) = handle(Arc::new(NamedClient("first")));
         assert_eq!(stream_text(&handle).await, "first");
         handle.store(Arc::new(NamedClient("second")));
         assert_eq!(stream_text(&handle).await, "second");
@@ -496,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_swap_does_not_reach_a_request_already_in_flight() {
-        let handle = ClientHandle::new(Arc::new(NamedClient("first")));
+        let (handle, _project, _global) = handle(Arc::new(NamedClient("first")));
         let request = LlmRequest {
             system: "s",
             tools: &[],
@@ -516,7 +552,7 @@ mod tests {
     /// one true thing when asked to answer.
     #[tokio::test]
     async fn an_unconfigured_session_answers_with_how_to_configure_it() {
-        let handle = ClientHandle::new(Arc::new(Unconfigured));
+        let (handle, _project, _global) = handle(Arc::new(Said(NO_MODEL.into())));
         let request = LlmRequest {
             system: "s",
             tools: &[],
@@ -545,13 +581,51 @@ mod tests {
             base_url: None,
             extended_thinking_budget: Some(1_000),
         };
-        let handle = ClientHandle::new(Arc::new(NamedClient("the session's own")));
+        let (handle, _project, _global) = handle(Arc::new(NamedClient("the session's own")));
         let error = slash::ModelSwitch::switch(&handle, &config(ABSENT))
             .expect_err("no key is exported for this one");
         assert!(error.to_string().contains(ABSENT), "{error}");
         assert_eq!(stream_text(&handle).await, "the session's own");
         slash::ModelSwitch::switch(&handle, &config(KEY))
             .expect("a client that builds replaces the one in place");
+    }
+
+    /// A provider that offers an account: with neither the account
+    /// connected nor the key exported, the swap still lands — on a client
+    /// that answers every request with the sentence.
+    #[tokio::test]
+    async fn a_swap_onto_a_provider_with_neither_account_nor_key_lands_on_the_sentence() {
+        std::env::remove_var("XAI_API_KEY");
+        let xai = aldwin_config::ProviderConfig {
+            version: aldwin_config::PROVIDER_VERSION,
+            provider: ProviderKind::OpenaiCompatible,
+            model: "grok-4.7".into(),
+            api_key_env: "XAI_API_KEY".into(),
+            base_url: Some("https://api.x.ai/v1/chat/completions".into()),
+            extended_thinking_budget: None,
+        };
+        let (handle, _project, _global) = handle(Arc::new(NamedClient("the session's own")));
+
+        slash::ModelSwitch::switch(&handle, &xai).expect("the swap lands");
+        let request = LlmRequest {
+            system: "s",
+            tools: &[],
+            messages: &[],
+            cache_breakpoint: None,
+        };
+        let mut stream = handle.stream(request);
+        match stream.next().await {
+            Some(Err(LlmError::Terminal { message, .. })) => {
+                assert!(
+                    message.starts_with("No x.ai account is connected"),
+                    "{message}"
+                );
+                assert!(message.contains("/connect xai"), "{message}");
+            }
+            other => panic!("expected the sentence, got {other:?}"),
+        }
+        // The account-then-key order itself is `connect::reach`'s, and its
+        // own test walks all three steps.
     }
 
     /// Every catalogue row reaches the TUI with its models and their context

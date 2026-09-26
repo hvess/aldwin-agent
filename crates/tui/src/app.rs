@@ -32,6 +32,11 @@ pub struct ProviderChoice {
     pub id: String,
     pub purpose: String,
     pub models: Vec<ModelChoice>,
+    /// The subscription an account on this provider needs, when the
+    /// provider can be reached through one (ADR 0012) — the fact beside
+    /// its row in the `/connect` list. `None` for a provider that takes a
+    /// key only.
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +63,9 @@ pub enum Asker {
     /// This screen, because no model is configured: which provider. The
     /// answer opens the model question.
     Provider { then: Option<String> },
+    /// Bare `/connect`: which account (ADR 0012). The answer submits
+    /// `/connect <provider>`.
+    Connection,
     /// Which of that provider's models. The answer submits `/model p/m`,
     /// then the message that was waiting, if any.
     Model {
@@ -527,7 +535,7 @@ impl App {
                 // A sentence you can act on; the error itself, a provider's
                 // own body as often as not, is the detail (ADR 0009 §5).
                 self.push(LogEntry::Failure {
-                    message: failure_sentence(&message).to_string(),
+                    message: failure_sentence(&message).into_owned(),
                     detail: Some(message),
                     open: false,
                 });
@@ -850,7 +858,7 @@ impl App {
                     self.draft.set(text);
                 }
             }
-            Asker::Session => {}
+            Asker::Connection | Asker::Session => {}
         }
     }
 
@@ -874,6 +882,11 @@ impl App {
             Asker::Provider { then } => {
                 if let Some(provider) = self.catalogue.get(index).cloned() {
                     self.open_model_question(provider, then);
+                }
+            }
+            Asker::Connection => {
+                if let Some(provider) = self.connectable().get(index) {
+                    self.submit_text(format!("/connect {}", provider.id));
                 }
             }
             Asker::Model { provider, then } => {
@@ -919,6 +932,34 @@ impl App {
             question,
             list: List::new(rows).opened_on(current),
             asker: Asker::Provider { then },
+        });
+    }
+
+    /// The rows of the catalogue that can be reached through an account.
+    fn connectable(&self) -> Vec<&ProviderChoice> {
+        self.catalogue
+            .iter()
+            .filter(|p| p.account.is_some())
+            .collect()
+    }
+
+    /// Bare `/connect`: the accounts there are to connect (ADR 0012), each
+    /// with the subscription it needs as its fact.
+    fn open_connection_question(&mut self) {
+        let connectable = self.connectable();
+        let rows = connectable
+            .iter()
+            .map(|p| ListRow::with_detail(p.id.clone(), p.account.clone().unwrap_or_default()))
+            .collect();
+        let question = Question {
+            question: "Which account?".into(),
+            detail: "You sign in through your browser, and a model on that provider then runs on your subscription rather than an API key.".into(),
+            options: connectable.iter().map(|p| p.id.clone()).collect(),
+        };
+        self.mode = Mode::Question(Asking {
+            question,
+            list: List::new(rows),
+            asker: Asker::Connection,
         });
     }
 
@@ -1104,6 +1145,10 @@ impl App {
             self.open_provider_question(None);
             return;
         }
+        if command == "/connect" && !self.connectable().is_empty() {
+            self.open_connection_question();
+            return;
+        }
         self.submit_text(text);
     }
 
@@ -1227,6 +1272,7 @@ pub(crate) mod tests {
                     purpose: "balanced".into(),
                     context: 1_000_000,
                 }],
+                account: None,
             },
             ProviderChoice {
                 id: "openai".into(),
@@ -1236,8 +1282,59 @@ pub(crate) mod tests {
                     purpose: "balanced".into(),
                     context: 400_000,
                 }],
+                account: None,
+            },
+            ProviderChoice {
+                id: "xai".into(),
+                purpose: "grok models".into(),
+                models: vec![ModelChoice {
+                    id: "grok-4.7".into(),
+                    purpose: "balanced".into(),
+                    context: 500_000,
+                }],
+                account: Some("SuperGrok or X Premium".into()),
             },
         ]
+    }
+
+    /// Bare `/connect` lists the accounts there are, with the subscription
+    /// each needs as its fact, and the answer is the command with the
+    /// provider filled in. A provider that takes a key only is not listed.
+    #[test]
+    fn bare_connect_lists_the_accounts_and_submits_the_command() {
+        let mut a = app().with_catalogue(catalogue(), Some("anthropic".into()));
+        type_str(&mut a, "/connect");
+        a.handle_key(press(KeyCode::Enter));
+        let Mode::Question(asking) = &a.mode else {
+            panic!("connection question")
+        };
+        assert!(matches!(asking.asker, Asker::Connection));
+        assert_eq!(asking.question.options, ["xai"]);
+        assert_eq!(asking.list.rows[0].detail, "SuperGrok or X Premium");
+
+        a.handle_key(press(KeyCode::Char('1')));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "/connect xai".into()
+            }]
+        );
+    }
+
+    /// With nothing to list, bare `/connect` goes to the interceptor, which
+    /// reports rather than asks — as bare `/model` does with no catalogue.
+    #[test]
+    fn connect_with_no_account_to_offer_is_forwarded() {
+        let mut a = app().with_catalogue(catalogue()[..2].to_vec(), Some("anthropic".into()));
+        type_str(&mut a, "/connect");
+        a.handle_key(press(KeyCode::Enter));
+        assert!(matches!(a.mode, Mode::Conversation));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "/connect".into()
+            }]
+        );
     }
 
     #[test]

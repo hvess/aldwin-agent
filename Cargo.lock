@@ -15,6 +15,7 @@ dependencies = [
  "aldwin-config",
  "aldwin-core",
  "aldwin-llm",
+ "aldwin-login",
  "aldwin-tools",
  "aldwin-tui",
  "assert_cmd",
@@ -58,10 +59,23 @@ version = "0.4.0"
 dependencies = [
  "aldwin-config",
  "aldwin-core",
+ "aldwin-login",
  "async-stream",
+ "async-trait",
  "eventsource-stream",
  "futures",
  "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "aldwin-login"
+version = "0.4.0"
+dependencies = [
  "reqwest",
  "serde",
  "serde_json",

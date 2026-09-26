@@ -55,9 +55,26 @@ pub const PROVIDER_HEADER: &str = "\
 #   api_key_env:               the NAME of an environment variable holding your
 #                              API key — Aldwin never reads or stores the key
 #                              itself here, only this variable's name. Export it
-#                              before starting Aldwin.
+#                              before starting Aldwin. A provider you have
+#                              connected an account to (/connect) is reached
+#                              through the account first, and the key only when
+#                              no account is connected.
 #   extended_thinking_budget:  token budget for extended thinking. Omit to use
 #                              aldwin-llm's built-in default.
+";
+
+pub const CONNECTIONS_HEADER: &str = "\
+# Aldwin connected accounts, written by /connect (global only — there is no
+# project-scope connections.yaml). Each entry under accounts is one
+# provider's account; a model on that provider runs on it rather than on an
+# API key while the entry is here.
+#
+# The tokens here are secrets: they act as you at that provider until they
+# expire or you revoke them there. Keep this file to yourself. Deleting an
+# account's entry disconnects it from the next start, or after
+# /reload-config and picking the model again. Aldwin rewrites an entry
+# whenever the provider rotates its token, and removes it when the provider
+# revokes it.
 ";
 
 pub const MCP: &str = "\
@@ -103,6 +120,20 @@ mod tests {
 
         let tui: TuiConfig = serde_yaml_ng::from_str(TUI).unwrap();
         assert_eq!(tui, TuiConfig::empty());
+    }
+
+    /// `connections.yaml` is never seeded, so its header is only ever seen
+    /// over a serialised value; that pairing has to parse like the others.
+    #[test]
+    fn the_connections_header_over_a_serialised_value_parses() {
+        let text = format!(
+            "{CONNECTIONS_HEADER}{}",
+            serde_yaml_ng::to_string(&ConnectionsConfig::empty()).unwrap()
+        );
+        assert_eq!(
+            serde_yaml_ng::from_str::<ConnectionsConfig>(&text).unwrap(),
+            ConnectionsConfig::empty()
+        );
     }
 
     /// The full constants are built from the headers, so this cannot drift;

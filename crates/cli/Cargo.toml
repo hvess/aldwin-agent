@@ -12,6 +12,7 @@ aldwin-core   = { path = "../core" }
 aldwin-config = { path = "../config" }
 aldwin-tools  = { path = "../tools" }
 aldwin-llm    = { path = "../llm" }
+aldwin-login  = { path = "../login" }
 aldwin-tui    = { path = "../tui" }
 tokio         = { workspace = true }
 futures       = { workspace = true }

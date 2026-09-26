@@ -7,8 +7,8 @@ mod scope;
 mod store;
 
 pub use domain::{
-    McpConfig, McpServer, McpTransport, PermissionsConfig, ProviderConfig, ProviderKind, TuiConfig,
-    PROVIDER_VERSION,
+    ConnectionRecord, McpConfig, McpServer, McpTransport, PermissionsConfig, ProviderConfig,
+    ProviderKind, TuiConfig, PROVIDER_VERSION,
 };
 pub use error::ConfigError;
 pub use history::{

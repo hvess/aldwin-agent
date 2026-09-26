@@ -8,6 +8,8 @@
 //! calls complete, `Plan` is replaced whenever the `plan` tool speaks, and
 //! `Question` gains its answer.
 
+use std::borrow::Cow;
+
 use aldwin_core::{PlanStep, RetryInfo, ReviewOutcome};
 
 /// One entry in the conversation log.
@@ -234,7 +236,23 @@ pub(crate) fn plural(n: usize, noun: &str) -> String {
 /// `provider error 429: …`, `stream interrupted: …`, `terminal error after
 /// N attempts: …`. Anything else — an error from the loop itself — gets the
 /// plain fallback. Open-tasks 32 is carrying the kind instead.
-pub fn failure_sentence(error: &str) -> &'static str {
+///
+/// Zero attempts is the one case whose message is the sentence already:
+/// nothing was sent, because Aldwin itself could not reach a model — none
+/// configured, or an account-or-key provider with neither (ADR 0012) — and
+/// said so in words written for this row.
+pub fn failure_sentence(error: &str) -> Cow<'_, str> {
+    match error.strip_prefix("terminal error after 0 attempts: ") {
+        Some(said) => Cow::Borrowed(said),
+        None => Cow::Borrowed(provider_sentence(error)),
+    }
+}
+
+/// The sentence for an error that came back from a provider. Kept apart
+/// from [`failure_sentence`] so the zero-attempt rule applies to the whole
+/// error only: a provider's own message that happens to begin the same way
+/// is still a provider's message, not a sentence of Aldwin's.
+fn provider_sentence(error: &str) -> &'static str {
     const FALLBACK: &str = "The turn stopped before it finished. The detail says why.";
     if error.starts_with("network error:") {
         return "The provider could not be reached. Check your connection, then send again.";
@@ -246,7 +264,7 @@ pub fn failure_sentence(error: &str) -> &'static str {
         // Retries exhausted: say why they were needed, if the last one says.
         return match rest
             .split_once(": ")
-            .map(|(_, last)| failure_sentence(last))
+            .map(|(_, last)| provider_sentence(last))
         {
             Some(sentence) if sentence != FALLBACK => sentence,
             _ => "The provider kept failing. Send again in a moment.",
@@ -258,7 +276,7 @@ pub fn failure_sentence(error: &str) -> &'static str {
         .and_then(|s| s.trim().parse::<u16>().ok());
     match status {
         Some(401 | 403) => {
-            "The provider did not accept your API key. Check the key, then send again."
+            "The provider did not accept your key or account. The detail says which, and what to do."
         }
         Some(429) => "The provider is limiting requests right now. Wait a moment, then send again.",
         Some(500..=599) => "The provider had a problem on its side. Send again in a moment.",
@@ -293,7 +311,7 @@ mod tests {
             ),
             (
                 "provider error 401: invalid x-api-key",
-                "The provider did not accept your API key. Check the key, then send again.",
+                "The provider did not accept your key or account. The detail says which, and what to do.",
             ),
             (
                 "provider error 429: rate_limit_error",
@@ -328,6 +346,26 @@ mod tests {
             assert_eq!(failure_sentence(error), sentence, "{error}");
             assert!(!sentence.chars().any(|c| c.is_ascii_digit()), "{sentence}");
         }
+    }
+
+    /// Nothing was sent, and the message is Aldwin's own: it is the
+    /// sentence, whole — not "the provider kept failing", which would send
+    /// the developer to wait for a provider that was never asked.
+    #[test]
+    fn a_turn_aldwin_could_not_send_leads_with_aldwins_own_sentence() {
+        let said = "No x.ai account is connected and XAI_API_KEY is not set. Connect one with /connect xai, or set XAI_API_KEY and start Aldwin again.";
+        assert_eq!(
+            failure_sentence(&format!("terminal error after 0 attempts: {said}")),
+            said
+        );
+        // A provider's message that begins the same way, after real
+        // attempts, is still the provider's, and never the headline.
+        assert_eq!(
+            failure_sentence(
+                "terminal error after 4 attempts: terminal error after 0 attempts: pay here"
+            ),
+            "The provider kept failing. Send again in a moment."
+        );
     }
     use serde_json::json;
 

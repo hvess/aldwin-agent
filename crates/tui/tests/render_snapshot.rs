@@ -84,6 +84,7 @@ fn catalogue() -> Vec<ProviderChoice> {
                     context: 1_000_000,
                 },
             ],
+            account: None,
         },
         ProviderChoice {
             id: "openai".into(),
@@ -93,6 +94,7 @@ fn catalogue() -> Vec<ProviderChoice> {
                 purpose: "balanced; a good default".into(),
                 context: 400_000,
             }],
+            account: None,
         },
     ]
 }

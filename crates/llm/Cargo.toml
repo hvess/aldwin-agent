@@ -10,12 +10,14 @@ test-server = []
 [dependencies]
 aldwin-core        = { path = "../core" }
 aldwin-config      = { path = "../config" }
+aldwin-login       = { path = "../login" }
 tokio              = { workspace = true }
 futures            = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 thiserror          = { workspace = true }
 async-stream       = { workspace = true }
+async-trait        = { workspace = true }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
 eventsource-stream = "0.2"
 rand               = "0.8"

@@ -34,6 +34,7 @@ fn app() -> App {
                     purpose: "balanced".into(),
                     context: 1_000_000,
                 }],
+                account: None,
             }],
             Some("anthropic".into()),
         )

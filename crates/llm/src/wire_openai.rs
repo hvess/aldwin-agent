@@ -454,6 +454,7 @@ impl Assembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Auth;
     use aldwin_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
     use serde_json::json;
 
@@ -774,7 +775,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "mistral-small-latest".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: Some("https://api.mistral.ai/v1/chat/completions".into()),
             extended_thinking_budget: Some(4096),
         };
@@ -805,7 +806,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: Some("https://x".into()),
             extended_thinking_budget: Some(4096),
         };
@@ -845,7 +846,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: Some("https://x".into()),
             extended_thinking_budget: Some(4096),
         };
@@ -864,7 +865,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: Some("https://x".into()),
             extended_thinking_budget: Some(4096),
         };

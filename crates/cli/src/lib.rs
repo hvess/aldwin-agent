@@ -8,6 +8,7 @@
 //! tested here.
 
 mod bootstrap;
+mod connect;
 mod context;
 mod error;
 mod history;

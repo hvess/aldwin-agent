@@ -22,6 +22,7 @@
 //! changes a persisted format and so wants its own decision record first.
 
 use aldwin_config::ProviderKind;
+use aldwin_login::Account;
 
 /// One model on offer, in the shared 16-cell option row: the id that lands
 /// in `provider.yaml`, and what picking it does.
@@ -47,6 +48,10 @@ pub struct Provider {
     /// needs before they can choose.
     pub purpose: &'static str,
     pub api_key_env: &'static str,
+    /// The account a developer may connect instead of exporting a key
+    /// (ADR 0012), where the provider offers one. A connected account is
+    /// used before the key.
+    pub account: Option<Account>,
     /// The full chat-completions URL, used verbatim — not a prefix. `None`
     /// for Anthropic, whose client has a single well-known endpoint.
     pub base_url: Option<&'static str>,
@@ -69,6 +74,7 @@ pub static PROVIDERS: &[Provider] = &[
         kind: ProviderKind::Anthropic,
         purpose: "claude models · ANTHROPIC_API_KEY",
         api_key_env: "ANTHROPIC_API_KEY",
+        account: None,
         base_url: None,
         models: &[
             Model {
@@ -93,6 +99,7 @@ pub static PROVIDERS: &[Provider] = &[
         kind: ProviderKind::OpenaiCompatible,
         purpose: "gemini models · GOOGLE_API_KEY",
         api_key_env: "GOOGLE_API_KEY",
+        account: None,
         base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
         models: &[
             Model {
@@ -112,6 +119,7 @@ pub static PROVIDERS: &[Provider] = &[
         kind: ProviderKind::OpenaiCompatible,
         purpose: "gpt models · OPENAI_API_KEY",
         api_key_env: "OPENAI_API_KEY",
+        account: None,
         base_url: Some("https://api.openai.com/v1/chat/completions"),
         models: &[
             Model {
@@ -127,10 +135,31 @@ pub static PROVIDERS: &[Provider] = &[
         ],
     },
     Provider {
+        id: "xai",
+        kind: ProviderKind::OpenaiCompatible,
+        purpose: "grok models · XAI_API_KEY, or /connect",
+        api_key_env: "XAI_API_KEY",
+        account: Some(Account::Xai),
+        base_url: Some("https://api.x.ai/v1/chat/completions"),
+        models: &[
+            Model {
+                id: "grok-4.7",
+                purpose: "balanced; a good default",
+                context: 500_000,
+            },
+            Model {
+                id: "grok-4.3",
+                purpose: "fast, cheap",
+                context: 1_000_000,
+            },
+        ],
+    },
+    Provider {
         id: "lumo",
         kind: ProviderKind::OpenaiCompatible,
         purpose: "proton lumo · LUMO_API_KEY",
         api_key_env: "LUMO_API_KEY",
+        account: None,
         base_url: Some("https://lumo-api.proton.me/ai/v1/chat/completions"),
         models: &[
             Model {
@@ -150,6 +179,7 @@ pub static PROVIDERS: &[Provider] = &[
         kind: ProviderKind::OpenaiCompatible,
         purpose: "mistral models · MISTRAL_API_KEY",
         api_key_env: "MISTRAL_API_KEY",
+        account: None,
         base_url: Some("https://api.mistral.ai/v1/chat/completions"),
         models: &[
             Model {
@@ -169,6 +199,7 @@ pub static PROVIDERS: &[Provider] = &[
         kind: ProviderKind::OpenaiCompatible,
         purpose: "deepseek models · DEEPSEEK_API_KEY",
         api_key_env: "DEEPSEEK_API_KEY",
+        account: None,
         base_url: Some("https://api.deepseek.com/v1/chat/completions"),
         models: &[
             Model {
@@ -287,6 +318,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An account is offered beside a key, never instead of one: the
+    /// key-less row would be a provider that cannot be reached without an
+    /// account.
+    #[test]
+    fn an_account_is_offered_beside_a_key_and_xai_offers_one() {
+        for p in PROVIDERS {
+            if let Some(account) = p.account {
+                assert_eq!(account.id(), p.id, "the account is keyed by the row's id");
+                assert_eq!(p.kind, ProviderKind::OpenaiCompatible);
+            }
+        }
+        assert_eq!(provider("xai").unwrap().account, Some(Account::Xai));
     }
 
     /// Every entry names an environment variable, and never a key: there is

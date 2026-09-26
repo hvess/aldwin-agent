@@ -4,7 +4,7 @@
 
 Aldwin is a Rust TUI coding agent — a discussion-first harness where the developer's understanding is the product, not the agent's throughput. It is not a mobile SDK project. Do not apply mobile SDK, FFI, Android, or iOS framing here.
 
-Workspace: seven Cargo crates under `crates/` — cli, config, core, llm, review, tools and tui. Each has a spec in `.claude/spec/` or its `archive/`. Read the relevant spec before working on any crate.
+Workspace: eight Cargo crates under `crates/` — cli, config, core, llm, login, review, tools and tui. Each has a spec in `.claude/spec/` or its `archive/`. Read the relevant spec before working on any crate.
 
 ## Language & Platform
 
@@ -16,8 +16,8 @@ Specs are in `.claude/spec/` — read before implementing. Six are archived
 under `.claude/spec/archive/`: config, core, llm and cli as of 2026-08-29,
 the transcript feature (history) as of 2026-09-20 — implemented, tested, and
 audited with no known gaps — and permissions as of 2026-09-24, closed when
-ADR 0011 deleted its crate. Three stay active: tools, tui and review. When a
-spec step is completed, note it; when all steps are done, move the spec to
+ADR 0011 deleted its crate. Four stay active: tools, tui, review and
+login. When a spec step is completed, note it; when all steps are done, move the spec to
 `.claude/spec/archive/`.
 
 `aldwin-review.md` is the feedback loop that runs after a change is ready
@@ -118,8 +118,8 @@ and became the problem it was built to solve.
 **Where the design disagrees with a decision, the decision wins and the
 disagreement is recorded.** The design's commands include `/changes` and
 `/undo`; the product ships `/resume`, `/model`, `/quit`, `/clear` (the
-developer's call, 2026-09-23) and `/theme` (2026-09-25), and `/changes` and
-`/undo` are open-tasks 27. That is in `baseline.json`. A frame is authority
+developer's call, 2026-09-23), `/theme` (2026-09-25) and `/connect` (ADR
+0012, 2026-09-26), and `/changes` and `/undo` are open-tasks 27. That is in `baseline.json`. A frame is authority
 on tone and position, not on scope.
 
 ## Decision records
@@ -166,6 +166,13 @@ a decision they cover.
   incidental list; reads and the network are open, the network by stated
   non-goal. Where the system cannot confine, the developer is told once at
   startup. `allow:`, `default:` and `deny:` still parse, and are reported.
+- **0012 — A connected account is tried before an API key.** `/connect`
+  connects an account (xai today) through the device-code flow; its tokens
+  live in the global-only `connections.yaml`. `provider.yaml` is unchanged:
+  a provider that offers an account is reached through it when connected,
+  through its key when exported, and otherwise every request answers with
+  one sentence naming both fixes. The sign-in is the `aldwin-login` leaf
+  crate.
 
 ## Key Constraints (non-negotiable)
 

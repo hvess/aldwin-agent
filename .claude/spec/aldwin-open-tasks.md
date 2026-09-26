@@ -7,7 +7,7 @@ Work that is known, understood and not done. Each entry says what was seen, wher
 date (ADR 0009) closed or mooted eleven entries and added five (27–31); the
 closed ones are kept below, struck through, until the next renumbering.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-26
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -133,6 +133,17 @@ contradicts) and the entry says so before it goes.
    whole-app pass that raised the threshold to 100 went review → fix →
    re-review → rescore and reached 100 on its fourth iteration (the review
    spec's Progress, 2026-09-24).
+
+34. **No scene shows `/connect`'s own surfaces.** The stage 5 judge of
+   2026-09-26 (ADR 0012's first review, `run-1790417222`) said so under
+   "questions": the `question` scene is the agent's ask, the `commands`
+   scene types `/c` and stops, and no scene reaches the list of accounts,
+   the sign-in notice, or the sentence a provider with neither an account
+   nor a key answers with. Closing it means a scene that types `/connect`
+   (the list, which needs no server), one that submits a message on an
+   xai `provider.yaml` with no key and nothing connected (the sentence,
+   which needs none either), and one for the notice, which needs the fake
+   provider to stand in for `auth.x.ai` too.
 
 ## History (ADR 0005)
 

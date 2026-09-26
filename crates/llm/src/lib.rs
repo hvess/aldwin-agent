@@ -27,4 +27,4 @@ pub mod test_server;
 pub use catalog::{identify, provider, provider_ids, Model, Provider, PROVIDERS};
 pub use client::{AnthropicClient, LlmClientInitError};
 pub use client_openai::OpenAiCompatibleClient;
-pub use config::ProviderConfig;
+pub use config::{Auth, ProviderConfig};

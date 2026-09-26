@@ -5,7 +5,7 @@ use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 use thiserror::Error;
 
-use crate::config::ProviderConfig;
+use crate::config::{Auth, ProviderConfig};
 use crate::transport::{self, Dialect, Transport};
 use crate::wire::{self, Assembler, WireEvent};
 
@@ -19,6 +19,10 @@ pub enum LlmClientInitError {
     HttpClient(#[source] reqwest::Error),
     #[error("provider.yaml's base_url is required for the openai-compatible provider")]
     MissingBaseUrl,
+    #[error("this provider takes an API key, not a connected account")]
+    AccountNotOffered,
+    #[error("the connected account's session could not be set up: {0}")]
+    ConnectionSession(String),
 }
 
 /// V0 Anthropic client implementing core's `LlmClient`. No Anthropic wire
@@ -48,7 +52,10 @@ impl AnthropicClient {
     /// silently redirect Anthropic requests for anyone who has a leftover
     /// base_url set while `provider: anthropic`.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
-        let headers = headers(&transport::api_key(&config.api_key_env)?, &config)?;
+        let Auth::ApiKeyEnv(var) = &config.auth else {
+            return Err(LlmClientInitError::AccountNotOffered);
+        };
+        let headers = headers(&transport::api_key(var)?, var)?;
         let transport = Transport::new(wire::ANTHROPIC_API_URL.to_string(), headers)?;
         Ok(Self { config, transport })
     }
@@ -64,7 +71,7 @@ impl AnthropicClient {
         endpoint: String,
         idle_timeout: std::time::Duration,
     ) -> Self {
-        let headers = headers(api_key, &config).unwrap();
+        let headers = headers(api_key, "test").unwrap();
         let transport = Transport::new(endpoint, headers)
             .unwrap()
             .with_idle_timeout(idle_timeout);
@@ -73,11 +80,12 @@ impl AnthropicClient {
 }
 
 /// The key and the pinned API version. `Content-Type` is left to reqwest's
-/// `json`, which sets it.
-fn headers(api_key: &str, config: &ProviderConfig) -> Result<HeaderMap, LlmClientInitError> {
+/// `json`, which sets it. `var` is named when the key will not go in a
+/// header.
+fn headers(api_key: &str, var: &str) -> Result<HeaderMap, LlmClientInitError> {
     let key =
         HeaderValue::from_str(api_key).map_err(|_| LlmClientInitError::InvalidApiKeyValue {
-            var: config.api_key_env.clone(),
+            var: var.to_string(),
         })?;
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", key);
@@ -125,7 +133,7 @@ mod tests {
         ProviderConfig {
             kind: aldwin_config::ProviderKind::Anthropic,
             model: "claude-sonnet-5".into(),
-            api_key_env: "UNUSED".into(),
+            auth: Auth::ApiKeyEnv("UNUSED".into()),
             base_url: None,
             extended_thinking_budget: Some(1000),
         }

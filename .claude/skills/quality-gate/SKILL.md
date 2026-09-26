@@ -43,6 +43,7 @@ The workspace is already shaped as ports and adapters; keep it that way.
 | **Domain + ports** | `aldwin-core` | Depends on no other workspace crate. Defines the traits the outside world must satisfy — `LlmClient`, `ToolDispatcher`, `RecordSink` — and the types that cross them. |
 | **Adapters** | `aldwin-llm`, `aldwin-tools`, `aldwin-tui` | Implement or consume ports. Never depended on by `aldwin-core`. |
 | **Shared settings and store** | `aldwin-config` | The settings schema and its YAML files, and the transcript store (`HistoryStore`) that aldwin-cli's `RecordSink` writes through. Not an adapter behind a port: a shared crate any crate but `aldwin-core` may depend on. |
+| **Account login** | `aldwin-login` | A provider account's login and the session that keeps it fresh (`Login`, `Session`). A leaf: it depends on nothing in the workspace, and aldwin-llm and aldwin-cli depend on it. Nothing OAuth-shaped crosses its surface. |
 | **Composition root** | `aldwin-cli` (`bootstrap.rs`) | The one place concrete adapters are chosen and wired together. |
 | **Dev harness** | `aldwin-review` | The `/review` loop. Never in a release build; nothing depends on it. |
 

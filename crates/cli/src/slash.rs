@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use aldwin_config::Config;
 use aldwin_core::{Command, Event, SessionId};
+use aldwin_login::{Account, Login};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
+use crate::connect;
 use crate::history::History;
 
 /// What `intercept` decided to do with one incoming command.
@@ -38,11 +41,11 @@ pub(crate) struct SlashCommand {
 }
 
 /// Every command `intercept` answers — the one table the `/` menu and
-/// `/help` are both drawn from. The menu offers the developer's six, in
+/// `/help` are both drawn from. The menu offers the developer's seven, in
 /// this order (`crates/review/baseline.json`,
 /// `frame-command-list-is-not-the-products`). `/quit` and `/exit` are one
 /// command under two names, and the menu offers both.
-const COMMANDS: [SlashCommand; 8] = [
+const COMMANDS: [SlashCommand; 9] = [
     SlashCommand {
         name: "resume",
         argument: "",
@@ -53,6 +56,12 @@ const COMMANDS: [SlashCommand; 8] = [
         name: "model",
         argument: "",
         summary: "Change the model",
+        in_menu: true,
+    },
+    SlashCommand {
+        name: "connect",
+        argument: "",
+        summary: "Connect a provider account",
         in_menu: true,
     },
     SlashCommand {
@@ -163,22 +172,47 @@ pub struct Session {
     /// `provider/model`, as [`qualified`] renders it — what the next turn
     /// will actually run on.
     model: String,
-    switch: Box<dyn ModelSwitch>,
+    /// Shared with the `/connect` that is waiting, so an account connected
+    /// mid-session moves the session onto itself.
+    switch: Arc<dyn ModelSwitch>,
     /// Run after a successful `/reload-config`, for state that does not share
     /// the `Config` handle and so does not see the reload on its own — today,
     /// the workspace roots (ADR 0007). Returns a line for the developer, or
     /// `None` when there is nothing to say.
     after_reload: Option<AfterReload>,
+    /// The `/connect` still waiting for the account to approve, if one is.
+    /// A new `/connect` replaces it: two waits on two codes would race to
+    /// write one entry. Aborted when the session ends, since a wait holds
+    /// a sender of the TUI's event channel and the TUI leaves only once
+    /// every sender is gone.
+    connecting: Option<JoinHandle<()>>,
+    /// Where a `/connect` says its account was approved and stored. The
+    /// interceptor, not the wait, decides whether the session moves onto
+    /// it: only the interceptor knows what the session is running now.
+    connected_tx: mpsc::Sender<Account>,
+    connected_rx: Option<mpsc::Receiver<Account>>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(wait) = self.connecting.take() {
+            wait.abort();
+        }
+    }
 }
 
 pub type AfterReload = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
 impl Session {
-    pub fn new(model: String, switch: Box<dyn ModelSwitch>) -> Self {
+    pub fn new(model: String, switch: Arc<dyn ModelSwitch>) -> Self {
+        let (connected_tx, connected_rx) = mpsc::channel(1);
         Self {
             model,
             switch,
             after_reload: None,
+            connecting: None,
+            connected_tx,
+            connected_rx: Some(connected_rx),
         }
     }
 
@@ -263,6 +297,12 @@ async fn intercept(
         }
         ("model", arg) => {
             handle_model(arg, config, session, events).await;
+            Intercepted::Handled
+        }
+        // Bare `/connect` normally never reaches here: aldwin-tui opens the
+        // list of connections and answers with `/connect <provider>`.
+        ("connect", arg) => {
+            handle_connect(arg, config, session, events).await;
             Intercepted::Handled
         }
         // Bare `/resume` normally never reaches here: aldwin-tui reads it
@@ -429,6 +469,123 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
     }
 }
 
+/// `/connect <provider>` — connect the account a catalogue row offers, so
+/// a model on that provider runs on the developer's subscription instead
+/// of a key (ADR 0012).
+///
+/// The whole sign-in runs as its own task — asking for the code, showing
+/// it as a notice, and waiting as long as the code lasts — so the
+/// interceptor stays free for `/quit` from the first moment. The task
+/// stores the account and says so on `connected_tx`; the interceptor then
+/// moves the session onto it if the session is on that provider
+/// ([`moved_onto`]).
+async fn handle_connect(
+    arg: Option<&str>,
+    config: &Config,
+    session: &mut Session,
+    events: &mpsc::Sender<Event>,
+) {
+    let offered: Vec<String> = aldwin_llm::PROVIDERS
+        .iter()
+        .filter(|p| p.account.is_some())
+        .map(|p| format!("/connect {}", p.id))
+        .collect();
+    let usage = format!("Connect one with {}.", offered.join(" or "));
+    let Some(provider) = arg.filter(|a| !a.is_empty()).map(str::to_ascii_lowercase) else {
+        let message = format!("Say which account. {usage}");
+        let _ = events.send(Event::Notice { message }).await;
+        return;
+    };
+    let Some(account) = aldwin_llm::provider(&provider).and_then(|p| p.account) else {
+        let message = format!("There is no account to connect for {provider}. {usage}");
+        let _ = events.send(Event::Notice { message }).await;
+        return;
+    };
+
+    if let Some(previous) = session.connecting.take() {
+        previous.abort();
+    }
+    let (config, events, connected) =
+        (config.clone(), events.clone(), session.connected_tx.clone());
+    session.connecting = Some(tokio::spawn(async move {
+        let name = account.name();
+        let failed =
+            |e: &dyn std::fmt::Display| format!("The {name} account could not be connected: {e}.");
+        let (login, prompt) = match Login::start(account).await {
+            Ok(started) => started,
+            Err(e) => {
+                let _ = events
+                    .send(Event::Notice {
+                        message: failed(&e),
+                    })
+                    .await;
+                return;
+            }
+        };
+        let message = format!(
+            "Open {} and enter the code {}. It is good for {}.",
+            prompt.url,
+            prompt.code,
+            minutes(prompt.expires_in)
+        );
+        let _ = events.send(Event::Notice { message }).await;
+        let credentials = match login.wait().await {
+            Ok(credentials) => credentials,
+            Err(e) => {
+                let _ = events
+                    .send(Event::Notice {
+                        message: failed(&e),
+                    })
+                    .await;
+                return;
+            }
+        };
+        if let Err(e) = config.set_connection(account.id(), connect::record(&credentials)) {
+            let message = format!(
+                "The {name} account was approved, but could not be saved: {e}. Connect it again once that is fixed."
+            );
+            let _ = events.send(Event::Notice { message }).await;
+            return;
+        }
+        let _ = connected.send(account).await;
+    }));
+}
+
+/// `12 minutes`, `1 minute` — a code's lifetime, rounded up so one with
+/// seconds left never reads as none.
+fn minutes(lifetime: std::time::Duration) -> String {
+    match lifetime.as_secs().div_ceil(60).max(1) {
+        1 => "1 minute".into(),
+        n => format!("{n} minutes"),
+    }
+}
+
+/// An account was approved and stored. The session moves onto it only
+/// when the session is running that provider's model as `provider.yaml`
+/// states it — the check `/model` makes before it swaps — so an edit
+/// picked up by `/reload-config` and not yet acted on, or a `/model` that
+/// ran during the wait, is never overridden behind the developer's back.
+/// What the developer reads about it.
+fn moved_onto(account: Account, config: &Config, session: &Session) -> String {
+    let name = account.name();
+    let on_it = config.effective_provider().filter(|p| {
+        let row = identify(p);
+        row.map(|row| row.id) == Some(account.id()) && qualified(p, row) == session.model
+    });
+    match on_it {
+        None => format!(
+            "Connected to {name}. A model on {} now runs on your account.",
+            account.id()
+        ),
+        Some(effective) => match session.switch.switch(&effective) {
+            Ok(()) => format!("Connected to {name}. {} now runs on your account.", effective.model),
+            Err(e) => format!(
+                "Connected to {name}, but the session could not move onto it: {e}. Pick the model again with /model."
+            ),
+        },
+    }
+}
+
 /// `/model [provider/]model` — the one way a session gets or changes its
 /// model. It picks both halves of "where the model runs, and which one",
 /// which is why it is one command rather than two: a model id is meaningless
@@ -477,9 +634,13 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
 /// that order. A provider whose `api_key_env` is not exported fails here
 /// rather than at the developer's next start, and nothing is persisted when
 /// it does: a `provider.yaml` that cannot boot is not an improvement on
-/// being told no. And the notice names what the *next turn* will run on,
-/// which is now the same thing the top bar and status line show — they read
-/// `Event::ModelChanged`, sent below.
+/// being told no. The exception is a provider that offers an account (ADR
+/// 0012): with neither the account connected nor the key exported, the
+/// model is still chosen and saved, and the first message is answered with
+/// the sentence naming both fixes — `connect::reach` decides that. And the
+/// notice names what the *next turn* will run on, which is now the same
+/// thing the top bar and status line show — they read `Event::ModelChanged`,
+/// sent below.
 async fn handle_model(
     arg: Option<&str>,
     config: &Config,
@@ -651,7 +812,9 @@ fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
 ///
 /// `provider.yaml` deliberately has no field a plaintext key could go in
 /// (see `ProviderConfig`), so this writes the key variable's *name* and the
-/// developer exports the key themselves.
+/// developer exports the key themselves. Whether the provider is then
+/// reached through that key or through a connected account is not written
+/// here at all: it is decided when the client is built (ADR 0012).
 ///
 /// `current` is whatever already supplies the setting, when anything does.
 /// Two fields come from it rather than from the catalogue row:
@@ -790,18 +953,32 @@ pub async fn run_interceptor(
     history: Option<Arc<History>>,
     events: mpsc::Sender<Event>,
 ) {
-    while let Some(command) = incoming.recv().await {
-        match intercept(command, &config, &mut session, history.as_ref(), &events).await {
-            Intercepted::Forward(command) => {
-                if forward.send(command).await.is_err() {
-                    break;
+    let mut connected = session
+        .connected_rx
+        .take()
+        .expect("a session's connection receiver is taken once, here");
+    loop {
+        tokio::select! {
+            command = incoming.recv() => {
+                let Some(command) = command else { break };
+                match intercept(command, &config, &mut session, history.as_ref(), &events).await {
+                    Intercepted::Forward(command) => {
+                        if forward.send(command).await.is_err() {
+                            break;
+                        }
+                    }
+                    Intercepted::Handled => {}
+                    Intercepted::Quit => break,
                 }
             }
-            Intercepted::Handled => {}
-            Intercepted::Quit => break,
+            Some(account) = connected.recv() => {
+                let message = moved_onto(account, &config, &session);
+                let _ = events.send(Event::Notice { message }).await;
+            }
         }
     }
-    // `forward` and `events` drop here — see `Intercepted::Quit`'s doc
+    // `forward` and `events` drop here, and `session` with them — which
+    // aborts a `/connect` still waiting — see `Intercepted::Quit`'s doc
     // comment for why that's enough to shut the whole session down.
 }
 
@@ -841,7 +1018,7 @@ mod tests {
     }
 
     fn session() -> Session {
-        Session::new(SESSION_MODEL.into(), Box::new(FakeSwitch::default()))
+        Session::new(SESSION_MODEL.into(), Arc::new(FakeSwitch::default()))
     }
 
     /// A session whose switch records, and the record itself — for the tests
@@ -849,7 +1026,7 @@ mod tests {
     fn recording_session() -> (Session, Arc<Mutex<Vec<aldwin_config::ProviderConfig>>>) {
         let switch = FakeSwitch::default();
         let seen = switch.seen.clone();
-        (Session::new(SESSION_MODEL.into(), Box::new(switch)), seen)
+        (Session::new(SESSION_MODEL.into(), Arc::new(switch)), seen)
     }
 
     fn config() -> (tempfile::TempDir, tempfile::TempDir, Config) {
@@ -1261,8 +1438,8 @@ mod tests {
         let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
         assert_eq!(
             menu,
-            ["resume", "model", "quit", "exit", "clear", "theme"],
-            "the developer's six, in order"
+            ["resume", "model", "connect", "quit", "exit", "clear", "theme"],
+            "the developer's seven, in order"
         );
         let help = help_text();
         for command in COMMANDS {
@@ -1780,7 +1957,7 @@ mod tests {
             fails_with: Some("GOOGLE_API_KEY"),
             ..Default::default()
         };
-        let mut session = Session::new(SESSION_MODEL.into(), Box::new(switch));
+        let mut session = Session::new(SESSION_MODEL.into(), Arc::new(switch));
         let (tx, mut rx) = mpsc::channel(8);
         intercept(
             Command::Submit {
@@ -2331,7 +2508,7 @@ mod tests {
             fails_with: Some("NO_KEY"),
             ..Default::default()
         };
-        session = Session::new(session.model.clone(), Box::new(switch));
+        session = Session::new(session.model.clone(), Arc::new(switch));
         intercept(
             Command::Submit {
                 text: "/model anthropic/claude-sonnet-5".into(),
@@ -2503,5 +2680,99 @@ mod tests {
             event_rx.recv().await.is_none(),
             "events must be dropped, not left open, on quit"
         );
+    }
+
+    // ── `/connect` ────────────────────────────────────────────────────────
+
+    /// The two answers `/connect` gives without reaching any server: which
+    /// accounts there are, and that the one named is not among them.
+    #[tokio::test]
+    async fn connect_without_a_provider_or_with_one_that_offers_none_says_which_do() {
+        let (_project, _global, cfg) = config();
+        for (text, expected) in [
+            (
+                "/connect",
+                "Say which account. Connect one with /connect xai.",
+            ),
+            (
+                "/connect anthropic",
+                "There is no account to connect for anthropic. Connect one with /connect xai.",
+            ),
+            (
+                "/connect nope",
+                "There is no account to connect for nope. Connect one with /connect xai.",
+            ),
+        ] {
+            let (tx, mut rx) = mpsc::channel(8);
+            let mut session = session();
+            let result = intercept(
+                Command::Submit { text: text.into() },
+                &cfg,
+                &mut session,
+                None,
+                &tx,
+            )
+            .await;
+            assert!(matches!(result, Intercepted::Handled));
+            assert_eq!(notice(&mut rx).await, expected, "{text}");
+            assert!(session.connecting.is_none(), "{text}: nothing to wait for");
+        }
+    }
+
+    /// An approved account moves the session onto it only when the session
+    /// is running that provider's model as the file states it. On another
+    /// provider, or with the file edited but not yet acted on, it is
+    /// stored and said, and the session is left alone.
+    #[test]
+    fn an_approved_account_moves_the_session_only_when_it_runs_that_provider() {
+        let (_project, _global, cfg) = config();
+        let (mut session, seen) = recording_session();
+
+        with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
+        assert_eq!(
+            moved_onto(Account::Xai, &cfg, &session),
+            "Connected to x.ai. A model on xai now runs on your account."
+        );
+
+        // The file says xai, as a hand edit and /reload-config leave it;
+        // the session still runs claude, so nothing moves.
+        with_provider(&cfg, aldwin_config::Scope::Global, "xai");
+        assert_eq!(
+            moved_onto(Account::Xai, &cfg, &session),
+            "Connected to x.ai. A model on xai now runs on your account."
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "the session was left alone"
+        );
+
+        session.model = "xai/grok-4.7".into();
+        assert_eq!(
+            moved_onto(Account::Xai, &cfg, &session),
+            "Connected to x.ai. grok-4.7 now runs on your account."
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1, "rebuilt on the account");
+    }
+
+    #[test]
+    fn a_codes_lifetime_reads_in_whole_minutes_rounded_up() {
+        use std::time::Duration;
+        assert_eq!(minutes(Duration::from_secs(1800)), "30 minutes");
+        assert_eq!(minutes(Duration::from_secs(90)), "2 minutes");
+        assert_eq!(minutes(Duration::from_secs(30)), "1 minute");
+    }
+
+    /// Ending the session aborts a `/connect` still waiting: the wait holds
+    /// a sender of the TUI's event channel, and the TUI leaves only once
+    /// every sender has gone.
+    #[tokio::test]
+    async fn ending_the_session_aborts_a_connect_still_waiting() {
+        let mut session = session();
+        let wait = tokio::spawn(std::future::pending::<()>());
+        let abort = wait.abort_handle();
+        session.connecting = Some(wait);
+        drop(session);
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished(), "the wait was aborted with the session");
     }
 }

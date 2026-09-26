@@ -12,7 +12,7 @@
 use aldwin_core::{
     ContentBlock, LlmClient, LlmEvent, LlmRequest, Message, Role, StopReason, ToolDefinition,
 };
-use aldwin_llm::{OpenAiCompatibleClient, ProviderConfig};
+use aldwin_llm::{Auth, OpenAiCompatibleClient, ProviderConfig};
 use futures::StreamExt;
 use serde_json::json;
 
@@ -23,7 +23,7 @@ fn config() -> ProviderConfig {
     ProviderConfig {
         kind: aldwin_config::ProviderKind::OpenaiCompatible,
         model: std::env::var("LUMO_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into()),
-        api_key_env: "LUMO_API_KEY".into(),
+        auth: Auth::ApiKeyEnv("LUMO_API_KEY".into()),
         base_url: Some(std::env::var("LUMO_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into())),
         extended_thinking_budget: Some(256),
     }

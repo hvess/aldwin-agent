@@ -1,11 +1,12 @@
 use std::pin::Pin;
 
 use aldwin_core::{LlmClient, LlmError, LlmEvent, LlmRequest};
+use aldwin_login::Account;
 use futures::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::client::LlmClientInitError;
-use crate::config::ProviderConfig;
+use crate::config::{Auth, ProviderConfig};
 use crate::transport::{self, Dialect, Transport};
 use crate::wire_openai::{self, Assembler, WireChunk};
 
@@ -27,16 +28,22 @@ impl std::fmt::Debug for OpenAiCompatibleClient {
 }
 
 impl OpenAiCompatibleClient {
-    /// Reads `std::env::var(config.api_key_env)` and requires
-    /// `config.base_url` — there's no sane default URL for
-    /// "OpenAI-compatible," unlike Anthropic's single well-known endpoint.
+    /// Requires `config.base_url` — there's no sane default URL for
+    /// "OpenAI-compatible," unlike Anthropic's single well-known endpoint —
+    /// and reads `std::env::var` for a key, or takes the connected
+    /// account's session (ADR 0012).
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let endpoint = config
             .base_url
             .clone()
             .ok_or(LlmClientInitError::MissingBaseUrl)?;
-        let headers = headers(&transport::api_key(&config.api_key_env)?, &config)?;
-        let transport = Transport::new(endpoint, headers)?;
+        let transport = match &config.auth {
+            Auth::ApiKeyEnv(var) => {
+                Transport::new(endpoint, bearer(&transport::api_key(var)?, var)?)?
+            }
+            Auth::Connection(session) => Transport::new(endpoint, HeaderMap::new())?
+                .with_account(session.clone(), disconnected(session.account())),
+        };
         Ok(Self { config, transport })
     }
 
@@ -49,24 +56,51 @@ impl OpenAiCompatibleClient {
         endpoint: String,
         idle_timeout: std::time::Duration,
     ) -> Self {
-        let headers = headers(api_key, &config).unwrap();
+        let headers = bearer(api_key, "test").unwrap();
         let transport = Transport::new(endpoint, headers)
             .unwrap()
             .with_idle_timeout(idle_timeout);
         Self { config, transport }
     }
+
+    /// Test-only: a client on a connected account, against a local fake
+    /// server, with the account itself a stand-in.
+    #[cfg(test)]
+    pub(crate) fn with_account_at(
+        config: ProviderConfig,
+        account: std::sync::Arc<dyn transport::Bearer>,
+        endpoint: String,
+        idle_timeout: std::time::Duration,
+    ) -> Self {
+        let transport = Transport::new(endpoint, HeaderMap::new())
+            .unwrap()
+            .with_account(account, disconnected(Account::Xai))
+            .with_idle_timeout(idle_timeout);
+        Self { config, transport }
+    }
 }
 
-/// The bearer key. `Content-Type` is left to reqwest's `json`, which sets it.
-fn headers(api_key: &str, config: &ProviderConfig) -> Result<HeaderMap, LlmClientInitError> {
+/// The bearer key. `Content-Type` is left to reqwest's `json`, which sets
+/// it. `var` is named when the key will not go in a header.
+fn bearer(api_key: &str, var: &str) -> Result<HeaderMap, LlmClientInitError> {
     let bearer = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
         LlmClientInitError::InvalidApiKeyValue {
-            var: config.api_key_env.clone(),
+            var: var.to_string(),
         }
     })?;
     let mut headers = HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, bearer);
     Ok(headers)
+}
+
+/// What the developer reads when the account server no longer honours the
+/// connection: the one failure a refresh cannot recover from (ADR 0012).
+fn disconnected(account: Account) -> String {
+    format!(
+        "Your {} account is no longer connected. Connect it again with /connect {}.",
+        account.name(),
+        account.id()
+    )
 }
 
 impl Dialect for Assembler {
@@ -111,6 +145,7 @@ mod tests {
     use super::*;
     use crate::test_server::{self, Canned};
     use aldwin_core::Message;
+    use aldwin_login::SessionError;
     use futures::StreamExt;
     use std::time::Duration;
 
@@ -118,7 +153,7 @@ mod tests {
         ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "mistral-small-latest".into(),
-            api_key_env: "UNUSED".into(),
+            auth: Auth::ApiKeyEnv("UNUSED".into()),
             base_url: Some("https://x".into()),
             extended_thinking_budget: Some(4096),
         }
@@ -299,7 +334,7 @@ mod tests {
         let config = ProviderConfig {
             kind: aldwin_config::ProviderKind::OpenaiCompatible,
             model: "m".into(),
-            api_key_env: "UNUSED".into(),
+            auth: Auth::ApiKeyEnv("UNUSED".into()),
             base_url: None,
             extended_thinking_budget: Some(4096),
         };
@@ -307,5 +342,214 @@ mod tests {
             OpenAiCompatibleClient::new(config),
             Err(LlmClientInitError::MissingBaseUrl)
         ));
+    }
+
+    /// A connected account, as the transport sees one: each attempt's
+    /// answer in turn, and a count of how often the endpoint's refusal was
+    /// passed back.
+    struct FakeAccount {
+        answers: std::sync::Mutex<std::collections::VecDeque<Result<&'static str, SessionError>>>,
+        invalidated: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeAccount {
+        fn answering(answers: Vec<Result<&'static str, SessionError>>) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                answers: std::sync::Mutex::new(answers.into()),
+                invalidated: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn invalidated(&self) -> usize {
+            self.invalidated.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl transport::Bearer for FakeAccount {
+        async fn headers(&self) -> Result<HeaderMap, SessionError> {
+            let token = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("an answer for every attempt")?;
+            bearer(token, "test").map_err(|e| SessionError::Failed(e.to_string()))
+        }
+
+        async fn invalidate(&self) {
+            self.invalidated
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn account_client_at(
+        server: &test_server::FakeServer,
+        account: std::sync::Arc<FakeAccount>,
+    ) -> OpenAiCompatibleClient {
+        OpenAiCompatibleClient::with_account_at(
+            config(),
+            account,
+            server.url("/v1/chat/completions"),
+            Duration::from_secs(5),
+        )
+    }
+
+    /// The header on each request, lowercased — hyper writes standard
+    /// names in lowercase, and the test should not care either way.
+    fn authorizations(server: &test_server::FakeServer) -> Vec<String> {
+        server
+            .requests()
+            .iter()
+            .map(|head| {
+                head.lines()
+                    .map(str::to_ascii_lowercase)
+                    .find(|line| line.starts_with("authorization:"))
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_client_on_a_connected_account_sends_the_sessions_bearer() {
+        let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
+        let account = FakeAccount::answering(vec![Ok("tok-1")]);
+        let client = account_client_at(&server, account);
+        let messages = vec![];
+
+        let events: Vec<_> = client.stream(request(&messages)).collect().await;
+
+        assert!(events.iter().all(Result::is_ok), "{events:?}");
+        assert_eq!(authorizations(&server), vec!["authorization: bearer tok-1"]);
+    }
+
+    /// The session says the account is gone: nothing is sent, and the
+    /// error is the sentence that says what to do — at zero attempts, so
+    /// the failure row leads with it rather than with a provider's refusal.
+    #[tokio::test]
+    async fn a_disconnected_account_is_the_sentence_and_no_request() {
+        let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
+        let account = FakeAccount::answering(vec![Err(SessionError::LoggedOut)]);
+        let client = account_client_at(&server, account);
+        let messages = vec![];
+
+        let events: Vec<_> = client.stream(request(&messages)).collect().await;
+
+        let [Err(LlmError::Terminal {
+            attempts: 0,
+            message,
+        })] = &events[..]
+        else {
+            panic!("expected Aldwin's own sentence, got {events:?}");
+        };
+        assert_eq!(
+            message,
+            "Your x.ai account is no longer connected. Connect it again with /connect xai."
+        );
+        assert!(server.requests().is_empty());
+    }
+
+    /// The endpoint refuses the token the session thought good — revoked,
+    /// or a skewed clock. The session is told, and the request goes again
+    /// on what it hands out next; the retry is visible like any other.
+    #[tokio::test]
+    async fn a_token_the_endpoint_refuses_is_refreshed_once_and_the_request_sent_again() {
+        let server = test_server::spawn(vec![
+            Canned::Status(401, r#"{"error":{"message":"token expired"}}"#.into()),
+            Canned::Sse(success_sse()),
+        ]);
+        let account = FakeAccount::answering(vec![Ok("tok-1"), Ok("tok-2")]);
+        let client = account_client_at(&server, account.clone());
+        let messages = vec![];
+
+        let events: Vec<LlmEvent> = client
+            .stream(request(&messages))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|e| e.unwrap())
+            .collect();
+
+        assert!(
+            matches!(&events[0], LlmEvent::RetryAttempt { info } if info.status == Some(401)),
+            "{events:?}"
+        );
+        assert!(matches!(&events[1], LlmEvent::TextDelta { text } if text == "hi"));
+        assert_eq!(account.invalidated(), 1);
+        assert_eq!(
+            authorizations(&server),
+            vec!["authorization: bearer tok-1", "authorization: bearer tok-2"]
+        );
+    }
+
+    /// A second refusal is the endpoint's answer, not a reason to keep
+    /// refreshing — and it is reported as the 401 it is.
+    #[tokio::test]
+    async fn a_second_refusal_is_the_endpoints_answer() {
+        let server = test_server::spawn(vec![
+            Canned::Status(401, r#"{"error":{"message":"no"}}"#.into()),
+            Canned::Status(401, r#"{"error":{"message":"still no"}}"#.into()),
+        ]);
+        let account = FakeAccount::answering(vec![Ok("tok-1"), Ok("tok-2")]);
+        let client = account_client_at(&server, account.clone());
+        let messages = vec![];
+
+        let events: Vec<_> = client.stream(request(&messages)).collect().await;
+
+        assert!(matches!(events[0], Ok(LlmEvent::RetryAttempt { .. })));
+        assert!(
+            matches!(&events[1], Err(LlmError::Provider { status: 401, message }) if message.contains("still no")),
+            "{events:?}"
+        );
+        assert_eq!(account.invalidated(), 1);
+    }
+
+    /// The account server's passing trouble reads like a lost connection:
+    /// a visible retry, then the request as normal.
+    #[tokio::test]
+    async fn a_refresh_the_account_server_fails_is_retried_like_a_lost_connection() {
+        let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
+        let account = FakeAccount::answering(vec![
+            Err(SessionError::Failed("HTTP 502".into())),
+            Ok("tok-1"),
+        ]);
+        let client = account_client_at(&server, account);
+        let messages = vec![];
+
+        let events: Vec<LlmEvent> = client
+            .stream(request(&messages))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|e| e.unwrap())
+            .collect();
+
+        assert!(
+            matches!(&events[0], LlmEvent::RetryAttempt { info } if info.status.is_none() && info.message == "HTTP 502"),
+            "{events:?}"
+        );
+        assert!(matches!(&events[1], LlmEvent::TextDelta { .. }));
+        assert_eq!(server.requests().len(), 1);
+    }
+
+    /// The resend after a refused token is an attempt like any other, so a
+    /// 401 on the last attempt is the answer rather than a fifth request.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_token_on_the_last_attempt_is_not_sent_again() {
+        let server = test_server::spawn(vec![
+            Canned::Status(503, "{}".into()),
+            Canned::Status(503, "{}".into()),
+            Canned::Status(503, "{}".into()),
+            Canned::Status(401, r#"{"error":{"message":"expired"}}"#.into()),
+        ]);
+        let account = FakeAccount::answering(vec![Ok("a"), Ok("b"), Ok("c"), Ok("d")]);
+        let client = account_client_at(&server, account.clone());
+        let messages = vec![];
+
+        let events: Vec<_> = client.stream(request(&messages)).collect().await;
+
+        assert_eq!(server.requests().len(), 4, "four attempts and no more");
+        assert_eq!(account.invalidated(), 0);
+        assert!(matches!(events.last(), Some(Err(_))), "{events:?}");
     }
 }

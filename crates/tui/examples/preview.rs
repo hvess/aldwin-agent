@@ -31,6 +31,7 @@ fn main() -> io::Result<()> {
             purpose: "balanced; a good default".into(),
             context: 1_000_000,
         }],
+        account: None,
     }];
     let mut app = App::new("claude-sonnet-5".into())
         .with_theme(theme)

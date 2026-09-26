@@ -617,6 +617,7 @@ impl Assembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Auth;
     use aldwin_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
     use serde_json::json;
 
@@ -843,7 +844,7 @@ mod tests {
         crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::Anthropic,
             model: "claude-sonnet-5".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: None,
             extended_thinking_budget: Some(1000),
         }
@@ -1001,7 +1002,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::Anthropic,
             model: "m".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: None,
             extended_thinking_budget: Some(8000),
         };
@@ -1043,7 +1044,7 @@ mod tests {
         let config = crate::config::ProviderConfig {
             kind: aldwin_config::ProviderKind::Anthropic,
             model: "claude-sonnet-5".into(),
-            api_key_env: "X".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
             base_url: None,
             extended_thinking_budget: Some(8000),
         };

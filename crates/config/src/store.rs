@@ -4,8 +4,9 @@ use std::sync::{Arc, RwLock};
 use crate::{
     annotated,
     domain::{
-        McpConfig, PermissionsConfig, ProviderConfig, TuiConfig, MCP_VERSION, PERMISSIONS_VERSION,
-        PROVIDER_VERSION, TUI_VERSION,
+        ConnectionRecord, ConnectionsConfig, McpConfig, PermissionsConfig, ProviderConfig,
+        TuiConfig, CONNECTIONS_VERSION, MCP_VERSION, PERMISSIONS_VERSION, PROVIDER_VERSION,
+        TUI_VERSION,
     },
     error::ConfigError,
     fsio,
@@ -43,6 +44,7 @@ struct Inner {
     project_mcp: RwLock<McpConfig>,
     global_mcp: RwLock<McpConfig>,
     global_tui: RwLock<TuiConfig>,
+    global_connections: RwLock<ConnectionsConfig>,
 }
 
 /// Typed access to Aldwin's on-disk config. Cheap to clone — internally an
@@ -148,6 +150,9 @@ impl Config {
 
         let global_tui = fsio::read_versioned(&global_dir.join("tui.yaml"), TUI_VERSION)?
             .unwrap_or_else(TuiConfig::empty);
+        let global_connections =
+            fsio::read_versioned(&global_dir.join("connections.yaml"), CONNECTIONS_VERSION)?
+                .unwrap_or_else(ConnectionsConfig::empty);
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -160,6 +165,7 @@ impl Config {
                 project_mcp: RwLock::new(project_mcp),
                 global_mcp: RwLock::new(global_mcp),
                 global_tui: RwLock::new(global_tui),
+                global_connections: RwLock::new(global_connections),
             }),
         })
     }
@@ -257,6 +263,18 @@ impl Config {
         self.inner.global_tui.read().expect("lock poisoned").clone()
     }
 
+    /// The account connected to `provider` — a catalogue id — or `None`
+    /// when the developer has not connected one (ADR 0012).
+    pub fn connection(&self, provider: &str) -> Option<ConnectionRecord> {
+        self.inner
+            .global_connections
+            .read()
+            .expect("lock poisoned")
+            .accounts
+            .get(provider)
+            .cloned()
+    }
+
     /// The `permissions.yaml` files that still say something through a key
     /// nothing reads — `allow:`, `default:` or `deny:` — nearest first, so
     /// the developer can be told once that the file promises what the
@@ -327,6 +345,44 @@ impl Config {
         )
     }
 
+    /// Stores the account connected to `provider`, replacing any it had:
+    /// what `/connect` writes, and what every refresh that rotates the
+    /// token writes again. Global scope only, by decision (ADR 0012): a
+    /// token inside a repository is a leak waiting to be committed. The
+    /// atomic writer creates the file owner-only.
+    pub fn set_connection(
+        &self,
+        provider: &str,
+        record: ConnectionRecord,
+    ) -> Result<(), ConfigError> {
+        let path = self.domain_path(Scope::Global, "connections");
+        let provider = provider.to_string();
+        self.with_domain_mut(
+            &self.inner.global_connections,
+            &path,
+            annotated::CONNECTIONS_HEADER,
+            move |current| {
+                current.accounts.insert(provider, record);
+            },
+        )
+    }
+
+    /// Forgets the account connected to `provider`: what a revoked refresh
+    /// token leads to, so the next client built on the provider falls back
+    /// to its key rather than to tokens the server will refuse.
+    pub fn remove_connection(&self, provider: &str) -> Result<(), ConfigError> {
+        let path = self.domain_path(Scope::Global, "connections");
+        let provider = provider.to_string();
+        self.with_domain_mut(
+            &self.inner.global_connections,
+            &path,
+            annotated::CONNECTIONS_HEADER,
+            move |current| {
+                current.accounts.remove(&provider);
+            },
+        )
+    }
+
     // ── Reload ───────────────────────────────────────────────────────────
 
     /// Re-read every layer that currently exists on disk. A layer that fails
@@ -369,6 +425,13 @@ impl Config {
             self.domain_path(Scope::Global, "tui"),
             TUI_VERSION,
             TuiConfig::empty,
+            &mut failures,
+        );
+        self.reload_domain(
+            &self.inner.global_connections,
+            self.domain_path(Scope::Global, "connections"),
+            CONNECTIONS_VERSION,
+            ConnectionsConfig::empty,
             &mut failures,
         );
 
@@ -501,6 +564,14 @@ mod tests {
             base_url: None,
             api_key_env: "ANTHROPIC_API_KEY".into(),
             extended_thinking_budget: None,
+        }
+    }
+
+    fn record(access_token: &str) -> ConnectionRecord {
+        ConnectionRecord {
+            access_token: access_token.into(),
+            refresh_token: "refresh".into(),
+            expires_at: 1_800_000_000,
         }
     }
 
@@ -817,6 +888,49 @@ mod tests {
     }
 
     #[test]
+    fn a_connection_is_stored_globally_owner_only_and_read_back() {
+        let (_project, global, config) = fresh();
+        assert_eq!(config.connection("xai"), None);
+
+        config.set_connection("xai", record("first")).unwrap();
+        config.set_connection("xai", record("second")).unwrap();
+        config.set_connection("other", record("third")).unwrap();
+
+        assert_eq!(config.connection("xai"), Some(record("second")));
+        assert_eq!(config.connection("other"), Some(record("third")));
+        config.remove_connection("other").unwrap();
+        assert_eq!(config.connection("other"), None);
+        let path = global.path().join(".aldwin").join("connections.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# Aldwin connected accounts"), "{text:?}");
+        assert!(
+            !_project.path().join(".aldwin").exists(),
+            "a connection never lands at project scope"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the file holds tokens");
+        }
+
+        // What was written is what a fresh open reads, and what a reload
+        // picks up after a hand edit — deleting an entry disconnects it.
+        let reopened = Config::open_at(_project.path(), global.path().join(".aldwin")).unwrap();
+        assert_eq!(reopened.connection("xai"), Some(record("second")));
+        std::fs::write(&path, "version: 1\naccounts:\n  other:\n    access_token: a\n    refresh_token: r\n    expires_at: 1\n").unwrap();
+        config.reload_all().unwrap();
+        assert_eq!(config.connection("xai"), None);
+    }
+
+    #[test]
+    fn a_connection_records_debug_output_carries_no_token() {
+        let printed = format!("{:?}", record("the-access-token"));
+        assert!(!printed.contains("the-access-token"), "{printed}");
+        assert!(!printed.contains("refresh"), "{printed}");
+    }
+
+    #[test]
     fn provider_yaml_without_extended_thinking_budget_still_parses() {
         // Backward compatibility: files written before this field existed
         // must keep loading, with the field defaulting to None.
@@ -840,12 +954,8 @@ mod tests {
     fn extended_thinking_budget_round_trips_through_set_provider() {
         let (_project, _global, config) = fresh();
         let provider = ProviderConfig {
-            version: PROVIDER_VERSION,
-            provider: crate::domain::ProviderKind::Anthropic,
-            model: "m".into(),
-            base_url: None,
-            api_key_env: "X".into(),
             extended_thinking_budget: Some(16_000),
+            ..provider("m")
         };
         config.set_provider(Scope::Global, provider).unwrap();
         assert_eq!(
@@ -919,12 +1029,8 @@ mod tests {
     fn set_provider_with_empty_api_key_env_is_rejected_and_writes_nothing() {
         let (_project, _global, config) = fresh();
         let bad = ProviderConfig {
-            version: PROVIDER_VERSION,
-            provider: crate::domain::ProviderKind::Anthropic,
-            model: "m".into(),
-            base_url: None,
             api_key_env: "".into(),
-            extended_thinking_budget: None,
+            ..provider("m")
         };
         let err = config.set_provider(Scope::Global, bad).unwrap_err();
         assert!(matches!(err, ConfigError::MissingApiKeyEnv { .. }));

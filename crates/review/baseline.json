@@ -17,8 +17,8 @@
     {
       "id": "frame-command-list-is-not-the-products",
       "design_says": "Frame `F commands` types `/c` and the list narrows to `changes` and `clear`, with no shortcut column; the design system's `CommandRow` still shows `changes`, `undo` (`↺`) and `quit` (`⌃D`), a key right-flush like a menu.",
-      "design_also_says": "Nothing in the design names `/resume` (ADR 0005, a shipped feature), `/model` or `/theme`, and the product has neither `/changes` nor `/undo`.",
-      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` are open-tasks entry 27.",
+      "design_also_says": "Nothing in the design names `/resume` (ADR 0005, a shipped feature), `/model`, `/connect` (ADR 0012) or `/theme`, and the product has neither `/changes` nor `/undo`.",
+      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/connect` (ADR 0012, 2026-09-26), `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` are open-tasks entry 27.",
       "glyphs": ""
     },
     {
@@ -40,6 +40,13 @@
       "design_says": "README: “Comments ride at the end of their line, `◆ Use config`, like an Xcode annotation. The code is never broken up.”",
       "design_also_says": "Apple's HIG (Layout): “For example, horizontally adjacent views may need to stack vertically to provide more space for text; table rows or other containers may need to grow in height so that text isn’t cropped or doesn’t overlap other content; and table rows with a single line of text by default might need to grow vertically to accommodate multiple lines of text.”",
       "app_follows": "The HIG (the developer's decision, 2026-09-24): a diff line longer than the pane wraps onto continuation rows with a blank gutter, rather than being cut at the pane's edge.",
+      "glyphs": ""
+    },
+    {
+      "id": "no-connection-component-adr-0012",
+      "design_says": "The design system's components are Frame, Field, StatusBar, ContextBar, UserEcho, Prose, Disclosure, PlanStep, Mark, LaunchCard, QuestionPanel, CommandRow and the review set; none of them connects an account, and no frame shows a code to enter elsewhere.",
+      "design_also_says": "The Content Fundamentals: lead with a sentence, outcomes not tool names. A device-code sign-in is one URL, one code and one outcome.",
+      "app_follows": "ADR 0012 — bare `/connect` is a QuestionPanel listing the accounts (\"Which account?\", each with the subscription it needs as its fact); the sign-in's prompt (\"Open <url> and enter the code <code>. It is good for 30 minutes.\") and its outcome (\"Connected to x.ai. …\") are notices. Retired when the design system draws a connection of its own.",
       "glyphs": ""
     }
   ]

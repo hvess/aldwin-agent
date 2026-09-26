@@ -7,10 +7,13 @@
 //! wire dialect supplies only what is its own — a [`Dialect`].
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aldwin_core::{LlmError, LlmEvent, RetryInfo};
+use aldwin_login::{Session, SessionError};
 use async_stream::try_stream;
+use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
 use reqwest::header::HeaderMap;
@@ -44,11 +47,41 @@ pub(crate) trait Dialect: Default + Send {
     }
 }
 
+/// A connected account behind a request, as the loop needs it (ADR 0012):
+/// the headers for one request, and a way to say the endpoint refused the
+/// token. The one implementation outside a test is aldwin-login's
+/// [`Session`]; a test's stands in for it so every answer a session can
+/// give is reachable without an account server.
+#[async_trait]
+pub(crate) trait Bearer: Send + Sync {
+    async fn headers(&self) -> Result<HeaderMap, SessionError>;
+    async fn invalidate(&self);
+}
+
+#[async_trait]
+impl Bearer for Session {
+    async fn headers(&self) -> Result<HeaderMap, SessionError> {
+        Session::headers(self).await
+    }
+
+    async fn invalidate(&self) {
+        Session::invalidate(self).await;
+    }
+}
+
+/// A request authenticated by a connected account rather than a fixed
+/// header, and the sentence for the day the account is gone.
+struct ConnectedAccount {
+    bearer: Arc<dyn Bearer>,
+    disconnected: String,
+}
+
 /// Where a client's requests go, and the shared HTTP client they go over.
 pub(crate) struct Transport {
     http: reqwest::Client,
     endpoint: String,
     headers: HeaderMap,
+    account: Option<ConnectedAccount>,
     idle_timeout: Duration,
 }
 
@@ -63,8 +96,20 @@ impl Transport {
             http,
             endpoint,
             headers,
+            account: None,
             idle_timeout: retry::IDLE_TIMEOUT,
         })
+    }
+
+    /// Authenticates every request through `bearer`, resolved per attempt
+    /// so a token refreshed between two is the one sent. `disconnected` is
+    /// what the developer reads when the account is no longer good.
+    pub(crate) fn with_account(mut self, bearer: Arc<dyn Bearer>, disconnected: String) -> Self {
+        self.account = Some(ConnectedAccount {
+            bearer,
+            disconnected,
+        });
+        self
     }
 
     /// A test's stand-in for the 60s idle timeout, so the retry path can be
@@ -95,11 +140,39 @@ impl Transport {
 
         Box::pin(try_stream! {
             let mut attempt: u32 = 0;
+            // A token the endpoint refuses is refreshed once and the request
+            // sent again; a second refusal is the endpoint's answer.
+            let mut refreshed = false;
 
             'attempts: loop {
                 attempt += 1;
 
-                let sent = self.http.post(&self.endpoint).headers(self.headers.clone()).json(&body).send().await;
+                let mut headers = self.headers.clone();
+                if let Some(account) = &self.account {
+                    match account.bearer.headers().await {
+                        Ok(bearer) => headers.extend(bearer),
+                        // Nothing is sent, so the error is Aldwin's own
+                        // sentence: zero attempts, which the failure row
+                        // leads with as written.
+                        Err(SessionError::LoggedOut) => {
+                            Err(LlmError::Terminal { attempts: 0, message: account.disconnected.clone() })?;
+                            continue;
+                        }
+                        // The account server's passing trouble is the same
+                        // kind of failure as not reaching the provider.
+                        Err(SessionError::Failed(message)) => {
+                            if should_retry(attempt) {
+                                yield retrying(None, message, attempt);
+                                tokio::time::sleep(backoff(attempt)).await;
+                                continue 'attempts;
+                            }
+                            Err(terminal_error(attempt, None, message))?;
+                            continue;
+                        }
+                    }
+                }
+
+                let sent = self.http.post(&self.endpoint).headers(headers).json(&body).send().await;
                 let resp = match sent {
                     Ok(r) => r,
                     Err(e) => {
@@ -117,6 +190,18 @@ impl Transport {
                 if !resp.status().is_success() {
                     let text = resp.text().await.unwrap_or_default();
                     let message = D::error_message(&text).unwrap_or(text);
+                    if status == 401 {
+                        if let Some(account) = &self.account {
+                            if !refreshed && should_retry(attempt) {
+                                account.bearer.invalidate().await;
+                                refreshed = true;
+                                yield retrying(Some(status), message, attempt);
+                                continue 'attempts;
+                            }
+                            Err(LlmError::Provider { status, message })?;
+                            continue;
+                        }
+                    }
                     if is_retryable_status(status) && should_retry(attempt) {
                         yield retrying(Some(status), message, attempt);
                         tokio::time::sleep(backoff(attempt)).await;

@@ -149,10 +149,13 @@ fn exec_real_git(args: Vec<OsString>) -> ExitCode {
 }
 
 /// The first `git` on `path` that resolves to an executable file whose name
-/// differs from `shim`'s. Matching by name skips every Aldwin build, not only
-/// `shim`: a nested session from another build adds a second shim, and two
-/// shims that skipped only themselves would loop forever.
+/// differs from `shim`'s resolved one. Matching by name skips every Aldwin
+/// build, not only `shim`: a nested session from another build adds a second
+/// shim, and two shims that skipped only themselves would loop forever.
 fn real_git(path: &OsStr, shim: &Path) -> Option<PathBuf> {
+    // Unresolvable (the binary deleted since it started): its own name is
+    // the best evidence left. `exec_real_git` resolves first and reports it.
+    let shim = shim.canonicalize().unwrap_or_else(|_| shim.to_path_buf());
     std::env::split_paths(path)
         .filter_map(|dir| dir.join("git").canonicalize().ok())
         .find(|target| {
@@ -426,5 +429,15 @@ mod tests {
 
         let path = std::env::join_paths([&shim, &nested]).unwrap();
         assert_eq!(real_git(&path, &this), None);
+
+        // Regression: started through a link named otherwise, the shims'
+        // `aldwin` did not match the link's name and was taken for git.
+        let link = root.path().join("ald");
+        std::os::unix::fs::symlink(&this, &link).unwrap();
+        let path = std::env::join_paths([&shim, &nested, &real]).unwrap();
+        assert_eq!(
+            real_git(&path, &link),
+            Some(real.join("git").canonicalize().unwrap())
+        );
     }
 }

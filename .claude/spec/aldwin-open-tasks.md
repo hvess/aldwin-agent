@@ -65,8 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/cli/src/context.rs` `platform_facts`: any failure to start the
-     sandboxed `sed --version` reports a GNU `sed` as BSD.
    - `crates/cli/src/git_shim.rs` `install` passes `current_exe()` to
      `real_git` uncanonicalised; `exec_real_git` canonicalises.
    - `crates/config/src/history.rs` `SessionSummary::title`: a first

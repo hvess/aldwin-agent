@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 /// The additional-context string handed to aldwin-core: the cwd, any extra
 /// workspace roots, the platform facts, then the full text of each file in
@@ -42,44 +43,53 @@ fn platform_facts(roots: &[PathBuf]) -> String {
     if let Some(version) = program_version("bash", &["--version"], roots) {
         facts.push(format!("bash: {version}"));
     }
-    // GNU `sed -i` takes no argument, BSD's requires one. Ask the `sed` on
-    // PATH, not the OS: a Mac can have GNU sed. BSD sed fails `--version`.
-    match program_version("sed", &["--version"], roots) {
-        Some(version) if version.contains("GNU") => {
-            facts.push("sed: GNU (in-place edit is `sed -i`)".to_string())
-        }
-        Some(_) => {}
-        None if which("sed") => {
-            facts.push("sed: BSD (in-place edit is `sed -i ''`, not `sed -i`)".to_string())
-        }
-        None => {}
-    }
+    facts.extend(
+        probe("sed", &["--version"], roots)
+            .and_then(|out| {
+                sed_fact(
+                    &String::from_utf8_lossy(&out.stdout),
+                    &String::from_utf8_lossy(&out.stderr),
+                )
+            })
+            .map(str::to_string),
+    );
     facts.join("\n")
 }
 
-/// Whether `program` is on PATH at all.
-fn which(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+/// The `sed` fact from what `sed --version` printed. GNU `sed -i` takes no
+/// argument, BSD's requires one. Ask the `sed` on PATH, not the OS: a Mac
+/// can have GNU sed. Only a flavour's own words are evidence: BSD sed
+/// rejects `--version` with its usage line, and a launcher that could not
+/// start `sed` (macOS's `sandbox-exec`) also exits non-zero.
+fn sed_fact(stdout: &str, stderr: &str) -> Option<&'static str> {
+    if stdout.contains("(GNU sed)") {
+        Some("sed: GNU (in-place edit is `sed -i`)")
+    } else if stderr.contains("usage: sed") {
+        Some("sed: BSD (in-place edit is `sed -i ''`, not `sed -i`)")
+    } else {
+        None
+    }
 }
 
 /// First line of `<program> <args>`, or `None` if it cannot be run or fails.
-/// Must run in the sandbox, as every process Aldwin starts does (ADR 0011).
 fn program_version(program: &str, args: &[&str], roots: &[PathBuf]) -> Option<String> {
-    let output = aldwin_tools::sandbox::std_command(program, args, roots)
+    let out = probe(program, args, roots).filter(|out| out.status.success())?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+/// What `<program> <args>` printed; `None` if it could not be started. Must
+/// run in the sandbox, as every process Aldwin starts does (ADR 0011).
+fn probe(program: &str, args: &[&str], roots: &[PathBuf]) -> Option<Output> {
+    aldwin_tools::sandbox::std_command(program, args, roots)
         .ok()?
         .stdin(std::process::Stdio::null())
         .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .next()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
+        .ok()
 }
 
 #[cfg(test)]
@@ -105,6 +115,23 @@ mod tests {
             &[dir.path().to_path_buf()],
         );
         assert_eq!(seen.as_deref(), Some("aldwin"));
+    }
+
+    /// Regression: a `sed` that could not be started was reported as BSD.
+    #[test]
+    fn a_sed_that_cannot_be_run_is_no_evidence_of_bsd() {
+        assert_eq!(
+            sed_fact("", "sandbox-exec: execvp() of 'sed' failed: No such file"),
+            None
+        );
+        let bsd = "sed: illegal option -- -\nusage: sed script [-Ealnru] [-i extension]";
+        assert!(sed_fact("", bsd).is_some_and(|f| f.contains("BSD")));
+        assert!(sed_fact("sed (GNU sed) 4.9\n", "").is_some_and(|f| f.contains("GNU")));
+        assert_eq!(
+            sed_fact("This is not GNU sed version 4.0\n", ""),
+            None,
+            "busybox"
+        );
     }
 
     #[test]

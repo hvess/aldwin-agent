@@ -52,11 +52,7 @@ impl Pty {
                 return Err(io::Error::last_os_error().into());
             }
             let mut buf = [0 as libc::c_char; 256];
-            // ptsname_r returns the error number rather than setting errno.
-            let rc = libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len());
-            if rc != 0 {
-                return Err(io::Error::from_raw_os_error(rc).into());
-            }
+            slave_name(fd, &mut buf)?;
             let slave_path =
                 PathBuf::from(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned());
 
@@ -162,7 +158,8 @@ impl Pty {
                 if libc::setsid() < 0 {
                     return Err(io::Error::last_os_error());
                 }
-                if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) < 0 {
+                // The request is a `c_ulong` on macOS and `TIOCSCTTY` a `c_uint`.
+                if libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 for target in 0..=2 {
@@ -182,6 +179,34 @@ impl Pty {
     }
 }
 
+/// Writes the slave's path for the master `fd` into `buf`, NUL-terminated.
+///
+/// # Safety
+///
+/// `fd` must be an open, unlocked pty master.
+#[cfg(not(target_os = "macos"))]
+unsafe fn slave_name(fd: libc::c_int, buf: &mut [libc::c_char; 256]) -> io::Result<()> {
+    // ptsname_r returns the error number rather than setting errno.
+    match unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } {
+        0 => Ok(()),
+        rc => Err(io::Error::from_raw_os_error(rc)),
+    }
+}
+
+/// Writes the slave's path for the master `fd` into `buf`, NUL-terminated.
+/// libc has no `ptsname_r` for macOS; `TIOCPTYGNAME` fills at most 128 bytes.
+///
+/// # Safety
+///
+/// `fd` must be an open, unlocked pty master.
+#[cfg(target_os = "macos")]
+unsafe fn slave_name(fd: libc::c_int, buf: &mut [libc::c_char; 256]) -> io::Result<()> {
+    if unsafe { libc::ioctl(fd, libc::TIOCPTYGNAME as _, buf.as_mut_ptr()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Reads from a pty master; `Ok(0)` means the slave side closed.
 ///
 /// # Errors
@@ -197,5 +222,19 @@ pub fn read(master: &mut File, buf: &mut [u8]) -> Result<usize> {
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             other => return Ok(other?),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `slave_name` is per platform; CI's macOS job is what runs the
+    /// `TIOCPTYGNAME` branch.
+    #[test]
+    fn an_opened_pty_names_a_slave_that_exists() {
+        let pty = Pty::open().unwrap();
+        assert!(pty.slave_path.starts_with("/dev/"), "{:?}", pty.slave_path);
+        assert!(pty.slave_path.exists(), "{:?}", pty.slave_path);
     }
 }

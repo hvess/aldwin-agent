@@ -335,6 +335,15 @@ moves any scene's snapshot has frames for stage 8 to judge.
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
 
+## Progress (2026-09-27, macOS)
+
+CI's first macOS run found the crate did not build there: `pty.rs` named
+the slave with `ptsname_r`, which libc has only on Linux-likes, and passed
+`TIOCSCTTY` where macOS takes a `c_ulong`. The gate runs this crate, so a
+contributor on a Mac could not commit through it. `slave_name` now asks
+macOS with `TIOCPTYGNAME`, and `an_opened_pty_names_a_slave_that_exists`
+is the test the macOS job runs it through.
+
 ## Progress (2026-09-27, the author checks first)
 
 A small change — a failed turn's typed kind, which closed open-tasks 1 — used all five

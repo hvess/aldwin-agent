@@ -2,6 +2,8 @@
 name    = "aldwin-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 # Exposes DispatchContext::for_testing to downstream crates — see its doc

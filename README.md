@@ -105,8 +105,18 @@ Prompt caching is on for Anthropic, which keeps long sessions cheaper.
 
 ## Install
 
-Grab the archive for your machine from [Releases](../../releases), extract
-it, and put `aldwin` on your `PATH`.
+```sh
+curl -fsSL https://raw.githubusercontent.com/hvess/aldwin-agent/main/install.sh | sh
+```
+
+It picks the build for your machine, checks it against the release's
+checksums and signature, and puts `aldwin` in `~/.local/bin`. If either
+check fails, nothing gets installed. Set `ALDWIN_INSTALL_DIR` to put it
+somewhere else, or `ALDWIN_VERSION` (say `v0.4.0`) to pin a release.
+[`install.sh`](install.sh) is short, so give it a read first if you like.
+
+Rather do it by hand? Grab the archive for your machine from
+[Releases](../../releases), extract it, and put `aldwin` on your `PATH`.
 
 | archive | for |
 | --- | --- |
@@ -249,3 +259,7 @@ it's usually written down there.
 Working on it with an agent? Point it at `AGENTS.md`. Every agent commit
 goes through the review loop in `.claude/skills/review/`, and the
 pre-commit hook enforces it.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

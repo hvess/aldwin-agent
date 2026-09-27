@@ -3,8 +3,10 @@ members = ["crates/core", "crates/config", "crates/login", "crates/tools", "crat
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
-version  = "0.4.0"
+edition    = "2021"
+version    = "0.4.0"
+license    = "MIT"
+repository = "https://github.com/hvess/aldwin-agent"
 
 [workspace.dependencies]
 tokio         = { version = "1", features = ["full"] }

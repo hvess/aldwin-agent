@@ -2,6 +2,8 @@
 name    = "aldwin-tui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 # Exposes the seams `tests/render_snapshot.rs` and `examples/preview.rs`

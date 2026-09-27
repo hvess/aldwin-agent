@@ -2,6 +2,8 @@
 name    = "aldwin-review"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 # Dev-only harness. Nothing in the shipped binary may depend on this crate;
 # `release.yml` builds `-p aldwin-cli`, so it is never in a release build.

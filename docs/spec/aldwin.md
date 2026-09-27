@@ -91,6 +91,8 @@ in how it is shaped. It replaces "A tool for thought.")
 
 - **The records live in `docs/`, the instructions in `AGENTS.md`.** — The developer's call, 2026-09-27, ahead of open-sourcing: the specs, ADRs and design were under `.claude/`, where only Claude Code looks. Every agent reads a root `AGENTS.md`, so the instructions moved there and `docs/` took the rest; `.claude/` keeps only Claude Code's own wiring (settings, hooks, skills), and its `CLAUDE.md` imports `AGENTS.md` rather than copying it.
 
+- **MIT, a one-line installer, and CI on every pull request.** — The developer's calls, 2026-09-27, for open-sourcing at `hvess/aldwin-agent`. MIT because OpenCode, Pi and Hermes Agent use it. `install.sh` installs a release only after checking the archive against `SHA256SUMS` and `SHA256SUMS` against its signature, with `allowed_signers` taken from the repository at the release's tag. `.github/workflows/ci.yml` runs the review loop's stages 2–5 on Linux and macOS; stage 1 compares against a toolchain string recorded from a local build, and 6–8 need an agent.
+
 ## Pitfalls
 
 - Anthropic wire types leaking past LlmClient — V0.5 becomes a refactor instead of an adapter swap. Audit early.

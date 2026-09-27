@@ -1,0 +1,48 @@
+# Every pull request, and every push to main: format, lint and test on both
+# platforms a release ships for. Nothing here writes to the repository.
+#
+# This is the review loop's stages 2–5 (stage 5 is the snapshot test the Test
+# step runs). Stage 1 compares against a toolchain string recorded from a
+# local build, and 6–8 need an agent, so they stay local.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two release targets' runners; macOS pinned for the same reason
+        # release.yml pins it.
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` pins the compiler with clippy only; rustfmt is
+      # added here rather than to the pin, which is part of the release recipe.
+      - name: Toolchain
+        run: rustup component add rustfmt
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Design tokens
+        run: cargo run --locked -p aldwin-review -- tokens

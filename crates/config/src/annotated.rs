@@ -73,8 +73,11 @@ pub const MCP: &str = "\
 #   kind: stdio, command: <path>, args: [...]
 #   kind: http,  url: <endpoint>
 # A project-scope entry with the same name replaces a global one entirely —
-# fields are never merged across scopes. A stdio server runs in the same
-# sandbox as the agent's commands: it can write only inside the workspace.
+# fields are never merged across scopes. A stdio server can read the
+# workspace but not write it — only temporary files and caches — so a change
+# it wants reaches your files as an edit you review. Two cases escape that: a
+# system that cannot confine processes, which Aldwin tells you about when it
+# starts, and a workspace kept under /tmp or ~/.cache.
 version: 1
 servers: []
 ";

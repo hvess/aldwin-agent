@@ -71,7 +71,7 @@ A tool for thought.
 
 - **Use the official rmcp crate for MCP client work.** — First-party Rust MCP SDK; reinventing the transport adds no value.
 
-- **No OS-level sandboxing in V0.** — *Reversed by ADR 0004; since ADR 0011 it is the boundary.* Every process Aldwin starts — a `run`, the language server, an MCP server — runs under Landlock (Linux) or Seatbelt (macOS) and can write only inside the workspace; reads and the network are open. Where neither exists, the developer is told once at startup. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
+- **No OS-level sandboxing in V0.** — *Reversed by ADR 0004; since ADR 0011 it is the boundary.* Every process Aldwin starts — a `run`, the language server, an MCP server — runs under Landlock (Linux) or Seatbelt (macOS) and can write only inside the workspace (an MCP server not even there, ADR 0014); reads and the network are open. Where neither exists, the developer is told once at startup. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
 
 - **Aldwin is a co-author of the commits it makes.** — ADR 0013, 2026-09-27: every `git commit` from anything Aldwin starts carries `Co-Authored-By: Aldwin <noreply@aldwin.codes>`. At startup Aldwin puts a symlink to its own binary, named `git`, first on its `PATH`; started under that name the binary execs the real git, adding `--trailer` to a `commit`. With a git older than 2.32, which has no `--trailer`, no shim is installed and that is said once. Merges, cherry-picks, rebases and a git called by absolute path get no trailer; a shim that could not be installed is said once.
 

@@ -2,41 +2,37 @@
 
 *A tool for thought.*
 
-A terminal coding agent that would rather explain the code than rewrite it
-behind your back. You describe a change in plain words; it reads and runs
-what it needs, says what it is doing, and never edits a file directly. Every
-edit opens as a full-window review, and nothing is saved until you approve.
-The point is that **you** finish the session understanding the code, not
-just holding a larger diff than when you started.
+Aldwin is a coding agent for your terminal that would rather talk the change
+through with you than quietly rewrite half your repo.
 
-Built in Rust on [ratatui](https://ratatui.rs). Works with Anthropic or any
-OpenAI-compatible endpoint.
+It reads and runs whatever it needs, tells you what it's doing, and when it
+wants to edit something, the edit waits for you. Every edit in a turn is
+shown to you as one review, and nothing touches disk until you approve it.
+The point isn't a bigger diff. The point is that you finish the session
+actually understanding your code.
 
-> **Status:** 0.3.0 and actively developed. Linux is the best-supported
-> platform — see the macOS note under Install.
+![Aldwin working through a plan](assets/plan.png)
+
+Written in Rust on [ratatui](https://ratatui.rs). Linux and Apple Silicon.
+
+> **Status:** 0.4.0, and moving fast. Linux is the best-tested platform.
 
 ## Install
 
-Grab a binary from [Releases](../../releases), extract, put `aldwin` on your
-`PATH`. No toolchain required. (The repo is private, so you'll need access.)
+Grab a binary from [Releases](../../releases), extract it, put `aldwin` on
+your `PATH`. That's it. (The repo is private for now, so you'll need access.)
 
 | archive | for |
 | --- | --- |
 | `…-x86_64-unknown-linux-gnu.tar.gz` | Intel/AMD Linux |
 | `…-aarch64-apple-darwin.tar.gz` | Apple Silicon Macs |
 
-No Intel Mac build. No Windows — `run` leans on Unix process APIs.
+No Intel Macs and no Windows, at least for now.
 
-**macOS caveat worth knowing before you install:** Linux enforces a read-only
-call with Landlock; macOS does it with Seatbelt, through `sandbox-exec`. The
-macOS half is newer and less exercised than the Linux one. If it can't be set
-up — or on a platform with no such primitive at all — the call runs with the
-tree writable, and Aldwin tells you so once, at the first such call.
+### Check what you downloaded
 
-### Verify what you downloaded
-
-Each release ships `SHA256SUMS` and a signature over it. Take
-`allowed_signers` from **this repo**, not the release page — a key served
+Every release ships a `SHA256SUMS` and a signature over it. Take
+`allowed_signers` from **this repo**, not from the release page. A key sitting
 next to its own signature proves nothing.
 
 ```sh
@@ -47,61 +43,43 @@ ssh-keygen -Y verify -f allowed_signers \
 sha256sum -c SHA256SUMS
 ```
 
-No new tools: `ssh-keygen` came with SSH.
+`ssh-keygen` came with SSH, so there's nothing new to install. Releases from
+before the rename were signed as `release@mjolnir` / `mjolnir-release`. Same
+key, old name, and `allowed_signers` has both.
 
-For a release published before the project was renamed, swap in the old pair
-— `-I release@mjolnir -n mjolnir-release`. It is the same key; only the
-labels changed, and `allowed_signers` carries both.
+Why bother? Aldwin's whole deal is that nothing lands without your review.
+That promise is worth nothing if the binary isn't the one built from this
+source.
 
-This matters more here than for most downloads. Aldwin's whole pitch is that
-nothing reaches your files without a review you approved and that a read is
-enforced rather than trusted — none of which survives running a binary that
-isn't the one built from the source you can read.
+### Build it yourself
 
-### Build from source
-
-Needs [rustup](https://rustup.rs) — `rust-toolchain.toml` pins the compiler
-to 1.98.1, and only rustup honours it.
+You'll need [rustup](https://rustup.rs). `rust-toolchain.toml` pins the
+compiler to 1.98.1, and rustup is the only thing that reads that file.
 
 ```sh
-cargo install --path crates/cli   # or: cargo build --release
+cargo install --path crates/cli
 ```
 
-Release builds are reproducible: pinned compiler, `Cargo.lock`, source paths
-remapped out of the binary, no timestamps in the archive. Rebuilding a tag
-gives byte-identical archives.
+Release builds are reproducible, so checking out a tag and running
+`scripts/release.sh build <target>` then `scripts/release.sh package` gives you
+the same bytes we shipped. One catch: the macOS archive only reproduces on a
+Mac.
+
+## Run it
 
 ```sh
-git checkout vX.Y.Z
-scripts/release.sh build x86_64-unknown-linux-gnu
-scripts/release.sh package
-sha256sum -c SHA256SUMS      # the one from the release
-```
-
-Two honest limits: the macOS archive only reproduces *on a Mac* (Apple's SDK
-licence), and without rustup the compiler pin does nothing — the script says
-so rather than letting you wonder why the hashes differ.
-
-## Run
-
-```sh
-export ANTHROPIC_API_KEY=sk-...
 aldwin
 ```
 
-That's the whole CLI. No flags, no subcommands, nothing but `--help` and
-`--version`. Everything else lives in config files.
+There are no flags or subcommands to learn, just `--help` and `--version`.
+Everything else lives in config files you can read.
 
-**Every launch opens straight to the field**, under a short card of what
-Aldwin is working with: version, project, branch, model. There is no setup.
-With nothing configured the card reads `Model  not set`, and your first
-message is held while two questions ask which provider and which model —
-then it goes. `/model` changes either later. Answers go to `~/.aldwin/`
-(global) and `.aldwin/` (this project), both commented, both meant to be read
-and edited.
+![The launch card](assets/launch.png)
 
-Aldwin never stores your API key. `provider.yaml` holds the *name* of an
-environment variable, and reads it at startup. For an OpenAI-compatible
+The first time you run it, just type your question. Aldwin holds the message,
+asks which provider and model you want, then sends it. You get a suggested
+list: Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek and Proton Lumo. You
+can type any model id, and point `provider.yaml` at any OpenAI-compatible
 endpoint:
 
 ```yaml
@@ -112,144 +90,140 @@ base_url: https://api.mistral.ai/v1/chat/completions
 api_key_env: MISTRAL_API_KEY
 ```
 
-(`base_url` is ignored for `provider: anthropic`, which knows its own address.)
+Aldwin never stores your API key. `api_key_env` is the *name* of an
+environment variable, and the key stays in your environment.
 
-If the project has a `CLAUDE.md` or `AGENTS.md`, it goes in the model's
-context. Reading is a read.
+Got a SuperGrok subscription? `/connect` signs you in to your xAI account
+instead, and an xAI model then uses the account before it tries a key. If
+you have neither, you get one sentence telling you both ways to fix it.
+
+If your project has a `CLAUDE.md` or `AGENTS.md`, the model reads it.
 
 ## How a change happens
 
-Say what you want. Aldwin leads with a sentence about what it's doing, reads
-and runs what it needs without asking, and shows the plan as three plain
-lines — *Count requests per key*, *Turn away requests over the limit*,
-*Check that it works* — each marked done, running or pending. The work
-behind them collapses to a line (`Read 3 files · Ran 1 program`) that
-`Space` opens into exact paths and counts.
+You say what you want. Aldwin opens with a sentence about what it's doing,
+shows its plan as a few plain steps, and gets on with it. The reads and runs
+behind each step collapse into one line (`Read 3 files`), and `Space` opens
+it up if you want to see the details.
 
-**Reads and runs need no permission.** A `run` is a program plus an argument
-list, executed directly — `&&`, `|`, `;` and `$(…)` are just characters.
-When the agent declares a call a read, it runs with your tree read-only and
-the network unreachable; declare wrong and nothing lands, and the agent is
-told to declare it again as a write. *(Landlock on Linux, Seatbelt on macOS;
-see the note above.)*
+**Reading and running don't need permission.** `run` is a plain shell
+command, so pipes and `&&` work. Everything Aldwin starts (the command, the
+language server, MCP servers) runs in a sandbox that can only write inside
+your workspace, plus temp files and caches like `~/.cargo`. The kernel
+enforces that (Landlock on Linux, Seatbelt on macOS). It isn't just trusted
+to behave. If your system can't enforce it, Aldwin says so once when it
+starts. It never pretends.
 
-**Every tool stays inside your workspace — `run` too.** A path argument that
-points outside the project is refused before the program starts. Working
-across sibling checkouts is a line in the project's
-`.aldwin/permissions.yaml`:
+Your workspace is the project directory. Need a sibling checkout too? Add it
+to `.aldwin/permissions.yaml`:
 
 ```yaml
 roots:
   - ../proton-libs
 ```
 
-**A deny is a lock.** The other thing that file holds. A `deny:` entry —
-`curl`, or `npm: write` — refuses the call outright, the refusal names the
-file, and nothing narrower overrides it. Unlocking is a deliberate edit to
-the file.
+That's the only knob. Reads and the network are open, on purpose. The
+boundary is there to keep your files from changing behind your back, not to
+hide them.
 
-**Every edit is reviewed.** The `edit` tool writes nothing: it stages the
-change, and everything staged in a turn is shown to you as one review — at
-the end of the turn, or before any run that would see it, so tests run on
-approved code. The review takes the whole window: a file tree with reading
-progress, the diff with unchanged code folded away, and your comments riding
-at the end of their lines. `⌃↩` approves once you've read every file, or
-sends your comments back to the agent, which addresses them and stages the
-edits again. `⎋` asks before discarding. Nothing is written until you
-approve, under every setting, with no way to switch it off.
+**Edits are staged, then reviewed.** The `edit` tool doesn't write anything.
+Every edit in a turn lands in one changeset, and the review opens at the
+turn's end, or before a `run` that would see the changes, so your tests run
+on code you've approved.
 
-An MCP server's tools are its own code, so a server gets no write access to
-your workspace: a tool that tries is refused by the sandbox, and the agent
-makes the change with `edit`, which you review. Two cases escape it: a
-system that cannot confine processes, which you are told about when Aldwin
-starts, and a workspace kept under `/tmp` or `~/.cache`, which every
-process may write.
+![The review, with a comment on a line](assets/review.png)
 
-**When the agent needs you**, it asks one question with a short list —
-always a yes, a no, and *Chat about this*. `↑↓` and `↩`, or press the number.
+The review takes over the whole window: files on the left, the diff on the
+right with unchanged code folded away. Click or drag to select lines, `↩` to
+comment, and `⌃↩` to send your comments back or to approve once you've read
+every file. You can't switch the review off, and there's no "just this once".
+
+MCP servers get no write access to the workspace at all. If one wants to
+change a file, the agent does it with `edit`, and it goes through the review
+like everything else. Two cases get around that: a system that can't
+confine anything (you're told at startup), and a workspace kept under `/tmp`
+or `~/.cache`, which every process can write. So maybe don't keep your
+project in `/tmp`.
+
+**When Aldwin needs you**, it asks one question with a short list of answers,
+and the last one is always *Chat about this*.
+
+**Commits it makes carry its name.** Any `git commit` Aldwin runs gets
+`Co-Authored-By: Aldwin <noreply@aldwin.codes>`, so it's always clear who
+helped.
 
 ## Sessions
 
-Conversations are written to disk as they happen, one JSONL transcript per
-session under `~/.aldwin/history/`, mode `0600`. `/resume` lists past
-sessions in this project and picks one back up — into the transcript you see
-*and* the context the model has.
+Every conversation is saved as it happens, one file per session under
+`~/.aldwin/history/`, readable only by you. `/resume` lists this project's
+past sessions and picks one back up, both what you see and what the model
+remembers.
 
-Nothing crosses between sessions on its own. Resume is something you ask for,
-by name; there's no cross-session memory and nothing gets summarised behind
-your back.
-
-Nothing prunes old transcripts yet. They're your files, in a directory you
-own.
+Nothing carries over between sessions unless you ask for it. There's no
+hidden memory and nothing summarized behind your back. Old sessions aren't
+cleaned up automatically, because they're your files.
 
 ## Keys and commands
 
 | key | does |
 | --- | --- |
-| `↩` / `⇧↩` | send / newline (`⌃J` where the terminal can't tell them apart) |
-| `⎋` | stop the turn that's running |
-| `⌃C` | stop the turn, or leave if nothing is running |
-| `Space` | show or hide the details of the current turn's work (on an empty field) |
-| `↑` `↓` | move within a multi-line draft, then scroll the transcript |
-| `1`–`9`, `↩` | pick and confirm in any question |
+| `↩` / `⇧↩` | send / new line (`⌃J` if your terminal can't tell them apart) |
+| `⎋` | stop the running turn |
+| `⌃C` | stop the turn, or quit if nothing's running |
+| `Space` | show or hide the current turn's work (on an empty field) |
+| `1`–`9` | answer a question |
 
-In the review:
+In the review, `?` shows every key.
 
-| key | does |
+Type `/` on an empty field to get the commands: `/resume`, `/model`,
+`/connect`, `/clear`, `/theme`, `/quit` (or `/exit`). `/reload-config` and
+`/help` work too, they just aren't in the menu.
+
+## Config
+
+All of it is commented YAML. Global settings live in `~/.aldwin/` and
+project settings in `.aldwin/`.
+
+| file | holds |
 | --- | --- |
-| click, drag | select a line, or a run of lines, to comment on; a click on `⋯  N lines` opens it |
-| `⇧↑` `⇧↓` | select from the keyboard: the first line shown, then extend |
-| `Space` | open every folded run in the file |
-| `↑` `↓`, `PgUp` `PgDn` | scroll the diff, or move a selection |
-| `↩` | comment on the selection |
-| `⌃↩` | approve, or send the comments (a bare `↩` with nothing selected or typed does the same, for terminals that cannot tell them apart) |
-| `⇥` `⇧⇥`, `←` `→` | next and previous file |
-| `⎋` | clear the selection, then discard |
-| `?` | show the keys |
+| `provider.yaml` | provider, model, which env var holds the key |
+| `permissions.yaml` | extra workspace `roots:` (project only) |
+| `mcp.yaml` | MCP servers, stdio or http |
+| `tui.yaml` | theme (global only) |
+| `connections.yaml` | accounts from `/connect` (global only, keep it private) |
 
-The mouse wheel scrolls too. In the conversation the terminal keeps the
-mouse, so selecting and copying text works the way it does anywhere else;
-while a review is open Aldwin takes it, to select lines with (most
-terminals still copy with a Shift-drag).
+Edited something while Aldwin is running? `/reload-config`.
 
-`/` in an empty field opens the commands: `/resume`, `/model`, `/quit`,
-`/clear`. Also reachable by typing them: `/theme light|dark`,
-`/reload-config`, `/help`.
+## Hacking on it
 
-## Layout
+It's a Cargo workspace of eight crates. Each boundary's trait lives in the
+crate that owns it, and the implementations live in the crates that depend
+on it.
 
-Cargo workspace, eight crates. `aldwin-review` is a dev-only harness that
-lints, tests and screenshots the TUI, and never reaches a release build —
-the release workflow builds `-p aldwin-cli` and nothing else. Traits live in
-the crate owning the boundary, impls in the siblings that depend on it.
-
-| crate | role |
+| crate | does |
 | --- | --- |
-| `aldwin-core` | agent loop, conversation log, event/command types, `LlmClient` and `ToolDispatcher` traits |
-| `aldwin-config` | YAML config per domain, project and global scope, refuses to start on a half-deleted one |
-| `aldwin-permissions` | the deny lock |
-| `aldwin-tools` | read, edit, run, explain (LSP), plan, ask, the staged changeset, the read-enforcing sandbox, MCP bridge |
-| `aldwin-llm` | Anthropic and OpenAI-compatible clients — reqwest, SSE, retry, prompt caching |
-| `aldwin-tui` | the ratatui frontend, the review included |
-| `aldwin-cli` | the `aldwin` binary — startup, wiring, slash commands |
-| `aldwin-review` | dev-only: the review loop and screenshot harness |
-
-Design notes live in `.claude/spec/`, and decisions that changed a stated
-constraint in `.claude/adr/`. Read the relevant one before changing a crate.
-
-## Development
+| `aldwin-core` | the agent loop, the conversation, the `LlmClient` and `ToolDispatcher` traits |
+| `aldwin-llm` | Anthropic and OpenAI-compatible clients: streaming, retries, prompt caching |
+| `aldwin-tools` | read, edit, run, explain (LSP), plan, ask, the staged changeset, the sandbox, MCP |
+| `aldwin-tui` | the ratatui frontend, review included |
+| `aldwin-config` | the YAML files, global and project |
+| `aldwin-login` | the `/connect` device-code sign-in |
+| `aldwin-cli` | the `aldwin` binary: startup, wiring, slash commands |
+| `aldwin-review` | dev only, never ships: the review loop and the screenshot harness |
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Two tests are `#[ignore]`d because they spawn a real `rust-analyzer`:
+A few tests are `#[ignore]`d because they need a real `rust-analyzer` or a
+live Lumo key. `cargo test -- --ignored` runs them if you have those.
 
-```sh
-cargo test -p aldwin-tools -- --ignored
-```
+Design notes are in `.claude/spec/`, and the decisions behind them are in
+`.claude/adr/`. Read the relevant one before you change something. There's
+usually a reason, and it's usually written down.
 
-`cargo run -p aldwin-review -- review --goal "…" --focus "…"` runs the full
-loop — lint, tests, design tokens, frame snapshots, and screenshots of the
-real binary driven through a real terminal.
+If you're an agent: every commit goes through `/review`. It runs lint, tests,
+the design tokens, screenshots of the real binary, and then three blind
+judges. The pre-commit hook won't let a commit in without a passing review,
+so don't go looking for a way around it.

@@ -200,12 +200,14 @@ moves any scene's snapshot has frames for stage 8 to judge.
     judge carried — is recorded by `review` itself once stages 1–5 pass.
 
 16. **An agent's commit is gated; the developer's is not.** An agent is
-    anything that sets `AGENT`: Claude Code through the project settings'
+    anything that sets `AGENT` (or Claude Code's own `CLAUDECODE`, below):
+    Claude Code through the project settings'
     `env`, Aldwin in every process it starts (`sandbox::command`), and
     `.githooks/pre-commit` checks for it. It was `CLAUDECODE` until
     2026-09-27, which Aldwin never set, so Aldwin's own commits passed
-    ungated. A Claude Code session started without the project's settings
-    has no `AGENT` and is not gated; the backstop is open-tasks 4. Any value of `AGENT` counts: a developer whose own shell exports
+    ungated. `CLAUDECODE` still counts beside it, as a backstop: Claude Code
+    sets it whatever its settings, so a session started without the
+    project's settings is gated too (the developer's call, 2026-09-27). Any value of `AGENT` counts: a developer whose own shell exports
     it for another tool has their commits gated too, and sees the gate's
     sentence say so — accepted as rare and visible (the developer's call).
     The guard below is a Claude Code hook and binds Claude Code only: an
@@ -222,9 +224,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
     whether defined with `-c` or saved with `git config`, and the git
     commands that write commits without `pre-commit` (`commit-tree`,
     `cherry-pick`, `revert`, `rebase`, `am`). Each is matched with the
-    command's quotes taken out, as the shell joins them. A command wrapped
-    onto a second line with a backslash is not yet read as one line, so a
-    `--no-verify` after the break gets through (open-tasks 5). A merge commit runs
+    command's quotes taken out and its backslash-newlines joined, as the
+    shell does. A merge commit runs
     `pre-merge-commit`, which is the same gate. Edits to the settings, the
     hooks and the record are denied.
     **What the guard is for, and what it is not.** It refuses the plain

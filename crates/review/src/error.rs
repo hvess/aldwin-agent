@@ -86,7 +86,7 @@ pub enum Error {
     },
 
     /// Stage 10: the tree being committed has no review record.
-    #[error("no passing review for tree {tree}. AGENT is set, so this is an agent's commit, and an agent's commit runs the whole loop first: run /review, and commit exactly what it reviewed.")]
+    #[error("no passing review for tree {tree}. AGENT or CLAUDECODE is set, so this is an agent's commit, and an agent's commit runs the whole loop first: run /review, and commit exactly what it reviewed.")]
     NoRecord {
         /// The staged tree.
         tree: String,

@@ -72,6 +72,8 @@ COMMIT_LONG_VALUED = {"--message", "--file", "--reuse-message", "--reedit-messag
                       "--template", "--trailer", "--pathspec-from-file"}
 
 def words(text):
+    # The shell joins a backslash-newline into one line before it splits.
+    text = text.replace("\\\n", "")
     lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()\n")
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True

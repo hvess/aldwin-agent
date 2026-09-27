@@ -24,7 +24,8 @@ code against a design principle or look at a picture. One is the loop itself, an
 
 **An agent's commit cannot land without this.** `.githooks/pre-commit`
 runs stage 10 for every commit made by an agent — any process with `AGENT`
-set, which Claude Code's project settings and Aldwin both set — and a
+set, which Claude Code's project settings and Aldwin both set, or with
+Claude Code's own `CLAUDECODE` — and a
 `PreToolUse` guard refuses the ways around it (`--no-verify`, `-n`, changing
 where hooks are read from, and the git commands that write commits without
 the hook). That is deliberate and it is not to be worked around: if the gate

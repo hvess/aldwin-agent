@@ -348,6 +348,13 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Re
                 .into(),
         ));
     }
+    if state.has_findings() {
+        return Err(Error::Review(
+            "every judge that could run has, and one has findings; fix them and run the \
+             loop again"
+                .into(),
+        ));
+    }
     if !state.passed() {
         return Err(Error::Review(
             "every judge that could run has, and the frames judge was not reached: its \

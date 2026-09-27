@@ -491,6 +491,27 @@ impl RunState {
         Ok(())
     }
 
+    /// Whether a judge written in this run has findings — why a run whose
+    /// last verdict passed can still fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::{Judge, RunState};
+    /// let paths = vec!["crates/core/src/lib.rs".to_string()];
+    /// let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
+    /// state.record(Judge::Code, false)?;
+    /// state.record(Judge::Rust, true)?;
+    /// assert!(state.has_findings());
+    /// # Ok::<(), aldwin_review::Error>(())
+    /// ```
+    pub fn has_findings(&self) -> bool {
+        self.assignments
+            .iter()
+            .any(|a| a.standing == Standing::Failed)
+    }
+
     /// Whether the run has passed as a whole: every deterministic stage, and
     /// every judge the change called for.
     ///
@@ -686,6 +707,19 @@ mod tests {
         unknown_before.record(Judge::Rust, true).unwrap();
         unknown.carry_from(&unknown_before, "run-1");
         assert_eq!(unknown.assignments()[1].standing(), Standing::Pending);
+    }
+
+    /// `judge` read the last verdict's pass as the run's, and blamed an
+    /// uncaptured frame for a run an earlier judge had failed.
+    #[test]
+    fn an_earlier_judges_findings_outlast_a_later_pass() {
+        let paths = ["crates/core/src/lib.rs".to_string()];
+        let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
+        state.record(Judge::Code, false).unwrap();
+        assert!(state.has_findings());
+        state.record(Judge::Rust, true).unwrap();
+        assert!(state.has_findings(), "a later pass does not clear it");
+        assert!(!state.passed());
     }
 
     /// The flag-and-option pair this replaced could carry a pass for a judge

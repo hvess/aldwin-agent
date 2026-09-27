@@ -58,26 +58,3 @@ contradicts) and the entry says so before it goes.
    call, 2026-09-27: its own change, with the put-back run inside the
    sandbox so the kernel refuses a write outside the workspace rather than
    a check in Aldwin.
-
-## Review
-
-4. **A Claude Code session without the project's settings is not gated.**
-   `.githooks/pre-commit` gates a commit only when `AGENT` is set, and
-   Claude Code gets `AGENT` only from `.claude/settings.json`'s `env`. A
-   session started without the project's settings, in a checkout whose
-   hooks are already switched on, commits ungated. Claude Code sets
-   `CLAUDECODE` whatever its settings, so the fix is one line in the hook,
-   `[ -n "$AGENT$CLAUDECODE" ] || exit 0`, with Decision 16, the review
-   skill and the gate's refusal saying so. The developer's call,
-   2026-09-27: make it. `.githooks/` is denied to agents, so the developer
-   copies the hook in; it waits on that.
-
-5. **The guard splits a command wrapped with a backslash.** The shell joins
-   a backslash-newline into one line; the guard's `words()`
-   (`.claude/hooks/commit-guard.sh`) reads the newline as a command break.
-   So `git commit \⏎ --no-verify -m x` is let through, and wrapping a long
-   command that way is habit, not evasion (Decision 16). The fix is one
-   line in `words()`: drop each backslash-newline before splitting, plus
-   cases for it in `crates/review/tests/commit_guard.rs`. It is written and
-   checked against every existing case; `.claude/hooks/` is denied to
-   agents, so it waits, with entry 4, on the developer copying it in.

@@ -85,6 +85,10 @@ fn every_way_around_the_hook_is_refused() {
         "env --ignore-env git commit -m x",
         "env -u FOO -i git commit -m x",
         "exec -c git commit -m x",
+        // A command wrapped onto a second line is still one command.
+        "git commit \\\n  --no-verify -m x",
+        "git commit \\\n  -n -m x",
+        "git commit -m x \\\n  --no-verify",
         // A global option that takes a value must not hide the subcommand,
         // and one the guard does not know must not either.
         "git --config-env x=HOME commit --no-verify -m hi",
@@ -163,6 +167,7 @@ fn commands_that_are_not_commits_are_let_through() {
         "MY_AGENT=x cargo run",
         "AGENT_HOME=x cargo run",
         "env FOO=1 cargo test -- --ignored",
+        "cargo test \\\n  -p aldwin-tools",
     ] {
         assert!(!refuses(command), "refused: {command:?}");
     }

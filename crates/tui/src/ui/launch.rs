@@ -24,13 +24,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-/// The card's rows, the mark's six with the facts centred beside them.
+/// The card's rows, the mark's with the facts centred beside them.
 pub(super) fn lines(app: &App) -> Vec<Line<'static>> {
     let pal = app.theme.palette();
     let mark = pal.mark();
     let facts = facts(app);
-    // `align-items: center`: four fact rows against six mark rows leaves
-    // one blank mark row above and below them.
+    // `align-items: center`: the four fact rows sit in the middle of the
+    // mark's rows.
     let offset = MARK_ROWS.saturating_sub(FACT_ROWS) / 2;
 
     let mut lines: Vec<Line<'static>> = (0..ROWS_ABOVE).map(|_| Line::default()).collect();

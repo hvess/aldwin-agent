@@ -20,6 +20,7 @@ use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::LogEntry;
 use crate::palette::Theme;
+use crate::tokens::{MARK_COLS, MARK_ROWS};
 
 fn app() -> App {
     App::new("claude-sonnet-5".into())
@@ -83,24 +84,25 @@ fn the_launch_card_leads_with_the_mark_and_the_four_facts() {
     }
     let name = find_row(&buf, "Aldwin").expect("the name row");
     assert_eq!(
-        name, 4,
-        "facts start on the mark's second row (centred four in six)"
+        name,
+        3 + (MARK_ROWS as u16 - 4) / 2,
+        "the four facts centred against the mark"
     );
     assert!(buf[(col_of(&buf, name, "Aldwin").unwrap() as u16, name)]
         .modifier
         .contains(Modifier::BOLD));
     assert_eq!(
         col_of(&buf, name, "Aldwin"),
-        Some(BODY_X + 18 + BODY_X),
-        "mark at 5ch, 18 wide, a 5ch gap"
+        Some(BODY_X + MARK_COLS + BODY_X),
+        "mark at 5ch, a 5ch gap"
     );
     assert_eq!(
         col_of(&buf, name + 1, "Project"),
-        Some(BODY_X + 18 + BODY_X)
+        Some(BODY_X + MARK_COLS + BODY_X)
     );
     assert_eq!(
         col_of(&buf, name + 1, "gateway"),
-        Some(BODY_X + 18 + BODY_X + 10),
+        Some(BODY_X + MARK_COLS + BODY_X + 10),
         "the value at --fact-col"
     );
     assert!(

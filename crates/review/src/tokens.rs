@@ -16,7 +16,8 @@
 //!   machine-readable copy.
 //! * `frames/Aldwin Agent TUI.dc.html` — the brand mark and the context
 //!   bar's ramp. Both are `color-mix()` expressions that exist nowhere else,
-//!   and the mark's 108 cells are the shape of the letter itself.
+//!   and the mark's 108 cells are the shape of the letter itself (redrawn
+//!   for a terminal's cell before they are emitted).
 //!
 //! **Ten roles are deliberately not carried.** `--chrome` and `--dot` paint
 //! the mock's macOS title bar, which a terminal does not draw. `--syn` and
@@ -161,7 +162,7 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
             })
     };
 
-    let mark = mark_cells(&frame)?;
+    let mark = fit_to_terminal(&mark_cells(&frame)?, MARK_TERMINAL_ROWS)?;
     check_gauge_against_frame(&frame)?;
 
     let mut out = header();
@@ -260,9 +261,10 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     out.push_str(&format!(
         "// ---- The brand mark's shape, from the frame ------------------------\n\
          //\n\
-         // 18 × 6 half-block cells. An open A: the frame draws each cell as a\n\
+         // An open A in half-block cells: the frame draws each cell as a\n\
          // `linear-gradient(top 50%, bottom 50%)`, which in a terminal is `▀` with\n\
-         // an independent foreground and background.\n\n\
+         // an independent foreground and background. Redrawn from the frame's\n\
+         // 6 rows to a terminal's cell shape; baseline.json records why.\n\n\
          pub(crate) const MARK_COLS: usize = {};\n\
          pub(crate) const MARK_ROWS: usize = {};\n\
          /// The glyph every mark cell is drawn with: upper half foreground, lower half background.\n\
@@ -448,6 +450,89 @@ fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
 struct MarkCell {
     top: Option<u8>,
     bottom: Option<u8>,
+}
+
+/// The mark's height in a terminal, in rows. The frame's row is 24px on a
+/// 14px font, so its half-cell is 8.4 × 12px; the cell `measure` pins
+/// (8 × 18) has an 8 × 9 half-cell. On the frame's 18 columns, which keep the
+/// letter's width and stroke, its 12 half-rows would need 16 to keep its
+/// height — but the frame's facts sit on 24px rows too, and against a
+/// terminal's shorter ones 8 rows of mark outweighs them. 7 is the balance:
+/// the letter a little wide (1.14 : 1 against the frame's 1.05), the facts
+/// 1.75 : 1 against the frame's 1.5. Only the mark is redrawn — it is the one
+/// picture on the grid (`mark-is-drawn-for-a-terminal-cell` in baseline.json).
+const MARK_TERMINAL_ROWS: usize = 7;
+
+/// The frame's A, redrawn `rows` rows tall on the frame's columns.
+///
+/// Stretching the frame's half-rows would repeat some and not others. The
+/// letter is read as strokes instead: every half-row of the frame is one run
+/// per side, the frame's stroke wide and cut off at the centre, so the apex
+/// is where the two strokes meet. What varies is the outer edge's distance
+/// from the centre. That distance is sampled along the new half-rows,
+/// between the frame's own, and each new half-row takes the fill of the
+/// frame half-row nearest it. At the frame's own height this is the frame.
+fn fit_to_terminal(mark: &[Vec<MarkCell>], rows: usize) -> Result<Vec<Vec<MarkCell>>> {
+    let invalid = |why: &str| Error::new(ErrorKind::InvalidData, format!("the mark {why}"));
+    let centre = mark[0].len() / 2;
+
+    // Each frame half-row's left run, as (outer edge's distance from the
+    // centre, run length, fill).
+    let runs = mark
+        .iter()
+        .flat_map(|row| {
+            [
+                row.iter().map(|c| c.top).collect::<Vec<_>>(),
+                row.iter().map(|c| c.bottom).collect(),
+            ]
+        })
+        .map(|halves| {
+            let left = &halves[..centre];
+            let start = left.iter().position(Option::is_some);
+            let end = left.iter().rposition(Option::is_some).map(|i| i + 1);
+            match (start, end) {
+                (Some(start), Some(end)) => Ok((
+                    centre - start,
+                    end - start,
+                    halves[start].unwrap_or_default(),
+                )),
+                _ => Err(invalid("has an empty half-row")),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let stroke = runs.iter().map(|&(_, len, _)| len).max().unwrap_or(0);
+    if runs.iter().any(|&(edge, len, _)| len != edge.min(stroke)) {
+        return Err(invalid("is not one stroke per side"));
+    }
+
+    let last = runs.len() - 1;
+    let halves: Vec<Vec<Option<u8>>> = (0..rows * 2)
+        .map(|t| {
+            let at = (t * last) as f64 / (rows * 2 - 1) as f64;
+            let below = at.floor() as usize;
+            let above = (below + 1).min(last);
+            let (low, high) = (runs[below].0 as f64, runs[above].0 as f64);
+            let edge = (low + (high - low) * (at - below as f64)).round() as usize;
+            let fill = runs[at.round() as usize].2;
+            let mut left = vec![None; centre];
+            for cell in &mut left[centre - edge..(centre - edge + stroke).min(centre)] {
+                *cell = Some(fill);
+            }
+            let right = left.iter().rev().copied().collect::<Vec<_>>();
+            left.into_iter().chain(right).collect()
+        })
+        .collect();
+
+    Ok(halves
+        .chunks(2)
+        .map(|pair| {
+            pair[0]
+                .iter()
+                .zip(&pair[1])
+                .map(|(&top, &bottom)| MarkCell { top, bottom })
+                .collect()
+        })
+        .collect())
 }
 
 /// The mark's cells, `[row][col]`, from the launch frame.
@@ -1129,6 +1214,56 @@ mod tests {
                 .all(|c| c.top.is_none() && c.bottom.is_none()),
             "the A is open between its legs"
         );
+    }
+
+    /// The mark read as strokes: at the frame's own height it is the frame,
+    /// and at a terminal's it keeps the frame's apex, stroke and fills.
+    #[test]
+    fn the_terminal_mark_is_the_frames_a_redrawn() {
+        let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
+        let wide = mark_cells(&frame).unwrap();
+        assert_eq!(fit_to_terminal(&wide, wide.len()).unwrap(), wide);
+
+        let mark = fit_to_terminal(&wide, MARK_TERMINAL_ROWS).unwrap();
+        let halves: Vec<Vec<Option<u8>>> = mark
+            .iter()
+            .flat_map(|row| {
+                [
+                    row.iter().map(|c| c.top).collect(),
+                    row.iter().map(|c| c.bottom).collect(),
+                ]
+            })
+            .collect();
+        let picture: Vec<String> = halves
+            .iter()
+            .map(|h| {
+                h.iter()
+                    .map(|c| if c.is_some() { '#' } else { '.' })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            picture,
+            [
+                ".......####.......",
+                "......######......",
+                "......######......",
+                ".....###..###.....",
+                ".....###..###.....",
+                "....###....###....",
+                "....###....###....",
+                "...###......###...",
+                "...###......###...",
+                "..###........###..",
+                "..###........###..",
+                ".###..........###.",
+                ".###..........###.",
+                "###............###",
+            ]
+        );
+        let fills = |h: &Vec<Option<u8>>| h.iter().flatten().copied().collect::<Vec<u8>>();
+        assert_eq!(fills(&halves[0]), [40; 4], "the apex is the frame's");
+        assert_eq!(fills(&halves[13]), [100; 6], "the feet are full fill");
     }
 
     /// The two bars the frame draws — four segments at 38–44 % and five at

@@ -5,10 +5,11 @@
 Aldwin is a coding agent for your terminal, for developers who want more of
 a say in how the code in their project is shaped.
 
-It reads your code and runs commands freely, all scoped to your workspace.
-What it never does is write on its own. Every edit waits in a review, and
-nothing lands until you've read it and approved it. You keep control of what
-gets written, and you keep your understanding of the code along the way.
+It reads your code and runs commands freely, and a command can only write
+inside your workspace. What Aldwin never does is edit your code on its own.
+Every edit waits in a review, and nothing lands until you've read it and
+approved it. You keep control of what gets written, and you keep your
+understanding of the code along the way.
 
 ![Aldwin working through a plan](assets/plan.png)
 
@@ -31,8 +32,9 @@ Aldwin keeps you in every change:
   The agent reworks it and stages it again, and nothing goes in until it's
   the way you want it.
 - **Reading and running don't get in your way.** The agent reads and runs
-  whatever it needs without asking, inside your workspace. The only thing
-  you're asked about is what actually changes your code.
+  whatever it needs without asking, and a command can only write inside your
+  workspace. The only thing you're asked about is what actually changes your
+  code.
 - **It shows its work.** Its plan is a few plain steps, and what it read and
   ran is one line away, down to the exact paths and commands.
 

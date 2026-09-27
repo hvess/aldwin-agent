@@ -23,17 +23,6 @@ contradicts) and the entry says so before it goes.
 
 ## TUI
 
-1. **A failed turn's kind reaches the TUI as text.** `TurnEndReason::Error`
-   carries a `String` (`crates/core/src/event.rs`), and
-   `log::failure_sentence` / `provider_sentence` (`crates/tui/src/log.rs`)
-   choose the sentence the developer reads by matching its prefixes
-   (`network error:`, `provider error 429:`, `terminal error after 0
-   attempts:`). A change to the core's wording silently drops the TUI to its
-   generic sentence. Closing it means carrying the failure's kind as a typed
-   value beside the text, and choosing the sentence from the kind. The
-   developer's call, 2026-09-27: fix it, as its own change after the comment
-   rework.
-
 3. **The model's thinking is not drawn.** Thinking streams to the TUI
    (`Event::ThinkingDelta`) and is carried and saved (ADR 0006), but
    `App::apply_event` drops it (`crates/tui/src/app.rs`), so a turn that

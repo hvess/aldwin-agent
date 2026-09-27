@@ -56,10 +56,9 @@ impl LlmClient for Said {
         &'a self,
         _: LlmRequest<'a>,
     ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-        Box::pin(futures::stream::iter([Err(LlmError::Terminal {
-            attempts: 0,
-            message: self.0.clone(),
-        })]))
+        Box::pin(futures::stream::iter([Err(LlmError::NotSent(
+            self.0.clone(),
+        ))]))
     }
 }
 
@@ -540,7 +539,7 @@ mod tests {
         };
         let mut stream = handle.stream(request);
         match stream.next().await {
-            Some(Err(LlmError::Terminal { message, .. })) => {
+            Some(Err(LlmError::NotSent(message))) => {
                 assert!(message.contains("/model"), "{message}")
             }
             other => panic!("expected the unconfigured error, got {other:?}"),
@@ -591,7 +590,7 @@ mod tests {
         };
         let mut stream = handle.stream(request);
         match stream.next().await {
-            Some(Err(LlmError::Terminal { message, .. })) => {
+            Some(Err(LlmError::NotSent(message))) => {
                 assert!(
                     message.starts_with("No x.ai account is connected"),
                     "{message}"

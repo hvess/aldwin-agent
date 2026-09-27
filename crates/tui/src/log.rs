@@ -3,9 +3,7 @@
 //! Append-only (aldwin-tui.md) except three updated in place: `Work` gains
 //! items, `Plan` is replaced, `Question` gains its answer.
 
-use std::borrow::Cow;
-
-use aldwin_core::{PlanStep, RetryInfo, ReviewOutcome};
+use aldwin_core::{Failure, FailureKind, PlanStep, RetryInfo, ReviewOutcome};
 
 /// One entry in the conversation log.
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +102,41 @@ impl LogEntry {
         LogEntry::Failure {
             message,
             detail: Some(info.message.clone()),
+            open: false,
+        }
+    }
+
+    /// A failed turn as a `Failure`: what happened and what to do, the error
+    /// itself the detail (ADR 0009 §5).
+    pub fn failed_turn(failure: Failure) -> Self {
+        let message = match failure.kind {
+            // Already the sentence: nothing more to disclose.
+            FailureKind::NotSent => {
+                return LogEntry::Failure {
+                    message: failure.message,
+                    detail: None,
+                    open: false,
+                }
+            }
+            FailureKind::Network => {
+                "The provider could not be reached. Check your connection, then send again."
+            }
+            FailureKind::Interrupted => {
+                "The reply was cut off partway. Send again to have it retried."
+            }
+            // A timeout retried to the end is not a refusal.
+            FailureKind::Exhausted {
+                status: None | Some(408),
+            } => "The provider kept failing. Send again in a moment.",
+            FailureKind::Provider { status }
+            | FailureKind::Exhausted {
+                status: Some(status),
+            } => provider_sentence(status),
+            FailureKind::Other => "The turn stopped before it finished. The detail says why.",
+        };
+        LogEntry::Failure {
+            message: message.into(),
+            detail: Some(failure.message),
             open: false,
         }
     }
@@ -255,54 +288,16 @@ pub(crate) fn plural(n: usize, noun: &str) -> String {
     }
 }
 
-/// The sentence a failed turn leads with: what happened and what to do.
-/// Status, body and retries stay in the detail (ADR 0009 §5).
-///
-/// Parses `LlmError`'s `Display` (`crates/core/src/client.rs`); keep the
-/// prefixes in sync. Open-tasks 1 would carry the kind instead.
-///
-/// Zero attempts means Aldwin sent nothing (no model, or ADR 0012's no
-/// account and no key), and the message is already the sentence.
-pub fn failure_sentence(error: &str) -> Cow<'_, str> {
-    match error.strip_prefix("terminal error after 0 attempts: ") {
-        Some(said) => Cow::Borrowed(said),
-        None => Cow::Borrowed(provider_sentence(error)),
-    }
-}
-
-/// The sentence for a provider's error. Separate from [`failure_sentence`]
-/// so the zero-attempt rule applies only to the whole error, never to a
-/// nested provider message.
-fn provider_sentence(error: &str) -> &'static str {
-    const FALLBACK: &str = "The turn stopped before it finished. The detail says why.";
-    if error.starts_with("network error:") {
-        return "The provider could not be reached. Check your connection, then send again.";
-    }
-    if error.starts_with("stream interrupted:") {
-        return "The reply was cut off partway. Send again to have it retried.";
-    }
-    if let Some(rest) = error.strip_prefix("terminal error after ") {
-        // Retries exhausted: use the last error's sentence if it has one.
-        return match rest
-            .split_once(": ")
-            .map(|(_, last)| provider_sentence(last))
-        {
-            Some(sentence) if sentence != FALLBACK => sentence,
-            _ => "The provider kept failing. Send again in a moment.",
-        };
-    }
-    let status = error
-        .strip_prefix("provider error ")
-        .and_then(|rest| rest.split(':').next())
-        .and_then(|s| s.trim().parse::<u16>().ok());
+/// The sentence for the status a provider refused a request with. No digit:
+/// the status is the detail's.
+fn provider_sentence(status: u16) -> &'static str {
     match status {
-        Some(401 | 403) => {
+        401 | 403 => {
             "The provider did not accept your key or account. The detail says which, and what to do."
         }
-        Some(429) => "The provider is limiting requests right now. Wait a moment, then send again.",
-        Some(500..=599) => "The provider had a problem on its side. Send again in a moment.",
-        Some(_) => "The provider turned the request down. The detail says why.",
-        None => FALLBACK,
+        429 => "The provider is limiting requests right now. Wait a moment, then send again.",
+        500..=599 => "The provider had a problem on its side. Send again in a moment.",
+        _ => "The provider turned the request down. The detail says why.",
     }
 }
 
@@ -320,52 +315,88 @@ pub fn first_line(content: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aldwin_core::LlmError;
+
+    fn provider(status: u16, message: &str) -> LlmError {
+        LlmError::Provider {
+            status,
+            message: message.into(),
+        }
+    }
+
+    fn exhausted(status: Option<u16>, message: &str) -> LlmError {
+        LlmError::Terminal {
+            attempts: 4,
+            status,
+            message: message.into(),
+        }
+    }
 
     /// No status, body or retry count in the sentence; those are the detail.
     #[test]
     fn a_failure_reads_as_what_happened_and_what_to_do() {
         let cases = [
             (
-                "provider error 400: {\"error\":{\"message\":\"unknown model gpt-5\"}}",
+                provider(400, r#"{"error":{"message":"unknown model gpt-5"}}"#),
                 "The provider turned the request down. The detail says why.",
             ),
             (
-                "provider error 401: invalid x-api-key",
+                provider(401, "invalid x-api-key"),
                 "The provider did not accept your key or account. The detail says which, and what to do.",
             ),
             (
-                "provider error 429: rate_limit_error",
+                provider(429, "rate_limit_error"),
                 "The provider is limiting requests right now. Wait a moment, then send again.",
             ),
             (
-                "provider error 529: overloaded_error",
+                provider(529, "overloaded_error"),
                 "The provider had a problem on its side. Send again in a moment.",
             ),
             (
-                "network error: connection refused",
+                LlmError::Network("connection refused".into()),
                 "The provider could not be reached. Check your connection, then send again.",
             ),
             (
-                "stream interrupted: unexpected EOF",
+                LlmError::StreamInterrupted("unexpected EOF".into()),
                 "The reply was cut off partway. Send again to have it retried.",
             ),
             (
-                "terminal error after 3 attempts: provider error 529: overloaded",
+                exhausted(Some(529), "overloaded"),
                 "The provider had a problem on its side. Send again in a moment.",
             ),
             (
-                "terminal error after 3 attempts: something else",
+                exhausted(Some(429), "rate_limit_error"),
+                "The provider is limiting requests right now. Wait a moment, then send again.",
+            ),
+            (
+                exhausted(Some(401), "invalid x-api-key"),
+                "The provider did not accept your key or account. The detail says which, and what to do.",
+            ),
+            (
+                exhausted(Some(408), "request timeout"),
                 "The provider kept failing. Send again in a moment.",
             ),
             (
-                "command channel closed",
-                "The turn stopped before it finished. The detail says why.",
+                exhausted(None, "idle timeout"),
+                "The provider kept failing. Send again in a moment.",
             ),
         ];
         for (error, sentence) in cases {
-            assert_eq!(failure_sentence(error), sentence, "{error}");
+            let detail = error.to_string();
+            assert_eq!(
+                LogEntry::failed_turn(error.into()),
+                LogEntry::Failure {
+                    message: sentence.into(),
+                    detail: Some(detail),
+                    open: false,
+                }
+            );
             assert!(!sentence.chars().any(|c| c.is_ascii_digit()), "{sentence}");
         }
+        assert!(matches!(
+            LogEntry::failed_turn(Failure::other("command channel closed")),
+            LogEntry::Failure { message, .. } if message == "The turn stopped before it finished. The detail says why."
+        ));
     }
 
     /// Guards against "the provider kept failing" for a provider never
@@ -374,17 +405,21 @@ mod tests {
     fn a_turn_aldwin_could_not_send_leads_with_aldwins_own_sentence() {
         let said = "No x.ai account is connected and XAI_API_KEY is not set. Connect one with /connect xai, or set XAI_API_KEY and start Aldwin again.";
         assert_eq!(
-            failure_sentence(&format!("terminal error after 0 attempts: {said}")),
-            said
+            LogEntry::failed_turn(LlmError::NotSent(said.into()).into()),
+            LogEntry::Failure {
+                message: said.into(),
+                detail: None,
+                open: false,
+            }
         );
-        // A nested zero-attempt prefix after real attempts is the provider's.
-        assert_eq!(
-            failure_sentence(
-                "terminal error after 4 attempts: terminal error after 0 attempts: pay here"
-            ),
-            "The provider kept failing. Send again in a moment."
-        );
+        // A provider's text that reads like Aldwin's own is still the
+        // provider's.
+        assert!(matches!(
+            LogEntry::failed_turn(exhausted(None, "No model is configured yet.").into()),
+            LogEntry::Failure { message, .. } if message == "The provider kept failing. Send again in a moment."
+        ));
     }
+
     use serde_json::json;
 
     #[test]

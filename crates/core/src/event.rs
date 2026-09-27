@@ -69,8 +69,81 @@ pub enum TurnEndReason {
     EndTurn,
     /// The developer stopped it.
     Cancelled,
-    /// A step failed; the sentence says how.
-    Error(String),
+    /// A step failed.
+    Error(Failure),
+}
+
+/// Why a turn failed: the kind, which a reader chooses its sentence from,
+/// and the error's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "FailureRecord")]
+pub struct Failure {
+    /// What went wrong.
+    pub kind: FailureKind,
+    /// The error as it was raised.
+    pub message: String,
+}
+
+impl Failure {
+    /// A failure of no more specific kind.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use aldwin_core::{Failure, FailureKind};
+    ///
+    /// let failure = Failure::other("command channel closed");
+    /// assert_eq!(failure.kind, FailureKind::Other);
+    /// assert_eq!(failure.message, "command channel closed");
+    /// ```
+    pub fn other(message: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::Other,
+            message: message.into(),
+        }
+    }
+}
+
+/// What went wrong in a failed turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// [`LlmError::NotSent`](crate::LlmError::NotSent).
+    NotSent,
+    /// No HTTP answer.
+    Network,
+    /// The provider answered with an error status.
+    Provider {
+        /// HTTP status.
+        status: u16,
+    },
+    /// The reply broke off after it began.
+    Interrupted,
+    /// Retries ran out, or a later attempt was refused.
+    Exhausted {
+        /// The last attempt's error status, if it had one.
+        status: Option<u16>,
+    },
+    /// Anything else.
+    Other,
+}
+
+/// A `Failure` as a transcript holds it. Transcripts written before the kind
+/// was recorded hold the bare message, read as `Other`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FailureRecord {
+    Typed { kind: FailureKind, message: String },
+    Text(String),
+}
+
+impl From<FailureRecord> for Failure {
+    fn from(record: FailureRecord) -> Self {
+        match record {
+            FailureRecord::Typed { kind, message } => Self { kind, message },
+            FailureRecord::Text(message) => Self::other(message),
+        }
+    }
 }
 
 /// Events toward the TUI, from the agent or aldwin-cli's interceptor.

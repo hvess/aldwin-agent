@@ -79,9 +79,9 @@ first cut's `/login` and `login:` field. How it reaches the app:
 - [x] **aldwin-tui.** `ProviderChoice::account` carries the subscription
   an account needs. Bare `/connect` opens a list of the providers that
   offer one; the answer submits `/connect <provider>`. The model flow asks
-  nothing new. A zero-attempt error — Aldwin could not send at all — now
-  leads its failure row with its own message instead of "The provider
-  kept failing".
+  nothing new. An error Aldwin could not send at all — `LlmError::NotSent`
+  since 2026-09-27, a zero-attempt `Terminal` before — leads its failure
+  row with its own message instead of "The provider kept failing".
 - [x] **baseline.json.** `/connect` joins the command-list entry; a new
   entry records that the list is a QuestionPanel and the sign-in is
   notices, since the design has no connection component.
@@ -180,10 +180,12 @@ reachable, and each fix landed with the test that would have caught it.
   start Aldwin again.
 - **A disconnected account led with the generic 401 row.** It is now a
   zero-attempt error, so the row leads with "Connect it again with
-  /connect xai."
+  /connect xai." (`LlmError::NotSent` since 2026-09-27: see below.)
 - **A provider's text could become the headline** if it began "terminal
   error after 0 attempts:". The zero-attempt rule now applies to the whole
-  error only (`provider_sentence` for the rest).
+  error only (`provider_sentence` for the rest). (Since 2026-09-27 both are
+  `LlmError::NotSent`, chosen by type: see aldwin-tui's Progress entry "a
+  failed turn carries its kind".)
 - **The 401 resend ignored the retry budget**, sending a fifth request.
   It is an attempt like any other.
 - **Smaller:** a test whose second half passed for the wrong reason

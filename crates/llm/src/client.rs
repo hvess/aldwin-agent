@@ -379,7 +379,11 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         );
         assert!(matches!(
             events.last(),
-            Some(Err(LlmError::Terminal { attempts: 4, .. }))
+            Some(Err(LlmError::Terminal {
+                attempts: 4,
+                status: Some(503),
+                ..
+            }))
         ));
     }
 

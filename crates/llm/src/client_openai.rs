@@ -325,7 +325,14 @@ mod tests {
         let events: Vec<_> = client.stream(request(&messages)).collect().await;
 
         let last = events.last().unwrap();
-        assert!(matches!(last, Err(LlmError::Terminal { attempts: 4, .. })));
+        assert!(matches!(
+            last,
+            Err(LlmError::Terminal {
+                attempts: 4,
+                status: None,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -421,8 +428,8 @@ mod tests {
         assert_eq!(authorizations(&server), vec!["authorization: bearer tok-1"]);
     }
 
-    /// Logged out: nothing is sent, and the error is the fix as a sentence at
-    /// zero attempts, so the failure row shows it as written.
+    /// Logged out: nothing is sent, and the error is the fix as a sentence,
+    /// so the failure row shows it as written.
     #[tokio::test]
     async fn a_disconnected_account_is_the_sentence_and_no_request() {
         let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
@@ -432,11 +439,7 @@ mod tests {
 
         let events: Vec<_> = client.stream(request(&messages)).collect().await;
 
-        let [Err(LlmError::Terminal {
-            attempts: 0,
-            message,
-        })] = &events[..]
-        else {
+        let [Err(LlmError::NotSent(message))] = &events[..] else {
             panic!("expected Aldwin's own sentence, got {events:?}");
         };
         assert_eq!(

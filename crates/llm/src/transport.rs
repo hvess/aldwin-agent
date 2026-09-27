@@ -137,10 +137,10 @@ impl Transport {
                 if let Some(account) = &self.account {
                     match account.bearer.headers().await {
                         Ok(bearer) => headers.extend(bearer),
-                        // Nothing was sent: `attempts: 0` makes the failure
-                        // row show `disconnected` as written.
+                        // Nothing was sent: the failure row shows
+                        // `disconnected` as written.
                         Err(SessionError::LoggedOut) => {
-                            Err(LlmError::Terminal { attempts: 0, message: account.disconnected.clone() })?;
+                            Err(LlmError::NotSent(account.disconnected.clone()))?;
                             continue;
                         }
                         // Retried like a network failure.
@@ -239,7 +239,7 @@ impl Transport {
                             if emitted_any {
                                 Err(LlmError::StreamInterrupted(message))?;
                             } else {
-                                Err(LlmError::Terminal { attempts: attempt, message })?;
+                                Err(LlmError::Terminal { attempts: attempt, status: None, message })?;
                             }
                             continue;
                         }

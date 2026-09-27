@@ -1,5 +1,5 @@
 use crate::{
-    event::LlmEvent,
+    event::{Failure, FailureKind, LlmEvent},
     types::{Message, ToolDefinition},
 };
 use futures::Stream;
@@ -24,14 +24,36 @@ pub enum LlmError {
     /// would splice two completions together.
     #[error("stream interrupted: {0}")]
     StreamInterrupted(String),
-    /// Retries were exhausted, or the request could not be sent at all.
+    /// Retries were exhausted, or a later attempt was refused.
     #[error("terminal error after {attempts} attempts: {message}")]
     Terminal {
-        /// Attempts made; zero when none could be.
+        /// Attempts made.
         attempts: u32,
+        /// The last attempt's error status, if it had one.
+        status: Option<u16>,
         /// The last attempt's failure.
         message: String,
     },
+    /// Nothing could be sent (no model, or ADR 0012's no account and no
+    /// key); the text is already the sentence to show.
+    #[error("{0}")]
+    NotSent(String),
+}
+
+impl From<LlmError> for Failure {
+    fn from(error: LlmError) -> Self {
+        let kind = match error {
+            LlmError::Network(_) => FailureKind::Network,
+            LlmError::Provider { status, .. } => FailureKind::Provider { status },
+            LlmError::StreamInterrupted(_) => FailureKind::Interrupted,
+            LlmError::Terminal { status, .. } => FailureKind::Exhausted { status },
+            LlmError::NotSent(_) => FailureKind::NotSent,
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
 }
 
 /// Everything one step asks of the provider, borrowed from the agent.
@@ -58,4 +80,55 @@ pub trait LlmClient: Send + Sync {
         &'a self,
         request: LlmRequest<'a>,
     ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The kind carries what the text only spelled; the text stays the
+    /// error's, except where it is already the sentence.
+    #[test]
+    fn an_llm_error_becomes_a_failure_of_its_kind() {
+        let cases = [
+            (LlmError::Network("refused".into()), FailureKind::Network),
+            (
+                LlmError::Provider {
+                    status: 429,
+                    message: "slow down".into(),
+                },
+                FailureKind::Provider { status: 429 },
+            ),
+            (
+                LlmError::StreamInterrupted("eof".into()),
+                FailureKind::Interrupted,
+            ),
+            (
+                LlmError::Terminal {
+                    attempts: 4,
+                    status: Some(529),
+                    message: "overloaded".into(),
+                },
+                FailureKind::Exhausted { status: Some(529) },
+            ),
+        ];
+        for (error, kind) in cases {
+            let text = error.to_string();
+            assert_eq!(
+                Failure::from(error),
+                Failure {
+                    kind,
+                    message: text
+                }
+            );
+        }
+        let said = "No model is configured yet. Pick one with /model.";
+        assert_eq!(
+            Failure::from(LlmError::NotSent(said.into())),
+            Failure {
+                kind: FailureKind::NotSent,
+                message: said.into(),
+            }
+        );
+    }
 }

@@ -352,7 +352,9 @@ touched.
 rerunning, find its siblings: grep the stale wording everywhere it could
 be stated, look for the same shape in the rest of the diff, and test the
 neighbouring values. A fix that closes only the line the judge named
-leaves the next round to find the one beside it. The record is keyed by tree, so a fix always needs a new
+leaves the next round to find the one beside it.
+
+The record is keyed by tree, so a fix always needs a new
 run; within it, a judge whose own inputs the fix did not touch keeps its
 pass (spec Decision 17).
 

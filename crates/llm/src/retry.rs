@@ -14,6 +14,7 @@ pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> Llm
     } else {
         LlmError::Terminal {
             attempts: attempt,
+            status,
             message,
         }
     }

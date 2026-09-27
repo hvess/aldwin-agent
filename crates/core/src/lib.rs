@@ -15,6 +15,8 @@ mod types;
 pub use agent::Agent;
 pub use client::{LlmClient, LlmError, LlmRequest};
 pub use dispatcher::{DispatchContext, PendingMap, PendingReply, ToolDispatcher};
-pub use event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason};
+pub use event::{
+    Command, Event, Failure, FailureKind, LlmEvent, LogRecord, StepOutcome, TurnEndReason,
+};
 pub use log::{ConversationLog, RecordSink};
 pub use types::*;

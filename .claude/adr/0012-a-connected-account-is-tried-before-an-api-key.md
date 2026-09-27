@@ -116,7 +116,9 @@ until it is seen.
 The failure row led with "The provider kept failing" for every terminal
 error, including the ones where no provider was asked. A zero-attempt
 error's message is now the row's sentence, which also fixes the
-unconfigured stand-in's.
+unconfigured stand-in's. (Since 2026-09-27 the zero-attempt error is
+`LlmError::NotSent`, chosen by type: aldwin-tui's Progress entry "a failed
+turn carries its kind".)
 
 **The ChatGPT case was checked and left.** Its device flow is not RFC
 8628, its inference is the Responses API, and OpenAI has moved against

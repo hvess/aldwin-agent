@@ -11,7 +11,7 @@ use ratatui::text::Line;
 
 use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
-use crate::log::{failure_sentence, plural, LogEntry, WorkItem};
+use crate::log::{plural, LogEntry, WorkItem};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
 use crate::review::{Review, ReviewOutcome as ReviewKey};
@@ -541,14 +541,8 @@ impl App {
                 }
                 self.push(LogEntry::TurnBreak);
             }
-            TurnEndReason::Error(message) => {
-                // The sentence leads; the raw error is the detail (ADR 0009
-                // §5).
-                self.push(LogEntry::Failure {
-                    message: failure_sentence(&message).into_owned(),
-                    detail: Some(message),
-                    open: false,
-                });
+            TurnEndReason::Error(failure) => {
+                self.push(LogEntry::failed_turn(failure));
                 self.push(LogEntry::TurnBreak);
             }
         }
@@ -1222,8 +1216,8 @@ impl App {
 pub(crate) mod tests {
     use super::*;
     use aldwin_core::{
-        CacheStats, ChangedFile, Changeset, StepId, StepOutcome, StopReason, ToolCall, ToolResult,
-        TurnId, UsageStats,
+        CacheStats, ChangedFile, Changeset, Failure, FailureKind, StepId, StepOutcome, StopReason,
+        ToolCall, ToolResult, TurnId, UsageStats,
     };
     use ratatui::crossterm::event::KeyEventState;
 
@@ -1904,7 +1898,7 @@ pub(crate) mod tests {
         let mut a = app();
         a.apply_event(Event::TurnEnded {
             turn_id: TurnId(1),
-            reason: TurnEndReason::Error("boom\nstack".into()),
+            reason: TurnEndReason::Error(Failure::other("boom\nstack")),
         });
         assert!(
             matches!(&a.log[0], LogEntry::Failure { message, detail: Some(d), open: false } if message == "The turn stopped before it finished. The detail says why." && d == "boom\nstack")
@@ -1915,10 +1909,26 @@ pub(crate) mod tests {
         let body = r#"provider error 400: {"error":{"message":"the request was malformed"}}"#;
         a.apply_event(Event::TurnEnded {
             turn_id: TurnId(2),
-            reason: TurnEndReason::Error(body.into()),
+            reason: TurnEndReason::Error(Failure {
+                kind: FailureKind::Provider { status: 400 },
+                message: body.into(),
+            }),
         });
         assert!(
             matches!(&a.log[2], LogEntry::Failure { message, detail: Some(d), .. } if message == "The provider turned the request down. The detail says why." && d == body)
+        );
+
+        // A turn Aldwin could not send is its own sentence, with nothing to
+        // disclose.
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(3),
+            reason: TurnEndReason::Error(Failure {
+                kind: FailureKind::NotSent,
+                message: "No model is configured yet. Pick one with /model.".into(),
+            }),
+        });
+        assert!(
+            matches!(&a.log[4], LogEntry::Failure { message, detail: None, .. } if message == "No model is configured yet. Pick one with /model.")
         );
     }
 

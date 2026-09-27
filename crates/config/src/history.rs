@@ -381,7 +381,7 @@ fn derive_title(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aldwin_core::{StepId, ToolCall, TurnEndReason, TurnId};
+    use aldwin_core::{Failure, FailureKind, StepId, ToolCall, TurnEndReason, TurnId};
     use tempfile::tempdir;
 
     fn header() -> SessionHeader {
@@ -422,6 +422,41 @@ mod tests {
             store.append(record).unwrap();
         }
         assert_eq!(load(dir.path(), &id).unwrap(), records);
+    }
+
+    #[test]
+    fn a_failed_turn_loads_back_with_its_kind() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000002-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        let ended = LogRecord::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Error(Failure {
+                kind: FailureKind::Exhausted { status: Some(529) },
+                message: "terminal error after 4 attempts: overloaded".into(),
+            }),
+        };
+        let mut records = turn(1, "hello");
+        *records.last_mut().unwrap() = ended;
+        for record in &records {
+            store.append(record).unwrap();
+        }
+        assert_eq!(load(dir.path(), &id).unwrap(), records);
+    }
+
+    /// Transcripts from before the kind was recorded hold the bare message.
+    #[test]
+    fn a_failed_turn_from_an_older_build_loads_as_a_failure_of_no_kind() {
+        let line =
+            r#"{"type":"turn_ended","turn_id":1,"reason":{"Error":"network error: refused"}}"#;
+        let record: LogRecord = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            record,
+            LogRecord::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::Error(Failure::other("network error: refused")),
+            }
+        );
     }
 
     /// Counts the `write` calls it is given, the way `O_APPEND` sees them.

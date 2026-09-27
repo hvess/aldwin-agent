@@ -12,6 +12,21 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-27
 
+**Progress (2026-09-27, a failed turn carries its kind):** Was open-tasks 1.
+`TurnEndReason::Error` holds a `Failure` — a `FailureKind` beside the
+error's text — and `LogEntry::failed_turn` chooses the row from the kind, so
+a change to the core's wording no longer drops it to the generic sentence.
+"Nothing was sent" is `LlmError::NotSent`, no longer `Terminal` at zero
+attempts. Two visible changes: `LlmError::Terminal` carries the last
+attempt's status, so retries that end on one say what that status says
+instead of "The provider kept failing"; and a turn Aldwin could not send has
+no detail, since the detail was its own sentence with the error's prefix.
+Transcripts written before hold the bare text and load as
+`FailureKind::Other`, so a resumed not-sent failure from then reads as the
+generic sentence with its text as the detail. The reader is backward
+compatible only: an older build drops a turn that failed under this one, so
+`HISTORY_VERSION` stays 1.
+
 **Progress (2026-09-27, three changes the review loop's judges surfaced):**
 
 - **A list the developer opened has no status word.** `/resume`, `/model`
@@ -142,7 +157,8 @@ ethos, quality — found the rest. What changed, each against its source:
   error's kind and says what happened and what to do next ("Check your
   connection, then send again."), the error itself one disclosure below
   (HIG "Writing", ADR 0009 §5). The kind is read from the error's text,
-  not a type — open-tasks 1.
+  not a type — open-tasks 1. (A type since 2026-09-27: see the Progress
+  entry "a failed turn carries its kind".)
 - **A turn is marked where it opens.** Six places scanned back to the last
   `UserMessage`, and an answer through "Chat about this" is one, mid-turn:
   a plan updated after it split in two. `App::this_turn` reads from the

@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use crate::{
     client::{LlmClient, LlmRequest},
     dispatcher::{DispatchContext, PendingMap, PendingReply, ToolDispatcher},
-    event::{Command, Event, LlmEvent, LogRecord, StepOutcome, TurnEndReason},
+    event::{Command, Event, Failure, LlmEvent, LogRecord, StepOutcome, TurnEndReason},
     log::{ConversationLog, RecordSink},
     prompt,
     types::*,
@@ -308,7 +308,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     return (reason, None);
                 }
                 StepResult::Cancelled => return (TurnEndReason::Cancelled, None),
-                StepResult::Error(msg) => return (TurnEndReason::Error(msg), None),
+                StepResult::Error(failure) => return (TurnEndReason::Error(failure), None),
             }
         }
     }
@@ -333,7 +333,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                 return Err(TurnEndReason::Cancelled);
                             }
                         }
-                        None => return Err(TurnEndReason::Error("command channel closed".into())),
+                        None => return Err(TurnEndReason::Error(Failure::other("command channel closed"))),
                     }
                 }
 
@@ -375,14 +375,14 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     cmd = commands.recv() => {
                         match cmd {
                             Some(cmd) => if self.on_mid_turn_command(cmd, events).await { break StepTerminal::Cancelled },
-                            None => break StepTerminal::Error("command channel closed".into()),
+                            None => break StepTerminal::Error(Failure::other("command channel closed")),
                         }
                     }
 
                     item = stream.next() => {
                         match item {
-                            None => break StepTerminal::Error("stream closed without StepEnded".into()),
-                            Some(Err(e)) => break StepTerminal::Error(e.to_string()),
+                            None => break StepTerminal::Error(Failure::other("stream closed without StepEnded")),
+                            Some(Err(e)) => break StepTerminal::Error(e.into()),
                             Some(Ok(ev)) => {
                                 match ev {
                                     LlmEvent::TextDelta { text } => {
@@ -453,7 +453,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
         let outcome = match stream_terminal {
             StepTerminal::Cancelled => return StepResult::Cancelled,
-            StepTerminal::Error(msg) => return StepResult::Error(msg),
+            StepTerminal::Error(failure) => return StepResult::Error(failure),
             StepTerminal::Ok(outcome) => outcome,
         };
 
@@ -606,7 +606,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                             if !self.on_mid_turn_command(cmd, events).await { continue; }
                             TurnEndReason::Cancelled
                         }
-                        None => TurnEndReason::Error("command channel closed".into()),
+                        None => TurnEndReason::Error(Failure::other("command channel closed")),
                     };
                     return self.abort_dispatch(turn_id, step_id, &calls, events, reason).await;
                 }
@@ -739,7 +739,7 @@ fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
 enum StepTerminal {
     Ok(StepOutcome),
     Cancelled,
-    Error(String),
+    Error(Failure),
 }
 
 enum StepResult {
@@ -754,7 +754,7 @@ enum StepResult {
         reason: TurnEndReason,
     },
     Cancelled,
-    Error(String),
+    Error(Failure),
 }
 
 enum DispatchOutcome {

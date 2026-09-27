@@ -327,7 +327,7 @@ moves any scene's snapshot has frames for stage 8 to judge.
 
 ## Progress (2026-09-27, the author checks first)
 
-A small change — a failed turn's typed kind, open-tasks 1 — used all five
+A small change — a failed turn's typed kind, which closed open-tasks 1 — used all five
 iterations, and stages 1–5 passed in every one. Each round's findings were
 things the skills already state and the author had not checked: a public
 function without an example, a magic `attempts: 0` beside a new field, one

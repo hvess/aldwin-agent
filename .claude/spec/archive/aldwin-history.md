@@ -8,7 +8,7 @@ past session can be listed and resumed from inside a running one.
 and its picker, and what a resumed session restores. Excludes the LLM wire
 format, the permission engine, retention, and any launch-time entry point.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-27
 
 ## The stale line
 
@@ -247,6 +247,12 @@ All done, 2026-09-20.
   and if it needs new ones that is a signal Step 5's mapping is wrong.
 
 ## Progress
+
+- **2026-09-27 — a failed turn's reason gained a kind.** `TurnEnded`'s
+  `Error` is `{kind, message}` where it was the bare message (aldwin-tui's
+  Progress entry "a failed turn carries its kind"). The reader takes both
+  shapes, the old one as `FailureKind::Other`, so `HISTORY_VERSION` stays
+  1; an older build drops a turn that failed under a newer one.
 
 - **2026-09-20 — built, all nine steps.** 632 workspace tests pass and clippy
   is clean. Four things are worth reading before changing any of it.

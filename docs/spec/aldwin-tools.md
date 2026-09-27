@@ -421,6 +421,7 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 ## Pitfalls
 
 - LSP integration may outgrow this crate — server lifecycle, JSON-RPC client, capability negotiation, and per-language config (rust-analyzer, sourcekit-lsp, kotlin-lsp) are real scope. Split into aldwin-lsp if it eats more than ~25% of this crate's surface.
+- A `run` test that pins a coreutil's exit code or output shape. GNU (Linux) and BSD (macOS) differ — `ls` on a missing entry exits 2 on one and 1 on the other, which CI's macOS job found on 2026-09-27. A test wants a code or text the shell itself sets (`exit 3`, `echo … >&2`), not a program's.
 - Edit-shape marking for MCP tools drifting back into upfront config (e.g. a UI flow that asks at server registration rather than at first call) — defeats the encounter-driven design and re-creates the wizard the parent spec rejected.
 - MCP edit-shape arg mapping going stale if a server changes its tool schema between sessions — detect schema-hash mismatch on the marked tool and re-prompt, do not silently reuse the old mapping.
 - Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass.

@@ -450,18 +450,19 @@ mod tests {
         }
     }
 
-    /// Regression: a failed command came back `is_error: false`.
+    /// Regression: a failed command came back `is_error: false`. The exit
+    /// code is the shell's own, not a program's: GNU and BSD `ls` differ.
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error_and_keeps_the_whole_output() {
         let (_d, tool) = tool();
-        let err = call(&tool, json!({"command": "ls no-such-entry"}))
+        let err = call(&tool, json!({"command": "echo nope >&2; exit 3"}))
             .await
             .expect_err("a command that exits non-zero has not succeeded");
         let ToolError::CommandFailed { output } = &err else {
             panic!("expected CommandFailed, got {err:?}");
         };
         assert!(
-            output.contains("exit: 2"),
+            output.contains("exit: 3"),
             "the exit code survives: {output}"
         );
         assert!(output.contains("stderr:"), "and so does stderr: {output}");

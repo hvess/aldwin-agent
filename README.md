@@ -158,9 +158,12 @@ sends your comments back to the agent, which addresses them and stages the
 edits again. `⎋` asks before discarding. Nothing is written until you
 approve, under every setting, with no way to switch it off.
 
-The one gap, stated plainly: this covers Aldwin's own `edit` tool. An MCP
-server's tools are its own code, and what one of them writes is outside the
-review.
+An MCP server's tools are its own code, so a server gets no write access to
+your workspace: a tool that tries is refused by the sandbox, and the agent
+makes the change with `edit`, which you review. Two cases escape it: a
+system that cannot confine processes, which you are told about when Aldwin
+starts, and a workspace kept under `/tmp` or `~/.cache`, which every
+process may write.
 
 **When the agent needs you**, it asks one question with a short list —
 always a yes, a no, and *Chat about this*. `↑↓` and `↩`, or press the number.

@@ -433,7 +433,7 @@ stopping at "the code is written".
   wrote outside the sandbox: passes 6, 7 and 10 each found a new way a path
   check in it could be fooled, so after the tenth the developer took it out
   of the change, to come back with the put-back confined by the kernel
-  (open-tasks 2). The saved review's `›` and frame D's step note were
+  (open-tasks 2, since closed by ADR 0014 without a put-back). The saved review's `›` and frame D's step note were
   decided against on the way (`baseline.json`,
   `saved-review-is-not-reopened` and `a-plan-step-has-no-note`). The cap stays five:
   going past it is the developer's call each time, never the loop's.

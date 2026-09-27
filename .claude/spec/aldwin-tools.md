@@ -2,10 +2,21 @@
 
 ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every spawned process runs in, MCP bridge via rmcp.
 
-**Status:** active — one known gap: an MCP tool's writes bypass the review (open-tasks 2).
+**Status:** active.
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, staging, the sandbox, MCP bridge. Excludes agent loop, TUI, config persistence.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-27
+
+**Progress (2026-09-27, ADR 0014 — an MCP server cannot write the
+workspace):** Was open-tasks 2. `McpBridge` starts each server through
+`sandbox::command` with no roots, so where the sandbox confines it writes
+only the incidental paths (the ADR's Limits name the rest);
+`McpBridge::new` no longer takes a `Workspace`. The review still opens
+before an MCP call, since the server reads the tree.
+`a_server_cannot_write_the_workspace` has the fake server write into a
+scratch directory outside the incidental paths and sees the kernel refuse
+it. The record-put-back-stage answer tried first is recorded in the ADR as
+rejected.
 
 **Progress (2026-09-27):**
 
@@ -41,7 +52,8 @@ below build on.
   `~/.cache`); read anything; network open. `sandbox::command` builds the
   confined `tokio::process::Command` for `run`, the rust-analyzer behind
   `explain` (`LspClient::spawn` takes the `Workspace`), and every MCP stdio
-  server (`McpBridge::new` takes it too). Landlock handles every write
+  server (`McpBridge::new` took it too, until ADR 0014: see the Progress
+  entry above). Landlock handles every write
   right of the kernel's ABI and no read right; Seatbelt denies
   `file-write*` and allows the roots back. `sandbox::unavailable` is the
   one public item: cli asks it once at startup and says so when nothing

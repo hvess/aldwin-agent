@@ -1,6 +1,7 @@
 # 0009 — The review is the only gate
 
-**Status:** accepted, 2026-09-23. Superseded in part by 0011 (§1–§3).
+**Status:** accepted, 2026-09-23. Superseded in part by 0011 (§1–§3),
+and by 0014 (§4's one exception: an MCP server's own writes).
 **Supersedes:** ADR 0004 §1–§4, §6 and §8; ADR 0003 in full; the first-run
 Decision in `aldwin.md`. **Keeps:** ADR 0004 §5 and §7 (reach and the deny
 lock), ADR 0007 in full, ADR 0002, ADR 0005, ADR 0006, ADR 0008.

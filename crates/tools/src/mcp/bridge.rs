@@ -7,7 +7,6 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 
-use crate::paths::Workspace;
 use crate::sandbox;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,11 +31,12 @@ pub enum McpError {
 /// Hosts MCP server processes from a config snapshot. Each is spawned on its
 /// first listing or call and kept for the bridge's lifetime.
 ///
-/// Every server runs in the sandbox over `workspace` (ADR 0011): a cloned
-/// project's `mcp.yaml` is untrusted.
+/// Every server runs in the sandbox with no workspace root (ADR 0014): it
+/// reads the tree, and where the sandbox confines it, cannot write it (the
+/// ADR's Limits name where that does not hold). A cloned project's
+/// `mcp.yaml` is untrusted.
 pub struct McpBridge {
     servers: HashMap<String, McpServer>,
-    workspace: Workspace,
     running: tokio::sync::Mutex<HashMap<String, Arc<RunningService<RoleClient, ()>>>>,
 }
 
@@ -45,17 +45,15 @@ impl fmt::Debug for McpBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("McpBridge")
             .field("servers", &self.servers.keys().collect::<Vec<_>>())
-            .field("workspace", &self.workspace)
             .finish_non_exhaustive()
     }
 }
 
 impl McpBridge {
-    /// A bridge over `servers`, confined to `workspace`; spawns nothing yet.
-    pub fn new(servers: Vec<McpServer>, workspace: Workspace) -> Self {
+    /// A bridge over `servers`; spawns nothing yet.
+    pub fn new(servers: Vec<McpServer>) -> Self {
         Self {
             servers: servers.into_iter().map(|s| (s.name.clone(), s)).collect(),
-            workspace,
             running: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -95,8 +93,8 @@ impl McpBridge {
             command: command.clone(),
             source,
         };
-        let mut cmd =
-            sandbox::command(command, args, &self.workspace.roots()).map_err(spawn_error)?;
+        // No roots: only the incidental paths are writable (ADR 0014).
+        let mut cmd = sandbox::command(command, args, &[]).map_err(spawn_error)?;
         cmd.envs(&entry.env);
         let transport = TokioChildProcess::new(cmd).map_err(spawn_error)?;
         let service = ().serve(transport).await.map_err(|e| McpError::Rpc {
@@ -158,6 +156,7 @@ impl McpBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{confinement_or_explicit_skip, scratch_dir};
     use aldwin_config::McpTransport;
     use serde_json::json;
 
@@ -178,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn lists_tools_from_a_real_spawned_server() {
-        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
+        let bridge = McpBridge::new(vec![fake_server()]);
         let tools = bridge.list_tools("fake").await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
@@ -186,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn calls_a_tool_and_gets_its_text_content_back() {
-        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
+        let bridge = McpBridge::new(vec![fake_server()]);
         let mut args = serde_json::Map::new();
         args.insert("text".into(), json!("hello from the test"));
         let (content, is_error) = bridge.call_tool("fake", "echo", args).await.unwrap();
@@ -196,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn calling_an_unknown_tool_name_surfaces_is_error() {
-        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
+        let bridge = McpBridge::new(vec![fake_server()]);
         let (content, is_error) = bridge
             .call_tool("fake", "does-not-exist", serde_json::Map::new())
             .await
@@ -205,32 +204,47 @@ mod tests {
         assert!(content.contains("no such tool"));
     }
 
+    /// ADR 0014: a confined server's write into the workspace is refused.
+    #[tokio::test]
+    async fn a_server_cannot_write_the_workspace() {
+        if !confinement_or_explicit_skip() {
+            return;
+        }
+        let workspace = scratch_dir();
+        let target = workspace.path().join("written-by-the-server");
+        let bridge = McpBridge::new(vec![fake_server()]);
+        let mut args = serde_json::Map::new();
+        args.insert("path".into(), json!(target.to_str().unwrap()));
+        args.insert("text".into(), json!("unreviewed"));
+
+        let (content, is_error) = bridge.call_tool("fake", "write", args).await.unwrap();
+        assert!(is_error, "the write landed: {content}");
+        assert!(!target.exists());
+    }
+
     #[tokio::test]
     async fn unconfigured_server_name_is_a_structured_error() {
-        let bridge = McpBridge::new(vec![], Workspace::new("."));
+        let bridge = McpBridge::new(vec![]);
         let err = bridge.list_tools("nope").await.unwrap_err();
         assert!(matches!(err, McpError::UnknownServer { .. }));
     }
 
     #[tokio::test]
     async fn http_transport_is_not_yet_supported() {
-        let bridge = McpBridge::new(
-            vec![McpServer {
-                name: "web".into(),
-                transport: McpTransport::Http {
-                    url: "http://localhost:1/".into(),
-                },
-                env: Default::default(),
-            }],
-            Workspace::new("."),
-        );
+        let bridge = McpBridge::new(vec![McpServer {
+            name: "web".into(),
+            transport: McpTransport::Http {
+                url: "http://localhost:1/".into(),
+            },
+            env: Default::default(),
+        }]);
         let err = bridge.list_tools("web").await.unwrap_err();
         assert!(matches!(err, McpError::UnsupportedTransport { .. }));
     }
 
     #[tokio::test]
     async fn a_server_that_died_is_spawned_again_on_the_next_call() {
-        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
+        let bridge = McpBridge::new(vec![fake_server()]);
         assert!(
             bridge
                 .call_tool("fake", "die", serde_json::Map::new())
@@ -255,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_second_call_reuses_the_already_spawned_server() {
-        let bridge = McpBridge::new(vec![fake_server()], Workspace::new("."));
+        let bridge = McpBridge::new(vec![fake_server()]);
         bridge.list_tools("fake").await.unwrap();
         {
             let running = bridge.running.lock().await;

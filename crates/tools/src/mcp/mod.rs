@@ -100,10 +100,7 @@ mod tests {
 
     #[tokio::test]
     async fn registers_under_the_bare_name_when_there_is_no_collision() {
-        let bridge = Arc::new(McpBridge::new(
-            vec![fake_server("fake")],
-            Workspace::new("."),
-        ));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
         let mut registry = Registry::new();
         assert!(register_mcp_tools(bridge, &mut registry).await.is_empty());
         assert!(registry.get("echo").is_some());
@@ -111,10 +108,7 @@ mod tests {
 
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
-        let bridge = Arc::new(McpBridge::new(
-            vec![fake_server("fake")],
-            Workspace::new("."),
-        ));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
         let mut registry = crate::builtin_registry(
             Workspace::new("."),
             std::sync::Arc::new(crate::Staging::new(Workspace::new("."))),
@@ -165,10 +159,7 @@ mod tests {
             },
             env: Default::default(),
         };
-        let bridge = Arc::new(McpBridge::new(
-            vec![broken, fake_server("fake")],
-            Workspace::new("."),
-        ));
+        let bridge = Arc::new(McpBridge::new(vec![broken, fake_server("fake")]));
         let mut registry = Registry::new();
 
         let failures = register_mcp_tools(bridge, &mut registry).await;

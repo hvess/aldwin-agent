@@ -1,6 +1,7 @@
 //! The sandbox every process Aldwin starts runs in (ADR 0011): `run`'s
 //! shell, the language server, each MCP stdio server. Write only inside the
-//! workspace roots and the incidental paths; reads and the network are open.
+//! roots given — the workspace's, or none for an MCP server (ADR 0014) —
+//! and the incidental paths; reads and the network are open.
 //!
 //! Linux: Landlock (`linux.rs`), inherited by every descendant. macOS:
 //! Seatbelt via `sandbox-exec` (`macos.rs`), by rewriting the command.

@@ -9,8 +9,8 @@ use crate::registry::{Tool, ToolDescriptor};
 use aldwin_core::DispatchContext;
 
 /// One remote MCP tool, proxied through `McpBridge`. It observes disk, so
-/// the review opens before it as before `run`. Its own writes bypass the
-/// review (open-tasks 2); the sandbox keeps them inside the workspace.
+/// the review opens before it as before `run`. Its server gets no write
+/// access to the workspace (ADR 0014, within its Limits).
 pub struct McpTool {
     descriptor: ToolDescriptor,
     bridge: Arc<McpBridge>,
@@ -81,7 +81,6 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
     use aldwin_config::{McpServer, McpTransport};
     use serde_json::json;
 
@@ -112,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_proxies_through_the_bridge_and_returns_text() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server()], Workspace::new(".")));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
         let tool = McpTool::new(
             bridge,
             "fake".into(),
@@ -127,7 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_error_result_becomes_a_structured_tool_error() {
-        let bridge = Arc::new(McpBridge::new(vec![fake_server()], Workspace::new(".")));
+        let bridge = Arc::new(McpBridge::new(vec![fake_server()]));
         // A remote name the server lacks forces an `isError` result.
         let mut broken = remote_echo_tool();
         broken.name = "missing".into();
@@ -140,7 +139,7 @@ mod tests {
 
     #[test]
     fn an_mcp_tool_observes_the_disk() {
-        let bridge = Arc::new(McpBridge::new(vec![], Workspace::new(".")));
+        let bridge = Arc::new(McpBridge::new(vec![]));
         let tool = McpTool::new(
             bridge,
             "fake".into(),

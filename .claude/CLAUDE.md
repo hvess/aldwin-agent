@@ -156,10 +156,9 @@ a decision they cover.
   and runs need no grant and never ask. An edit is staged, every edit of a
   turn is one changeset, and the review opens at the first moment the
   changeset would be observed on disk — before a `run`, or at the turn's
-  end. Nothing Aldwin writes lands before an approve; an MCP server's own
-  writes are the one exception (open-tasks 2). There is no first run. `plan`
-  and `ask` carry the plan and a question to the screen. A failure is a
-  sentence.
+  end. Nothing Aldwin writes lands before an approve. There is no first
+  run. `plan` and `ask` carry the plan and a question to the screen. A
+  failure is a sentence.
 - **0010 — Review lines are selected with the mouse.** The diff has no line
   cursor; a click selects a line, a drag selects a run, and `Shift ↑↓`
   selects from the keyboard. The mouse is captured only while a review is
@@ -171,6 +170,7 @@ a decision they cover.
   incidental list; reads and the network are open, the network by stated
   non-goal. Where the system cannot confine, the developer is told once at
   startup. `allow:`, `default:` and `deny:` still parse, and are reported.
+  *An MCP server gets no workspace root: 0014.*
 - **0012 — A connected account is tried before an API key.** `/connect`
   connects an account (xai today) through the device-code flow; its tokens
   live in the global-only `connections.yaml`. `provider.yaml` is unchanged:
@@ -186,12 +186,19 @@ a decision they cover.
   after `commit`; git's own duplicate check keeps it to one. Merges,
   cherry-picks, rebases, `commit-tree`, aliases and an absolute-path git get
   no trailer. A shim that could not be installed is said once at startup.
+- **0014 — An MCP server cannot write the workspace.** Every MCP stdio
+  server starts in the sandbox with no workspace root, so it reads the tree
+  and writes only the incidental paths; a write into the workspace is the
+  kernel's refusal, and the model uses `edit` instead. It closes ADR 0009
+  §4's one exception wherever the sandbox confines; where nothing can be
+  confined 0011 §3 holds, and a workspace under an incidental path stays
+  writable.
 
 ## Key Constraints (non-negotiable)
 
-- Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole. What an MCP tool itself writes is the one exception, not yet closed (open-tasks 2).
+- Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole. An MCP server is given no write access to the workspace (ADR 0014; its Limits say where that cannot hold).
 - Edit is never allowlistable: there is nothing to allowlist it into. The review is structural, not a setting.
 - **The workspace is the only boundary** (ADR 0007, ADR 0011). It is `roots[0]` plus whatever the project `permissions.yaml` declares. Every tool refuses a path outside it, symlinks included, and an approved write is resolved again before it lands.
-- Every process Aldwin starts — `run`'s shell, the language server, an MCP server — can write only inside the workspace and the incidental paths, enforced by the kernel (Landlock, Seatbelt), not trusted. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0011 §3).
+- Every process Aldwin starts — `run`'s shell, the language server, an MCP server — can write only inside the workspace and the incidental paths (an MCP server only the incidental paths, ADR 0014), enforced by the kernel (Landlock, Seatbelt), not trusted. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0011 §3).
 - Discussion-first: resting state is conversation. Action follows the developer's **intent**, not their grammatical mood — a stated constraint is an instruction, an agreed plan is carried out whole (ADR 0008). The structural protection is the review, never the phrasing rule.
 - No Anthropic wire types past `LlmClient`: audit at the trait boundary, not after.

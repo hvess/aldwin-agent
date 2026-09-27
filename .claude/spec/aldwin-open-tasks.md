@@ -10,7 +10,8 @@ the expectation that what is still true surfaces again through the review
 loop and is entered then. The review loop then surfaced six gaps the specs still stated; the
 developer settled each the same day — `explain` over staged edits, the
 scenes stage 8 could not judge and Aldwin's ungated commits were fixed; an
-MCP tool's writes outside the review became its own change (entry 2); undo was decided against (ADR 0009);
+MCP tool's writes outside the review became its own change (entry 2,
+since closed by ADR 0014); undo was decided against (ADR 0009);
 the note that the macOS sandbox had never run on a Mac was dropped, since
 the developer runs it there. What is still true after that is entered here
 afresh.
@@ -31,22 +32,6 @@ contradicts) and the entry says so before it goes.
    one is not invented locally. The developer's call, 2026-09-27: draw it
    once the design specifies how — a disclosure, say, as `Read 1 file  ›`
    is.
-
-## Tools
-
-2. **An MCP tool's writes bypass the review.** An MCP call runs in its own
-   process over the real tree. The dispatcher opens the review before it
-   (ADR 0009 §4), but what the server writes is never staged: it lands on
-   disk unreviewed, inside the workspace the sandbox allows (ADR 0011),
-   which bounds the gap without closing it. A first answer — record the
-   workspace around each call, put back what changed, stage it — was built
-   on 2026-09-27 and taken out of that change before it landed: its
-   put-back is Aldwin's own write, outside the sandbox, and each review
-   pass found another way a path check in it could be fooled (a swapped
-   link, an unreadable file, a name that is not UTF-8). The developer's
-   call, 2026-09-27: its own change, with the put-back run inside the
-   sandbox so the kernel refuses a write outside the workspace rather than
-   a check in Aldwin.
 
 ## Review
 

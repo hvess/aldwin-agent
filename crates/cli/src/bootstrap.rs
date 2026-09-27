@@ -234,10 +234,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     // Every edit of a turn waits here for the review (ADR 0009 §4).
     let staging = Arc::new(Staging::new(workspace.clone()));
     let mut registry = aldwin_tools::builtin_registry(workspace.clone(), staging.clone());
-    let mcp_bridge = Arc::new(McpBridge::new(
-        merged_mcp_servers(&config),
-        workspace.clone(),
-    ));
+    let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
     // Best effort per server and tool: a broken server must not stop the
     // session or other servers. Each failure is said.
     for failure in register_mcp_tools(mcp_bridge, &mut registry).await {

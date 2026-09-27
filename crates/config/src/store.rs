@@ -855,11 +855,10 @@ mod tests {
     #[test]
     fn roots_are_read_from_a_permissions_file_and_a_misspelling_is_an_error() {
         let parsed: PermissionsConfig =
-            serde_yaml_ng::from_str("version: 2\nroots:\n- ../proton-libs\n- /abs/other\n")
-                .unwrap();
+            serde_yaml_ng::from_str("version: 2\nroots:\n- ../shared-lib\n- /abs/other\n").unwrap();
         assert_eq!(
             parsed.roots,
-            vec![PathBuf::from("../proton-libs"), PathBuf::from("/abs/other")]
+            vec![PathBuf::from("../shared-lib"), PathBuf::from("/abs/other")]
         );
 
         let none: PermissionsConfig = serde_yaml_ng::from_str("version: 2\n").unwrap();

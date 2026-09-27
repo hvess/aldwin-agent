@@ -14,7 +14,7 @@ pub const PERMISSIONS: &str = "\
 # (<project>/.aldwin/permissions.yaml) declares:
 #
 #   roots:
-#     - ../proton-libs
+#     - ../shared-lib
 #     - /Users/you/Documents/other-checkout
 #
 # A relative root is read from the project directory. A global roots list

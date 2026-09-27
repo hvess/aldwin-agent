@@ -85,6 +85,12 @@ pub(super) fn elide(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_string();
     }
+    cut(text, max)
+}
+
+/// `text`'s first `max - 1` cells and a `…`, even when it would fit;
+/// `max == 0` yields an empty string.
+fn cut(text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
     }
@@ -121,12 +127,8 @@ pub(super) fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<
             out.push(span);
             continue;
         }
-        let keep = elide(&span.content, max - used);
-        if !keep.is_empty() {
-            out.push(Span::styled(keep, span.style));
-        } else {
-            out.push(Span::styled("…", span.style));
-        }
+        // Later spans are dropped, so the `…` is due even when this one fits.
+        out.push(Span::styled(cut(&span.content, max - used), span.style));
         return out;
     }
     out

@@ -42,7 +42,7 @@ makes sense here."*
 a `├─┼─┤` rule, closed top and bottom.
 
 One bounded exception inside the exception: a column bottoms out at one cell, so
-`n` columns need `3n + 1`. Below that — 15-odd columns on a narrow terminal —
+`n` columns need `4n + 1`. Below that — 15-odd columns on a narrow terminal —
 rows are clipped to the column with the system's `…` and the right edge is lost.
 Chosen over drawing a `┐` where the table does not end, and over silently
 dropping the columns that do not fit: a visible `…` is the true statement.

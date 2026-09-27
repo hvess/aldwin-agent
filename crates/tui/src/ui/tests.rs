@@ -13,7 +13,8 @@ use ratatui::crossterm::event::{
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 
-use super::grid::{BODY_X, COMMAND_COL, GUTTER_LN, MARGIN_X, MARK_COL, NUMBER_COL, SIGN_COL};
+use super::grid::{Ctx, BODY_X, COMMAND_COL, GUTTER_LN, MARGIN_X, MARK_COL, NUMBER_COL, SIGN_COL};
+use super::markdown::render_prose;
 use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::LogEntry;
@@ -1079,4 +1080,21 @@ fn the_comment_field_names_escape_as_the_footers_do() {
         Some((MARGIN_X as u16 + 1, draft)),
         "the caret after the edge"
     );
+}
+
+/// Regression: a table cut on a column's edge dropped the rest with no `…`.
+#[test]
+fn a_table_too_narrow_for_its_columns_ends_every_row_in_an_ellipsis() {
+    let table = "| alpha | beta | gamma |\n|---|---|---|\n| a | b | c |";
+    // Three columns need 4 × 3 + 1 cells; below that, rows are clipped.
+    for width in 5..13 {
+        let ctx = Ctx::new(Theme::Dark.palette(), width);
+        for line in render_prose(table, ctx) {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if text.trim().is_empty() {
+                continue;
+            }
+            assert!(text.ends_with('…'), "width {width}: {text:?}");
+        }
+    }
 }

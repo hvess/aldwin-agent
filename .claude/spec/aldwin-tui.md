@@ -3762,11 +3762,11 @@ System and Decision-records sections rather than left as a silent divergence.
 
 A markdown table is now `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, one cell of padding either
 side of each cell's content, header above a `├─┼─┤` rule, closed top and
-bottom — except below `3n + 1` cells for `n` columns, where a column can shrink
+bottom — except below `4n + 1` cells for `n` columns, where a column can shrink
 no further and the rows are clipped with `…`, losing the right edge. That is
 chosen over drawing an edge where the table does not end and over dropping
 columns silently; pinned by
-`a_table_with_more_columns_than_cells_clips_rather_than_lying`. Rules in `quiet` — the tier below `dim`, so the grid carries the
+`a_table_too_narrow_for_its_columns_ends_every_row_in_an_ellipsis`. Rules in `quiet` — the tier below `dim`, so the grid carries the
 structure without competing with the cells; header stays `label`, cells stay
 `body`.
 

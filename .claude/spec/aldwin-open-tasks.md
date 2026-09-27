@@ -58,14 +58,3 @@ contradicts) and the entry says so before it goes.
    call, 2026-09-27: its own change, with the put-back run inside the
    sandbox so the kernel refuses a write outside the workspace rather than
    a check in Aldwin.
-
-## Workspace
-
-5. **The comment rework found code that disagrees with itself.** Reading
-   every comment against its code (`aldwin-review.md`, Progress
-   2026-09-27, comments) turned up these; each is its own change, with a
-   test.
-   - `crates/tui/src/ui/grid.rs` `truncate_spans`: a cut that lands on a
-     span boundary adds no `…`, so a table narrower than `4n + 1` cells
-     (`markdown.rs` `render_table`) drops its right columns silently, its
-     rows ending in a space. The narrow-table rule has no test.

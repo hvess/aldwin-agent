@@ -59,10 +59,19 @@ Delete or do not write:
   "Always", "Only". No "we", no "you", no hedging.
 - **Use exact anchors:** identifiers, paths, `ADR 0013`,
   `aldwin-review.md Decision 15`, test names. An LLM can search for these.
+  **Every anchor must resolve:** grep the test name, path or section before
+  writing it; "the spec" is not an anchor, `.claude/spec/aldwin-login.md` is.
+- **Claim no more than holds.** "Every", "never", "all", "unreachable" and
+  "only" must be true across the whole scope; otherwise name the scope
+  ("the plain spellings", "except a damaged transcript").
 - **Put it where the fact applies**, on the line or item it is about, not
   in a summary at the top of the file.
 - **Keep it true.** Changing code means changing or deleting its comment in
   the same edit. A stale comment misleads an LLM more than a missing one.
+  After changing a function, re-read: its item doc; its `# Errors` and
+  `# Panics` (a condition added, removed or still reachable); the module
+  doc; docs on callers that describe it; its tests' names and docs; and any
+  comment calling a path "unreachable" or a case "impossible".
 
 ## Doc comments (`///`, `//!`)
 

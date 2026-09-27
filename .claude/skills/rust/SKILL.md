@@ -143,6 +143,10 @@ pub async fn run() -> Result<(), crate::error::StartupError> {
 }
 ```
 
+The same holds in test bodies: a test module imports what its tests use
+(`use super::grid::{Ctx, ..}`) rather than spelling `super::grid::Ctx`
+inline, and a test does not re-import what its module already brings in.
+
 ## Project Philosophy
 
 ### Avoid Overengineering

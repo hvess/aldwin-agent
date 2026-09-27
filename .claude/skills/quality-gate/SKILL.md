@@ -132,12 +132,35 @@ handles every case.
   `tempfile` for the filesystem.
 - A bug fix lands with the test that would have caught it.
 
+### Fixing a bug
+
+1. **Fail first.** Run the new test against the old code — revert the fix,
+   or copy the old function back — and see it fail for the reported reason.
+   A test that passes either way pins nothing.
+2. **Test the siblings.** Name the other ways the same input can arrive —
+   another platform or launcher (`sandbox-exec` starts, then fails), a
+   malformed value (a `.git` file without `gitdir:`), the all-empty case —
+   and cover each one the fix treats differently.
+3. **Keep what the old code did.** Read what the code being removed or
+   simplified did besides the bug — an error it reported, a fallback, a
+   note it cleared — and keep it, or say in the commit why it goes.
+4. **Change the fact everywhere.** Grep the old behaviour's wording across
+   `crates/` and `.claude/`: the system prompt, tool descriptions, doc
+   comments, specs and ADRs that state it (records skill).
+
+## 9. Records
+
+The ledger, the specs, the ADRs and `baseline.json` change in the same
+commit as the code they describe, and a decision against fixing something
+is the developer's call. `.claude/skills/records/SKILL.md` says how.
+
 ## Running the gate
 
 1. While designing: check the plan against sections 1, 2 and 5 before
    writing code. Structural mistakes are cheapest here.
 2. Before calling the change done: walk every section against the diff
-   (`git diff`), then run the rust skill's required checks.
+   (`git diff`) — for a fix, the four steps of §8's *Fixing a bug*, and the
+   records skill's checks — then run the rust skill's required checks.
 3. Before committing: run `/review`. Its stage 6 judges the diff against
    this gate, and an agent's commit is refused without a passing review.
 

@@ -7,8 +7,11 @@
 //! the staged tree is what a commit records and what a pass is keyed by.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
@@ -18,7 +21,26 @@ pub(crate) const SNAPSHOT: &str = "crates/tui/tests/snapshots/render.snap";
 
 /// `git` in the workspace, failing with git's own message.
 fn git(root: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").current_dir(root).args(args).output()?;
+    git_fed(root, args, None)
+}
+
+/// [`git`], with `input` on its stdin when there is some.
+fn git_fed(root: &Path, args: &[&str], input: Option<&str>) -> Result<String> {
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin.write_all(text.as_bytes())?;
+    }
+    let out = child.wait_with_output()?;
     if !out.status.success() {
         return Err(Error::Git {
             command: args.join(" "),
@@ -148,6 +170,48 @@ pub fn staged_paths(root: &Path) -> Result<Vec<String>> {
 /// ```
 pub fn staged_diff(root: &Path) -> Result<String> {
     git(root, &["diff", "--cached"])
+}
+
+/// Git's hash of `HEAD` and part of a staged diff: two runs with the same
+/// fingerprint made the same changes there on the same commit, so every
+/// byte in that part of the tree is the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fingerprint(String);
+
+impl Fingerprint {
+    /// A hash as git gave it.
+    pub(crate) fn new(hash: impl Into<String>) -> Self {
+        Fingerprint(hash.into())
+    }
+}
+
+/// The [`Fingerprint`] of `HEAD` and the staged diff limited to `pathspecs` —
+/// the whole diff when there are none. `HEAD` because a diff names only the
+/// files it touches: a commit that changed a judge's rules elsewhere would
+/// leave the diff's text, and a fingerprint of it alone, as it was.
+///
+/// # Errors
+///
+/// When `git diff` or `git hash-object` cannot run.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// let rust = aldwin_review::git::fingerprint(Path::new("."), &["*.rs"])?;
+/// println!("the Rust this change stages hashes to {rust:?}");
+/// # Ok::<(), aldwin_review::Error>(())
+/// ```
+pub fn fingerprint(root: &Path, pathspecs: &[&str]) -> Result<Fingerprint> {
+    let args: Vec<&str> = ["diff", "--cached", "--"]
+        .into_iter()
+        .chain(pathspecs.iter().copied())
+        .collect();
+    // Empty before the first commit, which is no reason to stop.
+    let head = head(root).unwrap_or_default();
+    let diff = format!("{head}{}", git(root, &args)?);
+    let hash = git_fed(root, &["hash-object", "--stdin"], Some(&diff))?;
+    Ok(Fingerprint::new(hash.trim()))
 }
 
 /// Scenes whose snapshot the next commit changes, by name.
@@ -284,6 +348,51 @@ row b
     #[test]
     fn an_unchanged_snapshot_changes_no_scene() {
         assert!(changed_in(BEFORE, BEFORE).is_empty());
+    }
+
+    /// What carries a judge's pass: the same staged change where it reads
+    /// gives the same fingerprint, and a change elsewhere does not move it.
+    #[test]
+    fn a_fingerprint_moves_only_with_what_it_covers() {
+        let repo = Repo::new();
+        repo.write("lib.rs", "fn a() {}\n");
+        repo.git(&["add", "lib.rs"]);
+        let rust = fingerprint(repo.root(), &["*.rs"]).unwrap();
+        let whole = fingerprint(repo.root(), &[]).unwrap();
+        assert_eq!(rust.0.len(), 40, "{rust:?}");
+
+        repo.write("a.txt", "two\n");
+        repo.git(&["add", "a.txt"]);
+        assert_eq!(fingerprint(repo.root(), &["*.rs"]).unwrap(), rust);
+        assert_ne!(fingerprint(repo.root(), &[]).unwrap(), whole);
+
+        // A commit moves every fingerprint, even where the diff reads the
+        // same: what a judge judges by may have changed under it.
+        repo.git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--quiet",
+            "-m",
+            "c",
+        ]);
+        repo.write("lib.rs", "fn a() {}\n");
+        let empty_before = fingerprint(repo.root(), &["*.rs"]).unwrap();
+        repo.write("b.rs", "fn b() {}\n");
+        repo.git(&["add", "b.rs"]);
+        repo.git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--quiet",
+            "-m",
+            "d",
+        ]);
+        assert_ne!(fingerprint(repo.root(), &["*.rs"]).unwrap(), empty_before);
     }
 
     #[test]

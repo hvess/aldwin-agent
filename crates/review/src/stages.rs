@@ -1,4 +1,5 @@
-//! Stages 1, 2, 3 and 5 — the ones that are somebody else's command.
+//! Stages 1 to 5 ([`Stage`]): 1, 2, 3 and 5 run somebody else's command,
+//! and 4 is this crate's own token check.
 //!
 //! Each returns the same shape so the loop's report reads uniformly, and each
 //! runs the tool the developer would run by hand. Nothing is reimplemented
@@ -9,13 +10,53 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
-use crate::Result;
+use crate::{tokens, Baseline, Result};
+
+/// A deterministic stage — stage 2 as its two tools, since each passes or
+/// fails on its own. Which judges may run is decided on these, never on
+/// the label the report prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Stage 1: the toolchain against the baseline.
+    Toolchain,
+    /// Stage 2's formatting half.
+    Fmt,
+    /// Stage 2's clippy half: the one that shows the workspace builds.
+    Clippy,
+    /// Stage 3: the suite.
+    Test,
+    /// Stage 4: the design tokens.
+    Tokens,
+    /// Stage 5: the frame snapshots.
+    Frames,
+}
+
+impl Stage {
+    /// The stage's number and name, as the report's first column shows it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use aldwin_review::stages::Stage;
+    /// assert_eq!(Stage::Clippy.label(), "2 lint · clippy");
+    /// ```
+    pub fn label(self) -> &'static str {
+        match self {
+            Stage::Toolchain => "1 toolchain",
+            Stage::Fmt => "2 lint · fmt",
+            Stage::Clippy => "2 lint · clippy",
+            Stage::Test => "3 test",
+            Stage::Tokens => "4 tokens",
+            Stage::Frames => "5 frames",
+        }
+    }
+}
 
 /// One stage's verdict, as the report shows it.
 #[derive(Debug)]
 pub struct Outcome {
-    /// The stage's number and name, as the report's first column shows it.
-    pub stage: &'static str,
+    /// Which stage.
+    pub stage: Stage,
     /// Whether the tool succeeded.
     pub passed: bool,
     /// What the developer should read: the stage's stat line when it
@@ -27,7 +68,7 @@ impl Outcome {
     /// `stat` is what the stage reports when it passes — a count the tool
     /// itself produced, not one recomputed here.
     fn from(
-        stage: &'static str,
+        stage: Stage,
         output: std::process::Output,
         keep: usize,
         stat: impl Fn(&str) -> String,
@@ -96,13 +137,13 @@ fn cargo(root: &Path, args: &[&str]) -> Command {
 /// failed [`Outcome`], not an error.
 pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
     let fmt = Outcome::from(
-        "2 lint · fmt",
+        Stage::Fmt,
         cargo(root, &["fmt", "--all", "--check"]).output()?,
         40,
         |_| "formatted".to_string(),
     );
     let clippy = Outcome::from(
-        "2 lint · clippy",
+        Stage::Clippy,
         cargo(
             root,
             &[
@@ -142,7 +183,7 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
 /// [`Outcome`], not an error.
 pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![Outcome::from(
-        "3 test",
+        Stage::Test,
         cargo(root, &["test", "--workspace"]).output()?,
         60,
         |out| {
@@ -181,7 +222,7 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 /// failed [`Outcome`], not an error.
 pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     let outcome = Outcome::from(
-        "5 frames",
+        Stage::Frames,
         cargo(
             root,
             &["test", "-p", "aldwin-tui", "--test", "render_snapshot"],
@@ -220,6 +261,42 @@ fn snapshot_scenes(text: &str) -> usize {
         .len()
 }
 
+/// Stage 4 — whether the app's design system is still the imported one:
+/// `tokens.rs` regenerated from the design and compared.
+///
+/// # Errors
+///
+/// When the design cannot be read at all. A drifted file is a failed
+/// [`Outcome`], not an error.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// let base = aldwin_review::Baseline::load()?;
+/// let outcomes = aldwin_review::stages::tokens(Path::new("."), &base)?;
+/// assert!(outcomes.iter().all(|o| o.passed));
+/// # Ok::<(), aldwin_review::Error>(())
+/// ```
+pub fn tokens(root: &Path, base: &Baseline) -> Result<Vec<Outcome>> {
+    Ok(vec![
+        match tokens::check(root, &tokens::design_dir(), base)? {
+            Ok(n) => Outcome {
+                stage: Stage::Tokens,
+                passed: true,
+                detail: format!("{n} values from the design"),
+            },
+            Err(detail) => Outcome {
+                stage: Stage::Tokens,
+                passed: false,
+                detail: format!(
+                "{detail}\n\nRegenerate with:\n    cargo run -p aldwin-review -- tokens --write"
+            ),
+            },
+        },
+    ])
+}
+
 /// The toolchain this run measured against.
 ///
 /// Not hermeticity — `rust-toolchain.toml` is read by rustup and this machine
@@ -241,13 +318,13 @@ pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
     let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(vec![if found == expected {
         Outcome {
-            stage: "1 toolchain",
+            stage: Stage::Toolchain,
             passed: true,
             detail: found,
         }
     } else {
         Outcome {
-            stage:  "1 toolchain",
+            stage: Stage::Toolchain,
             passed: false,
             detail: format!(
                 "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it in the `toolchain` field of crates/review/baseline.json."

@@ -18,8 +18,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::judges::{Assignment, Judge};
-use crate::stages::Outcome;
+use crate::judges::{Assignment, Judge, Standing};
+use crate::stages::{Outcome, Stage};
 use crate::{Error, Result};
 
 /// Where a judge's section goes. Left as a comment so a reader of the raw
@@ -89,20 +89,23 @@ pub struct Run<'a> {
 }
 
 impl Run<'_> {
-    /// Whether `judge` can be written into this run: the change calls for
-    /// it, every deterministic stage passed, and — for the frames judge —
-    /// there are frames to look at. Only then does the report leave it a
-    /// placeholder, so `judge` has nowhere to write a pass over a failing run:
-    /// a judge reading code that does not build, or frames drawn by it,
-    /// reports a consequence as a cause.
+    /// Whether `judge` can be written into this run: it is pending — called
+    /// for, and not carried from an earlier run — and what it reads is sound.
+    /// The code and Rust judges read code, so they need it to build (stages
+    /// 1 and clippy), and nothing else: a failing test, fmt or token check is
+    /// fixed in the same round as their findings. The frames judge needs all
+    /// of stages 1 to 5 and captured frames, since a frame drawn with a
+    /// drifted palette reports a consequence as a cause. Only then does the
+    /// report leave it a placeholder.
     ///
     /// # Examples
     ///
     /// ```
     /// use aldwin_review::judges::{Assignment, Judge};
     /// use aldwin_review::report::Run;
-    /// use aldwin_review::stages::Outcome;
-    /// let outcomes = [Outcome { stage: "3 test", passed: true, detail: String::new() }];
+    /// use aldwin_review::stages::{Outcome, Stage};
+    /// let ok = |stage| Outcome { stage, passed: true, detail: String::new() };
+    /// let outcomes = [ok(Stage::Toolchain), ok(Stage::Clippy)];
     /// let assignments = [Assignment::new(Judge::Code, true, "a crate changed")];
     /// let run = Run {
     ///     commit: "abc1234",
@@ -116,12 +119,18 @@ impl Run<'_> {
     /// assert!(!run.reaches(Judge::Frames));
     /// ```
     pub fn reaches(&self, judge: Judge) -> bool {
-        let required = self
+        let pending = self
             .assignments
             .iter()
-            .any(|a| a.judge() == judge && a.standing().required());
-        let has_frames = judge != Judge::Frames || (self.frames.is_some() && self.captured > 0);
-        required && self.outcomes.iter().all(|o| o.passed) && has_frames
+            .any(|a| a.judge() == judge && a.standing() == Standing::Pending);
+        let passed = |stage| self.outcomes.iter().any(|o| o.stage == stage && o.passed);
+        let sound = match judge {
+            Judge::Code | Judge::Rust => passed(Stage::Toolchain) && passed(Stage::Clippy),
+            Judge::Frames => {
+                self.outcomes.iter().all(|o| o.passed) && self.frames.is_some() && self.captured > 0
+            }
+        };
+        pending && sound
     }
 }
 
@@ -176,7 +185,7 @@ fn render(run: &Run) -> String {
         let measured = outcome.detail.lines().next().unwrap_or("");
         out.push_str(&format!(
             "<tr><td>{}</td><td class=\"{class}\">{word}</td><td>{}</td></tr>",
-            esc(outcome.stage),
+            esc(outcome.stage.label()),
             esc(measured)
         ));
     }
@@ -191,7 +200,7 @@ fn render(run: &Run) -> String {
         for outcome in failures {
             out.push_str(&format!(
                 "<p><strong>{}</strong></p><pre>{}</pre>",
-                esc(outcome.stage),
+                esc(outcome.stage.label()),
                 esc(outcome.detail.trim_end())
             ));
         }
@@ -225,11 +234,16 @@ fn render(run: &Run) -> String {
                  judge has run; until then this run is incomplete.</p>",
                 esc(assignment.reason())
             ));
+        } else if assignment.standing() == Standing::Carried {
+            out.push_str(&format!(
+                "<p class=\"note\">Carried: {}.</p>",
+                esc(assignment.reason())
+            ));
         } else {
             out.push_str(
-                "<p class=\"note\">Not reached. A judge reads a run whose deterministic \
-                 stages all passed (and, for frames, whose frames were captured), and this \
-                 one is not that. Fix and run the loop again.</p>",
+                "<p class=\"note\">Not reached. The code and Rust judges need the \
+                 workspace to build; the frames judge needs stages 1&ndash;5 clean and \
+                 frames captured. Fix and run the loop again.</p>",
             );
         }
     }
@@ -281,6 +295,46 @@ pub struct Verdict {
 }
 
 impl Verdict {
+    /// One judge's verdict from its readers' — every finding, match,
+    /// contradiction and question of each.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Review`] unless there is exactly one verdict per reader the
+    /// judge has ([`Judge::readers`]): a pass read by fewer is not the pass
+    /// the loop promises.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use aldwin_review::judges::Judge;
+    /// use aldwin_review::report::Verdict;
+    /// let clean = || serde_json::from_str::<Verdict>(r#"{"iteration": 1, "findings": []}"#).unwrap();
+    /// assert!(Verdict::of(Judge::Code, vec![clean(), clean()])?.passes());
+    /// assert!(Verdict::of(Judge::Code, vec![clean()]).is_err());
+    /// # Ok::<(), aldwin_review::Error>(())
+    /// ```
+    pub fn of(judge: Judge, readers: Vec<Verdict>) -> Result<Verdict> {
+        if readers.len() != judge.readers() {
+            return Err(Error::Review(format!(
+                "stage {} has {} reader(s) a pass, each its own fresh subagent; got {} verdict(s)",
+                judge.stage(),
+                judge.readers(),
+                readers.len()
+            )));
+        }
+        readers
+            .into_iter()
+            .reduce(|mut one, other| {
+                one.findings.extend(other.findings);
+                one.matches.extend(other.matches);
+                one.contradictions.extend(other.contradictions);
+                one.questions.extend(other.questions);
+                one
+            })
+            .ok_or_else(|| Error::Review("a judge has no readers".into()))
+    }
+
     /// A judge passes with no findings at all. A minor finding fails it as a
     /// major one does; severity orders the fixing, not the verdict. This is
     /// the threshold of 100 the developer set on 2026-09-24, stated without
@@ -342,6 +396,29 @@ pub fn write_verdict(report: &Path, judge: Judge, verdict: &Verdict) -> Result<b
     })?;
     std::fs::write(report, filled)?;
     Ok(verdict.passes())
+}
+
+/// The judges the report at `report` still leaves a placeholder for — the
+/// ones that can still be written into this run.
+///
+/// # Errors
+///
+/// When the report cannot be read.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// let open = aldwin_review::report::awaiting(Path::new("target/review-frames/run-1/review.html"))?;
+/// println!("{} judge(s) left to write", open.len());
+/// # Ok::<(), aldwin_review::Error>(())
+/// ```
+pub fn awaiting(report: &Path) -> Result<Vec<Judge>> {
+    let text = std::fs::read_to_string(report)?;
+    Ok(Judge::ALL
+        .into_iter()
+        .filter(|&judge| text.contains(&marker(judge)))
+        .collect())
 }
 
 /// The report with `judge`'s verdict rendered over its placeholder, or `None`
@@ -416,6 +493,9 @@ fn fill(text: &str, judge: Judge, verdict: &Verdict) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::Fingerprint;
+    use crate::judges::RunState;
+    use std::collections::BTreeSet;
 
     /// Parsed from cargo's own summary lines rather than counted here, so the
     /// report cannot disagree with the tool it is reporting on.
@@ -442,9 +522,19 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
         assert!(escaped.contains("&lt;String&gt;") && escaped.contains("&amp;"));
     }
 
+    /// A workspace that built, with its suite passing or not.
+    fn built(tests_pass: bool) -> Vec<Outcome> {
+        let ok = |stage| Outcome {
+            stage,
+            passed: true,
+            detail: String::new(),
+        };
+        vec![ok(Stage::Toolchain), ok(Stage::Clippy), outcome(tests_pass)]
+    }
+
     fn outcome(passed: bool) -> Outcome {
         Outcome {
-            stage: "3 test",
+            stage: Stage::Test,
             passed,
             detail: String::new(),
         }
@@ -496,7 +586,7 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
     /// A clean run leaves each required judge a placeholder, written once.
     #[test]
     fn a_clean_run_leaves_each_required_judge_its_placeholder() {
-        let passed = [outcome(true)];
+        let passed = built(true);
         let all = assignments(&Judge::ALL);
         let page = render(&run(&passed, &all, Some(Path::new("frames")), 72));
         for judge in Judge::ALL {
@@ -505,17 +595,21 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
         }
     }
 
-    /// The false pass this closes: a judge's pass written over a run whose
-    /// suite failed, over a judge the change never called for, or over a
+    /// The false pass this closes: a judge's pass written over code that
+    /// does not build, over a judge the change never called for, or over a
     /// frames judge with nothing captured to look at.
     #[test]
     fn a_failing_unrequired_or_frameless_judge_has_nowhere_to_be_written() {
-        let failed = [outcome(true), outcome(false)];
-        let passed = [outcome(true)];
+        let unbuilt = [Outcome {
+            stage: Stage::Clippy,
+            passed: false,
+            detail: String::new(),
+        }];
+        let passed = built(true);
         let all = assignments(&Judge::ALL);
         let code_only = assignments(&[Judge::Code]);
 
-        let page = render(&run(&failed, &all, Some(Path::new("frames")), 72));
+        let page = render(&run(&unbuilt, &all, Some(Path::new("frames")), 72));
         assert!(Judge::ALL
             .into_iter()
             .all(|j| fill(&page, j, &judged(vec![])).is_none()));
@@ -526,6 +620,51 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
 
         let page = render(&run(&passed, &all, None, 0));
         assert!(fill(&page, Judge::Frames, &judged(vec![])).is_none());
+    }
+
+    /// Waiting on every stage cost a round per failure: a failing test held
+    /// back the code and Rust judges, whose findings could have been fixed
+    /// with it. Only the frames judge still waits for a clean 1 to 5.
+    #[test]
+    fn a_failing_test_holds_back_only_the_frames_judge() {
+        let failed = built(false);
+        let all = assignments(&Judge::ALL);
+        let page = render(&run(&failed, &all, Some(Path::new("frames")), 72));
+        assert!(fill(&page, Judge::Code, &judged(vec![])).is_some());
+        assert!(fill(&page, Judge::Rust, &judged(vec![])).is_some());
+        assert!(fill(&page, Judge::Frames, &judged(vec![])).is_none());
+    }
+
+    /// A pass carried from an earlier run is said, not asked for again.
+    #[test]
+    fn a_carried_judge_has_nowhere_to_be_written() {
+        let passed = built(true);
+        let paths = ["Cargo.toml".to_string()];
+        let inputs = |_| Some(Fingerprint::new("same"));
+        let assess = || RunState::assess("t", true, &paths, &BTreeSet::new(), inputs).0;
+        let mut earlier = assess();
+        earlier.record(Judge::Code, true).unwrap();
+        let mut now = assess();
+        now.carry_from(&earlier, "run-1");
+        let page = render(&run(&passed, now.assignments(), None, 0));
+        assert!(fill(&page, Judge::Code, &judged(vec![])).is_none());
+        assert!(page.contains("Carried: "), "{page}");
+        assert!(page.contains("run-1"));
+    }
+
+    /// Two readers were promised and one read would have passed: the count
+    /// is checked, and a finding of either reader fails the merged verdict.
+    #[test]
+    fn a_code_verdict_takes_both_readers_and_keeps_every_finding() {
+        assert!(Verdict::of(Judge::Code, vec![judged(vec![])]).is_err());
+        let merged = Verdict::of(
+            Judge::Code,
+            vec![judged(vec![]), judged(vec![finding("minor")])],
+        )
+        .unwrap();
+        assert!(!merged.passes());
+        assert_eq!(merged.findings.len(), 1);
+        assert!(Verdict::of(Judge::Rust, vec![judged(vec![]), judged(vec![])]).is_err());
     }
 
     /// Any finding fails the stage; only its absence passes.
@@ -543,7 +682,7 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
         assert_eq!(severity(&finding(" Major ")), "major");
         assert_eq!(severity(&finding("nit")), "minor");
 
-        let passed = [outcome(true)];
+        let passed = built(true);
         let code = assignments(&[Judge::Code]);
         let page = render(&run(&passed, &code, None, 0));
         let filled = fill(

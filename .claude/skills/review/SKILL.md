@@ -6,8 +6,8 @@ description: The feedback loop every agent commit to Aldwin runs, and cannot lan
 # Review
 
 Ten stages. Five are deterministic and one command runs them. Three are
-subagents, because no script can read code against a design principle or
-look at a picture. One is the loop itself, and the last is the gate.
+judges — subagents, the code judge two of them — because no script can read
+code against a design principle or look at a picture. One is the loop itself, and the last is the gate.
 
 | stage | what | who |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ look at a picture. One is the loop itself, and the last is the gate.
 | 3 test | `cargo test --workspace` | `review` |
 | 4 tokens | regenerate `tokens.rs` from `.claude/design/` and diff | `review` |
 | 5 frames | `render_snapshot`: the baseline and design conformance | `review` |
-| 6 code judge | the diff against `quality-gate`, the Key Constraints, the ADRs, the crate's spec | a subagent |
+| 6 code judge | the diff against `quality-gate`, the Key Constraints, the ADRs, the crate's spec | two subagents, one verdict |
 | 7 Rust judge | the diff against the `rust` skill's rules no lint checks | a subagent |
 | 8 frames judge | the changed scenes' frames against the design | a subagent |
 | 9 iterate | any failure: fix, and run again from stage 1 | you |
@@ -71,13 +71,18 @@ frames.
 **All five are hermetic.** Same inputs, same result, no clock, no network,
 no subprocess of the app, no compositor — about fifteen seconds, almost all
 of it `cargo test`. Capture is *not* a stage: it runs after them, only when
-stage 8 is required, only for the changed scenes.
+the frames judge is pending (called for and not carried), only for the
+changed scenes.
 
-**Every one of these must pass before any judge runs.** A judge reading code
-that does not build, or frames drawn with a drifted palette, reports a
-consequence as a cause. The report enforces it: it leaves a judge a
-placeholder only when stages 1–5 passed, so `judge` refuses to write into
-any other run.
+**A judge waits for the stages its inputs depend on, and no others.** A
+judge reading code that does not build, or frames drawn with a drifted
+palette, reports a consequence as a cause. So the code and Rust judges run
+once the workspace builds (stage 1 and clippy), even when fmt, a test, the
+tokens or the frames failed — fix their findings in the same round — and the
+frames judge runs only on a clean 1–5 with frames captured. The report
+enforces it: it leaves a judge a placeholder only when its inputs are sound,
+so `judge` refuses to write anywhere else. A pass is recorded only when all
+of 1–5 passed and every judge passed or was carried.
 
 `--stages-only` runs stages 1–5 and stops, without requiring the tree to be
 staged. It is the check to run while you are still working. It records
@@ -98,17 +103,25 @@ that still exports it cannot have stage 5 rewrite the baseline it checks.
   Every snapshot scene is also a capture scene (a test in `scene.rs` keeps
   the two lists equal), so those are exactly the frames it looks at.
 
-A change that calls for no judge — docs only — is recorded as passed as soon
-as stages 1–5 pass. Otherwise `review` exits non-zero: a review whose judges
+A change with no judge left to run — docs only, or every judge carried from
+an earlier run — is recorded as passed as soon as stages 1–5 pass. Otherwise `review` exits non-zero: a review whose judges
 have not run is not a review.
 
 ## 6–8. The judges
 
-Spawn **one fresh subagent per required judge, per iteration, all in
-parallel.** Not two to compare, not three to vote — a second judge measures
-variance, which is a thing to fix in the prompt rather than average away.
-Fresh every iteration: one that remembers its last verdict anchors on it,
-and one that knows what you changed is biased toward seeing the change work.
+Spawn **fresh subagents for every judge `review` printed a command for,
+per iteration, all in parallel** — two for the code judge, one each for the
+Rust and frames judges. The code judge's two readers are not there to vote:
+each fresh reader of a large diff finds one or two different things, and
+their findings are merged, so a pass surfaces more of them. Fresh every
+iteration: one that remembers its last verdict anchors on it, and one that
+knows what you changed is biased toward seeing the change work.
+
+**A judge `review` did not print a command for is carried, held back by a
+stage its inputs depend on, or not needed.**
+When a judge's inputs (`Judge::reads`) are identical to a run in which it
+passed, `review` keeps that pass and names the run in the report; do not
+spawn it. Only a pass carries — a finding is always read again.
 
 Hand each one its prompt below, filled in with the paths `review` printed —
 the run's `change.diff`, and for stage 8 the exact frame list. Never the
@@ -203,11 +216,11 @@ The shape all three return:
 > else. Its Good and Avoid examples are this codebase's own code; follow the
 > rule they illustrate, not their exact text.
 >
-> Some of its rules are already enforced by `cargo clippy -D warnings` and
-> the workspace lints, and the change has passed them: formatting, naming,
-> `?` over `match` where clippy's `question_mark` fires, docs on public
-> items, `# Errors` and `# Panics` sections, `Debug` on public types. **Do
-> not report those** — they cannot be present. Judge what no lint checks,
+> Some of its rules are already enforced by `cargo fmt`, `cargo clippy -D
+> warnings` and the workspace lints: formatting, naming, `?` over `match`
+> where clippy's `question_mark` fires, docs on public items, `# Errors` and
+> `# Panics` sections, `Debug` on public types. **Do not report those** —
+> clippy has passed, and a formatting failure is stage 2's to report. Judge what no lint checks,
 > among them:
 >
 > - iterator chains and combinators over manual loops with `push`;
@@ -285,10 +298,12 @@ The shape all three return:
 
 ### Write each verdict, with the command
 
-Save each judge's JSON block verbatim and run, once per judge:
+Save each reader's JSON block verbatim and run, once per judge — stage 6
+takes both of its readers' files, and refuses one:
 
 ```sh
-cargo run --release -p aldwin-review -- judge --run <dir> --stage 6 --findings code.json
+cargo run --release -p aldwin-review -- judge --run <dir> --stage 6 --findings code-1.json --findings code-2.json
+cargo run --release -p aldwin-review -- judge --run <dir> --stage 7 --findings rust.json
 ```
 
 Never transcribe or edit the block: that routes the judge's findings through
@@ -305,9 +320,10 @@ exactly when a manual step gets skipped.
 ## 9. Iterate
 
 Any failure — a stage, or a judge's finding — means: fix it, stage the fix,
-and run the whole loop again from stage 1, with fresh judges. A fix changes
-the tree, so a verdict on the old tree says nothing about the new one; the
-record is keyed by tree for exactly that reason.
+and run the whole loop again from stage 1, with fresh judges for whatever
+the fix touched. The record is keyed by tree, so a fix always needs a new
+run; within it, a judge whose own inputs the fix did not touch keeps its
+pass (spec Decision 17).
 
 **Cap it at five iterations.** If it has not passed by then, stop and take it
 to the developer: five failed passes is a disagreement about what a source

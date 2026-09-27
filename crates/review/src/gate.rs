@@ -120,7 +120,7 @@ mod tests {
     /// 5 passed or not.
     fn run(repo: &Repo, stages_passed: bool) -> RunState {
         let tree = staged_tree(repo.root()).unwrap();
-        RunState::assess(tree, stages_passed, &[], &BTreeSet::new()).0
+        RunState::assess(tree, stages_passed, &[], &BTreeSet::new(), |_| None).0
     }
 
     #[test]

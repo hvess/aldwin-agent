@@ -67,11 +67,13 @@ enum Command {
         /// 6 (code), 7 (Rust) or 8 (frames).
         #[arg(long)]
         stage: u8,
-        /// The judge's JSON block, saved verbatim: `{"iteration": 1,
+        /// Each reader's JSON block, saved verbatim: `{"iteration": 1,
         /// "findings": [{"severity","source","expected","found","at"}],
-        /// "matches": [], "contradictions": [], "questions": []}`.
-        #[arg(long)]
-        findings: PathBuf,
+        /// "matches": [], "contradictions": [], "questions": []}`. Once per
+        /// reader: twice for stage 6, whose two readers' findings are
+        /// merged into one verdict.
+        #[arg(long, required = true)]
+        findings: Vec<PathBuf>,
     },
     /// Stage 10: fail unless the tree about to be committed has a passing
     /// review. The pre-commit hook runs this for an agent's commit.
@@ -127,6 +129,10 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
+/// How many earlier runs are kept — and so how far back a judge's pass can
+/// carry from.
+const KEPT_RUNS: usize = 3;
+
 /// A fresh directory for this run's frames, keeping the last few.
 fn frames_dir(root: &Path) -> Result<PathBuf> {
     let parent = root.join("target/review-frames");
@@ -137,7 +143,10 @@ fn frames_dir(root: &Path) -> Result<PathBuf> {
         .filter(|p| p.is_dir())
         .collect();
     existing.sort();
-    for old in existing.iter().take(existing.len().saturating_sub(3)) {
+    for old in existing
+        .iter()
+        .take(existing.len().saturating_sub(KEPT_RUNS))
+    {
         let _ = std::fs::remove_dir_all(old);
     }
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
@@ -293,13 +302,17 @@ fn run() -> Result<()> {
 
 /// `judge`: writes one judge's verdict into the run's report and state, and
 /// records the pass once no judge is left.
-fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &Path) -> Result<()> {
+fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Result<()> {
     let judge = Judge::from_stage(stage).ok_or_else(|| {
         Error::Review(format!(
             "stage {stage} is not a judge; the judges are 6 (code), 7 (Rust) and 8 (frames)"
         ))
     })?;
-    let verdict: Verdict = serde_json::from_str(&std::fs::read_to_string(findings)?)?;
+    let readers = findings
+        .iter()
+        .map(|path| Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?))
+        .collect::<Result<Vec<Verdict>>>()?;
+    let verdict = Verdict::of(judge, readers)?;
     let report = run.join("review.html");
     let passed = report::write_verdict(&report, judge, &verdict)?;
     let mut state = RunState::load(run)?;
@@ -317,18 +330,32 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &Path) -> Result<
             "stage {stage} has findings; fix them and run the loop again from stage 1"
         )));
     }
-    let pending: Vec<String> = state
-        .assignments()
-        .iter()
-        .filter(|a| a.standing() == Standing::Pending)
-        .map(|a| format!("{} ({})", a.judge().stage(), a.judge().title()))
+    // What this run can still take, not what is pending: a frames judge
+    // held back by a failed stage is pending, and asking for it would ask
+    // for a verdict with nowhere to go.
+    let open: Vec<String> = report::awaiting(&report)?
+        .into_iter()
+        .map(|j| format!("{} ({})", j.stage(), j.title()))
         .collect();
-    if pending.is_empty() {
-        record(root, &state)?;
-    } else {
-        println!("still to write: stage {}", pending.join(", stage "));
+    if !open.is_empty() {
+        println!("still to write: stage {}", open.join(", stage "));
+        return Ok(());
     }
-    Ok(())
+    if !state.stages_passed() {
+        return Err(Error::Review(
+            "every judge that could run has, and a deterministic stage failed; fix it with \
+             the judges' findings and run the loop again"
+                .into(),
+        ));
+    }
+    if !state.passed() {
+        return Err(Error::Review(
+            "every judge that could run has, and the frames judge was not reached: its \
+             frames were not captured. Run the review again without --no-capture."
+                .into(),
+        ));
+    }
+    record(root, &state)
 }
 
 /// `measure`: measures foot's cell and checks it against the baseline, or
@@ -431,14 +458,33 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
         return stages_only_verdict(stages_passed);
     }
 
-    let (state, scenes) = RunState::assess(
+    let fingerprints = Judge::ALL
+        .into_iter()
+        .map(|judge| Ok((judge, git::fingerprint(root, judge.reads())?)))
+        .collect::<Result<Vec<_>>>()?;
+    let (mut state, scenes) = RunState::assess(
         tree.clone(),
         stages_passed,
         &git::staged_paths(root)?,
         &git::changed_scenes(root)?,
+        // A capture of one theme is not the frames a full run looks at, so
+        // it is fingerprinted as nothing: no pass carries into it or out.
+        |judge| {
+            fingerprints
+                .iter()
+                .find(|(j, _)| *j == judge && !(judge == Judge::Frames && args.theme.is_some()))
+                .map(|(_, f)| f.clone())
+        },
     );
     let dir = frames_dir(root)?;
-    let frames_needed = stages_passed && !scenes.is_empty() && !args.no_capture;
+    for (name, earlier) in earlier_runs(&dir) {
+        state.carry_from(&earlier, &name);
+    }
+    let frames_pending = state
+        .assignments()
+        .iter()
+        .any(|a| a.judge() == Judge::Frames && a.standing() == Standing::Pending);
+    let frames_needed = stages_passed && frames_pending && !args.no_capture;
     let captured = if frames_needed {
         capture_scenes(root, base, &dir, &scenes, args.theme, args.quiet_ms)?
     } else {
@@ -488,21 +534,7 @@ fn deterministic_stages(root: &Path, base: &Baseline) -> Result<Vec<Outcome>> {
     // drifted then every frame below was drawn with the wrong
     // colours and reporting those would be reporting a consequence
     // as a cause.
-    let design_dir = tokens::design_dir();
-    outcomes.push(match tokens::check(root, &design_dir, base)? {
-        Ok(n) => Outcome {
-            stage: "4 tokens",
-            passed: true,
-            detail: format!("{n} values from the design"),
-        },
-        Err(detail) => Outcome {
-            stage: "4 tokens",
-            passed: false,
-            detail: format!(
-                "{detail}\n\nRegenerate with:\n    cargo run -p aldwin-review -- tokens --write"
-            ),
-        },
-    });
+    outcomes.extend(stages::tokens(root, base)?);
     outcomes.extend(stages::frames(root)?);
     Ok(outcomes)
 }
@@ -518,9 +550,9 @@ fn print_outcomes(outcomes: &[Outcome]) {
             } else {
                 format!(" — {}", outcome.detail)
             };
-            println!("  ok    {}{detail}", outcome.stage);
+            println!("  ok    {}{detail}", outcome.stage.label());
         } else {
-            println!("  FAIL  {}", outcome.stage);
+            println!("  FAIL  {}", outcome.stage.label());
             for line in outcome.detail.lines() {
                 println!("          {line}");
             }
@@ -578,37 +610,64 @@ fn hand_to_judges(
     state: &RunState,
     scenes: &[String],
 ) -> Result<()> {
-    if !state.stages_passed() {
-        return Err(Error::Review(
-            "a deterministic stage failed; no judge runs until stages 1–5 pass".into(),
-        ));
-    }
     let reached: Vec<Judge> = Judge::ALL.into_iter().filter(|&j| run.reaches(j)).collect();
+    if reached.is_empty() && state.passed() {
+        // Nothing left for a judge — none called for, or each carried —
+        // so stages 1–5 are the rest of the review.
+        return record(root, state);
+    }
+    if !reached.is_empty() {
+        print_judge_inputs(dir, &reached, scenes);
+    }
     let unreached = run
         .assignments
         .iter()
-        .any(|a| a.standing().required() && !reached.contains(&a.judge()));
-    if unreached {
-        println!("Stage 8 needs frames: run the review again without --no-capture.");
-        return Err(Error::Review(
-            "review incomplete: frames not captured".into(),
-        ));
-    }
-    if reached.is_empty() {
-        // Nothing in this change is for a judge, so stages 1–5 are
-        // the whole review.
-        return record(root, state);
-    }
-
-    print_judge_inputs(dir, &reached, scenes);
+        .any(|a| a.standing() == Standing::Pending && !reached.contains(&a.judge()));
     // Deliberately an error. A review without its judges is not a
     // review, and a command that exits zero reads as completion —
-    // that is how the old stage 5 came back empty on five of seven runs. The
-    // only way to a pass is through `judge`.
-    Err(Error::Review(format!(
-        "review incomplete: {} judge(s) to run",
-        reached.len()
-    )))
+    // that is how the old stage 5 came back empty on five of seven runs. A
+    // pass comes only from `judge`, or from above when no judge is left.
+    Err(Error::Review(
+        if !state.stages_passed() && reached.is_empty() {
+            "a deterministic stage failed; fix it and run the loop again".into()
+        } else if !state.stages_passed() {
+            format!(
+                "a deterministic stage failed; {} judge(s) can still run on this tree — fix \
+             their findings with it",
+                reached.len()
+            )
+        } else if unreached {
+            println!("Stage 8 needs frames: run the review again without --no-capture.");
+            "review incomplete: frames not captured".into()
+        } else {
+            format!("review incomplete: {} judge(s) to run", reached.len())
+        },
+    ))
+}
+
+/// The runs before `current`, newest first, each by its directory name,
+/// whose state still loads. A run with no fingerprints — one from before
+/// they existed, or a one-theme capture — carries nothing. Newest first so a carried pass names the latest run
+/// it could have come from.
+fn earlier_runs(current: &Path) -> Vec<(String, RunState)> {
+    let Some(parent) = current.parent() else {
+        return Vec::new();
+    };
+    let mut runs: Vec<(String, RunState)> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path != current)
+        .filter_map(|path| {
+            let state = RunState::load(&path).ok()?;
+            Some((path.file_name()?.to_string_lossy().into_owned(), state))
+        })
+        .collect();
+    // `run-<seconds>`: the names sort as the times do.
+    runs.sort_by(|a, b| b.0.cmp(&a.0));
+    runs.truncate(KEPT_RUNS);
+    runs
 }
 
 /// Prints the exact inputs each reached judge reads and the exact command
@@ -636,12 +695,16 @@ fn print_judge_inputs(dir: &Path, reached: &[Judge], scenes: &[String]) {
         }
         println!("Each has a .txt beside it: the declared grid, every character at its\nexact column. Use it for geometry and the .png only for colour.");
     }
-    println!("\nAfter each judge, save its JSON block verbatim and run:");
+    println!("\nAfter each judge, save each reader's JSON block verbatim and run:");
     for judge in reached {
+        let files: Vec<String> = (1..=judge.readers())
+            .map(|n| format!("--findings <reader-{n}.json>"))
+            .collect();
         println!(
-            "  cargo run --release -p aldwin-review -- judge --run {} --stage {} --findings <file.json>",
+            "  cargo run --release -p aldwin-review -- judge --run {} --stage {} {}",
             dir.display(),
-            judge.stage()
+            judge.stage(),
+            files.join(" ")
         );
     }
 }

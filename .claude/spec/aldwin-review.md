@@ -13,7 +13,7 @@ that make an agent's commit depend on it (`.githooks/`, `.claude/hooks/`,
 `.claude/settings.json`). Excludes what the stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27 (the commit gate)
+**Last Updated:** 2026-09-27 (rounds, not readings)
 
 ## Why
 
@@ -23,8 +23,9 @@ architecture, its Rust, its design. The first is mechanical and the second
 mostly is not, and the whole design of this loop is keeping them apart.
 
 Five stages are deterministic: they run a command, compare against something
-committed, and say yes or no. Three are subagents, each reading one thing
-against one set of sources. Nothing in the deterministic five makes a
+committed, and say yes or no. Three are judges — subagents, each judge
+reading one thing against one set of sources, the code judge with two
+readers. Nothing in the deterministic five makes a
 judgement about whether the UI *looks like* the design, because the previous
 harness tried exactly that and the attempt is what this spec replaces.
 
@@ -42,10 +43,10 @@ rubric it was graded against.
 | 3 test | does the suite pass | `cargo test --workspace` | yes |
 | 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | a blind subagent over `change.diff`; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
+| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
 | 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
 | 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
-| 9 iterate | — | any failure: fix, run again from stage 1, fresh judges; at most five passes | — |
+| 9 iterate | — | any failure: fix, run again from stage 1, fresh judges for what changed; at most five passes | — |
 | 10 gate | was exactly this tree reviewed, and did it pass | `aldwin-review gate`, run by `.githooks/pre-commit` for an agent's commit | yes |
 
 Stages 1–5 take about fifteen seconds and hold no clock, no network, no
@@ -54,7 +55,10 @@ after them, only for stage 8's scenes, and its non-determinism is harmless
 there because a bad frame is something the judge says out loud.
 
 Which judges run is read off the staged diff, never chosen, and the report
-states each one's reason. Every snapshot scene is also a capture scene —
+states each one's reason. The code and Rust judges need only the workspace
+to build (stage 1 and clippy); the frames judge needs all of 1–5 and the
+captured frames. A judge whose inputs are unchanged since it passed keeps
+that pass (Decision 17). Every snapshot scene is also a capture scene —
 `scene.rs` has a test that fails if the two lists drift — so a change that
 moves any scene's snapshot has frames for stage 8 to judge.
 
@@ -142,15 +146,18 @@ moves any scene's snapshot has frames for stage 8 to judge.
     self-contained — no stylesheet, no script, no embedded frames — and does
     **not** apply the design system this loop enforces. Dressing the referee
     in the players' kit makes it harder to trust. The binary writes only what
-    was measured and leaves a marked placeholder per required judge; `judge`
-    writes each verdict, verbatim, because the agent that made the change is
+    was measured and leaves a marked placeholder per judge that is pending
+    and can run in this run (a carried judge gets a note naming the run it
+    passed in, and only a pass written there carries); `judge` writes each
+    verdict, verbatim, because the agent that made the change is
     the one that would otherwise write the verdict sentence.
 
-12. **A review is not complete until every required judge is written, and
-    the exit code says so.** `review` exits non-zero after a clean stages 1–5
-    whenever a judge is required, because that is not a review — only the
+12. **A review is not complete until every required judge has passed in
+    it or is carried into it, and the exit code says so.** `review` exits non-zero after a clean stages 1–5
+    whenever a judge is left to run, because that is not a review — only the
     `judge` that completes the run exits zero, and it is what writes the pass
-    record. `--stages-only` is the explicit opt-out for the fast check during
+    record. When no judge is left — none called for, or each one carried
+    (Decision 17) — `review` records the pass itself. `--stages-only` is the explicit opt-out for the fast check during
     development, and records nothing.
 
     This is the fourth fix for the same failure and the first one aimed at
@@ -185,10 +192,12 @@ moves any scene's snapshot has frames for stage 8 to judge.
     commit whose tree has no passing record. Keyed by tree because the
     commit does not exist yet when the hook runs, and because any edit after
     the review changes the tree, so a record cannot be carried over to code
-    it did not see. A review requires the working tree to equal the index:
+    it did not see. (A judge's *verdict* can be, when every byte that judge
+    reads is identical — Decision 17 — and the record is still of this
+    tree.) A review requires the working tree to equal the index:
     it builds and judges one and records the other, so they have to be the
-    same tree. A change that calls for no judge — docs only — is recorded by
-    `review` itself once stages 1–5 pass.
+    same tree. A change with no judge left to run — docs only, or every
+    judge carried — is recorded by `review` itself once stages 1–5 pass.
 
 16. **An agent's commit is gated; the developer's is not.** An agent is
     anything that sets `AGENT`: Claude Code through the project settings'
@@ -230,15 +239,45 @@ moves any scene's snapshot has frames for stage 8 to judge.
     paragraph is the answer, so a judge is not argued with a fourth time
     (the developer's call, 2026-09-27).
 
+17. **A pass is kept for as long as what it judged is unchanged; a pass is
+    one round, not one reading.** Three rules, from the first change the
+    loop ran on (2026-09-27, twenty passes):
+    - *A judge's pass carries.* Each judge reads part of the staged diff
+      (`Judge::reads`: the code judge all of it; the Rust judge the Rust,
+      its skill and the review skill that holds its prompt; the frames
+      judge the snapshot, the review crate that captures them, the design,
+      the ADRs and the review skill), fingerprinted with `HEAD` in git's
+      own hash (`git::Fingerprint`), so a commit voids every carried pass;
+      a one-theme capture is not fingerprinted, so a frames pass never
+      carries into or out of one.
+      A judge whose fingerprint matches a pass in one of the last three
+      runs (the ones kept) keeps that
+      pass, named in the report, and is not spawned; a carried frames judge
+      skips capture. Only a pass carries: a finding is always re-read. On
+      that change most passes changed only docs, and the Rust and frames
+      judges re-read identical code and frames each time.
+    - *The code judge has two readers* (`Judge::readers`). On a large diff
+      each fresh reader found one or two different minors, so one reader
+      cost a pass per finding; two readers' findings are merged into one
+      verdict, and `judge --stage 6` refuses anything but two files.
+    - *A judge waits only for what it reads.* The code and Rust judges
+      need the workspace to build; a failing fmt, test, token or frame
+      check no longer holds them back, and their findings are fixed in the
+      same round. The frames judge still waits for a clean 1–5.
+    This makes a run depend on earlier runs in `target/review-frames/`, not
+    only on the staged tree: a carried verdict is as sound as the
+    fingerprint that keys it, and the pass record is still of the tree.
+
 ## Pitfalls
 
 - **Letting the contradictions list grow.** It is nine entries, each
   accounted for in Progress below. A previous version of this idea reached
   fourteen and then needed its own admission rule, at which point it had
   become the thing it was built to prevent.
-- **Running a judge on a failing stage 1–5.** A judge looking at frames drawn
-  with a drifted palette, or at code that does not build, reports a
-  consequence as a cause.
+- **Running a judge on what it cannot read soundly.** A judge looking at
+  frames drawn with a drifted palette, or at code that does not build,
+  reports a consequence as a cause — which is why each judge waits on the
+  stages its inputs depend on, and on no others (Decision 17).
 - **Inferring stage 8's scenes from the code diff.** A change to a shared
   helper touches screens its code diff never names; the snapshot diff is
   what names them.
@@ -266,6 +305,19 @@ moves any scene's snapshot has frames for stage 8 to judge.
   variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-27, rounds, not readings)
+
+The first change through the loop took twenty passes, and almost none of
+that was stages blocking stages: stages 1–5 already all ran, and the judges
+already ran in parallel. The passes went to re-reading and to variance.
+Decision 17 is the answer: passes carry on unchanged inputs, the code judge
+has two readers, and the code and Rust judges no longer wait on failures
+they do not read. Tests pin each rule (`a_pass_carries_only_onto_the_same_inputs`,
+`a_fingerprint_moves_only_with_what_it_covers`,
+`a_failing_test_holds_back_only_the_frames_judge`,
+`a_carried_judge_has_nowhere_to_be_written`,
+`a_code_verdict_takes_both_readers_and_keeps_every_finding`).
 
 ## Progress (2026-09-27, the commit gate)
 

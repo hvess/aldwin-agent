@@ -1,31 +1,22 @@
-//! Stage 4 — the design tokens, generated rather than transcribed.
+//! Stage 4: generates `crates/tui/src/tokens.rs` from `.claude/design/`
+//! (`aldwin-review.md` Decisions 2–4); the stage passes when regenerating
+//! gives no diff.
 //!
-//! `crates/tui/src/tokens.rs` is emitted from `.claude/design/` and
-//! committed. The stage passes when regenerating produces no diff, which
-//! makes drift between the app's palette and the design system impossible by
-//! construction rather than detectable after the fact.
+//! Four sources, each read for what only it states:
 //!
-//! Four sources, each read for the one thing only it states:
-//!
-//! * `tokens/colors.css` — every colour role, as an `oklch()` literal (the
-//!   light theme mixes in six hexes). There is no ramp indirection to resolve
-//!   any more; the generator converts OKLCH to sRGB itself.
-//! * `tokens/layout.css` — the grid, in `ch` and `px`.
-//! * `guidelines/glyphs.html` — the closed glyph table. The README carries
-//!   the same fourteen marks as a prose sentence; the card is the one
+//! * `tokens/colors.css`: every colour role, as `oklch()` (the light theme
+//!   also has six hexes), converted to sRGB here.
+//! * `tokens/layout.css`: the grid, in `ch` and `px`.
+//! * `guidelines/glyphs.html`: the closed glyph table, its only
 //!   machine-readable copy.
-//! * `frames/Aldwin Agent TUI.dc.html` — the brand mark and the context
-//!   bar's ramp. Both are `color-mix()` expressions that exist nowhere else,
-//!   and the mark's 108 cells are the shape of the letter itself (redrawn
-//!   for a terminal's cell before they are emitted).
+//! * `frames/Aldwin Agent TUI.dc.html`: the brand mark's 108 cells (redrawn
+//!   for a terminal cell) and the context bar's ramp, both `color-mix()`
+//!   expressions found nowhere else.
 //!
-//! **Ten roles are deliberately not carried.** `--chrome` and `--dot` paint
-//! the mock's macOS title bar, which a terminal does not draw. `--syn` and
-//! `--call` are "reserved, not applied in any current frame" — carrying them
-//! would put a hue within reach of code the design says must not use it yet.
-//! The six `--canvas-*` roles are the documentation page around the frames.
-//! A role that is neither carried nor on that list is an error, not a silent
-//! omission — see [`generate`].
+//! Ten roles are deliberately not carried (`UNCARRIED`, Decision 3): `--syn`
+//! and `--call` are reserved by the design, so carrying them would offer a
+//! hue the app must not use yet. Every other declared role is carried, and
+//! one that does not parse fails [`generate`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -58,9 +49,8 @@ const UNCARRIED: [(&str, &str); 10] = [
 ];
 
 /// The grid tokens the app consumes, and the constant each becomes. Only
-/// these are emitted: `layout.css` also declares the mock's window measures
-/// (`--fw`, `--chrome-h`, the body heights), and a constant nothing reads
-/// would be this file asserting a layout rule rather than carrying a value.
+/// these are emitted (Decision 4): `layout.css`'s window measures (`--fw`,
+/// `--chrome-h`, the body heights) are pixels the app never reads.
 const GRID: [(&str, &str); 12] = [
     ("margin-x", "MARGIN_X"),
     ("body-x", "BODY_X"),
@@ -82,8 +72,8 @@ pub const OUTPUT: &str = "crates/tui/src/tokens.rs";
 /// The frame, relative to the design directory.
 pub const FRAME: &str = "frames/Aldwin Agent TUI.dc.html";
 
-/// The imported design system. Everything the loop knows about the design is
-/// read from here and from nowhere else.
+/// The imported design system, `.claude/design/`: the loop's only source for
+/// the design.
 pub fn design_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
 }
@@ -96,18 +86,16 @@ pub fn output_path(root: &Path) -> std::path::PathBuf {
 /// One theme's resolved colour roles, by token name.
 type Roles = BTreeMap<String, Rgb>;
 
-/// Emit the file. Returns its full text.
+/// The generated file's full text.
 ///
-/// `baseline` is an input like the design files: its contradictions license
-/// the glyphs in `MARKS_BY_EXCEPTION`.
+/// `baseline`'s contradictions license the glyphs in `MARKS_BY_EXCEPTION`.
 ///
 /// # Errors
 ///
-/// [`Error::Design`] when a design file this reads is missing something the
-/// app needs — a role, a grid token, a glyph list, the launch mark — or
-/// states it in a shape the generator does not parse, or when rustfmt rejects
-/// the output; [`Error::Io`] when a design file cannot be read or rustfmt
-/// cannot be run.
+/// [`Error::Design`] when a design file lacks a role, grid token, glyph list
+/// or the launch mark, states one in a shape the generator does not parse,
+/// or rustfmt rejects the output; [`Error::Io`] when a design file cannot be
+/// read or rustfmt cannot be run.
 pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let colors = strip_comments(&std::fs::read_to_string(
         design_dir.join("tokens/colors.css"),
@@ -124,11 +112,9 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let uncarried = |role: &str| UNCARRIED.iter().any(|(name, _)| *name == role);
     let carried: Vec<&String> = dark_raw.keys().filter(|role| !uncarried(role)).collect();
 
-    // Every carried role must parse to a colour in the dark scope; the light
-    // scope overrides most and inherits the rest, which is the design's own
-    // arrangement rather than a fallback. Only a role the light scope does not
-    // declare is inherited: one it declares and this generator cannot read is
-    // an error, never a silent dark value in the light theme.
+    // Every carried role must parse in the dark scope. The light scope
+    // inherits only roles it does not declare (the design's own cascade); one
+    // it declares and cannot be read is an error, never a silent dark value.
     let resolve_scope = |raw: &BTreeMap<String, String>,
                          inherited: Option<&Roles>|
      -> Result<Roles> {
@@ -151,8 +137,7 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let dark = resolve_scope(&dark_raw, None)?;
     let light = resolve_scope(&light_raw, Some(&dark))?;
 
-    // The mark and the gauge mix two roles in OKLCH; the mix has to happen on
-    // the unrounded values, so the source roles are re-read as OKLCH here.
+    // Mixes must use unrounded OKLCH, so the source roles are re-read here.
     let oklch_of = |raw: &BTreeMap<String, String>,
                     fallback: &BTreeMap<String, String>,
                     role: &str|
@@ -188,9 +173,8 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
         }
         out.push_str("};\n\n");
 
-        // The mark: each cell's top and bottom half, as `--fill` mixed over
-        // `--win`. An empty cell is the ground twice, so a renderer can paint
-        // every cell the same way.
+        // An empty mark cell is `--win` twice, so every cell paints the same
+        // way.
         let mut mark_colors: Vec<Rgb> = Vec::new();
         out.push_str(&format!(
             "/// The brand mark for this theme: `[row][col]` of (upper half, lower half).\n\
@@ -210,9 +194,7 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
         }
         out.push_str("];\n\n");
 
-        // The gauge: one row per filled count, each row the ten segments left
-        // to right — the filled run ramping to `--fill` at the leading edge,
-        // then `--track`. `ContextBar.jsx`'s own arithmetic, resolved.
+        // The gauge: `ContextBar.jsx`'s arithmetic, one row per filled count.
         let mut ramp_colors: Vec<Rgb> = Vec::new();
         out.push_str(&format!(
             "/// The context bar, `[filled][segment]`: for `n` filled segments the run ramps\n\
@@ -234,9 +216,8 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
         }
         out.push_str("];\n\n");
 
-        // Every colour of that theme as a flat list, so a conformance test
-        // can ask "is this colour in the design system?" without naming the
-        // fields — and without going stale when the design gains one.
+        // Every colour of the theme, flat, for stage 5's palette-membership
+        // test; it stays current when the design gains a role.
         let mut values: Vec<(String, Rgb)> = roles
             .iter()
             .map(|(role, rgb)| (format!("--{role}"), *rgb))
@@ -283,13 +264,8 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     rustfmt(&out)
 }
 
-/// The generated source as `cargo fmt` leaves it.
-///
-/// The file is committed inside a workspace that stage 2 holds to `cargo fmt
-/// --check`, so it is emitted formatted — the way bindgen and prost emit
-/// theirs — rather than written one way by this generator and rewritten
-/// another by the formatter, which would fail stage 2 or stage 4 whichever
-/// ran last. The edition is the workspace's, which is what `cargo fmt` passes.
+/// The generated source as `cargo fmt` leaves it; unformatted output would
+/// fail stage 2 or stage 4. The edition must match the workspace's.
 fn rustfmt(source: &str) -> Result<String> {
     let mut child = Command::new("rustfmt")
         .args(["--edition", "2021"])
@@ -297,8 +273,7 @@ fn rustfmt(source: &str) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    // rustfmt reads all of stdin before it writes, so this cannot deadlock
-    // against a full stdout pipe.
+    // No deadlock: rustfmt reads all of stdin before it writes.
     child
         .stdin
         .take()
@@ -378,19 +353,13 @@ fn gauge_mix(n: usize, i: usize) -> Option<f64> {
 /// The closed glyph table, and the glyphs a recorded design contradiction
 /// licenses on top of it.
 ///
-/// `MARKS` has two sources and both are the design's own: the fourteen marks
-/// `guidelines/glyphs.html` lists, and every non-ASCII character the frame
-/// draws inside a window — `↑↓` in a footer, `⌄` on an open disclosure, the
-/// `−` of a removed count, the punctuation prose carries. The mark's `▀` is
-/// added last: the frame draws that cell as CSS, not as a character, so it
-/// is the one glyph the app needs that no text in the design contains.
-///
-/// `MARKS_BY_EXCEPTION` is there because the design contradicts itself and
-/// `crates/review/baseline.json` records where.
+/// `MARKS` is the marks `guidelines/glyphs.html` lists, every non-ASCII
+/// character the frame draws inside a window, and the mark's `▀`, which the
+/// frame draws as CSS so no design text contains it. `MARKS_BY_EXCEPTION`
+/// comes from `baseline.json`'s contradictions.
 fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
     let mut marks = BTreeSet::new();
-    // Each entry of the card is `…width:3ch">X</span>`; the glyph is what
-    // sits between the closing bracket and the closing tag.
+    // Each card entry is `…width:3ch">X</span>`.
     for chunk in card.split("width:3ch\">").skip(1) {
         let Some(end) = chunk.find("</span>") else {
             continue;
@@ -443,8 +412,6 @@ fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
     ))
 }
 
-// ---- The frame --------------------------------------------------------------
-
 /// One cell of the mark: the percentage of `--fill` mixed over `--win` in
 /// each half, or `None` for the ground.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,26 +420,20 @@ struct MarkCell {
     bottom: Option<u8>,
 }
 
-/// The mark's height in a terminal, in rows. The frame's row is 24px on a
-/// 14px font, so its half-cell is 8.4 × 12px; the cell `measure` pins
-/// (8 × 18) has an 8 × 9 half-cell. On the frame's 18 columns, which keep the
-/// letter's width and stroke, its 12 half-rows would need 16 to keep its
-/// height — but the frame's facts sit on 24px rows too, and against a
-/// terminal's shorter ones 8 rows of mark outweighs them. 7 is the balance:
-/// the letter a little wide (1.14 : 1 against the frame's 1.05), the facts
-/// 1.75 : 1 against the frame's 1.5. Only the mark is redrawn — it is the one
-/// picture on the grid (`mark-is-drawn-for-a-terminal-cell` in baseline.json).
+/// The mark's height in a terminal, in rows (`mark-is-drawn-for-a-terminal-cell`
+/// in `baseline.json`). The frame's half-cell is 8.4 × 12px, the pinned
+/// cell's 8 × 9, so the frame's 12 half-rows would need 16 to keep the
+/// letter's height; 8 rows would outweigh the facts beside it. 7 balances
+/// them: the letter 1.14 : 1 (frame 1.05), the facts 1.75 : 1 (frame 1.5).
 const MARK_TERMINAL_ROWS: usize = 7;
 
 /// The frame's A, redrawn `rows` rows tall on the frame's columns.
 ///
-/// Stretching the frame's half-rows would repeat some and not others. The
-/// letter is read as strokes instead: every half-row of the frame is one run
-/// per side, the frame's stroke wide and cut off at the centre, so the apex
-/// is where the two strokes meet. What varies is the outer edge's distance
-/// from the centre. That distance is sampled along the new half-rows,
-/// between the frame's own, and each new half-row takes the fill of the
-/// frame half-row nearest it. At the frame's own height this is the frame.
+/// Not a stretch, which would repeat some half-rows and not others. Each
+/// frame half-row must be one run per side, stroke wide and cut at the
+/// centre; the outer edge's distance from the centre is interpolated along
+/// the new half-rows, each taking the fill of the nearest frame half-row. At
+/// the frame's own height this reproduces the frame.
 fn fit_to_terminal(mark: &[Vec<MarkCell>], rows: usize) -> Result<Vec<Vec<MarkCell>>> {
     let invalid = |why: &str| Error::Design(format!("the mark {why}"));
     let centre = mark[0].len() / 2;
@@ -593,8 +554,7 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
 }
 
 /// `<top> 50%, <bottom> 50%)…` → (`<top>`, `<bottom>`), each without its stop.
-/// The halves may themselves contain commas (inside `color-mix(...)`), so the
-/// split is on the ` 50%, ` between them rather than on a comma.
+/// Split on ` 50%, `, not a comma: a half's `color-mix(...)` holds commas.
 fn split_gradient(inner: &str) -> Option<(&str, &str)> {
     let (top, rest) = inner.split_once(" 50%, ")?;
     let bottom = rest.split(" 50%)").next()?;
@@ -641,10 +601,9 @@ fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
     out
 }
 
-/// The generator's gauge arithmetic is `ContextBar.jsx`'s, and the frame is
-/// where the design's own rendering of it can be read back. Every bar in the
-/// frame has to match what the formula gives for the percentage it shows —
-/// a formula that drifted from the frame would otherwise generate cleanly.
+/// Checks every context bar in the frame against [`gauge_mix`] for the
+/// percentage it shows; a formula drifted from `ContextBar.jsx` would
+/// otherwise generate cleanly.
 fn check_gauge_against_frame(frame: &str) -> Result<()> {
     let gauges = frame_gauges(frame);
     if gauges.is_empty() {
@@ -665,8 +624,8 @@ fn check_gauge_against_frame(frame: &str) -> Result<()> {
     Ok(())
 }
 
-/// Every window in the frame — the balanced `<div … data-screen-label="…">`
-/// subtree — so the canvas captions around them are never read as design.
+/// Every window in the frame, each the balanced `<div … data-screen-label="…">`
+/// subtree, so the canvas captions around them are never read as design.
 fn frame_windows(frame: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut from = 0;
@@ -729,8 +688,6 @@ fn text_of(html: &str) -> String {
         .replace("&gt;", ">")
 }
 
-// ---- CSS ------------------------------------------------------------------
-
 /// `--name: value;` pairs of one scope.
 fn declarations(css: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
@@ -749,9 +706,8 @@ fn declarations(css: &str) -> BTreeMap<String, String> {
     map
 }
 
-/// The declarations of one colour scope, which must exist and declare
-/// something: an empty light scope would otherwise inherit every role and
-/// generate a light theme that is the dark one.
+/// The declarations of one colour scope, which must not be empty: an empty
+/// light scope would inherit every role and generate the dark theme.
 fn scope_declarations(css: &str, selector: &str) -> Result<BTreeMap<String, String>> {
     let found = declarations(scope(css, selector));
     if found.is_empty() {
@@ -790,15 +746,13 @@ fn strip_comments(css: &str) -> String {
     out
 }
 
-/// `--tui-add-code` would have been `add_code`; the tokens are now flat
-/// (`--addcode`, `--label2`) and the field names mirror them exactly.
+/// A role's `Palette` field name: the token with `-` as `_`.
 fn field(role: &str) -> String {
     role.replace('-', "_")
 }
 
-/// `layout.css` in cells: a `Nch` value is `N` cells. `px` values are the
-/// mock's window measures and are not cells, so they are left out — asking
-/// for one is an error rather than a wrong number.
+/// `layout.css`'s `Nch` tokens as `N` cells. `px` values are left out, so
+/// asking for one is an error, never a wrong number.
 fn layout_tokens(css: &str) -> BTreeMap<String, u16> {
     let mut out = BTreeMap::new();
     for (name, value) in declarations(css) {
@@ -811,8 +765,6 @@ fn layout_tokens(css: &str) -> BTreeMap<String, u16> {
     }
     out
 }
-
-// ---- Colour -----------------------------------------------------------------
 
 /// An sRGB colour, 8 bits a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -887,15 +839,10 @@ fn parse_hex(value: &str) -> Option<Rgb> {
 
 /// CSS Color 4's just-noticeable difference, in ΔE OK.
 ///
-/// A token in OKLCH can sit a little outside sRGB — `--del`, a red at
-/// `oklch(0.7 0.2 27)`, does — and a terminal can draw only sRGB. CSS Color 4
-/// maps such a colour by clipping each channel when the clipped colour is
-/// within this distance of the original, because nobody can see the
-/// difference; the generator does the same. Every role and mix the design
-/// declares today clips within it. Further out, CSS reduces chroma to find a
-/// different colour, and a terminal palette that silently drew a different
-/// colour from the design's is the drift stage 4 exists to prevent — so the
-/// generator refuses instead, and the design has to say what it means.
+/// An out-of-sRGB OKLCH colour (`--del`, `oklch(0.7 0.2 27)`) is clipped per
+/// channel when the clip lands within this distance, as CSS Color 4 does.
+/// Further out, CSS would reduce chroma to a visibly different colour; the
+/// generator refuses instead, since that is the drift stage 4 prevents.
 const GAMUT_JND: f64 = 0.02;
 
 /// Björn Ottosson's OKLab → linear sRGB, clipped, then the sRGB transfer
@@ -955,9 +902,9 @@ fn rgb_to_oklch(rgb: Rgb) -> Oklch {
     Oklch { l: lab_l, c, h }
 }
 
-/// CSS `color-mix(in oklch, a p%, b)`: lightness and chroma interpolate
-/// linearly, hue along the shorter arc. Neither role this is used on is
-/// achromatic, so the powerless-hue rule never applies.
+/// CSS `color-mix(in oklch, a p%, b)`: lightness and chroma linear, hue along
+/// the shorter arc. Omits CSS's powerless-hue rule: correct only while
+/// neither input is achromatic.
 fn mix_oklch(a: Oklch, b: Oklch, percent: u8) -> Oklch {
     mix_oklch_f(a, b, f64::from(percent))
 }
@@ -977,13 +924,11 @@ fn mix_oklch_f(a: Oklch, b: Oklch, percent: f64) -> Oklch {
     }
 }
 
-// ---- The stage --------------------------------------------------------------
-
-/// The stage itself: regenerate, and report the first line that differs.
+/// Stage 4: regenerates and compares with the committed file.
 ///
-/// The inner result is the stage's verdict: `Ok` with a count of the colours
-/// and constants carried when the committed file is current, `Err` naming
-/// the first stale line when it is not.
+/// The inner result is the verdict: `Ok` with the number of generated lines
+/// holding a colour or a constant when the file is current, `Err` naming the
+/// first differing line when it is not.
 ///
 /// # Errors
 ///
@@ -1040,8 +985,7 @@ mod tests {
         }
     }
 
-    /// The light scope declares fewer roles than the dark one (`--onfill`
-    /// is inherited), and every carried role still resolves.
+    /// `--onfill` is declared only in the dark scope.
     #[test]
     fn the_light_theme_inherits_what_it_does_not_redeclare() {
         let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");
@@ -1059,7 +1003,6 @@ mod tests {
         parse_color(value).expect("a colour").expect("inside sRGB")
     }
 
-    /// A white and a black, and the round trip through OKLCH.
     #[test]
     fn oklch_conversion_hits_the_ends_of_the_scale() {
         assert_eq!(rgb("oklch(0.99 0 0)"), Rgb(252, 252, 252));
@@ -1076,7 +1019,7 @@ mod tests {
         }
     }
 
-    /// Generate from a copy of the design whose `colors.css` has been edited.
+    /// Generates from a copy of the design with `colors.css` edited.
     fn generate_with_colors(name: &str, edit: impl Fn(&str) -> String) -> Result<String> {
         let dir = std::env::temp_dir().join(format!(
             "aldwin-review-tokens-{name}-{}",
@@ -1103,8 +1046,7 @@ mod tests {
         generated
     }
 
-    /// A light value the generator cannot read used to fall back to the
-    /// dark one, drawing a dark-theme colour in the light theme.
+    /// Regression: an unreadable light value fell back to the dark one.
     #[test]
     fn an_unreadable_light_value_is_an_error_not_the_dark_one() {
         let result = generate_with_colors("unreadable", |css| {
@@ -1117,8 +1059,6 @@ mod tests {
         assert!(error.to_string().contains("--label3"), "{error}");
     }
 
-    /// With no light scope at all, every role would be inherited and the
-    /// light theme would be the dark one.
     #[test]
     fn a_missing_light_scope_is_an_error() {
         let result = generate_with_colors("no-light", |css| {
@@ -1128,16 +1068,14 @@ mod tests {
         assert!(error.to_string().contains(".tui-light"), "{error}");
     }
 
-    /// A hair outside sRGB is clipped; well outside is refused, because a
-    /// clip that far draws a colour the design never named.
+    /// Within [`GAMUT_JND`] of sRGB clips; well outside is refused.
     #[test]
     fn a_colour_well_outside_srgb_is_refused_rather_than_clipped() {
         assert!(parse_color("oklch(0.7 0.4 150)").expect("parses").is_err());
         assert!(parse_color("oklch(0.64 0.2 255)").expect("parses").is_ok());
     }
 
-    /// The accent, checked against the value Firefox rendered the frame with
-    /// (measured off the screenshot's `›`): a bright, saturated blue.
+    /// The accent, against the blue Firefox rendered the frame's `›` with.
     #[test]
     fn the_accent_is_a_blue() {
         let Rgb(r, g, b) = rgb("oklch(0.64 0.2 255)");
@@ -1147,7 +1085,6 @@ mod tests {
         );
     }
 
-    /// `color-mix` at 100% is the first colour and at 0% the second.
     #[test]
     fn a_mix_at_the_ends_is_one_of_its_inputs() {
         let fill = parse_oklch("oklch(0.53 0.2 258)").unwrap();
@@ -1167,9 +1104,8 @@ mod tests {
         );
     }
 
-    /// The mark as the frame draws it: six rows of eighteen, an open A whose
-    /// two legs meet at the top and part at the bottom, ramping brighter
-    /// downward (40 % at the apex, 100 % at the feet).
+    /// Six rows of eighteen, the fill ramping from the apex to 100 % at the
+    /// feet.
     #[test]
     fn the_mark_is_an_open_a() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
@@ -1208,8 +1144,8 @@ mod tests {
         );
     }
 
-    /// The mark read as strokes: at the frame's own height it is the frame,
-    /// and at a terminal's it keeps the frame's apex, stroke and fills.
+    /// At the frame's height the frame; at a terminal's, the frame's apex,
+    /// stroke and fills.
     #[test]
     fn the_terminal_mark_is_the_frames_a_redrawn() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
@@ -1258,9 +1194,7 @@ mod tests {
         assert_eq!(fills(&halves[13]), [100; 6], "the feet are full fill");
     }
 
-    /// The two bars the frame draws — four segments at 38–44 % and five at
-    /// 46 % — are what `ContextBar.jsx`'s rule gives, and the check that
-    /// proves it is the one `generate` runs.
+    /// Uses the same check `generate` runs.
     #[test]
     fn the_gauge_rule_reproduces_every_bar_in_the_frame() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
@@ -1306,8 +1240,6 @@ mod tests {
         }
     }
 
-    /// The card's fourteen marks and the frame's own characters both reach
-    /// the table; the canvas captions around the frames do not.
     #[test]
     fn the_glyph_table_is_the_card_plus_the_frame() {
         let text = generate(&design_dir(), &Baseline::load().unwrap()).expect("tokens generate");

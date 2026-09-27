@@ -1,13 +1,7 @@
 //! Measuring the cell, and taking one frame.
 //!
-//! Both go through the proxy, which is what removed the two guesses the
-//! earlier version of this file had to make. The cell is read from the pty
-//! foot sizes rather than from a shell running `stty`; and a frame is taken
-//! when the app stops drawing rather than after a hopeful interval.
-//!
-//! Every capture leaves two artefacts side by side: the PNG a human reads,
-//! and the declared cell grid stage 8 reads positions from. They are cross-checked against
-//! each other before either is trusted.
+//! A capture leaves the PNG and, beside it, the declared cell grid stage 8
+//! reads positions from; the two are cross-checked before either is trusted.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,16 +16,12 @@ use crate::pty::Pty;
 use crate::vt::Grid;
 use crate::{fake, png, scene, Error, Result};
 
-/// Measure foot's cell for the pinned font.
+/// Measures foot's cell for the pinned font and config.
 ///
-/// A large output and integer division: foot centres any remainder, so 800px
-/// of 19px rows is 42 rows and 2px of slack, and `800 / 42` recovers 19 where
-/// a float would not.
-///
-/// The number this returns is about the *pinned* config, not the machine's
-/// taste. Measured with the developer's `foot.ini` in play the same font at
-/// the same size gives 8×19; with `--config=/dev/null` it gives 8×18. That
-/// gap is why the harness measures rather than remembers.
+/// Integer division is required: foot centres the remainder, so 800 px of
+/// 19 px rows is 42 rows, and `800 / 42` recovers 19 where a float would not.
+/// The result depends on the config (the same font measured 8×19 under a
+/// developer's `foot.ini`, 8×18 under `--config=/dev/null`).
 ///
 /// # Errors
 ///
@@ -71,22 +61,19 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
     Ok(cell)
 }
 
-/// Capture one frame: one scene, one size, one theme. Returns the PNG's
-/// path; the declared grid is beside it with a `.txt` extension.
+/// Captures one scene at one size and theme. Returns the PNG's path; the
+/// declared grid is beside it with a `.txt` extension.
 ///
-/// The compositor is cleared on every exit path, not only the happy one. An
-/// early error used to leave foot on the output, where it both held the
-/// proxy's pump threads open on a pty nobody would close and shared the frame
-/// with the next capture — which the surface count would then report as a
-/// failure belonging to the wrong scene.
+/// Clears the compositor on every exit path, errors included, so a leftover
+/// foot never shares the next scene's frame.
 ///
 /// # Errors
 ///
 /// When the scene is unknown or cannot be seeded, the fake provider or the
-/// proxy cannot start, the app exits before it is captured, the output holds
-/// anything but one surface, no still frame with the caret shown arrives in
-/// five half-periods, the PNG is not the size asked for, too few cells can be
-/// cross-checked against it, or any file or compositor call fails.
+/// proxy cannot start, the app exits before capture, the output holds other
+/// than one surface, no still frame with the caret shown arrives in five
+/// tries, the PNG is the wrong size, too few cells can be cross-checked, or
+/// any file or compositor call fails.
 #[allow(clippy::too_many_arguments)]
 pub fn capture(
     comp: &Compositor,
@@ -126,13 +113,10 @@ fn take_frame(
     std::fs::create_dir_all(&work)?;
     let mut script = scene::script(scene_name)?;
 
-    // The provider is a real socket the app really talks to, so it has to be
-    // listening before the config that points at it is written — the port is
-    // ephemeral. A multi-threaded runtime, not a current-thread one: nothing
-    // here calls `block_on`, so the accept loop needs a worker of its own to
-    // make progress at all. It must outlive the capture: dropping it early
-    // takes the provider down mid-conversation, and the app reports a
-    // connection error it is entirely right about.
+    // The fake must listen before the config is seeded: its port is
+    // ephemeral. Multi-threaded, not current-thread: nothing calls
+    // `block_on`, so the accept loop needs its own worker. `runtime` must
+    // outlive the capture or the provider dies mid-conversation.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -168,8 +152,8 @@ fn take_frame(
         )));
     }
 
-    // Keys go in one at a time, each waited out, so a scene arrives at the
-    // state it names rather than at whatever a burst happened to produce.
+    // One key at a time, each waited out; a burst lands in a nondeterministic
+    // state.
     for key in &typed {
         proxy.send_key(key, quiet_for, Duration::from_secs(20))?;
     }
@@ -181,14 +165,10 @@ fn take_frame(
         )));
     }
 
-    // The picture and the grid have to be taken inside one half-period of
-    // the caret's blink (`Proxy::wait_for_change`), and the grid read back
-    // after the shot proves they were: a mismatch means the blink landed
-    // between them, and the shot is retaken on the next edge. The half-period
-    // is always the one with the caret shown (`caret_hidden`): the blink is
-    // timed from launch, so a scene at rest since then lands on the same
-    // phase every run, and a judge shown the hidden half reports a field
-    // with no caret.
+    // Picture and grid must fall in one half-period of the caret's blink
+    // (`Proxy::wait_for_change`); an unchanged grid after the shot proves it,
+    // otherwise retake on the next edge. Only the caret-shown half is taken
+    // (`caret_hidden`), or the judge reports a field with no caret.
     let path = run_dir.join(format!("{scene_name}-{size}-{theme}.png"));
     let mut grid = None;
     let mut prev = proxy.grid();
@@ -222,8 +202,7 @@ fn take_frame(
         )));
     }
 
-    // Written before the cross-check, not after: when the two disagree the
-    // grid is the evidence for which of them is wrong.
+    // Written before the cross-check: on a mismatch the grid is the evidence.
     let grid_path = run_dir.join(format!("{scene_name}-{size}-{theme}.txt"));
     std::fs::write(&grid_path, grid.text())?;
 
@@ -234,20 +213,14 @@ fn take_frame(
         )));
     }
 
-    // No design assertions here. Every check that reads declared cells —
-    // palette membership, the closed glyph table, the copy rules — is in
-    // `crates/tui/tests/render_snapshot.rs`, where a `TestBackend` buffer
-    // holds the same cells hermetically and in milliseconds. What a real
-    // terminal is for is the picture: stage 8 looks at these, and nothing
-    // else does.
+    // No design assertions here: checks on declared cells belong in
+    // `crates/tui/tests/render_snapshot.rs` (aldwin-review.md Decision 8).
     drop(proxy);
     Ok(path)
 }
 
-/// Whether `now` is the hidden half of the caret's blink, judged against
-/// `prev`, the grid one edge earlier. The caret is the terminal's cursor,
-/// and the blink hides it: hidden now, shown a half-period ago. A screen
-/// with no caret in either reads as shown — nothing there blinks.
+/// Whether `now` is the caret-hidden half of the blink, given `prev`, the grid
+/// one edge earlier. No caret in either reads as shown.
 fn caret_hidden(prev: &Grid, now: &Grid) -> bool {
     now.caret().is_none() && prev.caret().is_some()
 }
@@ -282,8 +255,7 @@ mod tests {
     use super::caret_hidden;
     use crate::vt::{Grid, Vt};
 
-    /// A field row, `›` and a space, with the cursor at the caret's cell
-    /// shown or hidden.
+    /// A field row with the cursor at column 2, shown or hidden.
     fn field(shown: bool) -> Grid {
         let mut vt = Vt::new(12, 1);
         let cursor = if shown { "\x1b[?25h" } else { "\x1b[?25l" };

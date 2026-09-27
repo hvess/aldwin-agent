@@ -1,12 +1,12 @@
 //! The `PreToolUse` guard in `.claude/hooks/commit-guard.sh`, run as Claude
-//! Code runs it: the tool call's JSON on stdin, a deny decision on stdout or
-//! nothing.
+//! Code runs it: the tool call's JSON on stdin, a deny decision or nothing on
+//! stdout.
 //!
-//! The guard is stage 10's other half — git runs the pre-commit gate however
-//! a commit is spelled, and this refuses the ways around git's hook — so both
-//! of its failures matter. Letting a way around through is the dangerous one;
-//! refusing an ordinary commit is the one it used to make, when it read the
-//! command as text and a message that said `-n` read as the flag.
+//! Stage 10's other half: git's pre-commit hook runs the gate, and the guard
+//! refuses the plain spellings of the ways around it; a spelling built to get
+//! past it is out of scope (Decision 16). Both failures are tested: letting a
+//! plain way around through (the dangerous one), and refusing an ordinary
+//! commit, e.g. one whose message contains `-n`.
 
 use std::path::PathBuf;
 
@@ -53,7 +53,7 @@ fn every_way_around_the_hook_is_refused() {
         // git takes an unambiguous abbreviation of a long option.
         "git commit --no-veri -m x",
         "git commit --no-verif -m x",
-        // A command another shell runs is read as a command of its own.
+        // A command run by another shell, or substituted, is checked too.
         "bash -c 'git commit --no-verify -m x'",
         "sh -c \"git commit -n -m x\"",
         "bash -lc 'cd x && git commit -n -m y'",
@@ -61,7 +61,7 @@ fn every_way_around_the_hook_is_refused() {
         "`git commit -n -m x`",
         "echo $(git commit -n -m x)",
         "eval git commit -n -m x",
-        // The gate knows an agent by AGENT; clearing it commits as the
+        // The gate knows an agent by AGENT; clearing it would commit as the
         // developer.
         "AGENT= git commit -m x",
         "env -u AGENT git commit -m x",
@@ -71,7 +71,7 @@ fn every_way_around_the_hook_is_refused() {
         "env -i git commit -m x",
         "env - git commit -m x",
         "export AGENT=; git commit -m x",
-        // Every way to empty it names it.
+        // Builtins that assign it an empty value.
         "read AGENT </dev/null; git commit -m x",
         "printf -v AGENT '' && git commit -m x",
         "mapfile -t AGENT </dev/null; git commit -m x",
@@ -89,14 +89,13 @@ fn every_way_around_the_hook_is_refused() {
         "git commit \\\n  --no-verify -m x",
         "git commit \\\n  -n -m x",
         "git commit -m x \\\n  --no-verify",
-        // A global option that takes a value must not hide the subcommand,
-        // and one the guard does not know must not either.
+        // A global option, valued or unknown, must not hide the subcommand.
         "git --config-env x=HOME commit --no-verify -m hi",
         "git --attr-source HEAD commit -n -m hi",
         "git --super-prefix sub/ commit -n -m hi",
         "git --unknown-global value commit -n -m hi",
         "git --exec-path commit -n -m hi",
-        // A merge commit runs pre-merge-commit, the same gate.
+        // A merge commit runs the same gate through pre-merge-commit.
         "git merge --no-verify feature",
         "git pull --no-verify origin main",
         "git merge --no-verif feature",
@@ -111,7 +110,7 @@ fn every_way_around_the_hook_is_refused() {
         // A command-line alias hides the subcommand.
         "git -c alias.ci=commit ci -n -m x",
         "git -c 'alias.ci=commit -n' ci -m x",
-        // A saved alias hides it from the next command.
+        // A saved alias hides it in a later command.
         "git config alias.ci 'commit --no-verify'",
         "git config --global Alias.ci commit",
         // The shell joins a quoted split back into the setting.
@@ -139,7 +138,7 @@ fn an_ordinary_commit_is_let_through_whatever_its_message_says() {
         "git commit --no-edit --amend",
         "git commit --no-verbose -m x",
         "git --config-env x=HOME commit -m hi",
-        // The way an agent writes a commit message: a heredoc inside `$(…)`.
+        // An agent's usual message form: a heredoc inside `$(…)`.
         "git commit -m \"$(cat <<'EOF'\nfix: handle -n in messages\n\nCo-Authored-By: Aldwin <noreply@aldwin.codes>\nEOF\n)\"",
     ] {
         assert!(!refuses(command), "refused: {command:?}");

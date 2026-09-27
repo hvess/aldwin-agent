@@ -1,17 +1,14 @@
 //! The three sizes, and the cell they are measured in.
 //!
-//! A size is stated in **cells** and only ever converted to pixels through a
-//! cell that was measured on this machine (see `capture::measure_cell`). The
-//! probe that preceded this crate assumed 8×18 for a cell that is 8×19, got a
-//! window holding 34 rows instead of 36, and produced frames that were wrong
-//! in every row while looking entirely correct. That is why nothing here
-//! carries a pixel constant.
+//! A size is in cells, converted to pixels only through a cell measured on
+//! this machine (`capture::measure_cell`). Never add a pixel constant: an
+//! assumed cell one pixel off yields plausible frames with the wrong row count.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// One terminal cell, in pixels, as foot actually lays it out for the pinned
-/// font. Measured per run; never hardcoded.
+/// One terminal cell, in pixels, as foot lays it out for the pinned font.
+/// Measured per run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cell {
     /// Width in pixels.
@@ -20,19 +17,13 @@ pub struct Cell {
     pub h: u32,
 }
 
-/// The three standard geometries, each carrying a different question.
+/// The three standard geometries.
 ///
-/// * `Small` — 80×24, the universal floor. Chosen for **vertical** pressure,
-///   not narrow width: at 24 rows `COMPOSER_MAX_ROWS = 10` takes 42% of the
-///   frame and `ui::decision::clamp_panel` starts discarding rows.
-/// * `Medium` — 104×32, a terminal the size of the design's window body (880px wide, 28 rows)
-///   (`tokens/cells.css`). The only size with a reference to check against.
-/// * `Large` — 200×50, a maximized terminal. Its job is the opposite of
-///   small's: prove nothing stretches that shouldn't.
-///
-/// Widths near the mid-50s are deliberately avoided: `ui/decision.rs`
-/// computes the option-detail column's survival from actual label and detail
-/// widths, so a size on that boundary would flip with a one-word copy change.
+/// * `Small` — 80×24, the floor, for vertical pressure: the composer's
+///   `COMPOSER_MAX_ROWS` (10) takes 42% of it.
+/// * `Medium` — 104×32, the design's window body (880px wide, 28 rows,
+///   `tokens/cells.css`); the only size with a reference to check against.
+/// * `Large` — 200×50, a maximized terminal, to show nothing stretches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Size {
     /// 80×24, the floor.
@@ -85,10 +76,9 @@ impl FromStr for Size {
     }
 }
 
-/// Both themes are captured for every scene. Theme is read once at startup
-/// from **global** config (`cli/src/bootstrap.rs`: `config.global_tui().theme`
-/// through `Theme::from_config`), so the two themes are two seeded configs —
-/// not two renders of one capture.
+/// A theme; every scene is captured in both. The app reads it at startup from
+/// global config (`cli/src/bootstrap.rs`), so each theme is its own seeded
+/// config and its own capture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     /// The dark palette, the app's default.

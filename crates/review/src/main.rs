@@ -1,15 +1,9 @@
-//! `aldwin-review` — the review loop's commands.
+//! `aldwin-review`: the review loop's commands.
 //!
-//! `review` runs stages 1 to 5, decides from the staged diff which of the
-//! judges in stages 6 to 8 the change needs, and hands them their inputs. The
-//! judges are subagents and belong to the skill; `judge` writes what each one
-//! found, and when every required stage has passed it records the pass
-//! against the staged tree. `gate` is stage 10: the pre-commit hook runs it,
-//! and an agent's commit without a passing record for exactly its tree fails.
-//!
-//! The other commands exist because the loop needs them: `tokens` regenerates
-//! the design system into the app, `capture` takes the frames stage 8 looks
-//! at, and `measure` pins the cell this machine renders.
+//! `review` runs stages 1 to 5 and hands the judges it assigns their inputs;
+//! `judge` writes a verdict and records the pass once every required stage
+//! has passed; `gate` is stage 10, run by `.githooks/pre-commit`. `tokens`,
+//! `capture` and `measure` serve stages 4 and 8.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -129,11 +123,12 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
-/// How many earlier runs are kept — and so how far back a judge's pass can
-/// carry from.
+/// How many earlier runs are kept, and so how far back a judge's pass can
+/// carry from (Decision 17).
 const KEPT_RUNS: usize = 3;
 
-/// A fresh directory for this run's frames, keeping the last few.
+/// A fresh `run-<seconds>` directory, after pruning to the last
+/// [`KEPT_RUNS`].
 fn frames_dir(root: &Path) -> Result<PathBuf> {
     let parent = root.join("target/review-frames");
     std::fs::create_dir_all(&parent)?;
@@ -157,16 +152,9 @@ fn frames_dir(root: &Path) -> Result<PathBuf> {
 
 /// Builds `target/debug/aldwin` and returns its path.
 ///
-/// **Building it here rather than checking it exists is the whole point.** An
-/// existence check cannot tell a current binary from one built several
-/// commits ago, and it did not: capture once spawned a stale *debug* binary
-/// after a `--release` build, and the judge spent its whole budget on pixels
-/// that predated the change, reporting the old copy as a finding. Stage 8 is
-/// the costliest stage and cannot be reproduced, so that is the most
-/// expensive way this loop can fail.
-///
-/// `cargo build` is incremental, so on an up-to-date tree this is a few
-/// hundred milliseconds against a capture measured in minutes.
+/// Never replace the build with an existence check: a stale binary gives
+/// stage 8 frames that predate the change. Incremental, so cheap when
+/// current.
 fn build_app(root: &Path) -> Result<PathBuf> {
     let out = std::process::Command::new("cargo")
         .current_dir(root)
@@ -188,11 +176,10 @@ fn build_app(root: &Path) -> Result<PathBuf> {
     Ok(binary)
 }
 
-/// Capture `scenes` into `dir`, for stage 8 to look at.
+/// Captures `scenes` into `dir` for stage 8 and returns how many frames.
 ///
-/// No assertions: everything that reads declared cells is a hermetic test in
-/// `crates/tui` now. This exists to make pictures, which is the one thing a
-/// `TestBackend` cannot do.
+/// Pictures only, no assertions: checks on declared cells belong in
+/// `crates/tui`'s hermetic tests (Decision 8).
 fn capture_scenes(
     root: &Path,
     base: &Baseline,
@@ -246,9 +233,8 @@ fn record(root: &Path, state: &RunState) -> Result<()> {
     Ok(())
 }
 
-/// Every failure, a refusal or a broken machine, is printed as the sentence
-/// it is rather than as `main`'s Debug form: the reader is whoever is
-/// committing, and the sentence is what they act on.
+/// Prints every failure as its `Display` sentence, never `main`'s `Debug`
+/// form.
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -330,9 +316,8 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Re
             "stage {stage} has findings; fix them and run the loop again from stage 1"
         )));
     }
-    // What this run can still take, not what is pending: a frames judge
-    // held back by a failed stage is pending, and asking for it would ask
-    // for a verdict with nowhere to go.
+    // Placeholders, not pending judges: a frames judge held back by a failed
+    // stage is pending but has nowhere to be written.
     let open: Vec<String> = report::awaiting(&report)?
         .into_iter()
         .map(|j| format!("{} ({})", j.stage(), j.title()))
@@ -374,9 +359,8 @@ fn measure(root: &Path, base: Baseline, record: bool) -> Result<()> {
     println!("measured cell {}×{} for {}", cell.w, cell.h, base.font);
     if cell != base.cell {
         if !record {
-            // Loudly, by design: a cell that has moved silently
-            // rewrites every frame's geometry while every frame still
-            // looks right.
+            // Must fail: a moved cell changes every frame's geometry while
+            // every frame still looks right.
             return Err(Error::Baseline(format!(
                 "cell {}×{} disagrees with the baseline's {}×{} — rerun with --record if the font or machine changed",
                 cell.w, cell.h, base.cell.w, base.cell.h
@@ -400,7 +384,7 @@ fn write_tokens(root: &Path, base: &Baseline) -> Result<()> {
 }
 
 /// `tokens`: fails when the app's tokens file is not what the design
-/// generates — the design and the app disagree.
+/// generates.
 fn check_tokens(root: &Path, base: &Baseline) -> Result<()> {
     let n = tokens::check(root, &tokens::design_dir(), base)?.map_err(Error::Design)?;
     println!("{} is current — {n} values from the design", tokens::OUTPUT);
@@ -417,8 +401,7 @@ fn capture_frames(root: &Path, base: &Baseline, args: &CaptureArgs) -> Result<()
         }
         None => frames_dir(root)?,
     };
-    // Same reason as `capture_scenes`: never spawn a binary nobody
-    // just built.
+    // See `build_app`: never spawn a binary not just built.
     let binary = build_app(root)?;
     let comp = Compositor::start(&dir)?;
     let cell = measure_cell(&comp, &base.font)?;
@@ -451,8 +434,8 @@ fn capture_frames(root: &Path, base: &Baseline, args: &CaptureArgs) -> Result<()
     Ok(())
 }
 
-/// `review`: stages 1 to 5, then the judges' inputs and the exit that says
-/// whether the review is finished.
+/// `review`: stages 1 to 5, then the judges' inputs; exits non-zero while a
+/// judge is left to run (Decision 12).
 fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
     if !args.stages_only {
         require_staged(root)?;
@@ -474,8 +457,8 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
         stages_passed,
         &git::staged_paths(root)?,
         &git::changed_scenes(root)?,
-        // A capture of one theme is not the frames a full run looks at, so
-        // it is fingerprinted as nothing: no pass carries into it or out.
+        // A one-theme capture gets no frames fingerprint, so no frames pass
+        // carries into or out of it.
         |judge| {
             fingerprints
                 .iter()
@@ -497,7 +480,7 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
     } else {
         0
     };
-    // Empty before the first commit, which is no reason to stop.
+    // Empty before the first commit.
     let commit = git::head(root).unwrap_or_default();
     let run = report::Run {
         commit: &commit,
@@ -514,9 +497,8 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
 
 /// Refuses a working tree that differs from the index.
 ///
-/// A review builds and judges the working tree and records the staged one,
-/// so they have to be the same tree. Staging is also the author saying what
-/// the commit is — nothing else is asked.
+/// A review builds and judges the working tree but records the staged one
+/// (Decision 15).
 fn require_staged(root: &Path) -> Result<()> {
     let unstaged = git::unstaged(root)?;
     if unstaged.is_empty() {
@@ -537,10 +519,8 @@ fn deterministic_stages(root: &Path, base: &Baseline) -> Result<Vec<Outcome>> {
     outcomes.extend(stages::lint(root)?);
     outcomes.extend(stages::test(root)?);
 
-    // Stage 4 before stage 5, because if the generated palette has
-    // drifted then every frame below was drawn with the wrong
-    // colours and reporting those would be reporting a consequence
-    // as a cause.
+    // Stage 4 before 5: frames drawn with a drifted palette would report a
+    // consequence as a cause.
     outcomes.extend(stages::tokens(root, base)?);
     outcomes.extend(stages::frames(root)?);
     Ok(outcomes)
@@ -579,9 +559,8 @@ fn stages_only_verdict(stages_passed: bool) -> Result<()> {
 /// Writes the run into `dir` — the diff the judges read, the report and
 /// `run.json` — and returns the report's path.
 fn write_run(root: &Path, dir: &Path, run: &report::Run, state: &RunState) -> Result<PathBuf> {
-    // The judges read the change from a file, the same bytes for
-    // each: a judge that runs `git diff` itself can run a different
-    // one.
+    // One file, so every judge reads the same bytes rather than its own
+    // `git diff`.
     std::fs::write(dir.join("change.diff"), git::staged_diff(root)?)?;
     let written = report::write(dir, run)?;
     state.save(dir)?;
@@ -607,9 +586,8 @@ fn print_assignments(assignments: &[Assignment], report: &Path) {
     println!("\nreport: {}", report.display());
 }
 
-/// Ends a review: records it when no judge is needed, and otherwise prints
-/// what each judge reads and the command that writes its verdict, and fails
-/// — the review is not finished until they have run.
+/// Ends a review: records it when no judge is left, and otherwise prints
+/// each judge's inputs and command, and fails.
 fn hand_to_judges(
     root: &Path,
     dir: &Path,
@@ -619,8 +597,7 @@ fn hand_to_judges(
 ) -> Result<()> {
     let reached: Vec<Judge> = Judge::ALL.into_iter().filter(|&j| run.reaches(j)).collect();
     if reached.is_empty() && state.passed() {
-        // Nothing left for a judge — none called for, or each carried —
-        // so stages 1–5 are the rest of the review.
+        // No judge left: none called for, or each carried.
         return record(root, state);
     }
     if !reached.is_empty() {
@@ -630,9 +607,7 @@ fn hand_to_judges(
         .assignments
         .iter()
         .any(|a| a.standing() == Standing::Pending && !reached.contains(&a.judge()));
-    // Deliberately an error. A review without its judges is not a
-    // review, and a command that exits zero reads as completion —
-    // that is how the old stage 5 came back empty on five of seven runs. A
+    // Must stay an error (Decision 12): a zero exit reads as completion. A
     // pass comes only from `judge`, or from above when no judge is left.
     Err(Error::Review(
         if !state.stages_passed() && reached.is_empty() {
@@ -652,10 +627,9 @@ fn hand_to_judges(
     ))
 }
 
-/// The runs before `current`, newest first, each by its directory name,
-/// whose state still loads. A run with no fingerprints — one from before
-/// they existed, or a one-theme capture — carries nothing. Newest first so a carried pass names the latest run
-/// it could have come from.
+/// The runs before `current` whose state loads, by directory name, newest
+/// first so a carried pass names the latest run it could come from. Capped
+/// at [`KEPT_RUNS`].
 fn earlier_runs(current: &Path) -> Vec<(String, RunState)> {
     let Some(parent) = current.parent() else {
         return Vec::new();
@@ -677,12 +651,8 @@ fn earlier_runs(current: &Path) -> Vec<(String, RunState)> {
     runs
 }
 
-/// Prints the exact inputs each reached judge reads and the exact command
-/// that writes its verdict.
-///
-/// With the directory filled in: the old stage 5's section was left empty on
-/// three separate runs because writing it depended on recalling a command
-/// rather than copying one.
+/// Prints the exact inputs each reached judge reads and the exact command,
+/// directory filled in, that writes its verdict.
 fn print_judge_inputs(dir: &Path, reached: &[Judge], scenes: &[String]) {
     println!(
         "\nThe change, for stages 6 and 7: {}",

@@ -1,22 +1,14 @@
-//! The headless compositor every frame is captured inside.
+//! The headless compositor every frame is captured inside: `sway` on the
+//! wlroots headless backend, with its own Wayland socket.
 //!
-//! `sway` on the wlroots headless backend: no GPU, no window on the
-//! developer's desktop, and its own Wayland socket, so a capture run cannot
-//! see — or be seen by — whatever the developer has open.
+//! Two invariants:
 //!
-//! Two traps from the 2026-09-19 probe are enforced here rather than
-//! documented and hoped for:
-//!
-//! * **The compositor must be silent.** One invalid line in a sway config
-//!   paints a red "errors in your config file" bar across the top of every
-//!   frame, and every capture after it is wrong in a way that still looks
-//!   plausible. [`Compositor::start`] runs `sway -C` over the config and
-//!   refuses to start if it does not validate.
-//! * **`grim` must run *inside* the session.** Launched from outside it
-//!   inherits the developer's own `WAYLAND_DISPLAY` and screenshots their
-//!   real desktop — silently, successfully, with a believable PNG. Every
-//!   capture goes through [`Compositor::exec`], which hands the command to
-//!   sway to run in its own environment.
+//! * **The config must validate.** An invalid line paints sway's config-error
+//!   bar across every frame; [`Compositor::start`] refuses a config `sway -C`
+//!   rejects.
+//! * **`grim` must run inside the session**, through [`Compositor::exec`].
+//!   Run outside, it inherits the developer's `WAYLAND_DISPLAY` and silently
+//!   captures their desktop.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -25,14 +17,11 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
-/// The headless backend names its single output this. Fixed by wlroots, not
-/// by us — every `swaymsg output` and `grim -o` refers to it.
+/// The name wlroots' headless backend gives its single output.
 pub const OUTPUT: &str = "HEADLESS-1";
 
-/// Deliberately minimal, and every line of it load-bearing. `default_border
-/// none` and zero gaps are what make foot's surface exactly the output, so a
-/// capture is the frame and nothing else. Anything added here must survive
-/// `sway -C`; the probe lost a run to `titlebar_padding 0`, which does not.
+/// No borders and zero gaps make foot's surface exactly the output. Every
+/// line must pass `sway -C` (`titlebar_padding 0` does not).
 const CONFIG: &str = "\
 output HEADLESS-1 mode 1200x800
 default_border none
@@ -41,8 +30,8 @@ gaps inner 0
 gaps outer 0
 ";
 
-/// A running headless sway, owned: dropping it asks sway to exit, kills it if
-/// it will not, and removes its socket.
+/// A running headless sway. Dropping it asks sway to exit, kills it after
+/// three seconds, and removes its socket.
 #[derive(Debug)]
 pub struct Compositor {
     sock: PathBuf,
@@ -74,14 +63,11 @@ impl Compositor {
             )));
         }
 
-        // A unix socket path is capped at ~108 bytes, and a run directory
-        // nested under `target/` blows that on its own. The runtime dir keeps
-        // it short, and the pid keeps two concurrent runs apart.
+        // In the runtime dir, not the run dir: a unix socket path is capped at
+        // ~108 bytes.
         let runtime = runtime_dir();
-        // Pid *and* a counter: one process can open more than one compositor
-        // in a run (preflight measures a cell, then the session captures), and
-        // two of them sharing a socket path would have the second talk to the
-        // first.
+        // Pid and counter: concurrent runs, and one process opening several
+        // compositors (cell measurement, then capture), must not share a socket.
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let sock = runtime.join(format!("aldwin-shot-{}-{n}.sock", std::process::id()));
@@ -139,19 +125,18 @@ impl Compositor {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    /// Run a command inside the session, so it inherits the headless
-    /// `WAYLAND_DISPLAY` rather than the developer's.
+    /// Runs a shell command inside the session, so it inherits the headless
+    /// `WAYLAND_DISPLAY`.
     ///
     /// # Errors
     ///
     /// As [`Compositor::msg`]: sway refused the `exec`. The command's own
-    /// failure is not seen here.
+    /// failure is not seen.
     pub fn exec(&self, command: &str) -> Result<()> {
         self.msg(&["exec", command]).map(|_| ())
     }
 
-    /// Resize the output. The harness always passes an exact multiple of the
-    /// measured cell, so the frame is a whole number of cells with no slack.
+    /// Resizes the output. Callers pass an exact multiple of the measured cell.
     ///
     /// # Errors
     ///
@@ -165,15 +150,13 @@ impl Compositor {
             "--custom",
             &format!("{width}x{height}"),
         ])?;
-        // The mode change is asynchronous; foot must not be launched into the
-        // old geometry or it starts at one size and is resized under it.
+        // The mode change is asynchronous; foot must not launch into the old
+        // geometry.
         sleep(Duration::from_millis(400));
         Ok(())
     }
 
-    /// How many surfaces are on the output. A capture is only trustworthy
-    /// when the answer is exactly one — anything else means something is
-    /// sharing the frame with the app under test.
+    /// How many windows are on the output; a capture is valid only at one.
     ///
     /// # Errors
     ///
@@ -195,13 +178,12 @@ impl Compositor {
         Ok(n)
     }
 
-    /// Close every terminal on the output, so the next capture starts from an
-    /// empty frame rather than tiling beside the last one.
+    /// Closes every foot window, so the next one does not tile beside it.
     ///
     /// # Errors
     ///
-    /// Never, today: a failed kill and a terminal that outlives the three
-    /// second wait are both tolerated, and the next surface count reports it.
+    /// Never: a failed kill or a window that outlives the 3 s wait is left
+    /// for the next [`Compositor::surface_count`] to report.
     pub fn clear(&self) -> Result<()> {
         let _ = self.msg(&["[app_id=\"foot\"]", "kill"]);
         let deadline = Instant::now() + Duration::from_secs(3);

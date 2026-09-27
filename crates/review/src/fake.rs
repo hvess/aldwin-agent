@@ -1,31 +1,17 @@
-//! The provider a scene talks to.
+//! The deterministic provider a scene talks to: `aldwin-llm`'s `test_server`
+//! (feature `test-server`), reached over the app's real HTTP and streaming path.
 //!
-//! Scenes need the TUI to draw a real conversation, and a real model cannot
-//! give one: it is slow, it costs money, and it says something different every
-//! time, so the same scene would produce a different frame on every run. This
-//! is the product's own canned-response server — `aldwin-llm`'s
-//! `test_server`, behind its `test-server` feature — driving the app through
-//! the whole real path: HTTP on a real socket, the streaming adapter, core's
-//! event loop, the TUI.
-//!
-//! The wire shape is **OpenAI-compatible**, not Anthropic, and that is forced
-//! rather than chosen: `base_url` is deliberately ignored for the `anthropic`
-//! provider (`llm/src/client.rs:64`, quoting `provider.yaml`'s own comment),
-//! and pointing the app at a local fake *is* setting `base_url`. So a scene
-//! exercises the OpenAI adapter. A defect living only in the Anthropic client
-//! is therefore invisible to this harness, which is worth knowing before
-//! reading a clean run as coverage of both.
+//! The wire shape is OpenAI-compatible because `AnthropicClient::new` never
+//! reads `base_url` (`llm/src/client.rs`), so a defect only in the Anthropic
+//! client is invisible to every scene.
 
 use serde_json::Value;
 
 pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 
-/// An assistant reply streamed as text deltas.
+/// An assistant reply streamed as several text deltas.
 ///
-/// Split across several deltas on purpose: one frame per delta is what the
-/// TUI actually receives from a live provider, and a scene that arrived whole
-/// would not exercise the incremental-render path (`e144409` fixed a
-/// re-render-the-world defect that only exists while streaming).
+/// Must stay split: a whole reply would skip the TUI's incremental-render path.
 ///
 /// # Panics
 ///
@@ -39,12 +25,9 @@ pub fn text(reply: &str) -> Canned {
     Canned::Sse(body)
 }
 
-/// A reply that streams `reply` and then holds the turn open: the stream
-/// stays connected and says nothing more, so the app is caught mid-turn
-/// with `● Working…` in the footer. The fake answers everything else at
-/// once, and this is the only way a scene stays in a running turn long
-/// enough to be captured. The client's idle timeout is a minute, far past
-/// any capture.
+/// Streams `reply`, then keeps the stream open and silent, so the app is
+/// captured mid-turn. The only way a scene holds a running turn; the client's
+/// `IDLE_TIMEOUT` (60 s) outlasts any capture.
 ///
 /// # Examples
 ///
@@ -56,8 +39,7 @@ pub fn held(reply: &str) -> Canned {
     Canned::SseThenStall(deltas(reply))
 }
 
-/// `reply` as the SSE events of its text deltas, and nothing that ends the
-/// step.
+/// `reply` as SSE text-delta events, with nothing that ends the step.
 ///
 /// # Panics
 ///
@@ -72,8 +54,7 @@ fn deltas(reply: &str) -> String {
         .collect()
 }
 
-/// Roughly 40-character pieces, split on whitespace so a delta boundary never
-/// lands inside a word — which would be a shape no provider produces.
+/// Roughly 40-byte pieces, split after whitespace so no delta splits a word.
 fn split_into_deltas(reply: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -89,26 +70,18 @@ fn split_into_deltas(reply: &str) -> Vec<String> {
     out
 }
 
-/// A tool call, streamed the way an OpenAI-compatible provider sends one:
-/// whole, in a single delta, with the arguments as a JSON *string*.
-///
-/// This is what puts the TUI's plan, question and review on screen. What the
-/// call then does — a read, a staged edit, a question — is the real
-/// dispatcher's business, not the provider's, so a scene reaches those states
-/// through the real path rather than by faking a panel.
+/// A tool call as an OpenAI-compatible provider streams it: whole, in one
+/// delta, arguments as a JSON string. The real dispatcher then runs it.
 pub fn tool_call(id: &str, name: &str, arguments: Value) -> Canned {
     tool_calls(&[(id, name, arguments)])
 }
 
-/// Several calls in one turn — which is how a scene stages more than one
-/// edit into a single changeset, or updates the plan beside a read.
+/// Several tool calls in one reply, e.g. edits staged into one changeset.
 pub fn tool_calls(calls: &[(&str, &str, Value)]) -> Canned {
     said_then_calls("", calls)
 }
 
-/// Prose, then calls, in one reply — the agent saying what it is about to
-/// do before it does it, which is how a turn's text lands between its work
-/// rather than only at its end.
+/// Prose, then tool calls, in one reply.
 ///
 /// # Panics
 ///
@@ -148,8 +121,8 @@ pub fn said_then_calls(text: &str, calls: &[(&str, &str, Value)]) -> Canned {
     Canned::Sse(body)
 }
 
-/// The URL a scene's `provider.yaml` points at. The server binds an ephemeral
-/// port, so this is written per run and never fixed.
+/// The URL a scene's `provider.yaml` points at; the port is ephemeral, so it
+/// is written per run.
 pub fn endpoint(server: &FakeServer) -> String {
     server.url("/v1/chat/completions")
 }

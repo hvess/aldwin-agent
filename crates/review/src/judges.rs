@@ -1,16 +1,10 @@
 //! Which of stages 6 to 8's judges a change needs, and where each one stands.
 //!
-//! The judges are subagents and belong to the skill. What lives here is
-//! everything about them that must not depend on anyone remembering: which of
-//! them a change needs is read off the staged diff, never chosen, and a
-//! verdict can be recorded only through [`Assignment::record`], never by hand
-//! — so `run.json` cannot say a judge passed that the change never called
-//! for.
-//!
-//! A pass is carried, not re-earned, when a judge's inputs have not changed
-//! since a run in which it passed ([`RunState::carry_from`]): each judge
-//! reads part of the diff ([`Judge::reads`]), and a fresh judge re-reading
-//! bytes it passed is variance, not review.
+//! The judges themselves are subagents in the review skill. Which ones run is
+//! read off the staged diff, never chosen, and a verdict is recorded only
+//! through [`Assignment::record`], so `run.json` cannot hold a pass for a
+//! judge the change never called for. A pass carries across runs on
+//! unchanged inputs ([`RunState::carry_from`], Decision 17).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -82,10 +76,9 @@ impl Judge {
         }
     }
 
-    /// The part of the staged diff this judge reads, as pathspecs; none is
-    /// the whole diff. Its sources and its prompt (the review skill) are in
-    /// it too, and for frames the code that captures them, so a change to
-    /// what it judges by or looks at is a change to its inputs.
+    /// The part of the staged diff this judge reads, as pathspecs; empty is
+    /// the whole diff. Must include its sources and its prompt (the review
+    /// skill), so a change to what it judges by voids a carried pass.
     ///
     /// # Examples
     ///
@@ -98,8 +91,8 @@ impl Judge {
         match self {
             Judge::Code => &[],
             Judge::Rust => &["*.rs", ".claude/skills/rust/", ".claude/skills/review/"],
-            // All of the review crate: the capture stack draws what it looks
-            // at, and the baseline holds its settled contradictions.
+            // All of the review crate: it captures the frames, and
+            // `baseline.json` holds the settled contradictions.
             Judge::Frames => &[
                 SNAPSHOT,
                 "crates/review/",
@@ -111,9 +104,7 @@ impl Judge {
     }
 
     /// How many subagents read for this judge in one pass, their findings
-    /// merged into one verdict. Two for the code judge: on a large diff each
-    /// fresh reader found one or two different things, so one reader took
-    /// a pass per finding.
+    /// merged into one verdict. Two for the code judge (Decision 17).
     ///
     /// # Examples
     ///
@@ -130,9 +121,8 @@ impl Judge {
     }
 }
 
-/// Where one judge stands in a run. One value rather than a "required" flag
-/// beside an optional verdict, so a verdict cannot be attached to a judge
-/// the change never called for.
+/// Where one judge stands in a run. One enum, not a "required" flag beside
+/// an optional verdict, so a verdict cannot attach to an uncalled judge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Standing {
@@ -166,11 +156,9 @@ impl Standing {
 
 /// Whether one judge runs for this change, why, and what it concluded.
 ///
-/// The fields are private so a standing moves only through [`new`],
-/// [`record`] and a carried pass ([`RunState::carry_from`]), which only a
-/// pending judge takes: a caller that could set it directly could write a
-/// pass for a judge the change never called for, which is the state
-/// [`Standing`] exists to rule out.
+/// Keep the fields private: a standing moves only through [`new`],
+/// [`record`] and a carried pass ([`RunState::carry_from`]), so no caller can
+/// write a pass for a judge the change never called for.
 ///
 /// [`new`]: Assignment::new
 /// [`record`]: Assignment::record
@@ -182,8 +170,8 @@ pub struct Assignment {
     standing: Standing,
     /// The sentence that says why it runs or why it does not.
     reason: String,
-    /// The fingerprint of what it reads ([`Judge::reads`]), when it was
-    /// taken. A run without one carries nothing.
+    /// The fingerprint of what it reads ([`Judge::reads`]); `None` carries
+    /// nothing.
     inputs: Option<Fingerprint>,
 }
 
@@ -253,8 +241,7 @@ impl Assignment {
     ///
     /// # Errors
     ///
-    /// [`Error::Review`] when the change never called for this judge — there
-    /// is no verdict to record for a judge that did not run.
+    /// [`Error::Review`] when the change never called for this judge.
     ///
     /// # Examples
     ///
@@ -282,8 +269,8 @@ impl Assignment {
 
     /// Takes `earlier`'s pass, from the run named `run`, when it judged
     /// exactly these inputs. Only a pending judge takes one, and only a pass
-    /// written in that run: a finding is re-read, and a pass `earlier` had
-    /// itself carried names a run that may be gone.
+    /// written in that run: a finding is always re-read, and a carried pass
+    /// would name a run that may be gone.
     fn carry(&mut self, earlier: &Assignment, run: &str) {
         let same =
             self.judge == earlier.judge && self.inputs.is_some() && self.inputs == earlier.inputs;
@@ -294,14 +281,12 @@ impl Assignment {
     }
 }
 
-/// What one run of the loop knows about itself, kept beside its report as
-/// `run.json` so `judge` can find it and, once every required judge has
-/// passed, copied into the pass record `gate` looks for.
+/// One run's state, saved beside its report as `run.json` for `judge`, and
+/// copied into the pass record `gate` reads once the run passes.
 ///
-/// Its fields are private and it is made only by [`RunState::assess`], so
-/// every run holds exactly the three judges, each as the staged diff called
-/// for it. A run assembled by hand with a judge left out would pass without
-/// it.
+/// Keep the fields private and [`RunState::assess`] the only constructor:
+/// every run must hold all three judges as the staged diff assigned them, or
+/// a run missing one would pass without it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     tree: String,
@@ -312,12 +297,10 @@ pub struct RunState {
 impl RunState {
     const FILE: &'static str = "run.json";
 
-    /// The run of `tree`, with each judge assigned from what the staged diff
-    /// touches — `paths` and the snapshot's `changed` scenes — and given the
-    /// fingerprint of what it reads, where `inputs` has one; and the scenes
-    /// stage 8 is to look at. Every snapshot scene is also a capture scene
-    /// (`scene.rs` has a test that says so), so the changed scenes are the
-    /// ones to capture.
+    /// The run of `tree`, each judge assigned from the staged `paths` and the
+    /// snapshot's `changed` scenes and fingerprinted by `inputs`; and the
+    /// scenes stage 8 looks at. Every snapshot scene is a capture scene (a
+    /// test in `scene.rs`), so the changed scenes are the ones to capture.
     ///
     /// # Examples
     ///
@@ -396,9 +379,8 @@ impl RunState {
     ///
     /// # Errors
     ///
-    /// [`Error::Review`] when the change never called for `judge`, or when the
-    /// run holds no assignment for it — only possible in a `run.json` edited
-    /// by hand.
+    /// [`Error::Review`] when the change never called for `judge`, or the
+    /// run holds no assignment for it (only a hand-edited `run.json`).
     ///
     /// # Examples
     ///
@@ -426,8 +408,7 @@ impl RunState {
     }
 
     /// Carries each pending judge's pass from `earlier`, the run named
-    /// `run`, where that judge read the same inputs. A run whose inputs were
-    /// never fingerprinted carries nothing.
+    /// `run`, where that judge read the same fingerprinted inputs.
     ///
     /// # Examples
     ///
@@ -491,8 +472,8 @@ impl RunState {
         Ok(())
     }
 
-    /// Whether a judge written in this run has findings — why a run whose
-    /// last verdict passed can still fail.
+    /// Whether any judge written in this run has findings, whatever the last
+    /// verdict was.
     ///
     /// # Examples
     ///
@@ -512,8 +493,8 @@ impl RunState {
             .any(|a| a.standing == Standing::Failed)
     }
 
-    /// Whether the run has passed as a whole: every deterministic stage, and
-    /// every judge the change called for.
+    /// Whether every deterministic stage passed and every judge the change
+    /// called for passed or was carried.
     ///
     /// # Examples
     ///
@@ -538,8 +519,7 @@ impl RunState {
 /// Which judges the change calls for, in stage order, and the scenes stage 8
 /// is to look at — [`RunState::assess`]'s reading of the staged diff.
 fn assign(paths: &[String], changed: &BTreeSet<String>) -> ([Assignment; 3], Vec<String>) {
-    // The gate's own enforcement is code too: a change to what makes the
-    // loop binding is the change most worth a second reader.
+    // The gate's hooks and settings count as code for the code judge.
     let code_changed = paths.iter().any(|p| {
         p.starts_with("crates/")
             || p.starts_with(".githooks/")
@@ -648,8 +628,7 @@ mod tests {
         assert!(!failed_stages.passed());
     }
 
-    /// With public fields and a `Vec`, a run built or edited by hand with a
-    /// judge left out passed without that judge.
+    /// Regression: a hand-edited run missing a judge passed without it.
     #[test]
     fn a_run_missing_a_judge_does_not_load() {
         let dir = tempfile::tempdir().unwrap();
@@ -666,9 +645,8 @@ mod tests {
         assert!(matches!(RunState::load(dir.path()), Err(Error::Json(_))));
     }
 
-    /// A fresh judge re-reading inputs it passed found something new on
-    /// most passes of a large change; a pass now carries across runs — but
-    /// only a pass, only onto a pending judge, and only for identical inputs.
+    /// Decision 17: only a pass carries, only onto a pending judge, only for
+    /// identical inputs.
     #[test]
     fn a_pass_carries_only_onto_the_same_inputs() {
         let paths = ["crates/core/src/lib.rs".to_string()];
@@ -709,8 +687,7 @@ mod tests {
         assert_eq!(unknown.assignments()[1].standing(), Standing::Pending);
     }
 
-    /// `judge` read the last verdict's pass as the run's, and blamed an
-    /// uncaptured frame for a run an earlier judge had failed.
+    /// Regression: `judge` read the last verdict's pass as the run's.
     #[test]
     fn an_earlier_judges_findings_outlast_a_later_pass() {
         let paths = ["crates/core/src/lib.rs".to_string()];
@@ -722,8 +699,6 @@ mod tests {
         assert!(!state.passed());
     }
 
-    /// The flag-and-option pair this replaced could carry a pass for a judge
-    /// the change never called for.
     #[test]
     fn a_verdict_cannot_be_recorded_for_a_judge_that_was_not_required() {
         let mut frames = Assignment::new(Judge::Frames, false, "no scene's snapshot changed");

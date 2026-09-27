@@ -1,10 +1,8 @@
-//! Stages 1 to 5 ([`Stage`]): 1, 2, 3 and 5 run somebody else's command,
-//! and 4 is this crate's own token check.
+//! Stages 1 to 5 ([`Stage`]): 1, 2, 3 and 5 run `rustc` or `cargo`, 4 is
+//! this crate's token check.
 //!
-//! Each returns the same shape so the loop's report reads uniformly, and each
-//! runs the tool the developer would run by hand. Nothing is reimplemented
-//! here: `cargo` is the authority on whether the workspace is clean, and a
-//! second opinion about that would be a second thing to keep in sync.
+//! Never reimplement what `cargo` checks: it is the authority on whether the
+//! workspace is clean.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -12,16 +10,16 @@ use std::process::Command;
 
 use crate::{tokens, Baseline, Result};
 
-/// A deterministic stage — stage 2 as its two tools, since each passes or
-/// fails on its own. Which judges may run is decided on these, never on
-/// the label the report prints.
+/// A deterministic stage, stage 2 split into its two tools. Which judges may
+/// run is decided on these variants, never on [`Stage::label`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// Stage 1: the toolchain against the baseline.
     Toolchain,
     /// Stage 2's formatting half.
     Fmt,
-    /// Stage 2's clippy half: the one that shows the workspace builds.
+    /// Stage 2's clippy half: the one that shows the workspace builds, which
+    /// the code and Rust judges wait on (Decision 17).
     Clippy,
     /// Stage 3: the suite.
     Test,
@@ -59,14 +57,14 @@ pub struct Outcome {
     pub stage: Stage,
     /// Whether the tool succeeded.
     pub passed: bool,
-    /// What the developer should read: the stage's stat line when it
-    /// passed, the tail of the tool's output when it failed.
+    /// The stage's stat line when it passed, the tail of the tool's output
+    /// when it failed.
     pub detail: String,
 }
 
 impl Outcome {
-    /// `stat` is what the stage reports when it passes — a count the tool
-    /// itself produced, not one recomputed here.
+    /// `stat` makes the pass line from the tool's own output; `keep` is how
+    /// many lines of a failure's tail to show.
     fn from(
         stage: Stage,
         output: std::process::Output,
@@ -85,9 +83,8 @@ impl Outcome {
                 detail: stat(&combined),
             };
         }
-        // Both streams: cargo puts diagnostics on stderr and test failures on
-        // stdout, and a stage that showed only one of them would report a
-        // failing suite as an empty error.
+        // Both streams: cargo puts diagnostics on stderr, test failures on
+        // stdout.
         let lines: Vec<&str> = combined.lines().filter(|l| !l.trim().is_empty()).collect();
         let tail = lines
             .iter()
@@ -107,10 +104,8 @@ impl Outcome {
 
 /// `cargo` in the workspace, with `UPDATE_SNAPSHOTS` removed.
 ///
-/// The loop inherits the developer's shell, and a shell that exported
-/// `UPDATE_SNAPSHOTS=1` for one deliberate regeneration would otherwise have
-/// stages 3 and 5 rewrite the baseline they exist to check, and report the
-/// rewrite as a pass.
+/// An inherited `UPDATE_SNAPSHOTS=1` would have stages 3 and 5 rewrite the
+/// baseline they check and report the rewrite as a pass.
 fn cargo(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("cargo");
     command
@@ -120,16 +115,8 @@ fn cargo(root: &Path, args: &[&str]) -> Command {
     command
 }
 
-/// Stage 2 — formatting and static analysis.
-///
-/// `cargo fmt --check` first, because it is the cheaper of the two. The
-/// workspace is formatted by stable rustfmt with no options, so its verdict
-/// is the one `cargo fmt` gives the developer.
-///
-/// Clippy with `--all-targets` so tests are linted too; a clippy warning that
-/// only fires in a test module is still a warning the next reader has to read
-/// past. `-D warnings` because a warning nobody fails on is a warning nobody
-/// fixes.
+/// Stage 2: `cargo fmt --all --check`, then clippy over all targets, tests
+/// included, with `-D warnings`.
 ///
 /// # Errors
 ///
@@ -158,10 +145,8 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
         .output()?,
         40,
         |out| {
-            // Cargo prints a `Checking` line per target it actually builds,
-            // so a warm cache reports none. "0 crate targets" would read as
-            // a lint that checked nothing, which is the opposite of what a
-            // cached pass means.
+            // Cargo prints a `Checking` line only per target it rebuilds, so
+            // a warm cache reports none.
             match out
                 .lines()
                 .filter(|l| l.trim_start().starts_with("Checking "))
@@ -175,7 +160,7 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![fmt, clippy])
 }
 
-/// Stage 3 — the suite.
+/// Stage 3: `cargo test --workspace`.
 ///
 /// # Errors
 ///
@@ -193,28 +178,13 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     )])
 }
 
-/// Stage 5 — the rendered frames.
+/// Stage 5: `crates/tui/tests/render_snapshot.rs`, hermetic over
+/// `TestBackend` buffers (Decisions 1 and 8): every scene's cells diffed
+/// against `render.snap`, and design conformance (palette roles, the closed
+/// glyph table, no strokes, prose never blue, red only in diffs).
 ///
-/// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
-/// `TestBackend` buffers for every snapshot scene at three sizes in both
-/// themes:
-///
-/// * **the baseline** — every cell's symbol, foreground, background and
-///   modifiers, serialised and diffed against `tests/snapshots/render.snap`;
-/// * **design conformance** — every colour is one of the nineteen roles
-///   `tokens.rs` carries (or a mark or gauge mix of two of them), every glyph
-///   is from the closed table, nothing is stroked, the agent's prose is never
-///   blue and nothing outside a diff is red.
-///
-/// Both are hermetic and together take under two seconds. The conformance
-/// half ran against a real terminal until 2026-09-20 — a compositor, a
-/// subprocess and 2m45s — until it was noticed that a `TestBackend` buffer
-/// holds the same declared cells. The terminal now only makes pictures for
-/// stage 8, the frames judge.
-///
-/// This re-runs tests stage 3 already ran. That is deliberate and costs about
-/// a second: a failure here names the design rule that broke, where the same
-/// failure inside a workspace-wide run is one line among six hundred.
+/// Deliberately re-runs tests stage 3 ran, so a failure is reported as its
+/// own stage.
 ///
 /// # Errors
 ///
@@ -231,8 +201,7 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
-            // Counted from the snapshot, not written down: a number in a
-            // string said sixteen for a day after there were nineteen.
+            // Counted from the snapshot: a written-down count goes stale.
             let scenes = std::fs::read_to_string(root.join(crate::git::SNAPSHOT))
                 .map(|text| snapshot_scenes(&text))
                 .unwrap_or_default();
@@ -261,8 +230,8 @@ fn snapshot_scenes(text: &str) -> usize {
         .len()
 }
 
-/// Stage 4 — whether the app's design system is still the imported one:
-/// `tokens.rs` regenerated from the design and compared.
+/// Stage 4: `crates/tui/src/tokens.rs` regenerated from the design and
+/// compared with the committed one.
 ///
 /// # Errors
 ///
@@ -297,14 +266,9 @@ pub fn tokens(root: &Path, base: &Baseline) -> Result<Vec<Outcome>> {
     ])
 }
 
-/// The toolchain this run measured against.
+/// Stage 1: `rustc --version` against the baseline's recorded toolchain.
 ///
-/// Not hermeticity — `rust-toolchain.toml` is read by rustup and this machine
-/// installs Rust from pacman, so there is nothing to pin against. What this
-/// buys instead is honesty: clippy's lint set and rustc's diagnostics move
-/// between releases, so a stage 2 failure on untouched code is a real
-/// possibility, and a recorded version turns it from a mystery into a line in
-/// the report.
+/// Recorded, not pinned (Decision 10): Rust comes from pacman, not rustup.
 ///
 /// # Errors
 ///
@@ -346,8 +310,6 @@ mod tests {
         assert_eq!(snapshot_scenes(snap), 2);
     }
 
-    /// A shell that exported `UPDATE_SNAPSHOTS=1` once would have stage 5
-    /// regenerate `render.snap` and then pass against its own output.
     #[test]
     fn cargo_never_inherits_the_snapshot_regeneration_switch() {
         let command = cargo(Path::new("."), &["test"]);

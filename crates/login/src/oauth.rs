@@ -217,8 +217,9 @@ fn refusal(body: &str) -> Option<Refusal> {
     serde_json::from_str(body).ok()
 }
 
-/// One line: the status, then the refusal's description, or else the body
-/// cut to `MOST` chars (an HTML error page is not worth carrying whole).
+/// One line: the status, then the refusal's description (its `error` code
+/// when it has none), or else the body cut to `MOST` chars (an HTML error
+/// page is not worth carrying whole).
 fn describe(status: StatusCode, body: &str) -> String {
     const MOST: usize = 240;
     let detail = refusal(body)

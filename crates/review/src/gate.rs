@@ -1,15 +1,9 @@
-//! Stage 10 — the record of a passing review, and the check the pre-commit
-//! hook runs against it.
+//! Stage 10: the pass record, and the check the pre-commit hook runs against
+//! it.
 //!
-//! A pass is recorded against the staged tree, so `gate` asks one question:
-//! was exactly this tree reviewed, and did every stage pass?
-//!
-//! Keyed by tree rather than by commit because the commit does not exist yet
-//! when the hook runs, and because any edit after the review changes the tree:
-//! a record cannot be carried over to code it did not see.
-//!
-//! Refusals are [`Error`] variants, so the gate's refusals are typed like the
-//! rest of the crate's failures.
+//! Keyed by staged tree, not commit (`aldwin-review.md` Decision 15): the
+//! commit does not exist yet when the hook runs, and any edit after the
+//! review changes the tree, so a record never covers code it did not see.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -18,8 +12,8 @@ use crate::git::{common_dir, staged_tree};
 use crate::judges::RunState;
 use crate::{Error, Result};
 
-/// Where the pass record for `tree` lives: inside the repository's git
-/// directory, so it is never committed and never shows in `git status`.
+/// The pass record's path for `tree`: inside the common git directory, so it
+/// is never committed and never shows in `git status`.
 ///
 /// # Errors
 ///
@@ -34,9 +28,9 @@ fn record_path(root: &Path, tree: &str) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// When the run has not passed, when the index has moved since it ran — a
-/// record for a tree nobody reviewed is the failure this exists to prevent —
-/// or when the record cannot be written.
+/// When the run has not passed, when the index has moved since it ran (the
+/// record must never cover an unreviewed tree), or when the record cannot be
+/// written.
 ///
 /// # Examples
 ///
@@ -77,8 +71,8 @@ pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
 ///
 /// [`Error::NoRecord`] when no review of this tree was recorded,
 /// [`Error::RecordFailed`] when the one recorded did not pass, and the I/O or
-/// JSON error itself when a record exists but cannot be read or parsed —
-/// a damaged record is not the same news as a missing one.
+/// JSON error itself when a record exists but cannot be read or parsed, so a
+/// damaged record is never reported as missing.
 ///
 /// # Examples
 ///
@@ -116,8 +110,7 @@ mod tests {
         run(repo, true)
     }
 
-    /// A run of `repo`'s staged tree that needed no judge, whose stages 1 to
-    /// 5 passed or not.
+    /// A run of `repo`'s staged tree that needed no judge.
     fn run(repo: &Repo, stages_passed: bool) -> RunState {
         let tree = staged_tree(repo.root()).unwrap();
         RunState::assess(tree, stages_passed, &[], &BTreeSet::new(), |_| None).0
@@ -143,8 +136,6 @@ mod tests {
         assert_eq!(check(repo.root()).unwrap(), written);
     }
 
-    /// The failure the record exists to prevent: a pass written for a tree
-    /// nobody reviewed.
     #[test]
     fn nothing_is_recorded_once_the_index_has_moved() {
         let repo = Repo::new();
@@ -167,8 +158,7 @@ mod tests {
             Err(Error::NotPassed)
         ));
 
-        // A record that says the run failed — written by hand, since
-        // `write_record` refuses to — is still a refusal.
+        // Written by hand: `write_record` refuses a failed run.
         let path = record_path(repo.root(), failed.tree()).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_string(&failed).unwrap()).unwrap();
@@ -178,8 +168,7 @@ mod tests {
         ));
     }
 
-    /// A damaged record used to read as "no passing review", which sent the
-    /// committer to review again when the record was the problem.
+    /// Regression: a damaged record was reported as missing.
     #[test]
     fn a_damaged_record_is_reported_as_damaged_not_as_missing() {
         let repo = Repo::new();

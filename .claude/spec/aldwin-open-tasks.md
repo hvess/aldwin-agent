@@ -61,8 +61,42 @@ contradicts) and the entry says so before it goes.
 
 ## Workspace
 
-4. **Comments predate the comments skill.** `.claude/skills/comments/SKILL.md`
-   holds every comment to what an LLM reader needs; the crates were written
-   before it. The rework lands one crate per commit, each through the review
-   loop and changing comments only: login (landed with the skill), llm,
-   config, core, tools, cli and tui are done; review follows. Entry 1 waits on it. Closing it is the last crate's commit.
+5. **The comment rework found code that disagrees with itself.** Reading
+   every comment against its code (`aldwin-review.md`, Progress
+   2026-09-27, comments) turned up these; each is its own change, with a
+   test.
+   - `crates/core/src/prompt.rs`: the system prompt tells the model to
+     declare every `run` call `read` or `write`; ADR 0011 removed run
+     classes and `run` takes no such parameter.
+   - `crates/tui/src/app.rs` `open_provider_question`: says every provider
+     needs a key in the environment; since ADR 0012 an account provider can
+     run on a connected account.
+   - `crates/login/src/oauth.rs` `poll`: a 4xx that is not an RFC 8628
+     answer (a 429, a proxy's HTML 403) is an `Err` and ends the login,
+     where a server's trouble is waited out.
+   - `crates/cli/src/bootstrap.rs` `git_branch` reads `<dir>/.git/HEAD`; in
+     a git worktree `.git` is a file, so it names an outer checkout's
+     branch.
+   - `crates/cli/src/context.rs` `platform_facts`: any failure to start the
+     sandboxed `sed --version` reports a GNU `sed` as BSD.
+   - `crates/cli/src/git_shim.rs` `install` passes `current_exe()` to
+     `real_git` uncanonicalised; `exec_real_git` canonicalises.
+   - `crates/llm/src/transport.rs`: the idle-timeout error says 60s whatever
+     `with_idle_timeout` set.
+   - `crates/config/src/history.rs` `SessionSummary::title`: a first
+     message of blank lines gives an empty title, not `(untitled)`.
+   - `crates/tools/src/tools/ask.rs`: a yes and a no are asked for in the
+     tool's description, never checked; only "Chat about this" is enforced.
+   - `crates/review`: `Assignment::record` accepts a verdict over a carried
+     pass; `measure`, and `capture` without `--out`, make run directories
+     that count toward `KEPT_RUNS`; `git::staged_tree` and `write_record`
+     inherit `GIT_DIR` and `GIT_INDEX_FILE`, which the gate tests would
+     honour inside a hook.
+   - Tests that cannot fail: `a_single_root_adds_no_reachability_section`
+     (looks for text the code never prints),
+     `a_session_from_a_future_schema_is_skipped_rather_than_failing_the_listing`
+     (never writes the file), `a_broken_transcript_reports_once_and_then_stays_quiet`
+     and `a_listing_is_newest_first_and_carries_a_readable_date` (neither
+     checks what its name says), `an_unfinished_session_is_not_listed`
+     (the current session is excluded anyway). The narrow-table rule in
+     `crates/tui/src/ui/markdown.rs` `render_table` has no test at all.

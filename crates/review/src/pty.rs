@@ -1,16 +1,8 @@
-//! Pseudoterminal plumbing for the proxy.
+//! Pseudoterminal plumbing for the proxy, which holds the masters of two ptys
+//! (foot's and the app's) to see the app's bytes, detect quiet and press keys.
 //!
-//! The harness owns both ends of two ptys. It is the only arrangement that
-//! gives all three things capture needs at once: the bytes the app actually
-//! emits (so a cell grid can be parsed from them), a way to know when the app
-//! has gone quiet, and a way to press keys.
-//!
-//! libc is reached only for what std has no word for — opening the pair, the
-//! line discipline, the window size and the controlling terminal. Once open,
-//! the master is a `File` and is read and written through std. The fiddly
-//! part is [`Pty::attach_as_controlling`]: a TUI needs its pty to *be* its
-//! controlling terminal, which means `setsid` and `TIOCSCTTY` between fork
-//! and exec.
+//! libc only for what std lacks: opening the pair, the line discipline, the
+//! window size and the controlling terminal.
 
 use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
@@ -32,11 +24,10 @@ pub struct Pty {
 }
 
 impl Pty {
-    /// Open a pty pair and put the line discipline in raw mode.
+    /// Opens a pty pair with the line discipline in raw mode.
     ///
-    /// Raw is not a detail: with `ECHO` on, every byte the harness writes to
-    /// the master comes straight back at it as if the far side had typed it.
-    /// The probe hit exactly that and read its own output back.
+    /// Must stay raw: with `ECHO` on, every byte written to the master is read
+    /// back from it.
     ///
     /// # Errors
     ///
@@ -82,8 +73,7 @@ impl Pty {
         Ok(Pty { master, slave_path })
     }
 
-    /// The `/dev/pts/N` path. `foot --pty` takes this one; the app gets the
-    /// other pty's, as its controlling terminal.
+    /// The slave's `/dev/pts/N` path, for `foot --pty`.
     pub fn slave_path(&self) -> &Path {
         &self.slave_path
     }
@@ -97,19 +87,18 @@ impl Pty {
         Ok(self.master.try_clone()?)
     }
 
-    /// Write to the master, as if the far side's keyboard had.
+    /// Writes to the master, as the slave side's input.
     ///
     /// # Errors
     ///
-    /// When the write fails, as for any `File`.
+    /// When the write fails.
     pub fn write_all(&self, bytes: &[u8]) -> Result<()> {
         (&self.master).write_all(bytes)?;
         Ok(())
     }
 
-    /// Window size as the far side sees it. foot writes this on its pty once
-    /// its window is configured, which is how the harness learns the app's
-    /// geometry is real rather than foot's initial 80×24.
+    /// Window size as columns and rows. foot sets it once its window is
+    /// configured, replacing its initial 80×24.
     ///
     /// # Errors
     ///
@@ -124,8 +113,8 @@ impl Pty {
         Ok((ws.ws_col, ws.ws_row))
     }
 
-    /// Set the window size, which also delivers `SIGWINCH` to the foreground
-    /// process group — how a resize reaches the app.
+    /// Sets the window size, which sends `SIGWINCH` to the foreground process
+    /// group.
     ///
     /// # Errors
     ///
@@ -144,22 +133,19 @@ impl Pty {
         Ok(())
     }
 
-    /// Spawn `command` with this pty's slave as stdin/stdout/stderr *and* as
-    /// its controlling terminal.
+    /// Spawns `command` with this pty's slave as stdin/stdout/stderr and as its
+    /// controlling terminal.
     ///
-    /// Without `setsid` the child stays in the harness's session and
-    /// `TIOCSCTTY` fails; without `TIOCSCTTY` the app has a tty on its fds but
-    /// no controlling terminal, and anything that queries the terminal —
-    /// which is exactly the layer this harness exists to exercise — behaves
-    /// differently or not at all.
+    /// Both `setsid` and `TIOCSCTTY` are required: without `setsid`,
+    /// `TIOCSCTTY` fails; without `TIOCSCTTY`, terminal queries misbehave.
     ///
     /// # Errors
     ///
-    /// When the slave cannot be opened or the command cannot be spawned —
+    /// When the slave cannot be opened or the command cannot be spawned,
     /// including `setsid`, `TIOCSCTTY` or `dup2` failing in the child.
     pub fn attach_as_controlling(&self, command: &mut Command) -> Result<Child> {
-        // O_NOCTTY: the harness opens the slave only to hand it on, and must
-        // not acquire it as its own controlling terminal on the way.
+        // O_NOCTTY: the harness must not acquire the slave as its own
+        // controlling terminal.
         let slave = OpenOptions::new()
             .read(true)
             .write(true)
@@ -167,11 +153,10 @@ impl Pty {
             .open(&self.slave_path)?;
         let slave_fd = slave.as_raw_fd();
 
-        // SAFETY: the closure runs in the forked child before exec, where
-        // only async-signal-safe calls are allowed. setsid, ioctl, dup2 and
-        // close are, and it allocates nothing: `last_os_error` only reads
-        // errno. slave_fd stays open in the parent until spawn returns, so
-        // the child inherits a valid descriptor.
+        // SAFETY: the closure runs between fork and exec, so it must be
+        // async-signal-safe: setsid, ioctl, dup2 and close are, and it
+        // allocates nothing (`last_os_error` only reads errno). slave_fd stays
+        // open in the parent until spawn returns.
         unsafe {
             command.pre_exec(move || {
                 if libc::setsid() < 0 {
@@ -197,20 +182,18 @@ impl Pty {
     }
 }
 
-/// Read from a pty master. Returns `Ok(0)` at EOF, which for a pty master
-/// means the far side closed — the app exited.
+/// Reads from a pty master; `Ok(0)` means the slave side closed.
 ///
 /// # Errors
 ///
-/// When the read fails with anything but `EIO`, which is the slave closing,
-/// or `Interrupted`, which is retried.
+/// When the read fails with anything but `EIO` (read as `Ok(0)`) or
+/// `Interrupted` (retried).
 pub fn read(master: &mut File, buf: &mut [u8]) -> Result<usize> {
     loop {
         match master.read(buf) {
             // A pty master reports EIO rather than EOF when the slave is gone.
             Err(e) if e.raw_os_error() == Some(libc::EIO) => return Ok(0),
-            // Retried like `write_all` does: the pump treats an error as the
-            // far side closing, and a signal is not that.
+            // Retried: the pump reads any error as the far side closing.
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             other => return Ok(other?),
         }

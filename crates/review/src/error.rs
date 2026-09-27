@@ -1,9 +1,7 @@
 //! The crate's one error type.
 //!
-//! A variant says what failed — a file, git, the design, a frame, a gate —
-//! and its `Display` is the sentence whoever ran the loop reads: `main` prints
-//! that and nothing else. The sentences are the interface; the variants are
-//! there so a caller that needs to tell a refusal from a broken machine can.
+//! Each `Display` is the whole sentence `main` prints; the variants let a
+//! caller tell a refusal from a broken machine.
 
 use thiserror::Error;
 
@@ -23,8 +21,8 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    /// `run.json`, a pass record, a judge's verdict or sway's tree is not the
-    /// JSON it should be.
+    /// `run.json`, a pass record, a judge's verdict or sway's tree is not
+    /// valid JSON of its shape.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
@@ -75,8 +73,8 @@ pub enum Error {
     #[error("the run has not passed; nothing to record")]
     NotPassed,
 
-    /// Something was staged after the review ran, so the tree it reviewed is
-    /// not the one about to be recorded.
+    /// The index changed after the review ran, so the reviewed tree is not
+    /// the one about to be recorded.
     #[error("the index is tree {now}, but this run reviewed {reviewed}; something was staged after the review. Run the loop again.")]
     IndexMoved {
         /// The tree the index holds now.
@@ -109,5 +107,5 @@ pub enum Error {
     Review(String),
 }
 
-/// A `Result` whose error is this crate's [`Error`].
+/// A `Result` whose error is this crate's [`enum@Error`].
 pub type Result<T> = std::result::Result<T, Error>;

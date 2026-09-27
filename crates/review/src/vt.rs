@@ -1,39 +1,23 @@
-//! A terminal emulator, cut down to what the app under test actually emits.
+//! A terminal emulator cut down to what ratatui emits, producing the declared
+//! cell grid (character, foreground, background) that quiesce waits on and
+//! stage 8 reads positions from; pixels cannot give declared colours.
 //!
-//! This is what turns the proxy's byte stream into the thing capture waits on
-//! and stage 8 reads positions from — the `.txt` beside each frame: a grid of
-//! cells, each carrying its character and the foreground and
-//! background the app *declared* for it. Reading those off the PNG instead
-//! cannot work — font rasterization antialiases every glyph edge into colours
-//! that belong to no palette, and a pixel says nothing about which run of
-//! text is a label rather than body.
-//!
-//! Scope is deliberate. ratatui positions every row absolutely and repaints,
-//! so this handles cursor addressing, erases, SGR and the alternate screen,
-//! and treats the rest as noise. Anything it does not understand is skipped
-//! rather than guessed at — a parser that invents cells is worse than one
-//! that admits a gap, because the judge would report confidently about cells
-//! the app never drew.
-//!
-//! The defence against that failure is in `proxy::verify_against_pixels`:
-//! a cell this parser calls "space on ground X" must be a flat block of X in
-//! the captured frame. Parser and pixels check each other.
+//! Handles cursor addressing, erases, SGR, DECTCEM and the alternate screen.
+//! Anything else is skipped, never guessed: an invented cell would mislead
+//! the judge. `proxy::verify_against_pixels` cross-checks the result.
 
 use unicode_width::UnicodeWidthChar;
 
 /// A colour as the app declared it in SGR.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Color {
-    /// The terminal's own default — the app never painted this cell. The
-    /// design system says that must never happen inside a frame, so this
-    /// variant is a finding, not a value.
+    /// The terminal's default: the app never painted this cell. Inside a
+    /// frame this is a design finding.
     #[default]
     Default,
-    /// One of the terminal's 256 palette entries, whose colour is foot's to
-    /// choose rather than the app's.
+    /// One of the terminal's 256 palette entries; foot picks the colour.
     Indexed(u8),
-    /// A truecolour value, which is how every design token reaches the
-    /// terminal.
+    /// A truecolour value, how every design token reaches the terminal.
     Rgb(u8, u8, u8),
 }
 
@@ -77,8 +61,7 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// The pair actually shown. `SGR 7` swaps them, and anything comparing
-    /// against the design's role pairing wants what the eye gets.
+    /// The `(fg, bg)` pair shown, with SGR 7 applied.
     pub fn effective(&self) -> (Color, Color) {
         if self.attrs.reverse {
             (self.bg, self.fg)
@@ -87,8 +70,7 @@ impl Cell {
         }
     }
 
-    /// The right-hand half of a double-width glyph. It holds no character of
-    /// its own and is skipped when reading a row as text.
+    /// Whether this is the right half of a double-width glyph.
     pub fn is_continuation(&self) -> bool {
         self.ch == '\0'
     }
@@ -102,9 +84,7 @@ pub struct Grid {
     /// Height in cells.
     pub rows: u16,
     cells: Vec<Cell>,
-    /// Where the terminal's cursor stands while it is shown. The app's
-    /// caret is that cursor, a bar no cell carries, so it is read here
-    /// rather than off a ground.
+    /// The shown cursor's `(row, col)`: the app's caret, which no cell carries.
     caret: Option<(u16, u16)>,
 }
 
@@ -148,8 +128,8 @@ impl Grid {
             .to_string()
     }
 
-    /// Every row as [`Grid::row_text`], joined by newlines — the `.txt`
-    /// written beside each frame.
+    /// Every row as [`Grid::row_text`], newline-joined: the `.txt` beside each
+    /// frame.
     pub fn text(&self) -> String {
         (0..self.rows)
             .map(|r| self.row_text(r))
@@ -157,14 +137,11 @@ impl Grid {
             .join("\n")
     }
 
-    /// A cheap identity for the visible state.
+    /// A hash of the visible state (cells and caret), which quiesce compares.
     ///
-    /// Quiesce is about what the frame *shows*, not about whether bytes are
-    /// flowing: the app repaints on every tick and ratatui still emits the
-    /// frame envelope — synchronised-update markers, cursor hide/show, an SGR
-    /// reset — when the diff is empty. Waiting for the byte stream to stop
-    /// therefore waits forever, which is exactly how the first scripted scene
-    /// failed.
+    /// Never quiesce on bytes instead: ratatui emits a frame envelope
+    /// (synchronised-update markers, cursor hide/show, SGR reset) every tick,
+    /// so the byte stream never stops.
     pub fn fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -200,13 +177,12 @@ pub struct Vt {
     params: Vec<u32>,
     current: Option<u32>,
     private: bool,
-    /// A `:` was seen in this CSI — the only thing that tells the
-    /// colour-space spelling `38:2::r:g:b` from `38;2;0;g;b` with more
-    /// parameters behind it.
+    /// A `:` was seen in this CSI; the only way to tell `38:2::r:g:b` from
+    /// `38;2;0;g;b` followed by more parameters.
     colons: bool,
     utf8: Vec<u8>,
     need: usize,
-    /// DECTCEM: whether the cursor is shown. A terminal starts with it on.
+    /// DECTCEM: whether the cursor is shown; starts on.
     shown: bool,
 }
 
@@ -240,8 +216,8 @@ impl Vt {
         for &b in bytes {
             self.byte(b);
         }
-        // Where the cursor has come to rest once the bytes are in — a frame
-        // hides it, paints, then shows it where the caret goes.
+        // Read after the whole chunk: a frame hides the cursor, paints, then
+        // shows it at the caret.
         self.grid.caret = self.shown.then_some((self.row, self.col));
     }
 
@@ -249,8 +225,7 @@ impl Vt {
         match self.state {
             State::Skip1 => self.state = State::Ground,
             State::Osc => {
-                // Terminated by BEL, or by ESC \ — the ESC is consumed here
-                // and the backslash lands in Skip1.
+                // Ends at BEL, or ESC \ (the backslash lands in Skip1).
                 if b == 0x07 {
                     self.state = State::Ground;
                 } else if b == 0x1b {
@@ -285,9 +260,7 @@ impl Vt {
                             .saturating_add(d),
                     );
                 }
-                // Colons appear in the SGR-with-colour-space spelling; treat
-                // them as separators so `38:2::r:g:b` does not silently
-                // become one enormous parameter.
+                // Colons separate too, as in `38:2::r:g:b`.
                 b';' | b':' => {
                     self.colons |= b == b':';
                     let v = self.current.take().unwrap_or(0);
@@ -302,8 +275,8 @@ impl Vt {
                     self.csi(b);
                     self.state = State::Ground;
                 }
-                // An ESC abandons the sequence and starts the next one; to
-                // drop it instead would print that sequence's body as text.
+                // ESC abandons this sequence and starts the next; dropping it
+                // would print the next sequence's body as text.
                 0x1b => self.state = State::Esc,
                 _ => self.state = State::Ground,
             },
@@ -323,8 +296,8 @@ impl Vt {
 
     fn utf8_byte(&mut self, b: u8) {
         let continuation = b & 0xc0 == 0x80;
-        // A sequence cut short is dropped and this byte starts afresh —
-        // waiting for the missing bytes would swallow the valid text after it.
+        // A truncated sequence is dropped; waiting for its missing bytes
+        // would swallow the valid text after it.
         if self.need != 0 && !continuation {
             self.need = 0;
         }
@@ -354,8 +327,8 @@ impl Vt {
     fn execute(&mut self, b: u8) {
         match b {
             0x08 => self.col = self.col.saturating_sub(1),
-            // Clamped to the last column, as a terminal does: unclamped, a run
-            // of tabs walks `col` up to a u16 overflow.
+            // Clamped to the last column: unclamped, a run of tabs overflows
+            // the u16 `col`.
             0x09 => self.col = (((self.col / 8) + 1) * 8).min(self.grid.cols.saturating_sub(1)),
             0x0a..=0x0c => self.line_feed(),
             0x0d => self.col = 0,
@@ -407,7 +380,7 @@ impl Vt {
         (param.max(1) - 1).min(self.grid.cols.saturating_sub(1) as u32) as u16
     }
 
-    /// A missing parameter and a zero both mean the default.
+    /// Parameter `i`; missing or zero means `default`.
     fn param(&self, i: usize, default: u32) -> u32 {
         self.params
             .get(i)
@@ -416,8 +389,7 @@ impl Vt {
             .unwrap_or(default)
     }
 
-    /// A relative move's count. Clamped rather than cast: `as u16` wraps
-    /// `CSI 65536 B` to a move of nothing.
+    /// A relative move's count, clamped: `as u16` would wrap `CSI 65536 B` to 0.
     fn count(&self) -> u16 {
         self.param(0, 1).min(u16::MAX as u32) as u16
     }
@@ -428,12 +400,9 @@ impl Vt {
                 self.row = self.clamp_row(self.param(0, 1));
                 self.col = self.clamp_col(self.param(1, 1));
             }
-            // Saturating and clamped, every one: the app under test is the
-            // thing being observed and does not get to be trusted. `CSI 65535
-            // B` overflows a plain `+`, and an out-of-range row reaches
-            // `erase_line`'s direct index — either panics the pump thread,
-            // which poisons the parser's lock and takes the capture down
-            // behind a misleading message.
+            // Every move saturates and clamps; the app is untrusted. An
+            // overflow or an out-of-range row (indexed by `erase_line`) would
+            // panic the pump thread and poison the parser's lock.
             b'A' => self.row = self.row.saturating_sub(self.count()),
             b'B' => {
                 self.row = self
@@ -460,13 +429,11 @@ impl Vt {
                 }
             }
             b'm' => self.sgr(),
-            // 25 is DECTCEM, the cursor shown or hidden: the caret's blink.
+            // DECTCEM (`?25`): the caret's blink.
             b'h' | b'l' if self.private && self.params.first() == Some(&25) => {
                 self.shown = final_byte == b'h';
             }
-            // 1049 is the alternate screen. ratatui enters it at startup and
-            // leaves on exit; either way the buffer it switches to is blank,
-            // which is all this parser needs to model.
+            // `?1049` alternate screen: modelled as a blank grid either way.
             b'h' | b'l' if self.private && self.params.first() == Some(&1049) => {
                 self.grid = Grid::new(self.grid.cols, self.grid.rows);
                 self.row = 0;
@@ -576,12 +543,10 @@ impl Vt {
     }
 }
 
-/// `38;5;n` and `38;2;r;g;b`, returning how many extra parameters were eaten.
-/// The colour-space variant `38:2::r:g:b` arrives with an empty slot where the
-/// colour space goes, which is why a 5-parameter form is accepted too — but
-/// only when the sequence was spelled with colons. crossterm sets both colours
-/// in one `38;2;r;g;b;48;2;r;g;b`, and without that condition a foreground
-/// whose red is 0 reads as the colour-space form and eats the background.
+/// Parses `38;5;n` and `38;2;r;g;b`, returning how many extra parameters were
+/// consumed. The 5-parameter `38:2::r:g:b` is accepted only when `colons`:
+/// crossterm sends `38;2;0;g;b;48;…`, where a red of 0 would otherwise eat
+/// the background.
 fn extended(rest: &[u32], colons: bool) -> (Option<Color>, usize) {
     match rest {
         [5, n, ..] => (Some(Color::Indexed(*n as u8)), 2),
@@ -604,8 +569,7 @@ mod tests {
 
     #[test]
     fn absolute_positioning_places_a_row_where_the_app_asked() {
-        // ratatui addresses every row absolutely rather than relying on
-        // wrapping, so CUP is the one sequence the whole grid depends on.
+        // ratatui addresses every row with CUP.
         let vt = vt(b"\x1b[3;5Hhello");
         assert_eq!(vt.grid().row_text(2), "    hello");
         assert_eq!(vt.grid().row_text(0), "");
@@ -622,8 +586,6 @@ mod tests {
 
     #[test]
     fn a_cell_the_app_never_painted_keeps_the_default_colour() {
-        // Which is a finding, not a value: the design system requires every
-        // glyph inside a frame to be painted from the palette.
         let vt = vt(b"\x1b[1;1Hx");
         assert_eq!(vt.grid().get(0, 1).bg, Color::Default);
     }
@@ -652,8 +614,7 @@ mod tests {
 
     #[test]
     fn a_double_width_glyph_occupies_two_cells() {
-        // unicode-width is the same crate the TUI measures with, so the
-        // harness and the app agree about how much room a glyph takes.
+        // Must use the same `unicode-width` crate as the TUI.
         let vt = vt("漢x".as_bytes());
         assert_eq!(vt.grid().get(0, 0).ch, '漢');
         assert!(vt.grid().get(0, 1).is_continuation());
@@ -663,22 +624,17 @@ mod tests {
 
     #[test]
     fn a_cursor_move_past_the_grid_cannot_panic_the_parser() {
-        // The parser observes an app that may be misbehaving — that is the
-        // point of it — so a wild VPA/CHA must clamp rather than index out of
-        // bounds. It runs on the pump thread, where a panic would poison the
-        // lock and take the whole capture with it.
+        // A panic here would poison the pump thread's lock.
         let mut vt = Vt::new(20, 5);
         vt.feed(b"\x1b[99d\x1b[99Gx\x1b[2K");
-        // Relative moves overflow a u16 rather than running past the grid,
-        // which is a different failure and just as fatal on the pump thread.
+        // Relative moves: u16 overflow.
         vt.feed(b"\x1b[65535B\x1b[65535C\x1b[65535X");
         assert_eq!(vt.grid().rows, 5);
     }
 
     #[test]
     fn a_foreground_with_no_red_does_not_eat_the_background_set_beside_it() {
-        // crossterm's `SetColors` is one sequence, and `38;2;0;…` is also how
-        // the colon spelling's empty colour-space slot parses.
+        // crossterm's `SetColors` is one sequence.
         let vt = vt(b"\x1b[38;2;0;10;20;48;2;4;5;6mx");
         let cell = vt.grid().get(0, 0);
         assert_eq!(cell.fg, Color::Rgb(0, 10, 20));
@@ -716,9 +672,6 @@ mod tests {
 
     #[test]
     fn an_unrecognised_sequence_is_skipped_rather_than_printed() {
-        // A parser that prints what it cannot parse would fabricate cells,
-        // and the grid stage 8 reads would report on glyphs the app never
-        // drew.
         let vt = vt(b"\x1b]0;a window title\x07\x1b[?25lok");
         assert_eq!(vt.grid().row_text(0), "ok");
     }

@@ -311,7 +311,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
 
 The code judge's third source now includes `.claude/skills/comments/SKILL.md`,
 which quality-gate's comment rule names: every comment is judged as written
-for an LLM reader. The rework it drives lands one crate per commit.
+for an LLM reader. The rework it drove landed one crate per commit, all
+eight by 2026-09-27; what it found in the code is open-tasks entry 5.
 
 ## Progress (2026-09-27, rounds, not readings)
 

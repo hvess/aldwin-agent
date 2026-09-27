@@ -1,31 +1,26 @@
-//! Keystrokes, as bytes.
+//! Keystrokes, as bytes the harness writes in place of foot's key encoding.
 //!
-//! The harness chooses these, which is the one place it stands in for the
-//! terminal rather than using it: foot's own key *encoding* is not exercised
-//! by anything here, so a defect in that layer — `40cb6b1` was one — stays
-//! invisible. `wtype` is the answer if that class recurs; the two compose.
-//!
-//! Everything else in the input path is real: what the app writes reaches
-//! foot, and foot's replies to the app's capability queries reach the app.
+//! foot's own key encoding is never exercised, so a defect there (e.g.
+//! `40cb6b1`) is invisible; `wtype` would cover it. The rest of the input path
+//! is real: foot answers the app's capability queries.
 
 use crate::{Error, Result};
 
-/// Turns a scene's comma-separated key spec — `Down, "ok", Enter` — into the
-/// bytes each key writes, one entry per key.
+/// Parses a scene's comma-separated key spec (`Down, "ok", Enter`) into one
+/// byte string per key.
 ///
 /// # Errors
 ///
 /// [`Error::Scene`] when a token is neither a known key name nor a quoted
-/// literal; the message names the token and the keys that are known.
+/// literal.
 pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
     tokenise(spec)
         .into_iter()
         .map(|token| match token.as_str() {
             "Up" => Ok(b"\x1b[A".to_vec()),
             "Down" => Ok(b"\x1b[B".to_vec()),
-            // The review's keyboard way to a selection (ADR 0010). Shift
-            // keeps the legacy form under the Kitty protocol's
-            // "disambiguate" flag, the only one the app pushes.
+            // Keyboard selection in the review (ADR 0010). Legacy form: the
+            // app pushes only the Kitty "disambiguate" flag, which keeps it.
             "ShiftDown" => Ok(b"\x1b[1;2B".to_vec()),
             "Right" => Ok(b"\x1b[C".to_vec()),
             "Left" => Ok(b"\x1b[D".to_vec()),
@@ -35,9 +30,8 @@ pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
             "Space" => Ok(b" ".to_vec()),
             "Backspace" => Ok(b"\x7f".to_vec()),
             other if other.starts_with('"') && other.ends_with('"') && other.len() >= 2 => {
-                // `\e` is an escape, so a raw sequence can be sent verbatim —
-                // needed to ask what a key looks like in a protocol the app
-                // negotiated with the terminal rather than with us.
+                // `\e` becomes ESC, so a raw sequence in a protocol the app
+                // negotiated with the terminal can be sent verbatim.
                 Ok(other[1..other.len() - 1].replace("\\e", "\x1b").into_bytes())
             }
             other => Err(Error::Scene(format!("unknown key {other:?} (Up|Down|ShiftDown|Left|Right|Enter|Tab|Esc|Space|Backspace|\"literal\")"))),
@@ -45,11 +39,7 @@ pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
-/// Split on commas *outside* quotes.
-///
-/// Splitting first and recognising quotes afterwards tore `"hello, world"`
-/// into two tokens and then complained that `"hello` was not a key — an error
-/// pointing at the wrong thing, for a scene that had done nothing wrong.
+/// Splits on commas outside quotes; `a_literal_may_contain_a_comma` pins it.
 fn tokenise(spec: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();

@@ -1,10 +1,8 @@
 //! What git says about the change under review.
 //!
-//! This is the one place the crate runs `git`, so every git failure reads the
-//! same way: the arguments it was given and what it said, as [`Error::Git`].
-//!
-//! Everything here reads the staged tree rather than the working one, because
-//! the staged tree is what a commit records and what a pass is keyed by.
+//! The crate's only caller of `git`; every failure is [`Error::Git`]. Reads
+//! the staged tree, never the working one: it is what a commit records and
+//! what a pass is keyed by.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -15,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
-/// The snapshot stage 5 checks. Which of its scenes changed is what decides
-/// whether stage 8 runs, and on which frames.
+/// The snapshot stage 5 checks; its changed scenes decide whether stage 8
+/// runs, and on which frames (Decision 5).
 pub(crate) const SNAPSHOT: &str = "crates/tui/tests/snapshots/render.snap";
 
 /// `git` in the workspace, failing with git's own message.
@@ -50,8 +48,8 @@ fn git_fed(root: &Path, args: &[&str], input: Option<&str>) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The repository's git directory — shared by every worktree — as an
-/// absolute path.
+/// The repository's git directory, shared by every worktree, as an absolute
+/// path.
 ///
 /// # Errors
 ///
@@ -87,9 +85,9 @@ pub fn head(root: &Path) -> Result<String> {
 
 /// The tree the next commit would record.
 ///
-/// Inside a pre-commit hook this is the index git is about to commit —
-/// including `git commit -a`'s temporary one, since git hands the hook
-/// `GIT_INDEX_FILE` and this inherits it.
+/// Inside a pre-commit hook this is the index git is about to commit,
+/// `git commit -a`'s temporary one included: `git` inherits the hook's
+/// `GIT_INDEX_FILE`.
 ///
 /// # Errors
 ///
@@ -109,8 +107,8 @@ pub fn staged_tree(root: &Path) -> Result<String> {
 
 /// Paths whose working copy differs from the index, untracked files included.
 ///
-/// A review builds and judges the working tree but records the staged one, so
-/// the two have to be the same thing; this is what says they are not.
+/// Must be empty for a review: it builds and judges the working tree but
+/// records the staged one (Decision 15).
 ///
 /// # Errors
 ///
@@ -172,9 +170,8 @@ pub fn staged_diff(root: &Path) -> Result<String> {
     git(root, &["diff", "--cached"])
 }
 
-/// Git's hash of `HEAD` and part of a staged diff: two runs with the same
-/// fingerprint made the same changes there on the same commit, so every
-/// byte in that part of the tree is the same.
+/// Git's hash of `HEAD` and part of the staged diff: equal fingerprints mean
+/// the same bytes in that part of the tree (Decision 17).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fingerprint(String);
 
@@ -185,10 +182,9 @@ impl Fingerprint {
     }
 }
 
-/// The [`Fingerprint`] of `HEAD` and the staged diff limited to `pathspecs` —
-/// the whole diff when there are none. `HEAD` because a diff names only the
-/// files it touches: a commit that changed a judge's rules elsewhere would
-/// leave the diff's text, and a fingerprint of it alone, as it was.
+/// The [`Fingerprint`] of `HEAD` and the staged diff limited to `pathspecs`
+/// (the whole diff when empty). `HEAD` is included because a commit can
+/// change what a judge reads outside the diff while leaving its text alone.
 ///
 /// # Errors
 ///
@@ -207,7 +203,7 @@ pub fn fingerprint(root: &Path, pathspecs: &[&str]) -> Result<Fingerprint> {
         .into_iter()
         .chain(pathspecs.iter().copied())
         .collect();
-    // Empty before the first commit, which is no reason to stop.
+    // Empty before the first commit.
     let head = head(root).unwrap_or_default();
     let diff = format!("{head}{}", git(root, &args)?);
     let hash = git_fed(root, &["hash-object", "--stdin"], Some(&diff))?;
@@ -237,15 +233,13 @@ pub fn changed_scenes(root: &Path) -> Result<BTreeSet<String>> {
 }
 
 /// The scene a snapshot line names, when it is a section's `=== <theme>
-/// <scene> <size>` header. The one reader of that header.
+/// <scene> <size>` header. The only parser of that header.
 pub(crate) fn scene_of(line: &str) -> Option<&str> {
     line.strip_prefix("=== ")?.split_whitespace().nth(1)
 }
 
-/// The scenes whose sections differ between two snapshots.
-///
-/// A section starts at `=== <theme> <scene> <size>` and runs to the next;
-/// one that changed, appeared or went away names its scene.
+/// The scenes whose sections changed, appeared or went away between two
+/// snapshots; a section runs from its header to the next.
 fn changed_in(before: &str, after: &str) -> BTreeSet<String> {
     fn sections(text: &str) -> BTreeMap<&str, Vec<&str>> {
         let mut out: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -270,10 +264,10 @@ fn changed_in(before: &str, after: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// A throwaway repository with one staged file, for the tests of the functions
-/// that decide whether a commit lands — here and in `gate`. Its git runs with
-/// the caller's `GIT_DIR` and `GIT_INDEX_FILE` removed, so a test never
-/// touches the repository it happens to run inside.
+/// A throwaway repository with one staged file, for the tests here and in
+/// `gate`. `Repo::git` removes `GIT_DIR` and `GIT_INDEX_FILE` so it never
+/// touches an enclosing repository; the crate's own `git` does not remove
+/// them.
 #[cfg(test)]
 pub(crate) mod fixture {
     use std::path::Path;
@@ -350,8 +344,7 @@ row b
         assert!(changed_in(BEFORE, BEFORE).is_empty());
     }
 
-    /// What carries a judge's pass: the same staged change where it reads
-    /// gives the same fingerprint, and a change elsewhere does not move it.
+    /// Decision 17: a judge's pass carries on this fingerprint.
     #[test]
     fn a_fingerprint_moves_only_with_what_it_covers() {
         let repo = Repo::new();
@@ -367,7 +360,7 @@ row b
         assert_ne!(fingerprint(repo.root(), &[]).unwrap(), whole);
 
         // A commit moves every fingerprint, even where the diff reads the
-        // same: what a judge judges by may have changed under it.
+        // same.
         repo.git(&[
             "-c",
             "user.name=t",

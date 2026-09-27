@@ -1,26 +1,12 @@
-//! The pty proxy — foot on one pty, the app on another, the harness between.
+//! The pty proxy: foot on one pty, the app on another, the harness pumping
+//! bytes between them.
 //!
-//! This is what makes the harness more than a camera. Sitting in the stream
-//! gives three things no screenshot can:
+//! It yields the declared cell grid (what stage 8 reads positions from),
+//! quiesce, and key input. foot still renders and answers the app's
+//! capability queries itself; only keypresses are synthesised.
 //!
-//! * **the declared cell grid** — the character and the foreground and
-//!   background the app asked for, per cell, which is the declared
-//!   grid stage 8 reads positions from;
-//! * **quiesce** — the app going quiet is observable, so a frame is captured
-//!   when it is finished rather than after a hopeful interval;
-//! * **input** — keystrokes go in as bytes.
-//!
-//! What it does *not* fake is the terminal. foot still renders, and its
-//! replies to the app's capability queries are foot's own: a query written by
-//! the app is forwarded to foot, and foot's answer is forwarded back. Only
-//! synthesised keypresses are the harness's invention, which is the one thing
-//! this arrangement cannot vouch for.
-//!
-//! Startup order matters and is the reason the pre-resize race disappears
-//! here. foot sets the window size on its pty once its window is configured;
-//! the harness waits for that, copies it to the app's pty, and only then
-//! starts the app. The app is therefore born at its final size and never
-//! sees the 80×24 foot would otherwise have handed it.
+//! Startup order is load-bearing: the app starts only after foot has sized its
+//! pty, on a pty already at that size, so it never sees foot's initial 80×24.
 
 use std::fs::File;
 use std::io::Write;
@@ -38,8 +24,8 @@ use crate::pty::{self, Pty};
 use crate::vt::{Color, Grid, Vt};
 use crate::{Error, Result};
 
-/// foot and the app, each on its own pty, with the harness pumping bytes
-/// between them and parsing the app's side. Dropping it kills the app.
+/// foot and the app on their own ptys, the app's output parsed on the way
+/// through. Dropping it kills the app.
 #[derive(Debug)]
 pub struct Proxy {
     app: Pty,
@@ -49,14 +35,11 @@ pub struct Proxy {
     start: Instant,
 }
 
-/// foot, pinned, attached to a pty the harness owns rather than one it makes.
-/// Nothing is read from the developer's own `foot.ini`: their font, padding
-/// and colours are theirs, not the test's.
+/// The `swaymsg exec` command line for foot on the harness's pty `pts`.
 ///
-/// The headless compositor has no keyboard, so foot never has focus and
-/// would draw its cursor — the app's caret — as an unfocused hollow block.
-/// `unfocused-style=unchanged` draws it as the focused terminal the
-/// developer types into does: the bar the app asked for.
+/// `--config=/dev/null` keeps the developer's `foot.ini` out.
+/// `cursor.unfocused-style=unchanged` is needed because headless foot never
+/// has focus and would otherwise draw the app's bar caret as a hollow block.
 pub(crate) fn foot_command(font: &str, pts: &Path) -> String {
     format!(
         "foot --config=/dev/null -o main.pad=0x0 -o cursor.unfocused-style=unchanged -o {} --pty={}",
@@ -65,13 +48,13 @@ pub(crate) fn foot_command(font: &str, pts: &Path) -> String {
     )
 }
 
-/// One word for the shell `swaymsg exec` hands its command to.
+/// `s` single-quoted as one word for the shell `swaymsg exec` runs.
 pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 impl Proxy {
-    /// Start foot, wait for it to size its pty, then start the app on a pty
+    /// Starts foot, waits for it to size its pty, then starts the app on a pty
     /// already at that size.
     ///
     /// # Errors
@@ -112,9 +95,8 @@ impl Proxy {
         let idle = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
 
-        // app → parser → foot. Every byte the app writes is both the thing
-        // foot renders and the thing the grid is parsed from, so there is
-        // no way for the two to disagree about what was sent.
+        // app → parser → foot: foot renders exactly the bytes the grid is
+        // parsed from.
         spawn_pump(
             app.try_clone_master()?,
             display.try_clone_master()?,
@@ -125,8 +107,7 @@ impl Proxy {
                 last_print: 0,
             }),
         );
-        // foot → app: keystrokes, and foot's replies to the app's own
-        // capability queries.
+        // foot → app: foot's replies to the app's capability queries.
         spawn_pump(display.try_clone_master()?, app.try_clone_master()?, None);
 
         Ok(Proxy {
@@ -138,16 +119,13 @@ impl Proxy {
         })
     }
 
-    /// Block until the app has emitted nothing for `idle`.
-    ///
-    /// This is the spec's quiesce rule, and it replaces a settle interval:
-    /// the spinner stops when there is no turn running, so a frame taken here
-    /// is one the app considers finished rather than one caught mid-draw.
+    /// Blocks until the visible grid has not changed for `idle` (the quiesce
+    /// rule; never replace it with a fixed settle interval).
     ///
     /// # Errors
     ///
-    /// When `timeout` passes first — the message says whether the app drew
-    /// nothing or never settled.
+    /// When `timeout` passes first, saying whether the app drew nothing or
+    /// never settled.
     pub fn wait_quiet(&self, idle: Duration, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -170,15 +148,11 @@ impl Proxy {
         }
     }
 
-    /// Block until the visible state moves, or `timeout` passes without it.
+    /// Whether the visible state moved before `timeout`.
     ///
-    /// The caret blinks at the design's 1.05s, stepped, so an app at rest
-    /// on a field is quiet for most of a second and then not: `wait_quiet`
-    /// still settles between blinks, but a picture and a grid taken either
-    /// side of the edge disagree at exactly one cell. Waiting for the edge
-    /// first leaves half a period to take both inside. A screen with no
-    /// caret never moves; that case falls through the timeout and costs
-    /// only that.
+    /// Used to align with the caret's 1.05 s stepped blink: a picture and a
+    /// grid taken on either side of a blink edge disagree at one cell, so
+    /// capture waits for the edge and then has half a period for both.
     pub fn wait_for_change(&self, timeout: Duration) -> bool {
         let before = self.idle.load(Ordering::Relaxed);
         let deadline = Instant::now() + timeout;
@@ -191,9 +165,7 @@ impl Proxy {
         false
     }
 
-    /// Send bytes as if typed. The harness chooses these, so they test the
-    /// app's handling and not foot's key encoding — the one thing this
-    /// arrangement cannot vouch for.
+    /// Sends bytes as typed input; foot's key encoding is bypassed.
     ///
     /// # Errors
     ///
@@ -202,18 +174,11 @@ impl Proxy {
         self.app.write_all(bytes)
     }
 
-    /// Press a key and wait for the app to finish reacting to **that key**.
+    /// Sends a key and waits for the app to finish reacting to that key.
     ///
-    /// Waiting for quiet alone is not enough and the difference is not
-    /// subtle: an app that has been idle since startup is *already* quiet, so
-    /// a bare `wait_quiet` returns before the keystroke has been read at all.
-    /// The first capture written this way screenshotted the previous screen
-    /// while the parser had already consumed the next one — caught, not by
-    /// review, but by `verify_against_pixels` refusing to reconcile the two.
-    ///
-    /// So: note the last-output mark, send, wait for it to move, then wait
-    /// for silence. A key that legitimately draws nothing falls through the
-    /// grace period and costs only that.
+    /// Waits for the change mark to move (up to a 2 s grace, for a key that
+    /// draws nothing) before `wait_quiet`: an already-quiet app would
+    /// otherwise return before the key was read.
     ///
     /// # Errors
     ///
@@ -251,9 +216,8 @@ impl Drop for Proxy {
     }
 }
 
-/// What the app-to-terminal direction carries besides bytes: the parser, the
-/// last-change mark, and the fingerprint that decides whether the *visible*
-/// state moved.
+/// The app-to-foot pump's parser and change mark. `idle` holds milliseconds
+/// since `start` at the last visible change, 0 before the first.
 struct Observer {
     vt: Arc<Mutex<Vt>>,
     idle: Arc<AtomicU64>,
@@ -262,9 +226,8 @@ struct Observer {
 }
 
 fn spawn_pump(mut from: File, mut to: File, mut observe: Option<Observer>) {
-    // `ALDWIN_SHOT_TRACE=<path>` tees the app's byte stream to a file. When
-    // the parser and the frame disagree, this is the only place the answer
-    // can be: both of them are downstream of these bytes.
+    // `ALDWIN_SHOT_TRACE=<path>` appends the app's byte stream to a file, for
+    // debugging a parser/frame disagreement.
     let mut trace = observe
         .is_some()
         .then(|| std::env::var_os("ALDWIN_SHOT_TRACE"))
@@ -288,10 +251,9 @@ fn spawn_pump(mut from: File, mut to: File, mut observe: Option<Observer>) {
                     if let Some(observer) = observe.as_mut() {
                         let mut vt = observer.vt.lock().expect("vt lock poisoned");
                         vt.feed(&buf[..n]);
-                        // The mark moves only when the *visible state* moves.
-                        // Bytes alone are not evidence of change: an idle app
-                        // repaints on every tick and ratatui emits the frame
-                        // envelope regardless of whether any cell differs.
+                        // Mark only a changed fingerprint, never bare bytes:
+                        // ratatui emits a frame envelope every tick even when
+                        // no cell differs.
                         let now = vt.grid().fingerprint();
                         if now != observer.last_print {
                             observer.last_print = now;
@@ -310,17 +272,11 @@ fn spawn_pump(mut from: File, mut to: File, mut observe: Option<Observer>) {
     });
 }
 
-/// Cross-check the parser against the picture.
-///
-/// A subtly wrong parser is the same class of defect as the wrong cell size:
-/// it produces a grid that looks entirely plausible, and the judge then
-/// reports confidently about cells the app never drew. So every cell the
-/// parser calls "a space on a known ground" must be a flat block of exactly
-/// that colour in the frame. Where they disagree, one of them is lying and
-/// the run is not scoreable.
+/// Cross-checks the parser against the picture: every non-caret space the
+/// parser gives an RGB ground must show exactly that colour in the frame.
 ///
 /// Returns how many cells were checked, so a caller can refuse a frame where
-/// too few could be.
+/// too few were.
 ///
 /// # Errors
 ///
@@ -333,13 +289,11 @@ pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Resul
         let Color::Rgb(r, g, b) = c.effective().1 else {
             continue;
         };
-        // The caret's cell carries the terminal's bar cursor over its
-        // ground, which is exactly the pixel sampled below.
+        // The caret's bar cursor covers the sampled pixel.
         if c.ch != ' ' || grid.caret() == Some((row, col)) {
             continue;
         }
-        // Inset by a pixel: a cell's own edge can carry the neighbouring
-        // glyph's antialiasing, and that is not what is under test here.
+        // Inset a pixel: a cell's edge can carry a neighbour's antialiasing.
         let x = col as u32 * cell.w + 1;
         let y = row as u32 * cell.h + 1;
         if x + 1 >= image.width || y + 1 >= image.height {

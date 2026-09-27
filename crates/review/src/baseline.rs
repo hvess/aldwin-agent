@@ -1,20 +1,10 @@
-//! The baseline: the measured cell, the pinned font, and the design's own
-//! contradictions.
+//! `baseline.json`: this machine's measured cell, pinned font and toolchain,
+//! and the design's recorded contradictions (`aldwin-review.md` Decision 7).
 //!
-//! The first two are facts about this machine. The third is the honest part.
-//!
-//! The design's prose, its tokens and its frames state one thing in one place
-//! and another elsewhere, and where the developer has decided against the
-//! design — or where the design disagrees with Apple's Human Interface
-//! Guidelines, the usability reference the `ux` skill names — the app follows
-//! one half. The loop cannot be run against such a reference without
-//! somewhere to record which. **Each entry here is a bug in the design
-//! system, not in the app** — it is removed when the design is fixed
-//! upstream or the decision reversed, not when the app changes.
-//!
-//! An entry with no `design_says` and `design_also_says` is not a
-//! contradiction, it is an unfixed bug wearing a costume, and [`Baseline::load`]
-//! rejects the file rather than let one through.
+//! A contradiction is a bug in the design system, not in the app: it is
+//! removed when the design is fixed upstream or the decision reversed, never
+//! when the app changes. [`Baseline::load`] rejects an entry missing either
+//! half.
 
 use std::path::{Path, PathBuf};
 
@@ -35,10 +25,8 @@ pub struct Baseline {
     /// The font the compositor's terminal is started with, pinned so every
     /// capture draws the same glyphs.
     pub font: String,
-    /// `rustc --version` this baseline's results were produced on. Stage 1
-    /// fails when the toolchain moves: clippy's lint set changes between
-    /// releases, so a stage 2 failure on untouched code is a real
-    /// possibility and deserves to be named rather than puzzled over.
+    /// `rustc --version` the results were produced on; stage 1 fails when it
+    /// moves, since clippy's lints change between releases (Decision 10).
     #[serde(default)]
     pub toolchain: String,
     /// Where the design disagrees with itself, the HIG or a decision.
@@ -46,7 +34,7 @@ pub struct Baseline {
     pub contradictions: Vec<Contradiction>,
 }
 
-/// One place the design system disagrees with itself.
+/// One place the design disagrees with itself, the HIG or a decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contradiction {
     /// A short kebab-case name for the entry, quoted wherever it is cited.
@@ -56,7 +44,7 @@ pub struct Contradiction {
     /// What it states in another, what its own rendered frame shows, or what
     /// the HIG says against it.
     pub design_also_says: String,
-    /// Which half the app follows, and why that is the defensible one.
+    /// Which half the app follows, and why.
     pub app_follows: String,
     /// Glyphs this contradiction licenses, for the closed-table check.
     #[serde(default)]

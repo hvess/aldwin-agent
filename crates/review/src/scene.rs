@@ -1,28 +1,14 @@
-//! Scenes — the states the binary is put into before capture.
+//! Scenes: the states the real binary is driven into before capture, each a
+//! seeded `HOME`/`.aldwin` config, a queue of canned replies, and keys.
 //!
-//! A scene is a seeded `HOME`/`.aldwin` config, a queue of canned provider
-//! replies, and the keys to type. The real binary then plays it out: real
-//! HTTP, real streaming adapter, real core loop, real tools, real TUI.
-//! Nothing is poked into the UI's memory, which is the difference between
-//! this and `render_snapshot.rs` — and the reason a scene here can catch
-//! something the snapshot cannot: the review below is opened by the real
-//! dispatcher over a really staged edit.
+//! [`CATALOGUE`] must name exactly the scenes of `render_snapshot.rs`
+//! (`the_catalogue_names_the_snapshots_scenes`). Each scene reaches its
+//! snapshot's state through the real path; one that cannot is reshaped or
+//! dropped with a note here, never pointed at a different state under the
+//! same name.
 //!
-//! The catalogue names the same scenes as `render_snapshot.rs`, so every
-//! scene is both pinned by the snapshot and capturable: stage 8 judges a
-//! scene only when its snapshot moved, and a name missing from either list
-//! is a scene no change can call a judge for. A scene here reaches the
-//! snapshot's state through the real path — the words and files are the
-//! fake's, the state is the same — and one that cannot is reshaped or
-//! dropped **with a note here**, never quietly pointed at a different state
-//! under the same name.
-//!
-//! Two kinds of state took more than typing. A turn still running
-//! (`working`, `running`) is held open by a reply that never ends
-//! (`fake::held`), since the fake otherwise answers at once and the turn is
-//! over before the frame is taken. A selection in the review (`selecting`,
-//! `commented`) is made with `Shift ↓` and the arrows, the keyboard's way to
-//! the same selection a drag leaves (ADR 0010).
+//! A running turn (`working`, `running`) is held open by `fake::held`. A
+//! review selection (`selecting`, `commented`) uses `Shift ↓` (ADR 0010).
 
 use std::path::{Path, PathBuf};
 
@@ -30,24 +16,20 @@ use crate::fake::{self, Canned};
 use crate::geometry::Theme;
 use crate::{Error, Result};
 
-/// The static half of a scene: what it needs seeded and what it will be told.
+/// What a scene seeds and replies, before it is written to disk.
 #[derive(Debug)]
 pub struct Script {
     /// One per request the scene makes, in order.
     pub replies: Vec<Canned>,
-    /// Files the scene needs in the project before it runs — a `read` needs
-    /// something to read, an `edit` needs its `before` text to exist exactly
-    /// once.
+    /// `(path, contents)` seeded in the project. An `edit`'s `before` must
+    /// occur exactly once in its file.
     pub files: Vec<(&'static str, &'static str)>,
-    /// Past sessions to seed into this project's history directory, as
-    /// `(first user message, started_at, turns)`. Written through the
-    /// product's own `HistoryStore`, same rule as the global config: a copy
-    /// of the JSONL format here would drift from the one being reviewed.
+    /// Past sessions as `(first user message, started_at, turns)`, written
+    /// through `HistoryStore`, never a copy of its format.
     pub history: &'static [(&'static str, u64, usize)],
-    /// Typed once the app has settled.
+    /// A [`crate::keys::parse`] spec, typed once the app has settled.
     pub keys: &'static str,
-    /// Written only when the scene wants a provider configured at all;
-    /// `launch_unconfigured` is defined by its absence.
+    /// Whether `provider.yaml` is written; false only for `launch_unconfigured`.
     pub provider: bool,
 }
 
@@ -99,9 +81,8 @@ const PROSE: &str = "Looking at how requests move through the gateway. Every req
 
 const TABLE: &str = "Three providers are configured here:\n\n| provider | key variable | streaming |\n| --- | --- | --- |\n| anthropic | ANTHROPIC_API_KEY | yes |\n| openai | OPENAI_API_KEY | yes |\n| google | GOOGLE_API_KEY | no |\n\n- `google` has no streaming yet\n- the others stream\n\n> A key variable must be exported before launch.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```";
 
-/// `⌃↩` under the Kitty keyboard protocol, which the app pushes at startup
-/// (`CSI > 1 u`), so foot reports Enter with the control modifier as
-/// `CSI 13 ; 5 u` rather than as a bare `\r`.
+/// `⌃↩` as foot reports it under the Kitty keyboard flag the app pushes at
+/// startup (`CSI > 1 u`): `CSI 13 ; 5 u`, not `\r`.
 const CTRL_ENTER: &str = "\"\\e[13;5u\"";
 
 fn plan(states: [&str; 3]) -> serde_json::Value {
@@ -186,11 +167,11 @@ pub fn script(name: &str) -> Result<Script> {
         )
     };
     Ok(match name {
-        // Every launch, the first included: the card and the field.
+        // The launch card and the field.
         "launch" => Script { replies: vec![], history: &[], files: vec![], keys: "", provider: true },
 
-        // Nothing configured: the card reads `Model  not set`. There is no
-        // first-run screen (ADR 0009 §6).
+        // No provider: the card reads `Model  not set`; no first-run screen
+        // (ADR 0009 §6).
         "launch_unconfigured" => Script { replies: vec![], history: &[], files: vec![], keys: "", provider: false },
 
         // The plan and a collapsed disclosure, as a finished turn leaves them.
@@ -219,20 +200,19 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // The `ask` tool: the panel takes the band with the three answers.
+        // The `ask` tool's question panel.
         "question" => Script { replies: question(), history: &[], files: vec![], keys: ask, provider: true },
 
         // Frame F types `/c`: the list narrowed, the field completed in grey.
         "commands" => Script { replies: vec![], history: &[], files: vec![], keys: "\"/\",\"c\"", provider: true },
 
-        // The review, opened by the real dispatcher at the end of a turn
-        // that staged one edit and created one file (ADR 0009 §4).
+        // The review at the end of a turn that staged one edit and one new
+        // file (ADR 0009 §4).
         "review" => Script { replies: review(), history: &[], files: vec![(ROUTER, ROUTER_RS)], keys: ask, provider: true },
 
-        // The router's first two added lines selected, and a comment typed
-        // against them: `Tab` to the router, `Shift ↓` selects the top row
-        // shown, the arrows carry it to the first added line and `Shift ↓`
-        // extends it by one.
+        // The router's first two added lines selected, a comment typed:
+        // `Tab` to the router, `Shift ↓` selects the top row, the arrows move
+        // it to the first added line, `Shift ↓` extends it by one.
         "selecting" => Script {
             replies: review(),
             history: &[],
@@ -241,7 +221,7 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // The comment added: it rides on the lines, and the field closes.
+        // The comment added to the lines, the field closed.
         "commented" => Script {
             replies: review(),
             history: &[],
@@ -267,8 +247,8 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // A turn in flight: its prose, its work folded, the plan with a
-        // step running, and the model still answering.
+        // A turn in flight: prose, folded work, a plan step running, the
+        // model still answering.
         "working" => Script {
             replies: vec![
                 fake::said_then_calls("Looking at how requests move through the gateway.", &[
@@ -287,7 +267,7 @@ pub fn script(name: &str) -> Result<Script> {
         // The last step running, and the model saying what it is doing.
         "running" => Script { replies: running(), history: &[], files: vec![], keys: ask, provider: true },
 
-        // `esc` mid-turn: stopped, and nothing else.
+        // `Esc` mid-turn.
         "stopping" => Script {
             replies: running(),
             history: &[],
@@ -296,8 +276,8 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // "Chat about this": the question stays, the turn waits on you,
-        // and what is typed is the answer.
+        // Option 3, "Chat about this": the question stays and the typed text
+        // is the answer.
         "answering" => Script {
             replies: question(),
             history: &[],
@@ -306,7 +286,7 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // Approved: the review folds into the one row the conversation keeps.
+        // Approved: the review folds into one conversation row.
         "saved" => Script {
             replies: vec![edit(), fake::text("Each key gets 100 requests a minute; the rest are turned away before auth.")],
             history: &[],
@@ -317,9 +297,8 @@ pub fn script(name: &str) -> Result<Script> {
 
         "markdown" => Script { replies: vec![fake::text(TABLE)], history: &[], files: vec![], keys: "\"which providers are set up?\",Enter", provider: true },
 
-        // A turn that did not finish: the provider answered with an error
-        // the client does not retry. A sentence in `label`, its detail one
-        // disclosure below — no red (ADR 0009 §5).
+        // A non-retried provider error: a sentence in `label`, detail in a
+        // disclosure, no red (ADR 0009 §5).
         "failure" => Script {
             replies: vec![Canned::Status(400, "{\"error\":{\"message\":\"the request was malformed: unknown model gpt-5\"}}".into())],
             history: &[],
@@ -337,8 +316,7 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // Bare `/resume`: the session question over two past sessions, so
-        // the list is a list.
+        // Bare `/resume` over two past sessions.
         "resume" => Script {
             replies: vec![],
             history: &[("how should the retry loop back off?", 1_789_732_800, 4), ("which providers are set up?", 1_789_819_200, 1)],
@@ -351,24 +329,22 @@ pub fn script(name: &str) -> Result<Script> {
     })
 }
 
-/// Write the config a scene runs under, and parse its keys.
+/// Writes a scene's config, files and history under `root`, and parses its
+/// keys.
 ///
 /// # Errors
 ///
-/// When a directory or file cannot be created or written, the product's own
-/// config or history writer fails, or the scene's keys do not parse.
+/// When a directory or file cannot be created or written, the config or
+/// history writer fails, or the scene's keys do not parse.
 pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Result<Prepared> {
-    // Absolute, always. `HOME` is resolved by the app against its own working
-    // directory, so a relative one sends it looking for `~/.aldwin` inside
-    // the project.
+    // Must be absolute: the app resolves a relative `HOME` against its cwd.
     let home = root.join("home");
     let cwd = home.join("proj");
     std::fs::create_dir_all(&cwd)?;
     let home = home.canonicalize()?;
     let cwd = cwd.canonicalize()?;
 
-    // `~/.aldwin` is materialised by the product's own writer rather than a
-    // copy of its templates here.
+    // The product's own writer, never a copy of its templates.
     let global = home.join(".aldwin");
     let config = aldwin_config::Config::open_at(&cwd, &global)
         .map_err(|e| Error::Scene(format!("seeding global config: {e}")))?;
@@ -376,17 +352,15 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         .init_global_if_empty()
         .map_err(|e| Error::Scene(format!("seeding global config: {e}")))?;
 
-    // Theme is global-only and read once at startup, so it is seeded as config
-    // rather than sent as a command.
+    // Theme is global-only and read at startup, so it is seeded, not typed.
     std::fs::write(
         global.join("tui.yaml"),
         format!("version: 1\ntheme: {theme}\n"),
     )?;
 
     if script.provider {
-        // The endpoint carries an ephemeral port, so this is written per run.
-        // `openai-compatible` is not a preference: `base_url` is ignored for
-        // the anthropic provider, and a local fake is nothing but a base_url.
+        // `openai-compatible` because the anthropic provider ignores
+        // `base_url` (see `fake`).
         std::fs::write(
             global.join("provider.yaml"),
             format!("version: 1\nprovider: openai-compatible\nmodel: gpt-5\nbase_url: {endpoint}\napi_key_env: ALDWIN_SHOT_KEY\n"),
@@ -407,7 +381,7 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
     Ok(Prepared { cwd, home, keys })
 }
 
-/// Write this scene's past sessions, through the product's own writer.
+/// Writes the scene's past sessions through `HistoryStore`.
 fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
     if script.history.is_empty() {
         return Ok(());
@@ -465,9 +439,7 @@ mod tests {
 
     use super::{script, CATALOGUE, CTRL_ENTER};
 
-    /// Stage 8 judges a scene only when its snapshot section moved and
-    /// capture can draw it, so a name on one list and not the other is a
-    /// scene no change can call a judge for.
+    /// A scene on one list only could never reach the stage 8 judge.
     #[test]
     fn the_catalogue_names_the_snapshots_scenes() {
         let snapshot = std::fs::read_to_string(concat!(

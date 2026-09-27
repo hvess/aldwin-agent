@@ -1,10 +1,7 @@
-//! Just enough PNG to read pixels back.
+//! Just enough PNG to check a captured frame's pixels.
 //!
-//! The harness does not process images; it needs to *check* one — that a
-//! captured frame really shows what the parser says the app drew. So this
-//! decodes 8-bit RGB/RGBA, non-interlaced, which is what `grim` writes, and
-//! refuses anything else rather than guessing. The encoder is test-only: it
-//! makes the images the decoder's tests read back.
+//! Decodes only 8-bit RGB/RGBA non-interlaced (what `grim` writes) and refuses
+//! anything else. The encoder is test-only.
 
 use std::io::Read;
 use std::path::Path;
@@ -23,8 +20,7 @@ pub struct Image {
 }
 
 impl Image {
-    /// The RGB of the pixel at `x`, `y`, alpha dropped; black outside the
-    /// image rather than a panic.
+    /// The RGB of the pixel at `x`, `y`; black outside the image.
     pub fn pixel(&self, x: u32, y: u32) -> (u8, u8, u8) {
         if x >= self.width || y >= self.height {
             return (0, 0, 0);
@@ -33,8 +29,7 @@ impl Image {
         (self.data[i], self.data[i + 1], self.data[i + 2])
     }
 
-    /// The pixels as packed RGB, alpha dropped, with the image's width and
-    /// height.
+    /// Width, height and the pixels as packed RGB.
     #[cfg(test)]
     pub fn into_rgb(self) -> (u32, u32, Vec<u8>) {
         if self.bpp == 3 {
@@ -48,8 +43,7 @@ impl Image {
     }
 }
 
-/// Width and height from the IHDR alone — cheap, and enough to enforce the
-/// capture invariant without decompressing anything.
+/// Width and height from the IHDR alone, without decompressing.
 ///
 /// # Errors
 ///
@@ -72,9 +66,9 @@ fn header(bytes: &[u8]) -> Result<(u32, u32, u8, u8, u8)> {
 ///
 /// # Errors
 ///
-/// When the file cannot be read, is not a PNG, is any other depth, colour
-/// type or interlacing, its image data does not inflate, is shorter than the
-/// header claims, or uses an unknown filter.
+/// When the file cannot be read, is not a PNG, has another depth, colour type
+/// or interlacing, or its data does not inflate, is truncated, or uses an
+/// unknown filter.
 pub fn decode(path: &Path) -> Result<Image> {
     let bytes = std::fs::read(path)?;
     let (width, height, depth, color, interlace) = header(&bytes)?;
@@ -103,8 +97,8 @@ pub fn decode(path: &Path) -> Result<Image> {
     let mut raw = Vec::new();
     flate2::read::ZlibDecoder::new(&idat[..]).read_to_end(&mut raw)?;
 
-    // A scanline is one filter byte then the row. Checked once and before the
-    // allocation, so the size a header merely claims is never trusted.
+    // A scanline is a filter byte then the row. Checked before allocating, so
+    // the header's claimed size is never trusted.
     let stride = width as usize * bpp;
     if (raw.len() as u64) < (stride as u64 + 1) * height as u64 {
         return Err(Error::Png("truncated PNG data".into()));
@@ -161,8 +155,7 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
-/// Writes `rgb`, packed 8-bit RGB, as a PNG at `path` — for the decoder's
-/// tests to read back.
+/// Writes `rgb`, packed 8-bit RGB, as a PNG at `path`.
 ///
 /// # Errors
 ///
@@ -207,8 +200,8 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
 }
 
 #[cfg(test)]
-/// PNG's CRC-32, resumable: it finalises with the standard inversion and
-/// undoes it on the way in, so a fresh run starts from `previous = 0`.
+/// PNG's CRC-32, resumable: pass a previous result to continue it, `0` to
+/// start.
 fn crc32(previous: u32, bytes: &[u8]) -> u32 {
     let mut crc = previous ^ 0xffff_ffff;
     for &byte in bytes {
@@ -230,7 +223,7 @@ mod tests {
 
     #[test]
     fn a_chunk_carries_the_crc_every_png_ends_with() {
-        // IEND has no body, so its CRC is a constant of the format.
+        // IEND's CRC is a constant of the format.
         let mut out = Vec::new();
         chunk(&mut out, b"IEND", &[]);
         assert_eq!(

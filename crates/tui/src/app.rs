@@ -930,8 +930,7 @@ impl App {
             .unwrap_or(0);
         let question = Question {
             question: "Where should the model run?".into(),
-            detail: "Each provider needs its key in the environment variable named beside it."
-                .into(),
+            detail: "Beside each: the key it reads from the environment, or /connect.".into(),
             options: self.catalogue.iter().map(|p| p.id.clone()).collect(),
         };
         self.mode = Mode::Question(Asking {
@@ -2070,6 +2069,19 @@ pub(crate) mod tests {
             matches!(a.mode, Mode::Conversation),
             "the question goes with its turn"
         );
+    }
+
+    /// ADR 0012: an account provider runs without a key. Regression: the
+    /// question said every provider needs one.
+    #[test]
+    fn the_provider_question_does_not_demand_a_key_of_every_provider() {
+        let mut a = App::new(String::new()).with_catalogue(catalogue(), None);
+        a.open_provider_question(None);
+        let Mode::Question(q) = &a.mode else {
+            panic!("the provider question is open")
+        };
+        assert!(!q.question.detail.contains("needs its key"));
+        assert!(q.question.detail.contains("/connect"));
     }
 
     /// Regression: closing the provider question dropped the held message.

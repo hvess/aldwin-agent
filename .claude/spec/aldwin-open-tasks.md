@@ -65,9 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/tui/src/app.rs` `open_provider_question`: says every provider
-     needs a key in the environment; since ADR 0012 an account provider can
-     run on a connected account.
    - `crates/login/src/oauth.rs` `poll`: a 4xx that is not an RFC 8628
      answer (a 429, a proxy's HTML 403) is an `Err` and ends the login,
      where a server's trouble is waited out.

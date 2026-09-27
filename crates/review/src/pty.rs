@@ -4,10 +4,9 @@
 //! libc only for what std lacks: opening the pair, the line discipline, the
 //! window size and the controlling terminal.
 
-use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -33,7 +32,11 @@ impl Pty {
     ///
     /// When the pair cannot be opened, granted, unlocked or named, or its
     /// line discipline cannot be read or set raw.
+    #[cfg(not(target_os = "macos"))]
     pub fn open() -> Result<Self> {
+        use std::ffi::CStr;
+        use std::os::fd::{FromRawFd, OwnedFd};
+
         // SAFETY: posix_openpt returns a fresh fd or -1, and a fresh fd is
         // handed straight to OwnedFd so it is closed exactly once.
         let master = unsafe {
@@ -52,7 +55,11 @@ impl Pty {
                 return Err(io::Error::last_os_error().into());
             }
             let mut buf = [0 as libc::c_char; 256];
-            slave_name(fd, &mut buf)?;
+            // ptsname_r returns the error number rather than setting errno.
+            let rc = libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len());
+            if rc != 0 {
+                return Err(io::Error::from_raw_os_error(rc).into());
+            }
             let slave_path =
                 PathBuf::from(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned());
 
@@ -67,6 +74,22 @@ impl Pty {
             slave_path
         };
         Ok(Pty { master, slave_path })
+    }
+
+    /// Refuses: a pty here only feeds frame capture, which drives foot under
+    /// sway, and neither runs on macOS. The crate builds there for the gate
+    /// and stages 1–5, which open none.
+    ///
+    /// # Errors
+    ///
+    /// Always, on macOS.
+    #[cfg(target_os = "macos")]
+    pub fn open() -> Result<Self> {
+        use crate::Error;
+
+        Err(Error::Capture(
+            "capturing frames needs Linux, where foot and sway run".into(),
+        ))
     }
 
     /// The slave's `/dev/pts/N` path, for `foot --pty`.
@@ -179,34 +202,6 @@ impl Pty {
     }
 }
 
-/// Writes the slave's path for the master `fd` into `buf`, NUL-terminated.
-///
-/// # Safety
-///
-/// `fd` must be an open, unlocked pty master.
-#[cfg(not(target_os = "macos"))]
-unsafe fn slave_name(fd: libc::c_int, buf: &mut [libc::c_char; 256]) -> io::Result<()> {
-    // ptsname_r returns the error number rather than setting errno.
-    match unsafe { libc::ptsname_r(fd, buf.as_mut_ptr(), buf.len()) } {
-        0 => Ok(()),
-        rc => Err(io::Error::from_raw_os_error(rc)),
-    }
-}
-
-/// Writes the slave's path for the master `fd` into `buf`, NUL-terminated.
-/// libc has no `ptsname_r` for macOS; `TIOCPTYGNAME` fills at most 128 bytes.
-///
-/// # Safety
-///
-/// `fd` must be an open, unlocked pty master.
-#[cfg(target_os = "macos")]
-unsafe fn slave_name(fd: libc::c_int, buf: &mut [libc::c_char; 256]) -> io::Result<()> {
-    if unsafe { libc::ioctl(fd, libc::TIOCPTYGNAME as _, buf.as_mut_ptr()) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// Reads from a pty master; `Ok(0)` means the slave side closed.
 ///
 /// # Errors
@@ -229,12 +224,19 @@ pub fn read(master: &mut File, buf: &mut [u8]) -> Result<usize> {
 mod tests {
     use super::*;
 
-    /// `slave_name` is per platform; CI's macOS job is what runs the
-    /// `TIOCPTYGNAME` branch.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn an_opened_pty_names_a_slave_that_exists() {
         let pty = Pty::open().unwrap();
         assert!(pty.slave_path.starts_with("/dev/"), "{:?}", pty.slave_path);
         assert!(pty.slave_path.exists(), "{:?}", pty.slave_path);
+    }
+
+    /// The refusal is a sentence, not an errno from a call macOS refuses.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn opening_a_pty_on_macos_says_capture_needs_linux() {
+        let err = Pty::open().unwrap_err().to_string();
+        assert!(err.contains("needs Linux"), "{err}");
     }
 }

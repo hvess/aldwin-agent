@@ -340,9 +340,14 @@ moves any scene's snapshot has frames for stage 8 to judge.
 CI's first macOS run found the crate did not build there: `pty.rs` named
 the slave with `ptsname_r`, which libc has only on Linux-likes, and passed
 `TIOCSCTTY` where macOS takes a `c_ulong`. The gate runs this crate, so a
-contributor on a Mac could not commit through it. `slave_name` now asks
-macOS with `TIOCPTYGNAME`, and `an_opened_pty_names_a_slave_that_exists`
-is the test the macOS job runs it through.
+contributor on a Mac could not commit through it. The second run built it
+and failed opening a pty (`ENOTTY`). A pty here only feeds frame capture,
+which drives foot under sway, and neither runs on macOS; so capture is
+Linux-only. On macOS `Pty::open` is a one-line refusal rather than
+syscalls that fail, and each platform has a test of its own answer; a
+capture there meets the compositor failing to start sway first. The crate
+builds on both, and the gate and stages 1–5 open no pty. Stage 8 on a Mac is
+open-tasks entry 6.
 
 ## Progress (2026-09-27, the author checks first)
 

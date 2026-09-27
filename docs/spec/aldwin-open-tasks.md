@@ -44,3 +44,13 @@ contradicts) and the entry says so before it goes.
    skill, "When a judge is wrong"). Closing it means two stage-2 checks in
    `crates/review/src/stages.rs` over the staged diff. The developer's
    call, 2026-09-27: its own change, after Decision 18.
+
+6. **Frame capture runs only on Linux.** Capture drives foot under sway,
+   neither of which runs on macOS, so `Pty::open` refuses there
+   (`crates/review/src/pty.rs`) and the compositor fails to start first.
+   The crate, the gate and stages 1–5 build and run on a Mac, but a change
+   that moves a scene's snapshot needs captured frames for stage 8
+   (aldwin-review.md, "The stages"), so a contributor on a Mac cannot pass
+   the review for it. Closing it means a terminal and compositor that run
+   on macOS behind the same capture, or deciding it against. The
+   developer's call, 2026-09-27: kept open, for later.

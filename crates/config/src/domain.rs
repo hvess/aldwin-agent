@@ -1,6 +1,6 @@
-//! Typed shapes for the four config domains. Each versions independently;
-//! `deny_unknown_fields` is deliberate — a stray or renamed field should fail
-//! loudly at load rather than be silently dropped.
+//! Typed shapes for the config domains, each versioned independently.
+//! `deny_unknown_fields` is deliberate: a stray or renamed field must fail at
+//! load, not be dropped.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,18 +13,11 @@ pub const MCP_VERSION: u32 = 1;
 pub const TUI_VERSION: u32 = 1;
 pub const CONNECTIONS_VERSION: u32 = 1;
 
-/// Permissions for one scope. Since ADR 0011 the workspace is the only
-/// boundary, and `roots:` — which widens it — is the only key read.
+/// Permissions for one scope. `roots:` is the only key read (ADR 0011).
 ///
-/// Three keys from models this file has outlived are still *parsed*:
-/// `default:` and `allow:` (ADR 0004's rung and grants, unread since ADR
-/// 0009) and `deny:` (the lock ADR 0011 removed). Files written by an earlier
-/// Aldwin carry them — every first launch wrote `deny: []` — and
-/// `deny_unknown_fields` would otherwise stop every existing project from
-/// starting. Their values are not interpreted, so a v1 file's `kind:pattern`
-/// strings load as readily as a v2 file's `git: read`; [`has_stale_keys`]
-/// says whether any of them says something, so the developer is told once
-/// that it no longer does.
+/// `default:`, `allow:` (ADR 0004) and `deny:` are still parsed, as any
+/// value, so older files load under `deny_unknown_fields`; do not remove
+/// them. [`has_stale_keys`] reports whether they say anything.
 ///
 /// [`has_stale_keys`]: PermissionsConfig::has_stale_keys
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -32,12 +25,9 @@ pub const CONNECTIONS_VERSION: u32 = 1;
 pub struct PermissionsConfig {
     /// Schema version; this build reads `PERMISSIONS_VERSION`.
     pub version: u32,
-    /// Extra directories that are workspace, beyond the project root (ADR
-    /// 0007): tools may be pointed at them and a run may write in them.
-    ///
-    /// Stated rather than inferred — nothing walks up to find sibling
-    /// checkouts. Project scope only: a global root list would silently
-    /// widen the workspace in every directory at once.
+    /// Extra workspace directories beyond the project root (ADR 0007).
+    /// Honoured at project scope only: a global list would widen every
+    /// project at once.
     #[serde(default)]
     pub roots: Vec<PathBuf>,
     #[serde(default)]
@@ -60,9 +50,8 @@ impl PermissionsConfig {
         }
     }
 
-    /// Whether the file says something through a key nothing reads. An
-    /// empty list says nothing — the `deny: []` every first launch wrote is
-    /// not worth a notice.
+    /// Whether `default:`, `allow:` or `deny:` holds anything but an empty
+    /// list; earlier first launches wrote `deny: []`.
     pub fn has_stale_keys(&self) -> bool {
         [&self.default, &self.allow, &self.deny]
             .into_iter()
@@ -83,12 +72,9 @@ pub enum ProviderKind {
     OpenaiCompatible,
 }
 
-/// `api_key_env` names an environment variable; resolving it is aldwin-llm's
-/// job. A raw `api_key` field is rejected by `deny_unknown_fields` — there is
-/// deliberately no field a plaintext key could go in. A provider's connected
-/// account (ADR 0012) is not named here either: it lives in
-/// `connections.yaml`, and whether the provider is reached through it or
-/// through the variable is decided when the client is built.
+/// One scope's `provider.yaml`. Never add a field for a plaintext key: only
+/// the variable's name is stored, and aldwin-llm resolves it. A connected
+/// account (ADR 0012) lives in `connections.yaml`, not here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
@@ -104,24 +90,19 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     /// The environment variable that holds the API key.
     pub api_key_env: String,
-    /// Extended-thinking token budget. `None` means "let the provider crate
-    /// pick its own default" — this field only exists so the developer can
-    /// override it; aldwin-config has no opinion on what a good budget is.
+    /// Extended-thinking token budget; `None` leaves aldwin-llm's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_thinking_budget: Option<u32>,
 }
 
 impl ProviderConfig {
-    /// True for a schema violation `deny_unknown_fields` can't catch by itself:
-    /// the field can be present and still empty.
+    /// Whether `api_key_env` is non-blank, which the schema cannot check.
     pub fn has_valid_api_key_env(&self) -> bool {
         !self.api_key_env.trim().is_empty()
     }
 
-    /// This file laid over `below` — a project `provider.yaml` over the
-    /// global one. The required fields come from this file wholesale (a
-    /// file that names a provider names all of them); the two optional
-    /// ones fall back to `below` one at a time.
+    /// This file laid over `below` (project over global): required fields
+    /// come from `self`, and each optional field falls back to `below`.
     pub fn over(self, below: Option<&ProviderConfig>) -> ProviderConfig {
         ProviderConfig {
             base_url: self
@@ -135,10 +116,9 @@ impl ProviderConfig {
     }
 }
 
-/// Unknown fields are refused here, rather than on
-/// [`McpServer`]: serde does not support `deny_unknown_fields` together with
-/// `flatten`, and on the outer struct it refused every field the flattened
-/// transport owns — so no `mcp.yaml` naming a server could load at all.
+/// How an MCP server is reached. Unknown fields are refused here, not on
+/// [`McpServer`]: serde's `deny_unknown_fields` on a struct with a
+/// `flatten` field refuses the flattened fields too.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
 pub enum McpTransport {
@@ -166,8 +146,7 @@ pub struct McpServer {
     /// How the server is reached.
     #[serde(flatten)]
     pub transport: McpTransport,
-    /// Environment variables set for a started server, on top of Aldwin's
-    /// own.
+    /// Environment variables added to Aldwin's own for a started server.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 }
@@ -212,10 +191,8 @@ impl ConnectionsConfig {
     }
 }
 
-/// One connected account's tokens, as aldwin-login hands them over and
-/// reads them back. Its own type rather than aldwin-login's, for the
-/// reason `TuiConfig` is not aldwin-tui's: this crate persists, it does
-/// not depend.
+/// One connected account's tokens, as aldwin-login stores and reads them.
+/// Not aldwin-login's type: this crate is a leaf.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionRecord {
@@ -223,11 +200,11 @@ pub struct ConnectionRecord {
     pub access_token: String,
     /// What a refresh trades for a new access token.
     pub refresh_token: String,
-    /// Unix seconds.
+    /// When the access token expires, in Unix seconds.
     pub expires_at: u64,
 }
 
-/// The tokens are the one thing here that must not reach a log.
+/// Omits the tokens: they must never reach a log.
 impl std::fmt::Debug for ConnectionRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectionRecord")
@@ -236,16 +213,13 @@ impl std::fmt::Debug for ConnectionRecord {
     }
 }
 
-/// Field set owned by aldwin-tui; this crate only persists it. Kept as
-/// plain, permissive types (rather than importing aldwin-tui's own types)
-/// since aldwin-config is a leaf crate.
+/// aldwin-tui's `tui.yaml`, as plain types: this crate is a leaf.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TuiConfig {
     /// Schema version; this build reads `TUI_VERSION`.
     pub version: u32,
-    /// The developer's theme, as `/theme` wrote it; aldwin-tui decides what
-    /// the string means, and what `None` does.
+    /// The theme `/theme` wrote; aldwin-tui interprets it and `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
 }

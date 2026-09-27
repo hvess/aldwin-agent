@@ -1,19 +1,9 @@
-//! First-launch YAML written to `~/.aldwin/` on a fresh install — a tour of
-//! the format in the developer's editor. Each string must parse under its
-//! domain's real schema (checked in this module's tests); the exact wording
-//! is a separate deliverable from the structure.
+//! Annotated YAML seeded into `~/.aldwin/` on first launch. Each file must
+//! parse under its domain's schema (this module's tests).
 //!
-//! A domain Aldwin also writes to (provider, tui) exposes a `*_HEADER`
-//! constant: just the leading `#`-comment block. `store.rs`'s
-//! `with_domain_mut` prepends it to *every* write of that domain's file,
-//! because a plain re-serialise drops the comments the moment anything is
-//! next persisted — reported as "editing permissions.yaml doesn't really
-//! appear to make any sense." `permissions.yaml` and `mcp.yaml` are never
-//! written after first launch, so they need none.
-//!
-//! The tui header lives in a macro rather than a `const` only because
-//! `concat!` cannot take a `const &str`; the macro is what lets the full
-//! constant be built from the header instead of restating it.
+//! A domain Aldwin writes to (provider, tui, connections) has a `*_HEADER`
+//! comment block that `Config::with_domain_mut` prepends to every write.
+//! `permissions.yaml` and `mcp.yaml` are never written after first launch.
 
 pub const PERMISSIONS: &str = "\
 # Aldwin permissions. There is one boundary, and it is the workspace: reads
@@ -89,6 +79,8 @@ version: 1
 servers: []
 ";
 
+// A macro, not a `const`: `concat!` cannot take a `const &str`, and `TUI`
+// is built from it.
 macro_rules! tui_header {
     () => {
         "\
@@ -122,8 +114,8 @@ mod tests {
         assert_eq!(tui, TuiConfig::empty());
     }
 
-    /// `connections.yaml` is never seeded, so its header is only ever seen
-    /// over a serialised value; that pairing has to parse like the others.
+    /// `connections.yaml` is never seeded; its header only ever precedes a
+    /// serialised value.
     #[test]
     fn the_connections_header_over_a_serialised_value_parses() {
         let text = format!(
@@ -136,8 +128,6 @@ mod tests {
         );
     }
 
-    /// The full constants are built from the headers, so this cannot drift;
-    /// it pins that whoever changes how they are built keeps it that way.
     #[test]
     fn a_headers_own_comment_block_matches_the_full_constants_leading_text() {
         assert!(TUI.starts_with(TUI_HEADER));

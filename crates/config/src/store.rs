@@ -16,23 +16,24 @@ use crate::{
 /// Result of [`Config::init_global_if_empty`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InitOutcome {
-    /// `~/.aldwin/` did not exist; created it and wrote all four annotated files.
+    /// `~/.aldwin/` did not exist; created it with the three annotated files
+    /// (permissions, mcp, tui).
     Created,
-    /// `~/.aldwin/` exists and all four domain files are present.
+    /// `~/.aldwin/` exists with all three seeded files.
     AlreadyPresent,
-    /// `~/.aldwin/` exists but is missing one or more domain files. The
-    /// caller must refuse to start rather than auto-fill the gap.
+    /// `~/.aldwin/` exists but lacks a seeded file. The caller must refuse
+    /// to start, not fill the gap.
     PartiallyPresent {
-        /// The file names that are absent, in the order init writes them.
+        /// The absent file names, in the order init writes them.
         missing: Vec<&'static str>,
     },
 }
 
-/// One (scope, domain) layer that failed to reload; the previous in-memory
-/// snapshot for that layer is left untouched.
+/// One (scope, domain) layer that failed to reload; its previous in-memory
+/// snapshot is kept.
 #[derive(Debug)]
 pub struct ReloadFailure {
-    /// The file that failed, so the developer can be told which.
+    /// The file that failed.
     pub path: PathBuf,
     /// Why it failed.
     pub error: ConfigError,
@@ -52,10 +53,9 @@ struct Inner {
     global_connections: RwLock<ConnectionsConfig>,
 }
 
-/// Typed access to Aldwin's on-disk config. Cheap to clone — internally an
-/// `Arc`, so every clone shares the same in-memory snapshots. Reads never
-/// touch disk; they answer from the snapshot loaded at [`Config::open`] or
-/// refreshed by [`Config::reload_all`].
+/// Typed access to Aldwin's on-disk config. Clones share one `Arc`'d set of
+/// snapshots. Reads never touch disk: they answer from the snapshot loaded
+/// by [`Config::open`] or refreshed by [`Config::reload_all`].
 #[derive(Clone, Debug)]
 pub struct Config {
     inner: Arc<Inner>,
@@ -70,9 +70,9 @@ impl std::fmt::Debug for Inner {
     }
 }
 
-/// Load `provider.yaml` and validate `api_key_env`, since `deny_unknown_fields`
-/// alone can't catch a *present but empty* field. Shared by `open`, `init`,
-/// and `reload` so all three refuse the same malformed file the same way.
+/// Loads `provider.yaml` and refuses an empty `api_key_env`, which the
+/// schema alone accepts. Every provider read goes through here so all refuse
+/// the same file the same way.
 fn load_provider(path: &Path) -> Result<Option<ProviderConfig>, ConfigError> {
     let Some(cfg) = fsio::read_versioned::<ProviderConfig>(path, PROVIDER_VERSION)? else {
         return Ok(None);
@@ -85,23 +85,13 @@ fn load_provider(path: &Path) -> Result<Option<ProviderConfig>, ConfigError> {
     Ok(Some(cfg))
 }
 
-/// One-time best-effort migration across the project's two rebrands:
-/// Amundsen→Mjolnir, then Mjolnir→Aldwin. Existing installs have their
-/// config at `~/.mjolnir/`, and installs that never saw the middle name at
-/// `~/.amundsen/`. If the new `~/.aldwin/` doesn't exist yet but one of the
-/// old ones does, move it over so a rebuild-and-reinstall doesn't silently
-/// orphan a developer's existing permissions grants and provider config
-/// behind a renamed directory `Config::open` no longer looks at.
+/// Renames a legacy global dir (`~/.mjolnir/`, then `~/.amundsen/`) to
+/// `new_dir` when `new_dir` does not exist.
 ///
-/// The order is newest-first, so a machine carrying both — one that upgraded
-/// through the first rebrand while an empty `.amundsen/` was recreated by an
-/// older binary — takes the one that was last in use. Only one dir is ever
-/// moved; the other is left where it is rather than merged, because merging
-/// two permissions files means choosing between them silently.
-///
-/// Best-effort: a failed rename (e.g. a cross-device home directory) just
-/// leaves `global_dir` nonexistent, which `init_global_if_empty` already
-/// treats as a normal fresh install — migration must never block startup.
+/// Newest name first; only one is moved, never merged, since merging would
+/// pick between two files silently. Best-effort and must never block
+/// startup: a failed rename leaves `new_dir` absent, which
+/// `init_global_if_empty` treats as a fresh install.
 fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
     if new_dir.exists() {
         return;
@@ -116,15 +106,14 @@ fn migrate_legacy_global_dir(home: &Path, new_dir: &Path) {
 }
 
 impl Config {
-    /// Read every existing layer once, resolving global scope to
-    /// `~/.aldwin/`. See [`Config::open_at`] for the same thing with an
-    /// explicit global root (used by tests, so they never touch the real
-    /// home directory).
+    /// Reads every existing layer once, with global scope at `~/.aldwin/`
+    /// after migrating a legacy dir. Tests use [`Config::open_at`] so they
+    /// never touch the real home directory.
     ///
     /// # Errors
     ///
-    /// [`ConfigError::NoHomeDir`] when there is no home directory, and
-    /// otherwise whatever [`Config::open_at`] refuses.
+    /// [`ConfigError::NoHomeDir`] when there is no home directory, otherwise
+    /// whatever [`Config::open_at`] refuses.
     pub fn open(project_root: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
         let global_dir = home.join(".aldwin");
@@ -132,10 +121,9 @@ impl Config {
         Self::open_at(project_root, global_dir)
     }
 
-    /// Read every existing layer once. Missing files are the normal "nothing
-    /// persisted here yet" state and become empty defaults (or `None` for
-    /// provider, which has no meaningful empty state) — only a malformed
-    /// file, an unknown version, or an empty `api_key_env` refuses to start.
+    /// Reads every existing layer once, with global scope at `global_dir`. A
+    /// missing file becomes its domain's empty value, or `None` for provider,
+    /// which has no meaningful empty value.
     ///
     /// # Errors
     ///
@@ -199,12 +187,10 @@ impl Config {
         self.scope_dir(scope).join(format!("{domain}.yaml"))
     }
 
-    /// Where this project's transcripts live — `~/.aldwin/history/<slug>/`.
+    /// This project's transcript directory, `~/.aldwin/history/<slug>/`.
     ///
-    /// Global-scoped and keyed by project, not written into the project's own
-    /// `.aldwin/`: a transcript carries whatever the session's tool results
-    /// carried, and that is not something to leave sitting inside a tree the
-    /// developer may well be committing.
+    /// Never inside the project's `.aldwin/`: a transcript holds whatever
+    /// tool results held, and the project tree may be committed.
     pub fn history_dir(&self) -> PathBuf {
         let project_root = self
             .inner
@@ -335,10 +321,9 @@ impl Config {
             .cloned()
     }
 
-    /// The `permissions.yaml` files that still say something through a key
-    /// nothing reads — `allow:`, `default:` or `deny:` — nearest first, so
-    /// the developer can be told once that the file promises what the
-    /// product no longer does (ADR 0011).
+    /// The `permissions.yaml` files, project first, whose `allow:`,
+    /// `default:` or `deny:` says something ([`PermissionsConfig::has_stale_keys`]);
+    /// nothing reads those keys since ADR 0011, and the developer is told once.
     pub fn stale_permissions(&self) -> Vec<PathBuf> {
         [Scope::Project, Scope::Global]
             .into_iter()
@@ -355,17 +340,13 @@ impl Config {
 
     // ── Write ────────────────────────────────────────────────────────────
 
-    /// Read → mutate → persist-atomically → swap, all under one *held*
-    /// write lock — not just the final swap. A concurrent writer (another
-    /// mutator on this domain, or `reload_all` re-reading it from disk) must
-    /// block until this call has landed on both disk and memory, or one of
-    /// the two silently clobbers the other. Every domain-mutating method in
-    /// this file goes through here so the locking cannot drift between
-    /// domains.
+    /// Clone, mutate, write atomically, swap, all under one held write lock.
+    /// Do not narrow the lock to the swap: another mutator or `reload_all`
+    /// would clobber this write on disk or in memory. Every domain write
+    /// must go through here.
     ///
     /// `header` is an `annotated::*_HEADER` constant, or `""` for a domain
-    /// with none; see `fsio::write_atomic_with_header` for why it is
-    /// prepended on every write.
+    /// with none.
     fn with_domain_mut<T: Clone + serde::Serialize>(
         &self,
         lock: &RwLock<T>,
@@ -418,11 +399,11 @@ impl Config {
         )
     }
 
-    /// Stores the account connected to `provider`, replacing any it had:
-    /// what `/connect` writes, and what every refresh that rotates the
-    /// token writes again. Global scope only, by decision (ADR 0012): a
-    /// token inside a repository is a leak waiting to be committed. The
-    /// atomic writer creates the file owner-only.
+    /// Stores the account connected to `provider`, replacing any it had;
+    /// written by `/connect` and by every refresh that rotates the token.
+    /// Global only (ADR 0012), so a token never lands in a repository. The
+    /// file is owner-only (0600) because the tempfile the atomic write
+    /// renames is.
     ///
     /// # Errors
     ///
@@ -445,9 +426,8 @@ impl Config {
         )
     }
 
-    /// Forgets the account connected to `provider`: what a revoked refresh
-    /// token leads to, so the next client built on the provider falls back
-    /// to its key rather than to tokens the server will refuse.
+    /// Forgets the account connected to `provider`, after its refresh token
+    /// is revoked, so the next client falls back to the API key.
     ///
     /// # Errors
     ///
@@ -468,10 +448,9 @@ impl Config {
 
     // ── Reload ───────────────────────────────────────────────────────────
 
-    /// Re-read every layer that currently exists on disk. A layer that fails
-    /// to parse keeps its previous in-memory snapshot — a bad hand-edit must
-    /// not collapse an in-progress session — and is reported by path so the
-    /// caller (the TUI's `/reload-config` handler) can name the failing file.
+    /// Re-reads every layer, for `/reload-config`; a missing file becomes its
+    /// empty value. A layer that fails keeps its previous snapshot, so a bad
+    /// hand edit cannot break a running session.
     ///
     /// # Errors
     ///
@@ -541,9 +520,8 @@ impl Config {
         empty: fn() -> T,
         failures: &mut Vec<ReloadFailure>,
     ) {
-        // Locked *before* the read, not after it: `with_domain_mut` could
-        // otherwise land a write between the two, and the snapshot would be
-        // swapped back to the file as it was before that write.
+        // Lock before the read: otherwise a `with_domain_mut` write landing
+        // between them is reverted in memory.
         let mut guard = lock.write().expect("lock poisoned");
         match fsio::read_versioned::<T>(&path, version) {
             Ok(value) => *guard = value.unwrap_or_else(empty),
@@ -567,21 +545,12 @@ impl Config {
 
     // ── First launch ─────────────────────────────────────────────────────
 
-    /// Create `~/.aldwin/` and write the annotated global files if the
-    /// directory does not exist. Idempotent — a directory that already
-    /// exists is inspected for completeness rather than touched.
+    /// Creates `~/.aldwin/` with the annotated permissions, mcp and tui files
+    /// if it does not exist; an existing directory is only checked for them.
     ///
-    /// **`provider.yaml` is deliberately not among them.** Every other file
-    /// here has a meaningful empty value — no roots, no MCP servers, no
-    /// theme override — so writing one states nothing on the developer's
-    /// behalf. A provider does not: any file this could write would name a
-    /// host, a model and a key variable nobody chose. It used to write
-    /// `anthropic` / `claude-sonnet-5`, and because that ran *before* the
-    /// session's own check (`global_provider().is_err()`), the
-    /// provider question was never once asked — the seed had already
-    /// answered it. Leaving the file absent is what makes "no provider is
-    /// configured" a real state, and it is the state the launch card's `Model  not set` exists to
-    /// resolve.
+    /// Never seed `provider.yaml`: any value would be a model nobody chose,
+    /// and its absence (`global_provider().is_err()`) is what makes the
+    /// session ask the provider question (the launch card's `Model  not set`).
     ///
     /// # Errors
     ///
@@ -590,9 +559,8 @@ impl Config {
     ///
     /// # Panics
     ///
-    /// If a writer panicked while holding a domain's lock, or if a file this
-    /// just wrote does not read back — the annotated text disagreeing with
-    /// its own schema.
+    /// If a writer panicked while holding a domain's lock, or if a file just
+    /// written does not read back (annotated text that fails its schema).
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
         let dir = &self.inner.global_dir;
 
@@ -622,11 +590,9 @@ impl Config {
             return Ok(InitOutcome::Created);
         }
 
-        // `provider.yaml` is not required: an existing directory without one
-        // is a developer who has not answered the provider question yet (or
-        // who deleted the file to be asked again), which the provider question handles.
-        // The other three are written together at init, so any of them
-        // missing really is a half-deleted config directory.
+        // `provider.yaml` is not required: without it the provider question
+        // is asked. The other three are written together at init, so one
+        // missing means a half-deleted directory.
         let required = ["permissions.yaml", "mcp.yaml", "tui.yaml"];
         let missing: Vec<&'static str> = required
             .iter()
@@ -644,10 +610,7 @@ impl Config {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Covers this crate's real failure modes per aldwin-config.md's Pitfalls:
-// version-bump rejection, old permissions files still loading, partial-init refusing
-// to start, reload retaining the previous snapshot on a bad file while still
-// naming it, and project scope not materialising until first write.
+// Pins the Pitfalls in `.claude/spec/archive/aldwin-config.md`.
 
 #[cfg(test)]
 mod tests {
@@ -682,14 +645,13 @@ mod tests {
         path
     }
 
-    /// Fresh (project_dir, global_dir) temp roots and the Config opened on
-    /// them — neither exists on disk yet, matching a real fresh checkout.
+    /// Project and global temp roots and a `Config` opened on them; neither
+    /// `.aldwin/` exists yet.
     fn fresh() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         let project = tempdir().unwrap();
         let global = tempdir().unwrap();
-        // Use a not-yet-existing subdirectory so "does the dir exist" checks
-        // (init_global_if_empty, project-scope materialisation) start from
-        // true absence rather than an empty-but-present tempdir.
+        // A subdirectory, not the tempdir itself, so existence checks start
+        // from absence.
         let global_root = global.path().join(".aldwin");
         let config = Config::open_at(project.path(), &global_root).unwrap();
         (project, global, config)
@@ -717,8 +679,6 @@ mod tests {
         }
     }
 
-    /// Both rebrands' directories present. The newer name wins, and the older
-    /// one is left alone rather than merged into it.
     #[test]
     fn the_more_recent_legacy_dir_wins_when_both_exist() {
         let home = tempdir().unwrap();
@@ -817,23 +777,18 @@ mod tests {
             assert!(global_dir.join(f).is_file(), "missing {f}");
         }
 
-        // In-memory snapshot reflects what was just written, not stale
-        // defaults — and a fresh file says nothing a notice would report.
+        // The snapshot is what was written, and it reports nothing stale.
         assert_eq!(config.global_permissions(), PermissionsConfig::empty());
         assert!(config.stale_permissions().is_empty());
 
-        // Idempotent: a second call sees everything already there.
         assert_eq!(
             config.init_global_if_empty().unwrap(),
             InitOutcome::AlreadyPresent
         );
     }
 
-    /// A fresh global directory names no provider at all — the one question
-    /// init must not answer on the developer's behalf. Seeding one is what
-    /// made the provider question unreachable: it ran first, so the
-    /// screen's own "no provider is configured" test was never true, and
-    /// every developer silently got the seeded default.
+    /// Regression: a seeded `provider.yaml` meant the provider question was
+    /// never asked.
     #[test]
     fn init_writes_no_provider_so_the_question_is_still_open() {
         let (_project, global, config) = fresh();
@@ -867,9 +822,8 @@ mod tests {
         }
     }
 
-    /// Regression, reported as "editing permissions.yaml doesn't really
-    /// appear to make any sense": a plain re-serialise drops every comment,
-    /// so the annotated explanation survived only until the *first* write.
+    /// Regression: re-serialising dropped the annotated header on the first
+    /// write.
     #[test]
     fn provider_and_tui_yaml_keep_their_headers_after_a_write() {
         let (_project, global, config) = fresh();
@@ -897,9 +851,7 @@ mod tests {
         );
     }
 
-    /// ADR 0007 §1. `roots` is read, and `deny_unknown_fields` still rejects
-    /// a misspelling rather than silently ignoring the reach a developer
-    /// thought they had declared.
+    /// ADR 0007 §1. A misspelt `roots` must fail, not silently widen nothing.
     #[test]
     fn roots_are_read_from_a_permissions_file_and_a_misspelling_is_an_error() {
         let parsed: PermissionsConfig =
@@ -918,10 +870,8 @@ mod tests {
         );
     }
 
-    /// Files from every earlier model still load — a v1 file's `kind:pattern`
-    /// globs, a v2 file's rung and grants, a deny list — because refusing
-    /// one would stop an existing project from starting. What they say is
-    /// reported, once, rather than honoured (ADR 0011).
+    /// ADR 0011: an old file must load, or an existing project cannot start;
+    /// its stale keys are reported, not honoured.
     #[test]
     fn a_permissions_file_from_an_earlier_model_loads_and_is_reported_stale() {
         for text in [
@@ -936,8 +886,8 @@ mod tests {
         }
     }
 
-    /// The `deny: []` every first launch wrote says nothing, and a notice
-    /// about it would be noise on every existing install.
+    /// Earlier first launches wrote `deny: []`; reporting it would be noise
+    /// on every existing install.
     #[test]
     fn an_empty_list_or_roots_alone_is_not_stale() {
         let (project, _global, config) = fresh();
@@ -1013,8 +963,8 @@ mod tests {
             assert_eq!(mode, 0o600, "the file holds tokens");
         }
 
-        // What was written is what a fresh open reads, and what a reload
-        // picks up after a hand edit — deleting an entry disconnects it.
+        // A fresh open reads it back; a reload after a hand edit that deletes
+        // an entry disconnects it.
         let reopened = Config::open_at(_project.path(), global.path().join(".aldwin")).unwrap();
         assert_eq!(reopened.connection("xai"), Some(record("second")));
         std::fs::write(&path, "version: 1\naccounts:\n  other:\n    access_token: a\n    refresh_token: r\n    expires_at: 1\n").unwrap();
@@ -1031,8 +981,7 @@ mod tests {
 
     #[test]
     fn provider_yaml_without_extended_thinking_budget_still_parses() {
-        // Backward compatibility: files written before this field existed
-        // must keep loading, with the field defaulting to None.
+        // Files older than this field must keep loading.
         let (_project, global, _config) = fresh();
         let dir = global.path().join(".aldwin");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1063,9 +1012,8 @@ mod tests {
         );
     }
 
-    /// A project `provider.yaml` with no global one used to boot the
-    /// session unconfigured: the overlay needed a global file to lay the
-    /// project over.
+    /// Regression: a project `provider.yaml` with no global one left the
+    /// session unconfigured.
     #[test]
     fn a_project_provider_alone_is_in_force() {
         let (_project, _global, config) = fresh();
@@ -1143,9 +1091,8 @@ mod tests {
 
     #[test]
     fn mcp_server_unknown_field_is_rejected_despite_flattened_transport() {
-        // McpServer flattens McpTransport into itself; flatten + deny_unknown_fields
-        // is a known serde trouble spot, so this checks the combination actually
-        // still rejects a bogus field rather than silently accepting it.
+        // Unknown fields are refused by the flattened `McpTransport`, not by
+        // `McpServer`; see `McpTransport`'s doc.
         let bad = "name: fs\nkind: stdio\ncommand: fs-server\nbogus: 1\n";
         let result: Result<McpServer, _> = serde_yaml_ng::from_str(bad);
         assert!(
@@ -1161,8 +1108,6 @@ mod tests {
         config.set_tui(TuiConfig::empty()).unwrap();
         config.reload_all().unwrap();
 
-        // Hand-edit project permissions.yaml into garbage, and the global
-        // tui.yaml into something new but valid.
         std::fs::write(&path, "not: [valid, yaml: at all").unwrap();
         std::fs::write(
             global.path().join(".aldwin").join("tui.yaml"),
@@ -1174,12 +1119,10 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].path, path);
 
-        // Previous snapshot retained for the broken layer...
         assert_eq!(
             config.project_permissions().roots,
             [PathBuf::from("../libs")]
         );
-        // ...while an unrelated, still-valid layer still reloads fine.
         assert_eq!(config.global_tui().theme.as_deref(), Some("light"));
     }
 

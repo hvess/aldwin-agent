@@ -1,18 +1,11 @@
-//! Persisted conversation transcripts — the on-disk half of `/resume`.
+//! Conversation transcripts, the on-disk half of `/resume`
+//! (`.claude/spec/archive/aldwin-history.md`).
 //!
-//! One session is one append-only JSONL file under
-//! `~/.aldwin/history/<project-slug>/<session-id>.jsonl`. The first line is
-//! a [`SessionHeader`]; every line after it is one `LogRecord`.
-//!
-//! JSONL rather than one document because writes are appends: a process
-//! killed mid-turn costs the partial last line and nothing else. That is
-//! also why this module does not use `fsio`'s atomic write — atomicity here
-//! would mean rewriting the whole transcript on every record, which is
-//! exactly the O(n) write path aldwin-history.md rules out.
-//!
-//! Reading is deliberately forgiving and lives in [`load`]: an unparseable
-//! line is skipped, and a turn that never finished is dropped. See that
-//! function for why the drop is load-bearing rather than tidiness.
+//! One session is one append-only JSONL file,
+//! `~/.aldwin/history/<project-slug>/<session-id>.jsonl`: a [`SessionHeader`]
+//! line, then one `LogRecord` per line. Do not use `fsio`'s atomic write
+//! here: it would rewrite the whole file per record. A killed process costs
+//! only its partial last line; [`load`] skips bad lines and unfinished turns.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -24,19 +17,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
 
-/// Bumped when the transcript's shape changes incompatibly. A file whose
-/// header carries an unknown version is skipped by [`list`] rather than
-/// failing the listing — one unreadable old transcript must not cost the
-/// developer the rest of their history.
+/// The transcript schema version; bump on an incompatible change. [`list`]
+/// skips a file with any other version rather than failing.
 pub const HISTORY_VERSION: u32 = 1;
 
 /// The transcript's first line.
 ///
-/// Note what is *not* here: the title. It is derived from the first user
-/// message at listing time ([`SessionSummary::title`]), because at the
-/// moment a file is opened no user message exists yet — putting it in the
-/// header would mean going back to rewrite line one mid-session, which is
-/// the one thing an append-only file should never do.
+/// Holds no title: it is derived at listing time ([`SessionSummary::title`]),
+/// since storing it here would mean rewriting line one of an append-only file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionHeader {
     /// The transcript's shape; [`HISTORY_VERSION`] when written by this build.
@@ -56,11 +44,11 @@ pub struct SessionSummary {
     pub id: SessionId,
     /// Unix epoch seconds, from the header.
     pub started_at: u64,
-    /// First user message, trimmed to one line — see [`derive_title`].
+    /// The first user message's first non-blank line, at most 72 chars plus
+    /// `…`; `(untitled)` when there is none.
     pub title: String,
-    /// Number of *completed* turns — what a resume would actually restore,
-    /// since [`load`] drops a turn with no `TurnEnded`. Counting started
-    /// turns instead would promise a turn back that resume then drops.
+    /// Completed turns only: [`load`] drops a turn with no `TurnEnded`, and
+    /// this must count what a resume restores.
     pub turns: usize,
 }
 
@@ -70,23 +58,17 @@ const TITLE_MAX: usize = 72;
 /// Where a transcript's bytes go, and whether it exists yet.
 #[derive(Debug)]
 enum Sink {
-    /// The header is composed but nothing is on disk. A session that says
-    /// nothing must leave no file — see [`HistoryStore::create`].
+    /// Nothing on disk yet; see [`HistoryStore::create`].
     Pending(SessionHeader),
     Open(File),
-    /// A write failed. The first failure is reported by whoever owns the
-    /// event channel (aldwin-cli's sink wrapper); every subsequent record is
-    /// dropped silently, because a disk that is full at record 200 is still
-    /// full at record 201 and the developer does not need to be told 400
-    /// times.
+    /// A write failed. aldwin-cli's sink wrapper reports the first failure;
+    /// every later record is dropped silently so it is not reported again.
     Off,
 }
 
-/// The transcript this session is writing to.
-///
-/// Holds the file open for the life of the session rather than reopening per
-/// record: a transcript is written on every committed record, and the open
-/// is the expensive half of an append.
+/// The transcript this session is writing to. Holds the file open for the
+/// session rather than reopening per record, since it is written on every
+/// committed record.
 #[derive(Debug)]
 pub struct HistoryStore {
     path: PathBuf,
@@ -94,20 +76,10 @@ pub struct HistoryStore {
 }
 
 impl HistoryStore {
-    /// Prepare this session's transcript. **The file is not created until
-    /// the first record is appended.**
-    ///
-    /// Opening a session is not the same act as having a conversation, and
-    /// every launch used to leave a header-only file behind — so did every
-    /// `/clear`, which opens a fresh transcript the developer may never say
-    /// anything into. Those files are unresumable by construction (`load`
-    /// finds no completed turn) and listing them offered rows the picker
-    /// would then refuse. Deferring the create means a session that says
-    /// nothing leaves nothing.
-    ///
-    /// The directory *is* created here, eagerly: it is the cheap half, and
-    /// it is what lets a session that cannot write history say so at startup
-    /// rather than at the first committed record.
+    /// Prepares this session's transcript. The file is created only on the
+    /// first append, so a session or `/clear` that records nothing leaves no
+    /// file. The directory is created now, so an unwritable history is
+    /// reported at startup.
     ///
     /// # Errors
     ///
@@ -123,19 +95,14 @@ impl HistoryStore {
         })
     }
 
-    /// Create the file and write the header — the deferred half of
-    /// [`HistoryStore::create`], run on the first record.
+    /// Creates the file and writes the header, on the first record.
     ///
-    /// Mode `0600`: a transcript carries whatever the session's tool results
-    /// carried — file contents, command output, anything a `.env` held — so
-    /// it is readable by its owner and nobody else. See aldwin-history.md's
-    /// Pitfalls.
+    /// Mode `0600`: a transcript holds whatever tool results held
+    /// (aldwin-history.md Pitfalls).
     fn materialise(path: &Path, header: &SessionHeader) -> Result<File, ConfigError> {
-        // `create_new`, not `create`: an id that already has a transcript is
-        // a collision, and appending onto one would merge two conversations
-        // into a file `load` then resumes as a single history. Loud is the
-        // only safe failure here. Continuing a transcript on purpose is
-        // [`HistoryStore::reopen`], which says so by name.
+        // `create_new`, not `create`: an existing file is an id collision,
+        // and appending would merge two conversations. Continuing on purpose
+        // is [`HistoryStore::reopen`].
         let mut options = OpenOptions::new();
         options.create_new(true).append(true);
         #[cfg(unix)]
@@ -154,18 +121,12 @@ impl HistoryStore {
         Ok(file)
     }
 
-    /// Reopen an existing transcript for appending — what `/resume` does, so
-    /// a resumed conversation continues in the file it came from rather than
-    /// forking a second one (aldwin-history.md's fork-free Decision).
+    /// Reopens an existing transcript for appending, for `/resume`; the
+    /// conversation continues in its own file (aldwin-history.md's fork-free
+    /// Decision). Writes no header, so `started_at` stays the original.
     ///
-    /// No header is written: the file already has one, and its `started_at`
-    /// should keep saying when the conversation began, not when it was last
-    /// picked up.
-    ///
-    /// A transcript whose writer was killed mid-record does not end on a
-    /// newline, and an append straight onto it would fuse the next record —
-    /// the resumed turn's `TurnStarted` — into the torn line, where [`load`]
-    /// skips both. So the line is closed first.
+    /// A missing final newline (a torn record) is written first; otherwise
+    /// the next record fuses into the torn line and [`load`] skips both.
     ///
     /// # Errors
     ///
@@ -201,9 +162,8 @@ impl HistoryStore {
         &self.path
     }
 
-    /// Append one record, creating the transcript if this is the first.
-    /// `Err` on the first failure only; every call after that is a silent
-    /// no-op (see [`Sink::Off`]).
+    /// Appends one record, creating the transcript on the first. `Err` on
+    /// the first failure only; every later call is a silent no-op.
     ///
     /// # Errors
     ///
@@ -232,8 +192,6 @@ impl HistoryStore {
         match write_line(file, record) {
             Ok(()) => Ok(()),
             Err(e) => {
-                // Drop the handle so the next record short-circuits above
-                // rather than retrying a write that just failed.
                 *guard = Sink::Off;
                 Err(ConfigError::Io {
                     path: self.path.clone(),
@@ -244,42 +202,28 @@ impl HistoryStore {
     }
 }
 
-/// Writes `value` as one line, in **one** `write` call.
-///
-/// A `writeln!` on a `File` is two writes — the text, then the newline —
-/// and `O_APPEND` makes each write atomic, not the pair: a second process
-/// continuing the same transcript (ADR 0005 accepts two) can land its
-/// record between them, and both lines are then lost to [`load`]. One
-/// buffer, one `write_all`, is one append.
+/// Writes `value` as one line in one `write_all`. Do not use `writeln!`: it
+/// is two writes, and `O_APPEND` makes only each one atomic, so a second
+/// process on the same transcript (ADR 0005 allows two) can land between them.
 fn write_line(out: &mut impl Write, value: &impl Serialize) -> io::Result<()> {
     let mut line = serde_json::to_vec(value).expect("transcript lines are always serialisable");
     line.push(b'\n');
     out.write_all(&line)
 }
 
-/// A transcript's lines, as bytes.
+/// A transcript's lines, as bytes; an I/O error ends them.
 ///
-/// Split on `\n` rather than read as text: a record torn in the middle of a
-/// multi-byte character is not UTF-8, and `BufRead::lines` ends the whole
-/// read with an error there — every turn after it lost. As bytes, the torn
-/// line merely fails to parse and is skipped like any other. An I/O error
-/// still ends the read: there is nothing after it to recover.
+/// Not `BufRead::lines`: a record torn mid-character is not UTF-8 and would
+/// end the read there; as bytes it only fails to parse.
 fn lines(file: File) -> impl Iterator<Item = Vec<u8>> {
     BufReader::new(file).split(b'\n').map_while(Result::ok)
 }
 
-/// Every *resumable* session in this project, newest first.
+/// Every resumable session in `dir`, newest first.
 ///
-/// **A session is listed if and only if it can be resumed.** A transcript
-/// with no completed turn — a session that was opened and quit, or one killed
-/// inside its first turn — loads as nothing (see [`load`]), so listing it
-/// would offer a row the picker then refuses. The two rules are one rule and
-/// they are deliberately written against the same record.
-///
-/// Unreadable and unrecognised files are skipped rather than failing the
-/// listing: one corrupt transcript must not cost the developer the rest of
-/// their history. A missing directory is an empty list, not an error — it is
-/// the normal "nothing recorded here yet" state.
+/// Invariant: listed if and only if [`load`] returns a completed turn; keep
+/// `summarise` and `load` agreeing on `TurnEnded`. Unreadable or unknown
+/// files are skipped; a missing `dir` is an empty list.
 pub fn list(dir: &Path) -> Vec<SessionSummary> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -294,27 +238,17 @@ pub fn list(dir: &Path) -> Vec<SessionSummary> {
         })
         .collect();
 
-    // Newest first. `SessionId` sorts into start order too, but `started_at`
-    // is the field the row actually shows, so it is the one to sort on —
-    // otherwise a list could display out of the order it claims.
+    // By `started_at`, not `SessionId`: it is the field the row shows.
     sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
     sessions
 }
 
 /// One session's records, ready to become a `ConversationLog`.
 ///
-/// **Only finished turns are returned.** A tool call and its result are a
-/// pair: a process killed between them leaves a `ToolUse` on disk with no
-/// `ToolResult`, and `messages_from_log` would rebuild that into an assistant
-/// message carrying an unmatched tool-use block — which every provider
-/// rejects outright. Dropping every turn that never reached its `TurnEnded`
-/// is what makes the crash case resume exists for actually resumable, and it
-/// subsumes the torn-final-line case for free.
-///
-/// Every such turn, not only the last: a session resumed after a crash is
-/// appended to the file that still holds the dead half turn, so on the next
-/// load it sits in the middle. No finished turn at all loads as nothing —
-/// half a turn is worse than none.
+/// Only turns that reached `TurnEnded` are returned, wherever they sit in
+/// the file: an unfinished one can hold a `ToolUse` with no `ToolResult`,
+/// which `messages_from_log` turns into a tool-use block every provider
+/// rejects. A resumed crash leaves such a turn mid-file.
 ///
 /// # Errors
 ///
@@ -354,13 +288,11 @@ fn transcript_path(dir: &Path, id: &SessionId) -> PathBuf {
     dir.join(format!("{id}.jsonl"))
 }
 
-/// A filesystem-safe, collision-resistant name for a project root.
+/// A filesystem-safe name for a project root: its basename, then a hash of
+/// the full path that tells same-named projects apart.
 ///
-/// The readable half is for a human listing the directory; the hash is what
-/// actually distinguishes two projects, since basenames collide constantly
-/// (every `src`, every `web`). FNV-1a rather than `DefaultHasher` because
-/// this name has to mean the same thing across Rust releases — a hash that
-/// changes under the developer's feet silently orphans their history.
+/// FNV-1a, not `DefaultHasher`: the slug must be stable across Rust
+/// releases, or existing history is orphaned.
 fn project_slug(project_root: &Path) -> String {
     let name = project_root
         .file_name()
@@ -385,18 +317,14 @@ fn project_slug(project_root: &Path) -> String {
     format!("{safe}-{hash:016x}")
 }
 
-/// How a `TurnEnded` and a `UserMessage` line begin. `LogRecord` is
-/// internally tagged, and serde writes the tag first.
+/// How a `TurnEnded` and a `UserMessage` line begin. Relies on serde
+/// writing `LogRecord`'s internal tag first.
 const TURN_ENDED: &[u8] = br#"{"type":"turn_ended""#;
 const USER_MESSAGE: &[u8] = br#"{"type":"user_message""#;
 
-/// One row of the listing, read without parsing the whole transcript.
-///
-/// Every transcript in the project is summarised when a session starts, and
-/// most of a transcript is tool results and replies the row does not need.
-/// So a line is parsed only when its tag says it is one the row counts — a
-/// `TurnEnded`, which is small, or the first `UserMessage` — and the rest
-/// are passed over on the tag alone.
+/// One row of the listing. Every transcript is summarised at session start,
+/// so only `TurnEnded` lines and the first `UserMessage` are parsed; the
+/// rest are skipped by their tag.
 fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
     let file = File::open(path).ok()?;
     let mut lines = lines(file);
@@ -422,9 +350,8 @@ fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
         }
     }
 
-    // Nothing finished, so there is nothing to resume and nothing to list.
-    // This is also what keeps transcripts left by older builds — which were
-    // created eagerly at startup — out of the picker.
+    // Nothing to resume, so nothing to list; this also hides header-only
+    // files from older builds.
     if turns == 0 {
         return None;
     }
@@ -432,18 +359,15 @@ fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
     Some(SessionSummary {
         id,
         started_at: header.started_at,
-        // A completed turn without a user message is not reachable through
-        // the app, but a damaged transcript can look like one.
+        // Unreachable from the app, but a damaged transcript can lack one.
         title: title.unwrap_or_else(|| "(untitled)".into()),
         turns,
     })
 }
 
-/// The first user message, on one line, bounded.
-///
-/// Derived rather than authored, and deliberately not summarised by the
-/// model: filing is not what the developer's tokens are for. If the result
-/// reads badly in a list, the fix is the list.
+/// The first non-blank line of the first user message, cut to `TITLE_MAX`
+/// chars. Never summarise it with the model: that would spend the
+/// developer's tokens.
 fn derive_title(text: &str) -> String {
     let first = text
         .lines()
@@ -518,9 +442,8 @@ mod tests {
         }
     }
 
-    /// `writeln!` wrote the record and its newline as two writes, and a
-    /// second process appending to the same transcript could land between
-    /// them. The header and every record go through `write_line`.
+    /// Regression: `writeln!` was two writes, which a second appending
+    /// process could land between.
     #[test]
     fn a_line_is_one_write_newline_included() {
         let mut out = Writes::default();
@@ -539,9 +462,8 @@ mod tests {
         }
     }
 
-    /// A record torn in the middle of a multi-byte character is not UTF-8,
-    /// and reading lines as text ended the read there: every turn after it
-    /// was lost to `load` and to the listing both.
+    /// Regression: reading lines as text stopped at a non-UTF-8 torn record,
+    /// losing every later turn.
     #[test]
     fn a_record_torn_mid_character_costs_that_line_and_nothing_after_it() {
         let dir = tempdir().unwrap();
@@ -572,8 +494,7 @@ mod tests {
         );
     }
 
-    /// The listing counts turns and finds the title by a line's opening
-    /// bytes, which holds only while serde writes the tag first.
+    /// `summarise` matches lines by their opening bytes.
     #[test]
     fn the_tags_the_listing_matches_are_the_ones_serde_writes() {
         let [started, said, _, ended] = &turn(1, "hi")[..] else {
@@ -585,9 +506,8 @@ mod tests {
         assert!(!line(started).starts_with(TURN_ENDED));
     }
 
-    /// Verify for Step 2: a killed process leaves a file whose earlier lines
-    /// all parse. The kill is simulated by appending a half-written line,
-    /// which is the only damage an append-only file can take.
+    /// aldwin-history.md Step 2. A half-written line simulates a kill, the
+    /// only damage an append-only file takes.
     #[test]
     fn a_torn_final_line_costs_that_line_and_nothing_else() {
         let dir = tempdir().unwrap();
@@ -611,9 +531,8 @@ mod tests {
         );
     }
 
-    /// Verify for Step 3, and the reason the truncation rule exists: a
-    /// process killed between a tool call and its result must not resume
-    /// into an unmatched tool-use block.
+    /// aldwin-history.md Step 3: a kill between a tool call and its result
+    /// must not resume into an unmatched tool-use block.
     #[test]
     fn an_unfinished_turn_is_dropped_back_to_the_last_finished_one() {
         let dir = tempdir().unwrap();
@@ -624,7 +543,7 @@ mod tests {
         for record in &finished {
             store.append(record).unwrap();
         }
-        // A second turn that got as far as calling a tool and then died.
+        // A second turn killed after a tool call.
         store
             .append(&LogRecord::TurnStarted { turn_id: TurnId(2) })
             .unwrap();
@@ -677,8 +596,7 @@ mod tests {
         );
     }
 
-    /// Verify for Step 2: history must never be able to fail a turn, so the
-    /// failure it hands back has to be an error rather than a panic.
+    /// aldwin-history.md Step 2: history must never fail a turn.
     #[test]
     fn an_unwritable_history_directory_is_an_error_not_a_panic() {
         let dir = tempdir().unwrap();
@@ -719,8 +637,6 @@ mod tests {
         assert_eq!(sessions[0].turns, 1);
     }
 
-    /// A session that is opened and quit without a word must leave nothing
-    /// behind — not a file, and not a row.
     #[test]
     fn a_session_that_says_nothing_writes_no_file_at_all() {
         let dir = tempdir().unwrap();
@@ -735,14 +651,10 @@ mod tests {
         assert!(list(dir.path()).is_empty());
     }
 
-    /// The listing's invariant: a row is offered only if resuming it would
-    /// restore something. These two rules are written against the same
-    /// record and must not drift apart.
     #[test]
     fn a_session_is_listed_if_and_only_if_it_can_be_resumed() {
         let dir = tempdir().unwrap();
 
-        // Finished — listed and resumable.
         let finished = SessionId("0000000070-1".into());
         let store = HistoryStore::create(dir.path(), &finished, &header()).unwrap();
         for record in turn(1, "answered") {
@@ -750,7 +662,6 @@ mod tests {
         }
         drop(store);
 
-        // Started, never finished — neither listed nor resumable.
         let unfinished = SessionId("0000000080-1".into());
         let store = HistoryStore::create(dir.path(), &unfinished, &header()).unwrap();
         store
@@ -775,8 +686,6 @@ mod tests {
         assert_eq!(list(dir.path()).len(), 1);
     }
 
-    /// An older build created the file eagerly, so a developer upgrading has
-    /// header-only transcripts already on disk. They must not be offered.
     #[test]
     fn a_header_only_transcript_from_an_older_build_is_not_listed() {
         let dir = tempdir().unwrap();
@@ -791,9 +700,6 @@ mod tests {
         );
     }
 
-    /// The count has to be what resume restores, not what was attempted —
-    /// `load` drops the unfinished tail, so counting started turns would
-    /// promise a turn back that never arrives.
     #[test]
     fn the_turn_count_is_completed_turns_not_attempted_ones() {
         let dir = tempdir().unwrap();
@@ -872,9 +778,8 @@ mod tests {
         assert_eq!(list(dir.path())[0].turns, 2);
     }
 
-    /// The crash case, resumed twice. The half turn a killed process left is
-    /// still in the file when `/resume` appends after it, so the second load
-    /// finds it in the *middle* — where a tail truncation cannot reach it.
+    /// After `/resume`, a crashed half turn sits mid-file, where dropping
+    /// only the tail would miss it.
     #[test]
     fn a_half_turn_left_by_a_crash_stays_dropped_after_the_session_is_continued() {
         let dir = tempdir().unwrap();
@@ -898,7 +803,7 @@ mod tests {
             })
             .unwrap();
         drop(store);
-        // And the kill landed mid-write, so the file does not end on a newline.
+        // Killed mid-write: no final newline.
         let path = transcript_path(dir.path(), &id);
         let mut raw = fs::read_to_string(&path).unwrap();
         raw.push_str("{\"type\":\"tool_res");

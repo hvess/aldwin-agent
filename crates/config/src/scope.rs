@@ -1,5 +1,5 @@
-/// Persistence tier on disk. Not every domain exists at every scope —
-/// `tui` is global-only.
+/// Persistence tier on disk. Not every domain exists at every scope: `tui`
+/// and connections are global-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// The project's own `.aldwin/`, at the project root.

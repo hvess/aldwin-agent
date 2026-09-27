@@ -1,6 +1,5 @@
-//! Filesystem primitives: versioned read, atomic write. No domain knowledge
-//! lives here — this module doesn't know about scopes or which domain it's
-//! reading, only "a path, a version, a type".
+//! Filesystem primitives: versioned read, atomic write. Knows a path, a
+//! version and a type; never a scope or a domain.
 
 use serde::{de::DeserializeOwned, Serialize};
 use std::fs;
@@ -14,15 +13,12 @@ struct VersionOnly {
     version: u32,
 }
 
-/// Read and parse `path` as YAML if it exists, checking the version field
-/// first so a file from a *newer* build fails with `UnknownVersion` instead
-/// of a confusing generic parse error. `Ok(None)` means the file does not
-/// exist — the normal "nothing persisted here yet" state, not an error.
+/// Reads and parses `path` as YAML; `Ok(None)` when the file does not exist.
 ///
-/// An older version is handed to the schema rather than refused: a domain
-/// whose current shape still reads its old files (permissions, since ADR
-/// 0011) loads them, and one whose shape changed fails to parse, naming the
-/// field.
+/// The version is probed first, so a version of zero or newer than
+/// `current_version` fails as `UnknownVersion`, not as a parse error. An
+/// older version is handed to the schema, not refused: permissions (ADR
+/// 0011) still reads its v1 files.
 pub fn read_versioned<T: DeserializeOwned>(
     path: &Path,
     current_version: u32,
@@ -57,11 +53,10 @@ pub fn read_versioned<T: DeserializeOwned>(
     Ok(Some(value))
 }
 
-/// Write `text` to `path` atomically: a tempfile in the same directory,
-/// fsync'd, then renamed over the target. A crash mid-write leaves either the
-/// old file or the new one, never a partial write. Creates the parent
-/// directory if it doesn't exist yet — the first write into a scope is what
-/// materialises `<project>/.aldwin/` or `~/.aldwin/`.
+/// Writes `text` to `path` atomically: a synced tempfile in the same
+/// directory renamed over the target, so a crash leaves the old file or the
+/// new one. Creates the parent directory; the first write into a scope is
+/// what creates `<project>/.aldwin/` or `~/.aldwin/`.
 pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     let dir = path
         .parent()
@@ -93,15 +88,12 @@ pub fn write_atomic_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Serialise `value` as YAML and write it via [`write_atomic_text`], with
-/// `header` — a newline-terminated block of `#` comment lines from the
-/// `annotated` module, or `""` — prepended.
+/// Serialises `value` as YAML and writes it via [`write_atomic_text`] with
+/// `header` prepended: a newline-terminated `#` comment block from
+/// `annotated`, or `""`.
 ///
-/// `serde_yaml_ng::to_string` serialises fresh from the in-memory value and
-/// knows nothing of the file's comments, so a write without the header would
-/// drop a domain's explanation the first time anything is persisted to it.
-/// The annotated text is a standing tour of the format, not a one-time
-/// greeting.
+/// Serialising drops the file's comments, so a domain with a header must
+/// pass it on every write.
 pub fn write_atomic_with_header<T: Serialize>(
     path: &Path,
     header: &str,

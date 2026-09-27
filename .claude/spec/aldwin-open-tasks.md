@@ -64,6 +64,6 @@ contradicts) and the entry says so before it goes.
 4. **Comments predate the comments skill.** `.claude/skills/comments/SKILL.md`
    holds every comment to what an LLM reader needs; the crates were written
    before it. The rework lands one crate per commit, each through the review
-   loop and changing comments only: login (landed with the skill) and llm
-   are done; config, core, tools, cli, tui and review follow, in that
+   loop and changing comments only: login (landed with the skill), llm and
+   config are done; core, tools, cli, tui and review follow, in that
    order. Entry 1 waits on it. Closing it is the last crate's commit.

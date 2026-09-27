@@ -1,11 +1,11 @@
 ---
 name: design-sync
-description: How to re-sync the Aldwin design system from claude.ai/design with DesignSync — which of the two projects holds what, and the traps in addressing them. Read before any DesignSync call or design re-sync; not needed to use the local copy in .claude/design/.
+description: How to re-sync the Aldwin design system from claude.ai/design with DesignSync — which of the two projects holds what, and the traps in addressing them. Read before any DesignSync call or design re-sync; not needed to use the local copy in docs/design/.
 ---
 
 # Re-syncing the design system
 
-The local copy in `.claude/design/` (see its `IMPORT.md`) is the working
+The local copy in `docs/design/` (see its `IMPORT.md`) is the working
 source. Re-sync only when you need something that copy doesn't carry.
 
 ## The two projects

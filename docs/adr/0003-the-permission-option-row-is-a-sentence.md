@@ -13,7 +13,7 @@ toggles and becomes a property of the row they pick
 **Affects:** `aldwin-tui`, `mjolnir-design-conformance` (Class B 2, B 3, B 4)
 
 > **Note, 2026-09-20.** `mjolnir-design-conformance` was deleted with the
-> screenshot harness it belonged to — see `.claude/spec/aldwin-review.md`'s
+> screenshot harness it belonged to — see `docs/spec/aldwin-review.md`'s
 > Progress entry. Its Class B numbers below no longer resolve to anything on
 > disk; git history has them. The decision this record makes is unaffected
 > and still holds, which is why the body is left as it was written rather

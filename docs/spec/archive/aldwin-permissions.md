@@ -95,6 +95,6 @@ developer can most easily change.
 
 ## References
 
-- `.claude/adr/0009-the-review-is-the-only-gate.md` — why this crate is a lock.
-- `.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — §5 and §7, the two clauses that stand.
-- `.claude/adr/0007-reach-is-a-workspace-and-every-tool-honours-it.md` — `roots:`.
+- `docs/adr/0009-the-review-is-the-only-gate.md` — why this crate is a lock.
+- `docs/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md` — §5 and §7, the two clauses that stand.
+- `docs/adr/0007-reach-is-a-workspace-and-every-tool-honours-it.md` — `roots:`.

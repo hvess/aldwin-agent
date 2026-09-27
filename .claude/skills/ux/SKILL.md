@@ -17,13 +17,13 @@ and interaction.** When designing, creating or changing an interface, justify
 decisions from the HIG and nothing else — not other design systems, not
 other agents or TUIs, not your own taste.
 
-It divides responsibility with the Aldwin Design System (CLAUDE.md, "Design
+It divides responsibility with the Aldwin Design System (AGENTS.md, "Design
 System"):
 
 | Question | Authority |
 |---|---|
 | Is it intuitive, familiar, predictable, forgiving? What happens on a key, a click, an error? What does the text say? | **HIG** |
-| Which colour, glyph, ground, grid position? | **Aldwin Design System** (`.claude/design/`, generated into `tokens.rs`) |
+| Which colour, glyph, ground, grid position? | **Aldwin Design System** (`docs/design/`, generated into `tokens.rs`) |
 
 Where the two disagree, do not quietly pick one. Record it in
 `crates/review/baseline.json` under `contradictions` with both halves and

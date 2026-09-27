@@ -12,7 +12,7 @@ format, the permission engine, retention, and any launch-time entry point.
 
 ## The stale line
 
-`.claude/spec/aldwin.md` line 83 says, as a V0 Decision: *"No session
+`docs/spec/aldwin.md` line 83 says, as a V0 Decision: *"No session
 persistence, no first-class history... Sessions are ephemeral."* It becomes
 false the day this ships, so it is edited in the same change (Step 9), and ADR
 0005 records why. This is bookkeeping that travels with the code, not a gate in
@@ -203,10 +203,10 @@ All done, 2026-09-20.
    lowercase labels. An empty list answers with a Notice rather than an empty
    panel.
    - Verify: measured against the design system's list frame, not eyeballed —
-     see `.claude/design/IMPORT.md` rule 4.
+     see `docs/design/IMPORT.md` rule 4.
 
 9. Write ADR 0005; amend `aldwin.md` line 83 to point at it. Note completion
-   in Progress and move this spec to `.claude/spec/archive/`.
+   in Progress and move this spec to `docs/spec/archive/`.
 
 ## Pitfalls
 

@@ -1,5 +1,5 @@
 //! Provider clients implementing core's `LlmClient`, and the provider
-//! catalogue (`.claude/spec/archive/aldwin-llm.md`). Wire types stay in the
+//! catalogue (`docs/spec/archive/aldwin-llm.md`). Wire types stay in the
 //! private `wire` / `wire_openai` modules: nothing provider-shaped is public.
 
 mod catalog;

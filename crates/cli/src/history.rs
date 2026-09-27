@@ -1,4 +1,4 @@
-//! The session's transcript sink (`.claude/spec/archive/aldwin-history.md`).
+//! The session's transcript sink (`docs/spec/archive/aldwin-history.md`).
 //!
 //! The `RecordSink` impl lives here, not in aldwin-config, because a failed
 //! write is reported on the session's tokio `Event` channel, which

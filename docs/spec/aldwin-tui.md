@@ -167,7 +167,7 @@ ethos, quality — found the rest. What changed, each against its source:
   amber means running, and nothing is.
 
 **Progress (2026-09-23, the Aldwin Design System — a replacement):** The
-design system was replaced whole (`.claude/design/IMPORT.md`, "None of
+design system was replaced whole (`docs/design/IMPORT.md`, "None of
 Mjolnir's values carry over") and with it the product's behaviour (ADR
 0009). This crate was rewritten rather than retoned. What is here now, and
 what each thing was measured against:
@@ -257,7 +257,7 @@ deliberately.
 **Progress (2026-09-21, the lantern-gold repaint):** The design system was
 replaced, not adjusted — warm greys under one brand colour where it was a
 single 300° hue — and the eleven frames were renumbered into one file. Read
-`.claude/design/IMPORT.md`'s entry of this date before touching anything
+`docs/design/IMPORT.md`'s entry of this date before touching anything
 visual here; it is the record of what arrived and what was deliberately not
 followed.
 
@@ -338,7 +338,7 @@ Three things a reader of this crate should know:
 Measured over the five permission scenes at three sizes in both themes — 30
 frames, clean. *(The conformance catalogue this closed seven entries in was
 deleted on 2026-09-20 with the harness that produced it; see
-`.claude/spec/aldwin-review.md`'s Progress entry for why. The measurement
+`docs/spec/aldwin-review.md`'s Progress entry for why. The measurement
 stands, the catalogue numbers no longer resolve, and git history has them.)*
 
 **Progress (2026-09-19, the conformance catalogue's unblocked layout items):**
@@ -1058,7 +1058,7 @@ actual cause lives in `aldwin-core`'s base system prompt
 (`crates/core/src/prompt.rs`): it told the model to "always propose a diff
 and wait for approval," which is instructions to do by hand, in chat text,
 exactly what the `edit` tool's own structural gate already does
-automatically and unconditionally (see CLAUDE.md's "Edit is never
+automatically and unconditionally (see AGENTS.md's "Edit is never
 allowlistable" constraint) — so a compliant model narrates the diff itself,
 then the tool call triggers the real card, then it narrates a change summary
 afterward. Reworded to say the tool call itself is the proposal and the
@@ -2603,7 +2603,7 @@ four AA-passing metadata tiers on `#161826` would need steps between
 `#9397ab` and `#cfd3e5`, and the neutral ramp has one; separating
 `ground`/`bar_bottom`/`diff_box` needs values between `#161826` and
 `#232532`, and it has none. So closing this means new steps, which is
-inventing palette locally — the thing `.claude/CLAUDE.md`'s Design System
+inventing palette locally — the thing `AGENTS.md`'s Design System
 section exists to forbid. Left for the developer to direct, with the
 measurements above as the case; whatever is chosen belongs in the design
 system first and in `palette.rs` second, or the two drift.
@@ -2694,7 +2694,7 @@ have. That is a design-system change first, `palette.rs` second.
 **Progress (2026-09-06, Turn 13 — borderless rebuild, new grid, generated
 palette):** Closes the colour-transport gap above, and supersedes the
 2026-09-03 grid entry. The design system was re-synced from the bound copy
-in the "Design system tokens discussion" project (see `.claude/design/`),
+in the "Design system tokens discussion" project (see `docs/design/`),
 which is the live token layer — the standalone design-system project is
 stale and its `updatedAt` does not move when the bound copy is edited, so
 neither the file list nor the timestamp there is evidence of currency.
@@ -2854,7 +2854,7 @@ changed:
 
 **Progress (2026-09-06, thinking flag outlives its turn):** Found while
 wiring Proton's Lumo in as an OpenAI-compatible provider (see
-`.claude/spec/archive/aldwin-llm.md`'s entry of the same date), not by a
+`docs/spec/archive/aldwin-llm.md`'s entry of the same date), not by a
 TUI change. `App::thinking` was cleared only by `Event::ThinkingEnd` and
 `HistoryCleared`, so a stream that died mid-thinking — transport error,
 idle timeout, anything that ends a turn without the closing event — left
@@ -2905,7 +2905,7 @@ Two earlier deviations are now closed, and one stays:
    cells 3–10 and asserts the 2-cell gutter behind it stays blank.
 2. **`/model` in the prose is now true.** The clause was dropped twice for
    naming a command that did not exist; `/model [provider/]model` was built
-   alongside this (see `.claude/spec/archive/aldwin-cli.md`).
+   alongside this (see `docs/spec/archive/aldwin-cli.md`).
 3. **`/access` is still dropped.** The access step's design copy promises
    "/access changes it later" and there is no such command, so the sentence
    ends at "Which actions run without asking." A test asserts the string
@@ -2917,7 +2917,7 @@ fourth curated row. It is the one row whose copy — "local models · no key" �
 the harness cannot honour: `api_key_env` is required in `provider.yaml` and
 the OpenAI-compatible client refuses to start when the variable it names is
 unset, so the row would be an option that cannot open a session. See
-`.claude/spec/archive/aldwin-llm.md`'s catalogue note.
+`docs/spec/archive/aldwin-llm.md`'s catalogue note.
 
 Layering: this crate still does not know what an endpoint or a key variable
 is. `ProviderChoice { id, purpose }` is the display half of a catalogue row,
@@ -2950,7 +2950,7 @@ Six cells part two genuinely unrelated groups (`5b`'s `review changes` /
 `3 files`, and the footer's key hints), and the identity bar is not that.
 
 `HANDOFF.md`'s prose says the six-cell gap "survives only between the brand
-and everything else", which is exactly the trap CLAUDE.md's design notes
+and everything else", which is exactly the trap AGENTS.md's design notes
 warn about: the prose does not state positions, the frame does. The gap is
 now `chrome::brand_pad()` — derived from `BRAND`'s own width against
 `CONTENT_INDENT`, so cell 13 is never restated — and `BRAND` itself is
@@ -3234,7 +3234,7 @@ reference's two-hint footer.
 
 *Measured, then rendered, then re-rendered.* Every column was checked against
 the frames' own inline styles before any Rust was written (the numbers are in
-`.claude/design/HANDOFF.md`'s third first-run supersession note), and one
+`docs/design/HANDOFF.md`'s third first-run supersession note), and one
 correction came out of it that a reading alone had got wrong for a whole
 turn: **the wordmark is padded by two spaces at each end, not one** — a
 17-cell field, not 15. `examples/snapshot.rs` now covers `empty` and the
@@ -3613,7 +3613,7 @@ thirty-eight `var()` references into new `--color-{ground,ink,accent,neutral,dif
 ramps, so every `LIGHT` field in `palette.rs` names its rung the way the `DARK`
 fields already did.
 
-Verified the way this project's `CLAUDE.md` requires rather than by reading
+Verified the way this project's `AGENTS.md` requires rather than by reading
 prose: `Agent TUI v2 Light.dc.html` was fetched and its `:root{--t-*}` block
 measured against the bound copy's `.tui-light`. All thirty-eight roles agree,
 which is the one direction nothing else checks — the frames restate their whole
@@ -3773,7 +3773,7 @@ the two rules above stated as assertions (no glyph in the separator, its bg is
 above was rejected on sight, twice: "I want a real table, it's the only thing
 that makes sense here." The rules it was built from were quoted back first and
 reaffirmed against, so this is a deliberate exception, recorded in
-`.claude/adr/0002-markdown-tables-are-drawn.md` and in `CLAUDE.md`'s Design
+`docs/adr/0002-markdown-tables-are-drawn.md` and in `AGENTS.md`'s Design
 System and Decision-records sections rather than left as a silent divergence.
 
 A markdown table is now `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, one cell of padding either
@@ -3841,7 +3841,7 @@ harness at 4x when the question is whether something lines up.
 **Debt this leaves:** the upstream design system still has no table component
 and its Iconography table still has no box-drawing glyphs, so this crate now
 draws a mark the imported system does not list. ADR 0002's Follow-up carries
-it: add the component upstream, re-sync `.claude/design/`, then reconcile
+it: add the component upstream, re-sync `docs/design/`, then reconcile
 `IMPORT.md`'s glyph-vocabulary section with the ADR.
 
 **Progress (2026-09-08, Shift+Enter — closing the 2026-08-29 gap):** Reported:
@@ -3980,9 +3980,9 @@ repository `mjolnir-harness` → `aldwin-agent`.
 
 ## References
 
-- .claude/spec/aldwin.md — parent spec; layout decisions, UX posture, Edit friction rules.
-- .claude/spec/aldwin-core.md — event/command types, turn/step model, thinking-content contract.
-- .claude/spec/aldwin-tools.md — ToolApprovalRequested semantics, ApproveTool command.
+- docs/spec/aldwin.md — parent spec; layout decisions, UX posture, Edit friction rules.
+- docs/spec/aldwin-core.md — event/command types, turn/step model, thinking-content contract.
+- docs/spec/aldwin-tools.md — ToolApprovalRequested semantics, ApproveTool command.
 - https://ratatui.rs/ — ratatui.
 - https://docs.rs/crossterm/ — crossterm terminal backend.
 
@@ -3990,10 +3990,10 @@ repository `mjolnir-harness` → `aldwin-agent`.
 
 Both live on `claude.ai/design` and are read with the `DesignSync` tool
 (`/design-login` first; the tool is main-session only — subagents do not
-have it). See `.claude/CLAUDE.md`'s Design System section for the working
+have it). See `AGENTS.md`'s Design System section for the working
 notes on fetching and rendering them.
 
-A local copy is checked in at `.claude/design/` — `HANDOFF.md`, `SYNC.md`
+A local copy is checked in at `docs/design/` — `HANDOFF.md`, `SYNC.md`
 and `tokens/{cells,palette,semantic}.css`, with provenance and the
 two-project distinction in `IMPORT.md`. Read that before re-fetching.
 

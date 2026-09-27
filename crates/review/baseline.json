@@ -1,5 +1,5 @@
 {
-  "//": "The measured cell, the pinned font, the toolchain, and where the design disagrees with the product. Each contradiction is a bug in .claude/design/ or a decision the developer made against it, not a bug in the app; it leaves when the design is fixed upstream or the decision reversed. See crates/review/src/baseline.rs.",
+  "//": "The measured cell, the pinned font, the toolchain, and where the design disagrees with the product. Each contradiction is a bug in docs/design/ or a decision the developer made against it, not a bug in the app; it leaves when the design is fixed upstream or the decision reversed. See crates/review/src/baseline.rs.",
   "cell": {
     "w": 8,
     "h": 18

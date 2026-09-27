@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-09-20. Superseded by 0009 (§1–§4, §6, §8) and 0011 (§1, §7); §5 stands, widened by 0007 and 0011.
 **Supersedes:** ADR 0001 in full. Amends ADR 0003 §2 and §4 (the option list).
 **Affects:** `aldwin-permissions`, `aldwin-tools`, `aldwin-config`, `aldwin-tui`,
-and the non-negotiables in `.claude/CLAUDE.md`
+and the non-negotiables in `AGENTS.md`
 
 ## Context
 

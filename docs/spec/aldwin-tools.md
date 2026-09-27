@@ -43,7 +43,7 @@ rejected.
   a project chooses to.
 
 **Progress (2026-09-24, ADR 0011 — the workspace is the only boundary):**
-Read `.claude/adr/0011-the-workspace-is-the-only-boundary.md` first; it
+Read `docs/adr/0011-the-workspace-is-the-only-boundary.md` first; it
 supersedes the class, the argv rule and the deny lock that the entries
 below build on.
 
@@ -138,7 +138,7 @@ fired zero times.
 
 **Progress (2026-09-20, ADR 0004 — `shell` is gone and a sandbox arrived):**
 The largest change this crate has had. Read
-`.claude/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md`
+`docs/adr/0004-permissions-are-a-declared-class-an-enforced-sandbox-and-a-lock.md`
 and the rewritten `aldwin-permissions.md` before anything below; several
 sections further down still describe the world this replaced and are marked
 where they do.
@@ -441,9 +441,9 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 
 ## References
 
-- .claude/spec/aldwin.md — parent; built-in surface, MCP-as-extension, Edit-as-structural-friction.
-- .claude/spec/archive/aldwin-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
-- .claude/spec/archive/aldwin-permissions.md — the lock this crate consulted until ADR 0011.
-- .claude/adr/0011-the-workspace-is-the-only-boundary.md — the boundary as it stands.
+- docs/spec/aldwin.md — parent; built-in surface, MCP-as-extension, Edit-as-structural-friction.
+- docs/spec/archive/aldwin-core.md — ToolDispatcher trait, ToolApprovalRequested / ApproveTool placeholders.
+- docs/spec/archive/aldwin-permissions.md — the lock this crate consulted until ADR 0011.
+- docs/adr/0011-the-workspace-is-the-only-boundary.md — the boundary as it stands.
 - https://github.com/modelcontextprotocol/rust-sdk — rmcp.
 - https://modelcontextprotocol.io/specification — MCP protocol surface.

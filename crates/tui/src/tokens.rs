@@ -1,6 +1,6 @@
 //! The design system, in Rust. **Generated — do not edit.**
 //!
-//! Emitted by `aldwin-review tokens --write` from `.claude/design/`:
+//! Emitted by `aldwin-review tokens --write` from `docs/design/`:
 //! `tokens/colors.css`, `tokens/layout.css`, `guidelines/glyphs.html` and
 //! the frame. The review loop's stage 4 regenerates this file and fails if
 //! the result differs, so the app's palette and the imported design cannot
@@ -800,7 +800,7 @@ pub(crate) const MARKS: [char; 23] = [
 ];
 
 // Glyphs a recorded design contradiction licenses on top of it. Each is
-// a bug in .claude/design/, not in the app; see crates/review/baseline.json
+// a bug in docs/design/, not in the app; see crates/review/baseline.json
 // (no-table-component-adr-0002).
 pub(crate) const MARKS_BY_EXCEPTION: [char; 11] =
     ['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];

@@ -171,9 +171,9 @@ run or `/model` chooses. Covered by
 
 ## References
 
-- .claude/spec/aldwin.md — parent; workspace layout and the V0 local-storage decision.
-- .claude/spec/aldwin-permissions.md — sibling; the consumer that drives most of this crate's design.
-- .claude/spec/aldwin-core.md — sibling; transitively depends on this crate for provider settings.
+- docs/spec/aldwin.md — parent; workspace layout and the V0 local-storage decision.
+- docs/spec/aldwin-permissions.md — sibling; the consumer that drives most of this crate's design.
+- docs/spec/aldwin-core.md — sibling; transitively depends on this crate for provider settings.
 - https://docs.rs/serde_yaml/ — serde_yaml.
 - https://docs.rs/serde-yaml-ng/ — actively-maintained fork; evaluate before committing.
 - https://doc.rust-lang.org/std/fs/fn.rename.html — std::fs::rename; the atomic-write target.

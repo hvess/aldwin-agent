@@ -84,7 +84,7 @@ set, retargetable at any OpenAI-compatible endpoint via `LUMO_BASE_URL` /
 `LUMO_MODEL`. Both pass against the live API: text streams, usage lands
 non-zero, and a `get_weather` tool call comes back parsed. All 55
 `aldwin-llm` tests plus the workspace suite pass, clippy clean. One
-downstream fix this surfaced, recorded in `.claude/spec/aldwin-tui.md`:
+downstream fix this surfaced, recorded in `docs/spec/aldwin-tui.md`:
 `App::thinking` was never cleared by `TurnEnded`, so a stream dying
 mid-thinking left the spinner claiming the agent was still thinking.
 
@@ -225,9 +225,9 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 ## References
 
-- .claude/spec/aldwin.md — parent.
-- .claude/spec/aldwin-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
-- .claude/spec/aldwin-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
+- docs/spec/aldwin.md — parent.
+- docs/spec/aldwin-core.md — LlmClient trait, normalised events, cache markers, retry visibility.
+- docs/spec/aldwin-config.md — provider.yaml shape, api_key_env indirection, raw per-layer snapshots.
 - https://docs.anthropic.com/en/api/messages — Messages API.
 - https://docs.anthropic.com/en/api/messages-streaming — SSE event shapes.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — cache_control placement.

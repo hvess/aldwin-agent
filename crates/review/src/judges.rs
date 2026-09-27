@@ -96,8 +96,8 @@ impl Judge {
             Judge::Frames => &[
                 SNAPSHOT,
                 "crates/review/",
-                ".claude/design/",
-                ".claude/adr/",
+                "docs/design/",
+                "docs/adr/",
                 ".claude/skills/review/",
             ],
         }
@@ -512,7 +512,7 @@ impl RunState {
     /// ```
     /// use std::collections::BTreeSet;
     /// use aldwin_review::judges::RunState;
-    /// let docs = vec![".claude/spec/aldwin-review.md".to_string()];
+    /// let docs = vec!["docs/spec/aldwin-review.md".to_string()];
     /// let (docs_only, _) = RunState::assess("t", true, &docs, &BTreeSet::new(), |_| None);
     /// assert!(docs_only.passed());
     /// ```
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn a_docs_only_change_calls_for_no_judge() {
-        let paths = vec![".claude/spec/aldwin-review.md".to_string()];
+        let paths = vec!["docs/spec/aldwin-review.md".to_string()];
         let (assignments, scenes) = assign(&paths, &BTreeSet::new());
         assert!(required(&assignments).is_empty());
         assert!(scenes.is_empty());

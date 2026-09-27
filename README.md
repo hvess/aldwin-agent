@@ -242,8 +242,10 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Design notes live in `.claude/spec/`, and the decisions behind them in
-`.claude/adr/`. There's usually a reason things are the way they are, and
-it's usually written down there. Agents committing to this repo go through
-the review loop in `.claude/skills/review/`, and the pre-commit hook
-enforces it.
+Design notes live in `docs/spec/`, and the decisions behind them in
+`docs/adr/`. There's usually a reason things are the way they are, and
+it's usually written down there.
+
+Working on it with an agent? Point it at `AGENTS.md`. Every agent commit
+goes through the review loop in `.claude/skills/review/`, and the
+pre-commit hook enforces it.

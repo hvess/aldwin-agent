@@ -1,4 +1,4 @@
-//! The review loop: `.claude/spec/aldwin-review.md` defines its ten stages,
+//! The review loop: `docs/spec/aldwin-review.md` defines its ten stages,
 //! `.claude/skills/review/SKILL.md` drives it.
 //!
 //! This crate runs the deterministic stages 1–5, decides which judges

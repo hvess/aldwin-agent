@@ -1,4 +1,4 @@
-//! Stage 4: generates `crates/tui/src/tokens.rs` from `.claude/design/`
+//! Stage 4: generates `crates/tui/src/tokens.rs` from `docs/design/`
 //! (`aldwin-review.md` Decisions 2–4); the stage passes when regenerating
 //! gives no diff.
 //!
@@ -72,10 +72,10 @@ pub const OUTPUT: &str = "crates/tui/src/tokens.rs";
 /// The frame, relative to the design directory.
 pub const FRAME: &str = "frames/Aldwin Agent TUI.dc.html";
 
-/// The imported design system, `.claude/design/`: the loop's only source for
+/// The imported design system, `docs/design/`: the loop's only source for
 /// the design.
 pub fn design_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/design")
 }
 
 /// Where the generated file lives in the workspace at `root`.
@@ -293,7 +293,7 @@ fn header() -> String {
     format!(
         "//! The design system, in Rust. **Generated — do not edit.**\n\
          //!\n\
-         //! Emitted by `aldwin-review tokens --write` from `.claude/design/`:\n\
+         //! Emitted by `aldwin-review tokens --write` from `docs/design/`:\n\
          //! `tokens/colors.css`, `tokens/layout.css`, `guidelines/glyphs.html` and\n\
          //! the frame. The review loop's stage 4 regenerates this file and fails if\n\
          //! the result differs, so the app's palette and the imported design cannot\n\
@@ -401,7 +401,7 @@ fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
          pub(crate) const MARKS: [char; {}] = [{}];\n\
          \n\
          // Glyphs a recorded design contradiction licenses on top of it. Each is\n\
-         // a bug in .claude/design/, not in the app; see crates/review/baseline.json\n\
+         // a bug in docs/design/, not in the app; see crates/review/baseline.json\n\
          // ({}).\n\
          pub(crate) const MARKS_BY_EXCEPTION: [char; {}] = [{}];\n",
         marks.len(),

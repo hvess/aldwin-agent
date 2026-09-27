@@ -1,5 +1,5 @@
 //! Aldwin's settings on disk and its conversation transcripts
-//! (`.claude/spec/archive/aldwin-config.md`).
+//! (`docs/spec/archive/aldwin-config.md`).
 //!
 //! Each domain (permissions, provider, MCP, TUI, connected accounts) is a
 //! versioned YAML file at project scope (`<project>/.aldwin/`), global scope

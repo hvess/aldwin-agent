@@ -7,9 +7,9 @@ The decision is unchanged; `--tui-quiet`, `--tui-label` and `--tui-body`
 below are the names it was made in.
 **Supersedes:** nothing wholesale — it carves one exception out of the Turn 13
 "nothing inside a frame is stroked" rule and out of the closed glyph table in
-`.claude/design/HANDOFF.md`
-**Affects:** `aldwin-tui` (`ui/markdown.rs`), `.claude/design/` (the glyph
-table needs a table component upstream), `CLAUDE.md`'s Design System section
+`docs/design/HANDOFF.md`
+**Affects:** `aldwin-tui` (`ui/markdown.rs`), `docs/design/` (the glyph
+table needs a table component upstream), `AGENTS.md`'s Design System section
 
 ## Context
 
@@ -83,7 +83,7 @@ opinion about.
 ## Consequences
 
 - **The glyph table upstream is now wrong**, and this is the debt this ADR
-  incurs. `.claude/design/` is a local copy of an imported system; the source
+  incurs. `docs/design/` is a local copy of an imported system; the source
   of truth is the two projects on `claude.ai/design`, and neither has a table
   component or the box-drawing glyphs in its Iconography table. Until it is
   added there, this crate draws a mark the design system does not list.
@@ -112,7 +112,7 @@ opinion about.
 ## Follow-up
 
 Add a table component and the box-drawing glyphs to the source design system
-(`claude.ai/design`, project `4ea574fb-…`), then re-sync `.claude/design/` and
+(`claude.ai/design`, project `4ea574fb-…`), then re-sync `docs/design/` and
 delete the "the glyph table upstream is now wrong" consequence above. Until
 then, `IMPORT.md`'s glyph vocabulary section and this ADR disagree, and this
 ADR is the one that describes the code.

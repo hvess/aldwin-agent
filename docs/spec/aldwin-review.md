@@ -73,7 +73,7 @@ moves any scene's snapshot has frames for stage 8 to judge.
    is the one thing `TestBackend` cannot do.
 
 2. **The app's design system is generated, not transcribed.**
-   `crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css`
+   `crates/tui/src/tokens.rs` is emitted from `docs/design/tokens/*.css`
    and committed; stage 4 regenerates it and fails on any diff. Before this,
    `palette.rs` carried eighty-four hand-written hex literals with a
    `// neutral-200` comment beside each as the only link to the design.
@@ -600,4 +600,4 @@ plural pronoun for a count of one, on every 80×24 frame. It now reads
 - crates/review/src/tokens.rs — stage 4, and the roles it does not carry.
 - crates/tui/tests/render_snapshot.rs — stage 5's baseline.
 - crates/review/baseline.json — the design's own contradictions.
-- .claude/design/IMPORT.md — the reference, and its provenance.
+- docs/design/IMPORT.md — the reference, and its provenance.

@@ -1,6 +1,6 @@
 ---
 name: records
-description: How to keep Aldwin's records true while changing the code — the open-tasks ledger, the specs, the ADRs, and the design contradictions in baseline.json. Says when each must change in the same commit, how an entry leaves the ledger, what needs the developer's call, and how to check that nothing still points at what moved. Use whenever a change completes, discovers, or decides work, and whenever editing anything under .claude/spec/, .claude/adr/ or crates/review/baseline.json.
+description: How to keep Aldwin's records true while changing the code — the open-tasks ledger, the specs, the ADRs, and the design contradictions in baseline.json. Says when each must change in the same commit, how an entry leaves the ledger, what needs the developer's call, and how to check that nothing still points at what moved. Use whenever a change completes, discovers, or decides work, and whenever editing anything under docs/spec/, docs/adr/ or crates/review/baseline.json.
 ---
 
 # Records
@@ -13,9 +13,9 @@ of the change that left it so. Keep them in the same commit as the code.
 
 | Record | Holds | Changes when |
 |---|---|---|
-| `.claude/spec/aldwin-open-tasks.md` | Known, understood, undone work, each with its evidence | Work is discovered, done, or decided against |
-| `.claude/spec/aldwin-<crate>.md` | A crate's design, Decisions, Pitfalls, dated Progress | A change completes a step, changes a stated rule, or settles a question the spec covers |
-| `.claude/adr/NNNN-*.md` | One decision that alters a constraint or a persisted format | A new decision (a new ADR), or a factual slip in an existing one |
+| `docs/spec/aldwin-open-tasks.md` | Known, understood, undone work, each with its evidence | Work is discovered, done, or decided against |
+| `docs/spec/aldwin-<crate>.md` | A crate's design, Decisions, Pitfalls, dated Progress | A change completes a step, changes a stated rule, or settles a question the spec covers |
+| `docs/adr/NNNN-*.md` | One decision that alters a constraint or a persisted format | A new decision (a new ADR), or a factual slip in an existing one |
 | `crates/review/baseline.json` `contradictions` | The design disagreeing with itself or with Apple's HIG, and which half the app follows | The design is re-synced or a contradiction is found in it |
 
 ## In the same commit
@@ -30,7 +30,7 @@ of the change that left it so. Keep them in the same commit as the code.
   entry is history: add a pointer to the newer rule (`two to four since
   2026-09-27: see Decisions`) rather than rewriting it.
 - **A changed fact is changed everywhere it is stated.** Grep the old
-  wording across `crates/` and `.claude/` — specs, ADRs, the system prompt,
+  wording across `crates/`, `docs/` and `.claude/` — specs, ADRs, the system prompt,
   tool descriptions, doc comments — and fix each one, or give it a pointer.
 
 ## Leaving the ledger

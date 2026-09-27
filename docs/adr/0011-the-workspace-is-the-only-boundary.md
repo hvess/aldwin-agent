@@ -9,7 +9,7 @@ lock), and with them what ADR 0007 §2 built on argv (per-argument path
 containment). **Keeps:** ADR 0007 whole otherwise — reach is a list of
 roots, and every tool honours it — which is now the entire rule; ADR 0009
 §4–§7; ADR 0004 §5's wording of the claim, widened below.
-**Amends:** `CLAUDE.md`'s non-negotiables "No arbitrary commands", "A
+**Amends:** `AGENTS.md`'s non-negotiables "No arbitrary commands", "A
 read-declared call is enforced" and "A deny is a lock", which are replaced
 by the rule in §1–§3.
 

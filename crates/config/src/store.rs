@@ -610,7 +610,7 @@ impl Config {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
-// Pins the Pitfalls in `.claude/spec/archive/aldwin-config.md`.
+// Pins the Pitfalls in `docs/spec/archive/aldwin-config.md`.
 
 #[cfg(test)]
 mod tests {

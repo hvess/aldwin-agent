@@ -1,7 +1,7 @@
 # ADR 0008 — Discussion-first is about intent, not grammar
 
 **Status:** accepted, 2026-09-21
-**Amends:** the "Discussion-first" non-negotiable in `.claude/CLAUDE.md`;
+**Amends:** the "Discussion-first" non-negotiable in `AGENTS.md`;
 `aldwin-core`'s `prompt::BASE`
 **Affects:** `aldwin-core`
 
@@ -88,7 +88,7 @@ not repeated.
 
 ## Consequences
 
-**The non-negotiable in `CLAUDE.md` is reworded**, from "Action only on
+**The non-negotiable in `AGENTS.md` is reworded**, from "Action only on
 explicit developer signal" to intent-based. It is still a constraint and still
 non-negotiable; what changed is what counts as the signal.
 

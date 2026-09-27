@@ -4,8 +4,8 @@
 mechanism is theirs too).
 **Supersedes:** nothing.
 **Affects:** `aldwin-cli` (`main.rs`, `git_shim.rs`, `bootstrap::run` and
-its startup notices), `.claude/spec/archive/aldwin-cli.md`,
-`.claude/spec/aldwin.md`
+its startup notices), `docs/spec/archive/aldwin-cli.md`,
+`docs/spec/aldwin.md`
 
 ## Context
 

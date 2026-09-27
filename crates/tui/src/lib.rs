@@ -1,5 +1,5 @@
 //! ratatui frontend rendering core's event stream. Spec:
-//! `.claude/spec/aldwin-tui.md`.
+//! `docs/spec/aldwin-tui.md`.
 //!
 //! `App` (`app.rs`) holds all state and the key/event logic, tested without
 //! a terminal; `ui/` renders it; `run.rs` is the untested glue that drives
@@ -42,7 +42,7 @@ pub use {
 };
 
 /// Every colour the app may paint in `theme`, generated from
-/// `.claude/design/tokens/`; for `tests/render_snapshot.rs`.
+/// `docs/design/tokens/`; for `tests/render_snapshot.rs`.
 #[cfg(feature = "test-util")]
 pub fn design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
     match theme {

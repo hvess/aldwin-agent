@@ -5,7 +5,7 @@ and by 0014 (§4's one exception: an MCP server's own writes).
 **Supersedes:** ADR 0004 §1–§4, §6 and §8; ADR 0003 in full; the first-run
 Decision in `aldwin.md`. **Keeps:** ADR 0004 §5 and §7 (reach and the deny
 lock), ADR 0007 in full, ADR 0002, ADR 0005, ADR 0006, ADR 0008.
-**Amends:** `CLAUDE.md`'s first, second and fourth non-negotiables, which
+**Amends:** `AGENTS.md`'s first, second and fourth non-negotiables, which
 now read as §1–§3 below state them.
 
 ## Context

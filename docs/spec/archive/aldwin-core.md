@@ -164,7 +164,7 @@ The narrow heart of Aldwin — the agent loop, the canonical conversation log, a
 
 ## References
 
-- .claude/spec/aldwin.md — parent; narrow-vs-broad cut and inherited decisions.
+- docs/spec/aldwin.md — parent; narrow-vs-broad cut and inherited decisions.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API, streaming and tool-use blocks.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — breakpoint placement guidance.
 - https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking — thinking block semantics.

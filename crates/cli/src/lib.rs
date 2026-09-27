@@ -1,5 +1,5 @@
 //! Startup sequence, session bootstrap and slash-command dispatch
-//! (`.claude/spec/archive/aldwin-cli.md`).
+//! (`docs/spec/archive/aldwin-cli.md`).
 //!
 //! `bootstrap::run` is integration glue (real terminal, provider, MCP
 //! processes) and is not unit tested; `context` and `slash` are.

@@ -181,7 +181,7 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
-/// Every painted colour is a token generated from `.claude/design/tokens/`.
+/// Every painted colour is a token generated from `docs/design/tokens/`.
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {

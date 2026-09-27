@@ -1,5 +1,5 @@
 //! Logs in to a provider account so a subscription stands in for an API key
-//! (ADR 0012, `.claude/spec/aldwin-login.md`). A leaf crate: it depends on
+//! (ADR 0012, `docs/spec/aldwin-login.md`). A leaf crate: it depends on
 //! no other Aldwin crate.
 //!
 //! OAuth wire types, endpoints and the client id stay in the private `oauth`

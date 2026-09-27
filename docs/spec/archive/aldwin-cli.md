@@ -156,7 +156,7 @@ did not ask for. Both are fixed and pinned.
    "already on …".
 
 Also from the same pass: `bootstrap` writes first run's access answer only
-when the access question was actually asked. See `.claude/spec/aldwin-tui.
+when the access question was actually asked. See `docs/spec/aldwin-tui.
 md`'s entry of the same date — `add_grant` only ever adds, so an unasked
 answer could only widen an allow list the developer had already settled.
 
@@ -164,7 +164,7 @@ answer could only widen an allow list the developer had already settled.
 **Post-archive addition (2026-09-06, the model selector):** Reported: the
 selector "doesn't appear in the onboarding", and `/model` "says the model is
 already selected when it isn't". Three changes here; the screens and the
-picker are in `.claude/spec/aldwin-tui.md`'s entry of the same date, and
+picker are in `docs/spec/aldwin-tui.md`'s entry of the same date, and
 the reason onboarding never appeared is in `aldwin-config.md`'s (init
 seeded `provider.yaml`, so `needs_provider` was never true).
 
@@ -276,9 +276,9 @@ once at the top of the session that commits will not name Aldwin.
 
 ## References
 
-- .claude/spec/aldwin.md — parent spec; binary crate role and dependency list.
-- .claude/spec/aldwin-core.md — agent loop, additional-context contract, event/command channels.
-- .claude/spec/aldwin-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
-- .claude/spec/aldwin-permissions.md — PermissionsEngine init from config snapshot.
-- .claude/spec/aldwin-tools.md — ToolDispatcher instantiation.
-- .claude/spec/aldwin-tui.md — TUI launch, channel wiring, /reload-config surface.
+- docs/spec/aldwin.md — parent spec; binary crate role and dependency list.
+- docs/spec/aldwin-core.md — agent loop, additional-context contract, event/command channels.
+- docs/spec/aldwin-config.md — startup sequence, init_global_if_empty, refuse-to-start rules.
+- docs/spec/aldwin-permissions.md — PermissionsEngine init from config snapshot.
+- docs/spec/aldwin-tools.md — ToolDispatcher instantiation.
+- docs/spec/aldwin-tui.md — TUI launch, channel wiring, /reload-config surface.

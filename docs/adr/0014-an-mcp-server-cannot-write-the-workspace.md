@@ -5,8 +5,8 @@
 given the workspace roots), and the one exception ADR 0009 §4 stated —
 "what an MCP server writes during its call".
 **Affects:** `aldwin-tools` (`mcp/bridge.rs`, `mcp/tool.rs`, `sandbox.rs`),
-`aldwin-cli` (`bootstrap::run`), `.claude/spec/aldwin-tools.md`,
-`.claude/spec/aldwin.md`, `README.md`
+`aldwin-cli` (`bootstrap::run`), `docs/spec/aldwin-tools.md`,
+`docs/spec/aldwin.md`, `README.md`
 
 ## Context
 

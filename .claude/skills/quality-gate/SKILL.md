@@ -53,7 +53,7 @@ Checks:
   workspace; an adapter may depend on core, never the reverse. Verify with
   `grep aldwin- crates/core/Cargo.toml` — it must be empty of workspace crates.
 - **Nothing foreign crosses a port.** Provider wire types stop at
-  `LlmClient` (a non-negotiable in CLAUDE.md); likewise terminal, filesystem
+  `LlmClient` (a non-negotiable in AGENTS.md); likewise terminal, filesystem
   and HTTP types stay in the adapter that owns them. A port speaks domain
   types only.
 - **New external capability ⇒ new port.** Talking to something new (a
@@ -111,7 +111,7 @@ handles every case.
   outside tests except where an invariant makes failure impossible — and then
   the `expect` message states that invariant.
 - No dead code, commented-out code, or `TODO` without an entry in
-  `.claude/spec/aldwin-open-tasks.md`.
+  `docs/spec/aldwin-open-tasks.md`.
 - Comments follow `.claude/skills/comments/SKILL.md`: only what the code
   cannot say — a reason, an invariant, a warning, a hidden dependency, a
   pointer — lean, and written for an LLM reader.
@@ -145,7 +145,7 @@ handles every case.
    simplified did besides the bug — an error it reported, a fallback, a
    note it cleared — and keep it, or say in the commit why it goes.
 4. **Change the fact everywhere.** Grep the old behaviour's wording across
-   `crates/` and `.claude/`: the system prompt, tool descriptions, doc
+   `crates/`, `docs/` and `.claude/`: the system prompt, tool descriptions, doc
    comments, specs and ADRs that state it (records skill).
 
 ## 9. Records

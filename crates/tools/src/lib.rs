@@ -1,6 +1,6 @@
 //! The `ToolDispatcher` impl, the six built-in tools, the `sandbox`, the MCP
 //! bridge and `staging`, where a turn's edits wait for the review (ADR 0009).
-//! Spec: `.claude/spec/aldwin-tools.md`.
+//! Spec: `docs/spec/aldwin-tools.md`.
 //!
 //! The workspace is the only boundary (ADR 0011): every tool resolves paths
 //! through [`Workspace`], and every process a tool starts can write only

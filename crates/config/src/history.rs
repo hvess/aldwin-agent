@@ -1,5 +1,5 @@
 //! Conversation transcripts, the on-disk half of `/resume`
-//! (`.claude/spec/archive/aldwin-history.md`).
+//! (`docs/spec/archive/aldwin-history.md`).
 //!
 //! One session is one append-only JSONL file,
 //! `~/.aldwin/history/<project-slug>/<session-id>.jsonl`: a [`SessionHeader`]

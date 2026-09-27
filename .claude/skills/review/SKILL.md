@@ -14,7 +14,7 @@ code against a design principle or look at a picture. One is the loop itself, an
 | 1 toolchain | `rustc --version` against the baseline | `review` |
 | 2 lint | `cargo fmt --check`, `clippy -D warnings` with the workspace lints — the `rust` skill's checkable rules | `review` |
 | 3 test | `cargo test --workspace` | `review` |
-| 4 tokens | regenerate `tokens.rs` from `.claude/design/` and diff | `review` |
+| 4 tokens | regenerate `tokens.rs` from `docs/design/` and diff | `review` |
 | 5 frames | `render_snapshot`: the baseline and design conformance | `review` |
 | 6 code judge | the diff against `quality-gate`, the Key Constraints, the ADRs, the crate's spec | two subagents, one verdict |
 | 7 Rust judge | the diff against the `rust` skill's rules no lint checks | a subagent |
@@ -49,8 +49,8 @@ Until then, repeat both of these on every change:
      above all: a flag or a magic value standing in for a variant, and one
      rule decided in two places.
    - **Grep every identifier and phrase the diff removes or renames**
-     across `crates/` *and* `.claude/` — ADRs, specs and their archive,
-     `CLAUDE.md`, the system prompt, doc comments. Each hit is fixed or
+     across `crates/`, `docs/` *and* `.claude/` — ADRs, specs and their archive,
+     `AGENTS.md`, the system prompt, doc comments. Each hit is fixed or
      given a pointer (records skill).
    - **Test each changed behaviour at the layer that produces it**, not
      only where it is shown, and the edge values of any mapping it adds.
@@ -199,16 +199,16 @@ The shape all three return:
 > **What you judge against, and which source wins.** When two disagree, the
 > one higher in the list wins:
 >
-> 1. `.claude/CLAUDE.md`, the section **Key Constraints (non-negotiable)**.
-> 2. `.claude/adr/*.md` — numbered decisions. A change that follows a later
+> 1. `AGENTS.md`, the section **Key Constraints (non-negotiable)**.
+> 2. `docs/adr/*.md` — numbered decisions. A change that follows a later
 >    ADR where an earlier one disagrees is conformant.
 > 3. `.claude/skills/quality-gate/SKILL.md` — every section, and
 >    `.claude/skills/comments/SKILL.md`, which its section on comments names.
-> 4. The spec for each crate the diff touches: `.claude/spec/aldwin-<crate>.md`,
->    or `.claude/spec/archive/` for an archived one. A spec step the change
+> 4. The spec for each crate the diff touches: `docs/spec/aldwin-<crate>.md`,
+>    or `docs/spec/archive/` for an archived one. A spec step the change
 >    completes should be noted in it. A change to `.githooks/`,
 >    `.claude/hooks/` or `.claude/settings.json` is the review loop's own
->    enforcement: judge it against `.claude/spec/aldwin-review.md`,
+>    enforcement: judge it against `docs/spec/aldwin-review.md`,
 >    Decisions 15 and 16. Decision 16 says what the commit guard is for: a
 >    spelling built to get past it is out of its scope, not a finding.
 >
@@ -217,7 +217,7 @@ The shape all three return:
 >
 > - **major** — the change breaks source 1, 2 or 3.
 > - **minor** — the change breaks source 4, or leaves a spec or the
->   open-tasks ledger (`.claude/spec/aldwin-open-tasks.md`) stale where it
+>   open-tasks ledger (`docs/spec/aldwin-open-tasks.md`) stale where it
 >   completed or discovered work.
 >
 > **Your entire output is one fenced `json` block and nothing else**, in the
@@ -281,21 +281,21 @@ The shape all three return:
 > **What you may read, and which source wins.** When two disagree, the one
 > higher in the list wins — this is not a tiebreak you get to make:
 >
-> 1. `.claude/adr/*.md` — numbered decisions that deliberately amend the
+> 1. `docs/adr/*.md` — numbered decisions that deliberately amend the
 >    design. A frame following one is conformant, full stop.
 > 2. `crates/review/baseline.json`, the `contradictions` array —
 >    disagreements already settled. Never report one of these.
-> 3. `.claude/design/tokens/*.css` — the token layer. This is what the app
+> 3. `docs/design/tokens/*.css` — the token layer. This is what the app
 >    can actually draw through, so it is the operative statement.
-> 4. `.claude/design/frames/Aldwin Agent TUI.dc.html` — the ten frames.
+> 4. `docs/design/frames/Aldwin Agent TUI.dc.html` — the ten frames.
 >    Every position in them is a `var(--…)` from `tokens/layout.css`, so a
 >    position is a lookup, not a measurement; the brand mark and the context
 >    bar's ramp exist only here.
-> 5. `.claude/design/README.md` — the design's prose: content fundamentals,
+> 5. `docs/design/README.md` — the design's prose: content fundamentals,
 >    the colour rules, the glyph list. It states rules the frames only show.
 >
-> Read `.claude/design/IMPORT.md` first for context. Read nothing else — not
-> `crates/tui`, not `.claude/spec`.
+> Read `docs/design/IMPORT.md` first for context. Read nothing else — not
+> `crates/tui`, not `docs/spec`.
 >
 > **If a lower source contradicts a higher one, that is not an app defect.**
 > Put it under "contradictions" and move on.

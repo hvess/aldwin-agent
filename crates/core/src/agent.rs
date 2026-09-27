@@ -765,7 +765,7 @@ enum DispatchOutcome {
     },
 }
 
-// Pins the failure modes in `.claude/spec/archive/aldwin-core.md` Pitfalls:
+// Pins the failure modes in `docs/spec/archive/aldwin-core.md` Pitfalls:
 // torn logs on cancellation, tool round trips, step/turn bookkeeping.
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ fixing the friction.
 Two constraints bound any answer:
 
 - **Default-deny.** No tool may act without an explicit grant, and there is no
-  "obviously safe" carve-out (`CLAUDE.md`).
+  "obviously safe" carve-out (`AGENTS.md`).
 - **Edit is never allowlistable.** Enforced structurally, not by policy:
   `Engine::check_tool` returns `PromptRequired(PromptPayload::Edit)` for
   `edit_class` tools *before* consulting any allow or deny list
@@ -158,6 +158,6 @@ the unit makes that statement more important, not less.
 - **A read/write axis over `shell`.** Unsound: `ls` reads and `rm -rf` writes,
   and only the command string distinguishes them — precisely the information
   tool-level approval discards.
-- **Allow write-always grants.** Would contradict `CLAUDE.md`'s Edit constraint
+- **Allow write-always grants.** Would contradict `AGENTS.md`'s Edit constraint
   and the product's own premise. Explicitly declined: editing is de-scoped
   instead, which keeps both intact.

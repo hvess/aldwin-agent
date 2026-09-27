@@ -84,7 +84,7 @@ per-row positions of every component. The generator reads it.
   import and canvas body defaults; nothing a terminal consumes.
 - `components/**` (`.jsx`, `.d.ts`, `.prompt.md`) and `_ds_bundle.js` — the
   React components. Their `.prompt.md` files were read during the import and
-  are summarised in `.claude/spec/aldwin-tui.md`'s 2026-09-23 entry; the
+  are summarised in `docs/spec/aldwin-tui.md`'s 2026-09-23 entry; the
   frame carries the same positions and colours and is what the app is
   measured against.
 - `guidelines/*.html` other than `glyphs.html` — specimen cards restating

@@ -1,5 +1,5 @@
 //! The colour palette for `ui/`, one field per token in the design's
-//! `tokens/colors.css` (`.claude/design/`). Colour rules: CLAUDE.md "Design
+//! `tokens/colors.css` (`docs/design/`). Colour rules: AGENTS.md "Design
 //! System".
 //!
 //! `DARK` (`:root`) and `LIGHT` (`.tui-light`) are chosen once by

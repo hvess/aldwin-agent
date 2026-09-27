@@ -50,7 +50,7 @@ const XAI_TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
 /// The public client (no secret) of xAI's Grok Build CLI, reused because xAI
 /// offers third parties no registration. xAI could withdraw it;
-/// `.claude/spec/aldwin-login.md` records the decision.
+/// `docs/spec/aldwin-login.md` records the decision.
 const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 /// The inference endpoint checks `grok-cli:access` and `api:access`;

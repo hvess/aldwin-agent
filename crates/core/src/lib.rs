@@ -1,4 +1,4 @@
-//! The agent loop and its boundary types; spec `.claude/spec/archive/aldwin-core.md`.
+//! The agent loop and its boundary types; spec `docs/spec/archive/aldwin-core.md`.
 //!
 //! `LlmClient` and `ToolDispatcher` are implemented in aldwin-llm and
 //! aldwin-tools, so no provider wire type or filesystem dependency reaches

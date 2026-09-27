@@ -1,7 +1,7 @@
 # ADR 0005 — A session outlives its process
 
 **Status:** accepted, 2026-09-20
-**Supersedes:** one clause of the V0 Decision in `.claude/spec/aldwin.md` line
+**Supersedes:** one clause of the V0 Decision in `docs/spec/aldwin.md` line
 83 — "Sessions are ephemeral" — which is amended to point here. (An earlier
 draft of `aldwin-history.md` also named a matching line in
 `aldwin-permissions.md`'s Out of Scope; that spec was rewritten for ADR 0004
@@ -9,7 +9,7 @@ and no longer carries one.)
 **Affects:** `aldwin-core` (`RecordSink`, `Command::Resume`,
 `Event::HistoryLoaded`), `aldwin-config` (`history.rs`, the `~/.aldwin/`
 layout), `aldwin-cli` (`/resume`, `/clear`), `aldwin-tui` (the session
-picker), `.claude/spec/aldwin-history.md`
+picker), `docs/spec/aldwin-history.md`
 
 ## Context
 

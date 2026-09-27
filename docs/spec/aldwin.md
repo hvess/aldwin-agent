@@ -33,31 +33,31 @@ in how it is shaped. It replaces "A tool for thought.")
   - **aldwin-core** (`crates/core`)
     - Role: Agent loop, append-only log, event/command types, LlmClient and ToolDispatcher trait defs.
     - Depends on: (none)
-    - Spec: .claude/spec/archive/aldwin-core.md
+    - Spec: docs/spec/archive/aldwin-core.md
   - **aldwin-llm** (`crates/llm`)
     - Role: LlmClient implementations. V0 Anthropic; V0.5 OpenAI-compat adapter covering Qwen, Kimi, Together, Fireworks, OpenRouter, vLLM, Ollama.
     - Depends on: aldwin-core, aldwin-config
-    - Spec: .claude/spec/archive/aldwin-llm.md
+    - Spec: docs/spec/archive/aldwin-llm.md
   - **aldwin-config** (`crates/config`)
     - Role: Per-domain YAML files (project and global scope), the transcript store, persistence. `roots:` in `permissions.yaml` is the one permissions key read (ADR 0011).
     - Depends on: aldwin-core
-    - Spec: .claude/spec/archive/aldwin-config.md
+    - Spec: docs/spec/archive/aldwin-config.md
   - **aldwin-tools** (`crates/tools`)
     - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask), the staged changeset the review opens over, the sandbox every spawned process runs in (writes only inside the workspace), MCP bridge via rmcp.
     - Depends on: aldwin-core, aldwin-config
-    - Spec: .claude/spec/aldwin-tools.md
+    - Spec: docs/spec/aldwin-tools.md
   - **aldwin-tui** (`crates/tui`)
     - Role: ratatui frontend. Renders the event stream from the core, submits commands.
     - Depends on: aldwin-core
-    - Spec: .claude/spec/aldwin-tui.md
+    - Spec: docs/spec/aldwin-tui.md
   - **aldwin** (`crates/cli`)
     - Role: Binary crate. Session bootstrap (composes the additional-context string handed to the core), wires concrete trait impls into the core, runs the TUI.
     - Depends on: aldwin-core, aldwin-llm, aldwin-config, aldwin-tools, aldwin-tui
-    - Spec: .claude/spec/archive/aldwin-cli.md
+    - Spec: docs/spec/archive/aldwin-cli.md
   - **aldwin-review** (`crates/review`)
     - Role: The submission loop's harness (`/review`): design tokens, rendered frames, the screenshot baselines. Dev-only; never in a release build.
     - Depends on: aldwin-core, aldwin-config, aldwin-llm
-    - Spec: .claude/spec/aldwin-review.md
+    - Spec: docs/spec/aldwin-review.md
 
 ## Decisions
 
@@ -89,6 +89,8 @@ in how it is shaped. It replaces "A tool for thought.")
 
 - **Developer-authored memory; sessions persist but nothing crosses between them.** — Amended by ADR 0005, which reversed the original "sessions are ephemeral" clause: a conversation is written to disk as it happens and `/resume` picks one back up. The rest of this Decision stands unchanged and is what ADR 0005 was careful not to touch — memory is developer-authored, Aldwin does not propose entries or prompt at end of session, and nothing is carried into a *new* session by itself. Privacy is local-only with no telemetry; inference is governed by the chosen model provider (Anthropic in V0; local models possible once V0.5 ships).
 
+- **The records live in `docs/`, the instructions in `AGENTS.md`.** — The developer's call, 2026-09-27, ahead of open-sourcing: the specs, ADRs and design were under `.claude/`, where only Claude Code looks. Every agent reads a root `AGENTS.md`, so the instructions moved there and `docs/` took the rest; `.claude/` keeps only Claude Code's own wiring (settings, hooks, skills), and its `CLAUDE.md` imports `AGENTS.md` rather than copying it.
+
 ## Pitfalls
 
 - Anthropic wire types leaking past LlmClient — V0.5 becomes a refactor instead of an adapter swap. Audit early.
@@ -110,12 +112,12 @@ in how it is shaped. It replaces "A tool for thought.")
 
 ## References
 
-- .claude/spec/archive/aldwin-core.md — agent loop, conversation state, typed LLM/tool boundary.
-- .claude/spec/archive/aldwin-llm.md — Anthropic client, SSE, wire-level retry, cache placement, provider config.
-- .claude/spec/archive/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
-- .claude/adr/0009-the-review-is-the-only-gate.md — the review, staging, plan and ask, no first run.
-- .claude/adr/0011-the-workspace-is-the-only-boundary.md — the one boundary, and the sandbox that holds it.
-- .claude/adr/0013-aldwin-is-a-co-author-of-the-commits-it-makes.md — the co-author trailer, and the git shim that adds it.
+- docs/spec/archive/aldwin-core.md — agent loop, conversation state, typed LLM/tool boundary.
+- docs/spec/archive/aldwin-llm.md — Anthropic client, SSE, wire-level retry, cache placement, provider config.
+- docs/spec/archive/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
+- docs/adr/0009-the-review-is-the-only-gate.md — the review, staging, plan and ask, no first run.
+- docs/adr/0011-the-workspace-is-the-only-boundary.md — the one boundary, and the sandbox that holds it.
+- docs/adr/0013-aldwin-is-a-co-author-of-the-commits-it-makes.md — the co-author trailer, and the git shim that adds it.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — prompt caching.
 - https://ratatui.rs/ — ratatui.

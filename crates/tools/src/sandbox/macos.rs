@@ -1,22 +1,11 @@
-//! Seatbelt, spoken through `sandbox-exec`.
+//! Seatbelt through `sandbox-exec`: the Linux backend's rule, applied by
+//! rewriting the command rather than in the child. Do not call
+//! `sandbox_init_with_parameters` in the child: it allocates, and allocating
+//! between `fork` and `execve` in a threaded process can deadlock.
 //!
-//! The same rule as the Linux backend — *write only beneath the roots and
-//! the incidental paths* — reached by a different route, and the difference
-//! is deliberate.
-//!
-//! Landlock is engaged **inside the forked child**, which is safe because
-//! engaging it is two syscalls with no allocation. macOS's equivalent
-//! primitive, `sandbox_init_with_parameters`, is not: it compiles an SBPL
-//! profile, which allocates, and calling it between `fork` and `execve` in a
-//! threaded process is how you get a child that deadlocks in the allocator.
-//! So this backend runs nothing in the child. It rewrites the command to run
-//! under `/usr/bin/sandbox-exec`, which applies the profile to itself and
-//! then `exec`s the real program, which inherits the confinement.
-//!
-//! **`sandbox-exec` is deprecated and has been since 10.8.** It is also still
-//! shipped, still the only route to this primitive without entitlements,
-//! and if it goes away `unavailable` says so and processes run unconfined
-//! with the developer told once — never silently.
+//! `sandbox-exec` is deprecated but shipped, and the only route without
+//! entitlements. If it goes, `unavailable` says so and the developer is told
+//! once.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -35,10 +24,8 @@ pub fn unavailable() -> Option<&'static str> {
 }
 
 /// An SBPL profile: everything allowed, then every write denied, then writes
-/// beneath the roots and the incidental paths allowed back.
-///
-/// Rule order is the opposite of what a firewall reader expects: **Seatbelt
-/// is last-match-wins**, so the exemptions come after the blanket denial.
+/// beneath the roots and the incidental paths allowed back. Seatbelt is
+/// last-match-wins: the exemptions must follow the denial.
 pub struct Sandbox {
     profile: String,
 }
@@ -51,14 +38,9 @@ impl Sandbox {
              (deny file-write*)\n",
         );
         for path in roots.iter().cloned().chain(incidental_writes()) {
-            // Seatbelt matches the *resolved* path of the file being written,
-            // and on macOS the incidental paths are mostly symlinks: `/tmp` is
-            // `/private/tmp`, and `$TMPDIR` lives under `/var`, which is
-            // `/private/var`. A rule for the path as written never matches,
-            // so both forms are emitted; the redundant one is harmless.
-            //
-            // An unquotable path is skipped rather than allowed to end the
-            // literal early and change what the rest of the profile means.
+            // Seatbelt matches resolved paths and `/tmp`, `/var` are symlinks
+            // into `/private`, so both forms are emitted. An unquotable path
+            // is skipped: it could end the literal and rewrite the profile.
             let mut forms = vec![path.clone()];
             if let Ok(canonical) = path.canonicalize() {
                 if canonical != path {
@@ -74,9 +56,8 @@ impl Sandbox {
         Ok(Self { profile })
     }
 
-    /// The real program, run under `sandbox-exec` with this profile. `--`
-    /// keeps a program whose own first argument starts with `-` from being
-    /// read as a flag to `sandbox-exec`.
+    /// The program under `sandbox-exec` with this profile. `--` keeps a
+    /// program starting with `-` from being read as a `sandbox-exec` flag.
     pub fn command_line(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
         let mut argv = vec![
             "-p".to_string(),
@@ -88,8 +69,7 @@ impl Sandbox {
         (SANDBOX_EXEC.to_string(), argv)
     }
 
-    /// Nothing to install in the child: `sandbox-exec` confines itself and
-    /// then `exec`s the real program.
+    /// No-op: `sandbox-exec` confines itself, then `exec`s the program.
     pub fn install(self, _cmd: &mut Command) {}
 }
 

@@ -1,17 +1,9 @@
-//! `run` — a shell command, confined to the workspace for writes (ADR 0011).
+//! `run`: a shell command (`sh -c`) whose writes are confined to the
+//! workspace by `crate::sandbox` (ADR 0011). Never contain it by parsing the
+//! command string: ADR 0004 and 0007 tried, and `sh -c` got round both.
 //!
-//! The command is one string, run as `sh -c`, so pipes, redirection, globs
-//! and `&&` are what the model expects them to be. What contains it is not
-//! a reading of that string — ADR 0004 tried classifying argv and ADR 0007
-//! tried containing path-like arguments, and each left a hole the size of
-//! `sh -c` — but the sandbox every process Aldwin spawns runs in: it may
-//! read anything and write only inside the workspace roots and the
-//! incidental paths (`crate::sandbox`).
-//!
-//! Two things `run` still decides for itself: its working directory is
-//! resolved through the same [`Workspace`] as every other tool's path, and a
-//! timeout kills the whole process group and keeps what the command had
-//! already written.
+//! `cwd` resolves through [`Workspace`]; a timeout kills the whole process
+//! group and keeps the output so far.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -29,10 +21,9 @@ use aldwin_core::DispatchContext;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const OUTPUT_CAP_BYTES: usize = 50 * 1024;
-/// What is *held* per stream while the command runs. Only `OUTPUT_CAP_BYTES`
-/// is ever shown, so holding more is memory a chatty command — `yes`, a build
-/// log — can grow without bound. The slack keeps a character that straddles
-/// the cap whole, and lets [`cap`] see that there was more.
+/// Bytes held per stream; bounds memory for a chatty command. The 4 bytes
+/// over `OUTPUT_CAP_BYTES` keep a straddling character whole and let [`cap`]
+/// see there was more.
 const OUTPUT_KEEP_BYTES: usize = OUTPUT_CAP_BYTES + 4;
 
 pub struct RunTool {
@@ -40,11 +31,10 @@ pub struct RunTool {
     workspace: Workspace,
 }
 
-/// One call's parsed input.
 struct RunArgs {
     command: String,
     timeout: u64,
-    /// Working directory as the model wrote it, before containment.
+    /// As the model wrote it, not yet resolved through the workspace.
     cwd: Option<String>,
 }
 
@@ -146,8 +136,7 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    // Its own process group, so a timeout kills the whole tree rather than
-    // just the shell we happen to hold.
+    // Own process group, so a kill reaches the whole tree, not only the shell.
     // SAFETY: `setsid` is async-signal-safe and allocates nothing.
     unsafe {
         cmd.pre_exec(|| {
@@ -163,19 +152,14 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
         source,
     })?;
 
-    // `setsid` made the child its own group leader, so its pid is the group
-    // id.
+    // After `setsid` the child's pid is its group id.
     let group = child.id();
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
 
-    // Accumulate into buffers the reading future only borrows, so a timeout
-    // can still read what arrived before it fired — which is precisely the
-    // diagnostic a developer needs when a long command is what went wrong.
-    //
-    // Bytes, decoded once at the end: decoding each 8 KiB read on its own
-    // turns any multibyte character that straddles a read boundary into
-    // U+FFFD, in output the model is about to reason over.
+    // Buffers outlive the reading future, so a timeout still has the output.
+    // Bytes, decoded once at the end: decoding per read splits multibyte
+    // characters into U+FFFD.
     let out_buf = Mutex::new(Vec::<u8>::new());
     let err_buf = Mutex::new(Vec::<u8>::new());
 
@@ -186,9 +170,8 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
     };
     tokio::pin!(run);
 
-    // Declared after `run` so it drops *first*: the group is killed while
-    // the child is still unreaped, which is what keeps its pid — the group
-    // id — from having been handed to something else.
+    // Declared after `run` so it drops first: the child is still unreaped,
+    // so its pid (the group id) cannot have been reused.
     let mut group = KillGroupOnDrop(group);
 
     let status =
@@ -210,32 +193,27 @@ async fn execute(workspace: &Workspace, cwd: &Path, args: &RunArgs) -> Result<St
                 });
             }
         };
-    // It exited on its own. Anything it deliberately left running stays.
+    // Exited on its own: leave anything it left running.
     group.0 = None;
 
     let output = render(&status, &take(&out_buf), &take(&err_buf));
     if status.success() {
         Ok(output)
     } else {
-        // The dispatcher's `finish` maps every `Ok` to `is_error: false`, so
-        // returning the rendered output here would tell the model a command
-        // that exited 2 had succeeded. See `ToolError::CommandFailed`, which
-        // carries this same string through the error arm instead.
+        // Not `Ok`: the dispatcher maps every `Ok` to `is_error: false`.
+        // See `ToolError::CommandFailed`.
         Err(ToolError::CommandFailed { output })
     }
 }
 
-/// Kills a call's whole process group unless the command exited by itself.
-///
-/// `kill_on_drop` reaches only the process we hold, so without this a
-/// timed-out `sh -c 'slow-thing'` left `slow-thing` running — and so did a
-/// call whose future was dropped because the developer cancelled the turn.
+/// Kills a call's whole process group on timeout or cancel (a dropped
+/// future). `kill_on_drop` reaches only the shell, not its children.
 struct KillGroupOnDrop(Option<u32>);
 
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
         if let Some(pgid) = self.0 {
-            // SAFETY: a plain syscall on the id of a group we created.
+            // SAFETY: a plain syscall on the id of a group this call created.
             unsafe {
                 libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
             }
@@ -243,10 +221,9 @@ impl Drop for KillGroupOnDrop {
     }
 }
 
-/// Reads a stream to EOF, appending as it goes so a cancelled read still
-/// leaves everything received so far in the buffer. Past
-/// [`OUTPUT_KEEP_BYTES`] it keeps reading and stops keeping: the pipe has to
-/// stay drained or the command blocks on it.
+/// Reads a stream to EOF into `buf`, so a cancelled read keeps what arrived.
+/// Past [`OUTPUT_KEEP_BYTES`] it must keep reading and discard: an undrained
+/// pipe blocks the command.
 async fn drain<R>(reader: &mut R, buf: &Mutex<Vec<u8>>) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -272,8 +249,7 @@ fn take(buf: &Mutex<Vec<u8>>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// What a timed-out call reports: the elapsed budget *and* whatever the
-/// command managed to say before it ran out.
+/// The output a timed-out call reports.
 fn render_partial(out: &str, err: &str) -> String {
     let mut body = String::new();
     if !out.is_empty() {
@@ -338,8 +314,7 @@ mod tests {
         tool.call("c1", input, &ctx).await
     }
 
-    /// The whole of ADR 0011 in one assertion: a command may say it writes
-    /// anywhere, and what it can actually write is the workspace.
+    /// ADR 0011.
     #[tokio::test]
     async fn a_run_writing_outside_the_workspace_fails_and_changes_nothing() {
         if !confinement_or_explicit_skip() {
@@ -378,8 +353,6 @@ mod tests {
         );
     }
 
-    /// A second declared root is workspace on the same terms as the first —
-    /// reachable as a `cwd`, and writable.
     #[tokio::test]
     async fn a_declared_second_root_is_reachable_and_writable() {
         let project = scratch_dir();
@@ -439,8 +412,7 @@ mod tests {
         }
     }
 
-    /// A symlink is an ordinary git blob, so a checkout can ship `out ->
-    /// /elsewhere`; naming it as a `cwd` must not start the command there.
+    /// A checkout can ship such a symlink: git stores it as a blob.
     #[tokio::test]
     async fn a_symlinked_working_directory_that_escapes_is_refused() {
         let (dir, tool) = tool();
@@ -455,8 +427,6 @@ mod tests {
         );
     }
 
-    /// The refusal names the roots, so the model can ask for one rather than
-    /// guessing at a path it can reach.
     #[tokio::test]
     async fn the_refusal_names_the_reachable_roots() {
         let (dir, tool) = tool();
@@ -480,8 +450,7 @@ mod tests {
         }
     }
 
-    /// Seen in a real transcript: a failed command came back `is_error:
-    /// false`, and the model was told its broken call had worked.
+    /// Regression: a failed command came back `is_error: false`.
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error_and_keeps_the_whole_output() {
         let (_d, tool) = tool();
@@ -506,8 +475,6 @@ mod tests {
         assert!(out.starts_with("exit: 0"), "{out}");
     }
 
-    /// A timeout used to report only that it had timed out, dropping
-    /// everything the command had already written.
     #[tokio::test]
     async fn a_timeout_keeps_what_the_command_already_produced() {
         let (_d, tool) = tool();
@@ -522,8 +489,7 @@ mod tests {
         assert!(message.contains("progress-so-far"), "{message}");
     }
 
-    /// `setsid` exists so a timeout takes the whole tree: a timed-out
-    /// `sh -c` used to leave whatever it had started running.
+    /// Pins the `setsid` process group.
     #[tokio::test]
     async fn a_timeout_kills_the_grandchildren_too() {
         let (dir, tool) = tool();
@@ -537,8 +503,7 @@ mod tests {
         );
     }
 
-    /// Only a timeout killed the group once. A call dropped mid-run — the
-    /// developer cancelling the turn — left its grandchildren running.
+    /// Pins `KillGroupOnDrop`: a dropped call once left grandchildren running.
     #[tokio::test]
     async fn a_cancelled_call_kills_the_grandchildren_too() {
         let (dir, tool) = tool();
@@ -568,8 +533,7 @@ mod tests {
         assert!(cap(&take(&buf)).ends_with("bytes]\n"));
     }
 
-    /// Output was lossy-decoded one 8 KiB read at a time once, so a
-    /// multibyte character straddling a read boundary became U+FFFD.
+    /// Regression: per-read decoding turned a straddling character to U+FFFD.
     #[tokio::test]
     async fn a_multibyte_character_across_a_read_boundary_survives() {
         let (dir, tool) = tool();

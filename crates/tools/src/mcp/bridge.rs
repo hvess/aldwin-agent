@@ -29,22 +29,18 @@ pub enum McpError {
     Rpc { server: String, message: String },
 }
 
-/// Subprocess host for MCP servers. Config entries are supplied once at
-/// construction (a snapshot, not a live `Config` handle); each server's
-/// connection is spawned lazily, on first enumeration or call of any of its
-/// tools, and persists for the bridge's lifetime.
+/// Hosts MCP server processes from a config snapshot. Each is spawned on its
+/// first listing or call and kept for the bridge's lifetime.
 ///
-/// Every server runs in the sandbox over `workspace` (ADR 0011): a project's
-/// `mcp.yaml` can arrive with a clone, and what it starts can write only
-/// where a `run` could.
+/// Every server runs in the sandbox over `workspace` (ADR 0011): a cloned
+/// project's `mcp.yaml` is untrusted.
 pub struct McpBridge {
     servers: HashMap<String, McpServer>,
     workspace: Workspace,
     running: tokio::sync::Mutex<HashMap<String, Arc<RunningService<RoleClient, ()>>>>,
 }
 
-/// Names the servers rather than printing their entries: an entry's `env`
-/// commonly carries a server's API token.
+/// Names the servers only: an entry's `env` often holds an API token.
 impl fmt::Debug for McpBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("McpBridge")
@@ -55,8 +51,7 @@ impl fmt::Debug for McpBridge {
 }
 
 impl McpBridge {
-    /// A bridge over `servers` whose processes are confined to `workspace`.
-    /// Nothing is spawned yet.
+    /// A bridge over `servers`, confined to `workspace`; spawns nothing yet.
     pub fn new(servers: Vec<McpServer>, workspace: Workspace) -> Self {
         Self {
             servers: servers.into_iter().map(|s| (s.name.clone(), s)).collect(),
@@ -75,9 +70,7 @@ impl McpBridge {
         server_name: &str,
     ) -> Result<Arc<RunningService<RoleClient, ()>>, McpError> {
         let mut running = self.running.lock().await;
-        // A server whose transport has closed is spawned afresh rather than
-        // handed out again — cached for good, one crash failed every call to
-        // that server's tools for the rest of the session.
+        // A closed transport is respawned, never handed out again.
         if let Some(client) = running
             .get(server_name)
             .filter(|c| !c.is_transport_closed())
@@ -116,15 +109,14 @@ impl McpBridge {
         Ok(service)
     }
 
-    /// Enumerates every tool `server_name` advertises. Spawning happens here
-    /// (or in `call_tool`, whichever runs first) — see the struct doc.
+    /// Every tool `server_name` advertises, spawning the server if needed.
     ///
     /// # Errors
     ///
-    /// Returns [`McpError::UnknownServer`] when `server_name` is not
-    /// configured, [`McpError::UnsupportedTransport`] for a server that is
-    /// not stdio, [`McpError::Spawn`] when its process cannot be started, and
-    /// [`McpError::Rpc`] when the handshake or the listing fails.
+    /// `McpError::UnknownServer` when not configured,
+    /// `McpError::UnsupportedTransport` when not stdio, `McpError::Spawn`
+    /// when the process cannot start, `McpError::Rpc` when the handshake or
+    /// listing fails.
     pub async fn list_tools(&self, server_name: &str) -> Result<Vec<rmcp::model::Tool>, McpError> {
         let client = self.client_for(server_name).await?;
         client.list_all_tools().await.map_err(|e| McpError::Rpc {
@@ -133,14 +125,14 @@ impl McpBridge {
         })
     }
 
-    /// Returns `(content, is_error)` — the caller (McpTool) decides how to
-    /// fold `is_error` into aldwin-tools' own `ToolError` convention.
+    /// Calls a tool; returns its text content and whether it reported an
+    /// error.
     ///
     /// # Errors
     ///
-    /// Fails as `list_tools` does when the server cannot be reached, and with
-    /// [`McpError::Rpc`] when the call itself fails in transport or protocol.
-    /// A tool that ran and reported failure is `Ok` with `is_error` set.
+    /// As `list_tools` when the server cannot be reached; `McpError::Rpc`
+    /// when the call fails in transport or protocol. A tool that reported
+    /// failure is `Ok` with `is_error` set.
     pub async fn call_tool(
         &self,
         server_name: &str,
@@ -248,8 +240,7 @@ mod tests {
         );
 
         let revived = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            // The transport's closure is noticed by rmcp's own task, a beat
-            // after the process goes.
+            // rmcp notices the closed transport shortly after the exit.
             loop {
                 if let Ok(tools) = bridge.list_tools("fake").await {
                     return tools;

@@ -1,9 +1,5 @@
-//! `plan` — the plan as three plain lines (ADR 0009 §2).
-//!
-//! The model calls it with the whole list each time: to declare the steps
-//! before starting, and again as each one starts and finishes. The TUI draws
-//! the latest list; nothing else consumes it. The tool runs nothing and
-//! touches nothing.
+//! `plan`: the plan as a short list of steps (ADR 0009 §2). Each call carries
+//! the whole list; the TUI draws the latest and nothing else consumes it.
 
 use aldwin_core::{DispatchContext, PlanStep, StepState};
 use async_trait::async_trait;
@@ -12,8 +8,7 @@ use serde_json::{json, Value};
 use crate::error::ToolError;
 use crate::registry::{Tool, ToolDescriptor};
 
-/// More than this and the plan is a task list, not the three plain lines the
-/// developer can hold in view.
+/// Beyond this the plan is a task list the developer cannot hold in view.
 const MAX_STEPS: usize = 7;
 
 pub struct PlanTool {

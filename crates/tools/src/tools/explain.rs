@@ -23,25 +23,19 @@ enum Op {
     WorkspaceSymbols,
 }
 
-/// LSP-backed code intelligence. Output is structured location and
-/// signature data only (JSON text) — no prose summaries, per
-/// aldwin-tools.md. Servers spawn lazily per-language on first use, in the
-/// sandbox every process over the repository runs in (a language server
-/// runs build scripts and proc macros), and persist in `clients` for the
-/// session; each is killed when the tool is dropped.
+/// LSP-backed code intelligence returning JSON locations and signatures,
+/// never prose (aldwin-tools.md). One sandboxed server per language, spawned
+/// on first use and killed when the tool is dropped.
 ///
-/// The server sees the tree the agent sees: staged edits over the disk, as
-/// `read` serves it. A server reads the disk itself, and nothing is written
-/// before an approve, so without this a lookup after an edit answered about
-/// the code as it was.
+/// The server must see staged edits over disk, as `read` does: it reads disk
+/// itself, which holds nothing before an approve.
 pub struct ExplainTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
     staging: Arc<Staging>,
     clients: tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
-    /// Every file sent to a server so far. A file stays here after its edit
-    /// is approved or discarded, so the next call sends what the disk now
-    /// holds rather than leaving the server on the staged text.
+    /// Every file sent to a server. Kept after an approve or discard, so the
+    /// next call resends disk rather than leaving the staged text.
     shown: tokio::sync::Mutex<BTreeSet<PathBuf>>,
 }
 
@@ -73,11 +67,10 @@ impl ExplainTool {
         }
     }
 
-    /// The files in `language_id` a server should hold, and the text of each
-    /// as the agent sees it: every staged file, every file shown before, and
-    /// `queried` when there is one. Second, the files shown before that are
-    /// now gone — unstaged and not on disk — which the server must drop;
-    /// they are forgotten here. `queried` itself must be readable.
+    /// For `language_id`: the files a server should hold with their text as
+    /// the agent sees it (staged, shown before, `queried`), and the shown
+    /// files now gone, which are forgotten here. Errors only if `queried`
+    /// cannot be read.
     async fn view(
         &self,
         language_id: &str,
@@ -122,8 +115,7 @@ impl ExplainTool {
         Ok((view, gone))
     }
 
-    /// Shows `client` the files of `view`, so it answers over staged edits,
-    /// not the disk, and closes the ones that are gone.
+    /// Sends `client` the files of `view` and closes the gone ones.
     async fn sync(
         &self,
         client: &LspClient,
@@ -142,9 +134,7 @@ impl ExplainTool {
         Ok(())
     }
 
-    /// A server that has died is replaced rather than handed out again —
-    /// cached for good, one crash failed every `explain` for the rest of the
-    /// session.
+    /// The live client for `server`; a dead one is respawned, never reused.
     async fn client_for(&self, server: &lsp::LanguageServer) -> Result<LspClient, ToolError> {
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.get(server.language_id).filter(|c| !c.is_closed()) {
@@ -249,13 +239,8 @@ impl Tool for ExplainTool {
     }
 }
 
-// ── Response normalisation ──────────────────────────────────────────────
-//
-// LSP responses here are handled as raw `serde_json::Value` rather than
-// strict typed shapes: `textDocument/definition` alone can legally return
-// `Location | Location[] | LocationLink[] | null` depending on server and
-// client capabilities, and pinning that down with an untagged enum is more
-// fragile than just reading the fields that are actually present.
+// Responses are read as raw `Value`, not typed: `textDocument/definition`
+// alone may return `Location | Location[] | LocationLink[] | null`.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LocationOut {
@@ -289,8 +274,7 @@ fn location_from_value(item: &Value) -> Option<LocationOut> {
         (uri, range)
     };
     let start = range.get("start")?;
-    // LSP positions are 0-indexed; +1 for the conventional path:line:col a
-    // developer or model actually wants to read.
+    // LSP positions are 0-based; output is 1-based.
     let line = start.get("line")?.as_u64()? + 1;
     let character = start.get("character")?.as_u64()? + 1;
     Some(LocationOut {
@@ -372,8 +356,7 @@ mod tests {
         ExplainTool::new(workspace, staging)
     }
 
-    /// The bug this closes: `explain` after an edit answered about the code
-    /// as it was, because the server was shown the disk.
+    /// Regression: after an edit the server answered about disk.
     #[tokio::test]
     async fn the_server_is_shown_staged_edits_over_the_disk() {
         let dir = tempfile::tempdir().unwrap();
@@ -402,14 +385,12 @@ mod tests {
         assert!(view.contains(&(other.clone(), "fn other() {}\n".to_string())));
         assert!(view.contains(&(made.clone(), "fn made() {}\n".to_string())));
 
-        // A symbol search asks about no file, and is shown it too; it had
-        // skipped the sync, so a symbol only an edit added was not found.
+        // A symbol search names no file and still sees staged edits.
         let (view, _) = tool.view("rust", None).await.unwrap();
         assert!(view.contains(&(lib.clone(), "fn new() {}\n".to_string())));
 
-        // Discarded, the edit's file is shown the disk again, not left stale,
-        // and a file only the edit made is dropped, once — the server kept
-        // its text for the session.
+        // After a discard: disk is resent, and a file only the edit made is
+        // reported gone exactly once.
         staging.discard();
         let (view, gone) = tool.view("rust", Some(&other)).await.unwrap();
         assert!(view.contains(&(lib, "fn old() {}\n".to_string())));
@@ -525,12 +506,8 @@ mod tests {
         assert!(matches!(err, ToolError::InvalidInput { .. }));
     }
 
-    /// Full round trip against real rust-analyzer, including waiting for it
-    /// to index a tiny fixture crate enough to answer `textDocument/
-    /// definition` correctly. Ignored by default — indexing (even for a
-    /// trivial crate) can take several seconds, too slow/flaky for a
-    /// default test run. Run explicitly with:
-    ///   cargo test -p aldwin-tools --lib tools::explain -- --ignored
+    /// Against real rust-analyzer. Ignored: indexing takes seconds. Run with
+    /// `cargo test -p aldwin-tools --lib tools::explain -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn real_rust_analyzer_resolves_a_definition() {
@@ -549,8 +526,7 @@ mod tests {
 
         let tool = explain_in(Workspace::new(dir.path()));
 
-        // Poll until rust-analyzer has indexed enough to answer, rather than
-        // a fixed sleep — indexing time varies with machine load.
+        // Poll, not a fixed sleep: indexing time varies with load.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             let out = tool

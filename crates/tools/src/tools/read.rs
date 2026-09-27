@@ -9,8 +9,7 @@ use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
 
-/// Reads a file — the staged version when an edit this turn has touched it,
-/// so the model reads back what it wrote, otherwise the disk.
+/// Reads a file: the staged version if this turn edited it, else disk.
 pub struct ReadTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,

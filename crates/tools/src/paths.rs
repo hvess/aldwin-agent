@@ -3,41 +3,30 @@ use std::sync::{Arc, RwLock};
 
 use crate::error::ToolError;
 
-/// The workspace: the directories tools may be pointed at, and the only
-/// directories a process Aldwin starts may write to (ADR 0007, and ADR 0011,
-/// which makes it the whole boundary).
+/// The directories tools may address and the only ones a process Aldwin
+/// starts may write to: the whole boundary (ADR 0007, ADR 0011).
 ///
-/// Roots are stated, never inferred: the first is the project root and the
-/// rest come from `roots:` in the project's `.aldwin/permissions.yaml`. A
-/// *list* rather than a single root because a developer working across
-/// sibling checkouts needs a sanctioned way to say so, or the unsanctioned
-/// way carries the work.
+/// Roots are stated, never inferred: the project root, then `roots:` from
+/// `.aldwin/permissions.yaml`. Every tool's path argument (`run`'s `cwd`
+/// included) goes through [`Workspace::resolve`], symlinks included; every
+/// spawned process runs in `crate::sandbox`. Reads are not bounded (ADR 0011).
 ///
-/// Two halves hold the line. Every tool's path argument — `read`, `edit`,
-/// `explain`, `run`'s `cwd` — resolves through [`Workspace::resolve`], which
-/// refuses anything outside, symlinks included. And every process a tool
-/// starts runs in `crate::sandbox`, which lets it write nowhere else. What
-/// a process *reads* is not bounded; ADR 0011 says why.
-///
-/// The roots are shared between clones: every tool holds a `Workspace`, and
-/// `/reload-config` replacing the list through one of them is visible to all
-/// of them on the next call.
+/// Clones share the roots, so `/reload-config` through one reaches all.
 #[derive(Debug, Clone)]
 pub struct Workspace {
-    /// Canonical, absolute. `roots[0]` is the project root — the directory
-    /// relative paths resolve against and the default working directory —
-    /// and is never replaced.
+    /// Canonical, absolute. `roots[0]` is the project root (base of relative
+    /// paths, default working directory) and is never replaced.
     roots: Arc<RwLock<Vec<PathBuf>>>,
 }
 
 impl Workspace {
-    /// The single-root case: reach is the project root and nothing else.
+    /// A workspace of the project root alone.
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
         Self::with_roots(project_root, Vec::new())
     }
 
-    /// `extra` widens reach beyond the project root. See [`set_extra_roots`]
-    /// for what happens to a root that does not exist.
+    /// A workspace of the project root plus `extra`; a missing root is
+    /// dropped, as in [`Self::set_extra_roots`].
     pub fn with_roots(project_root: impl Into<PathBuf>, extra: Vec<PathBuf>) -> Self {
         let project_root = project_root.into();
         let canonical_project = project_root.canonicalize().unwrap_or(project_root);
@@ -48,12 +37,9 @@ impl Workspace {
         workspace
     }
 
-    /// Replaces every root but the project root, and returns the ones that
-    /// were **dropped** because they could not be canonicalized (they do not
-    /// exist). An unreachable root grants nothing, so the safe reading of a
-    /// typo is a narrower workspace rather than a broken session — but it is
-    /// returned rather than swallowed, so the caller can tell the developer
-    /// that the reach they wrote down is not the reach they have.
+    /// Replaces every root but the project root. Returns the roots dropped
+    /// because they could not be canonicalized, for the caller to tell the
+    /// developer; never swallow them.
     pub fn set_extra_roots(&self, extra: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut roots = self.roots.write().unwrap_or_else(|e| e.into_inner());
         roots.truncate(1);
@@ -71,8 +57,7 @@ impl Workspace {
         dropped
     }
 
-    /// The first root: the project directory, which relative paths resolve
-    /// against.
+    /// The project root, which relative paths resolve against.
     pub fn project_root(&self) -> PathBuf {
         self.read_roots()[0].clone()
     }
@@ -87,43 +72,27 @@ impl Workspace {
     }
 
     /// Resolves a tool's path argument, refusing to leave the workspace.
+    /// Synchronous on purpose: a few `canonicalize` calls cost less than a
+    /// `spawn_blocking` hop.
     ///
-    /// Synchronous on purpose, though tools call it from async code: it is a
-    /// few `canonicalize` calls, microseconds each, and a `spawn_blocking`
-    /// hop would cost more than it saves.
+    /// A relative path joins the project root; an absolute one is taken as
+    /// given (a second root must be addressable). Containment is decided on
+    /// resolved paths only, never the path as typed (on macOS `/tmp` and
+    /// `/var` are symlinks). Both forms must be inside a root:
     ///
-    /// A relative path resolves against the project root. An absolute path is
-    /// taken as given — ADR 0004 §5 rejected those outright, because
-    /// `PathBuf::join` silently *discards* its base when the joined path is
-    /// absolute (`root.join("/etc/passwd")` is `/etc/passwd`, not an error),
-    /// and a check against the model's literal argument had no way to see
-    /// the escape. With reach checked against canonical roots that
-    /// hazard is closed directly, and refusing absolute paths would make a
-    /// second root unaddressable.
+    /// 1. The lexically normalized path with its existing prefix
+    ///    canonicalized: covers a target not yet created, and a symlink inside
+    ///    a root pointing out.
+    /// 2. The filesystem's own resolution, when the path exists: after a
+    ///    symlink, real `..` differs from lexical `..`.
     ///
-    /// **Containment is decided on resolved paths only.** The roots are
-    /// canonical, so a purely lexical comparison against the path *as typed*
-    /// refuses anything that reaches a root through a symlink — on macOS
-    /// that is every `/tmp/…` and `/var/…` path, since both are links into
-    /// `/private`. Two resolved forms are checked, and both must be inside:
-    ///
-    /// 1. The lexically-normalized path with its existing prefix
-    ///    canonicalized. This is the form that works for a target that does
-    ///    not exist yet (Edit writing a new file), and it is what catches a
-    ///    symlink planted *inside* a root pointing out of it — legal in a
-    ///    git repo, where symlinks are ordinary blobs.
-    /// 2. The path as the *filesystem* resolves it, when it exists. Lexical
-    ///    `..` and real `..` disagree after a symlink: with `out -> /else/d`,
-    ///    `out/../x` normalizes to `x` but opens `/else/x`.
-    ///
-    /// The **normalized** path is what is returned and used for I/O, so what
-    /// was checked in (1) is what gets opened.
+    /// Returns the normalized path, so what (1) checked is what gets opened.
     ///
     /// # Errors
     ///
-    /// Returns [`ToolError::PathEscapesWorkspace`] when either resolved form
-    /// lies outside every root, and [`ToolError::Io`] when the path's
-    /// existing prefix cannot be canonicalized.
+    /// [`ToolError::PathEscapesWorkspace`] when either form lies outside
+    /// every root; [`ToolError::Io`] when the existing prefix cannot be
+    /// canonicalized.
     pub fn resolve(&self, path_str: &str) -> Result<PathBuf, ToolError> {
         let candidate = Path::new(path_str);
         let joined = if candidate.is_absolute() {
@@ -169,14 +138,10 @@ impl Workspace {
     }
 }
 
-/// Canonicalizes the longest *existing* ancestor of `path` (resolving any
-/// symlink along it) and re-appends whatever tail doesn't exist on disk yet,
-/// lexically — the target itself may not exist (Edit writing a brand-new
-/// file), and `Path::canonicalize` errors on any component that doesn't.
-/// `path` must already be lexically normalized (no `.`/`..`): this walks
-/// ancestors via plain component-stripping, which doesn't understand `..`
-/// semantically, so an un-normalized `a/../b` would double-count `a` instead
-/// of cancelling it.
+/// Canonicalizes the longest existing ancestor of `path` and re-appends the
+/// missing tail lexically, since the target may not exist yet.
+/// `path` must be lexically normalized: the ancestor walk does not interpret
+/// `..`.
 fn canonicalize_existing_prefix(path: &Path) -> std::io::Result<PathBuf> {
     let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
     let mut ancestor = path;
@@ -201,8 +166,8 @@ fn canonicalize_existing_prefix(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
-/// Collapses `.`/`..` components without touching the filesystem (the
-/// target may not exist yet, e.g. Edit writing a new file).
+/// Collapses `.`/`..` without touching the filesystem; the target may not
+/// exist yet.
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -222,8 +187,8 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    // Real temp directories, not fabricated paths like `/home/user/project`
-    // — `Workspace` canonicalizes its roots, which requires them to exist.
+    // Real temp directories: `Workspace` canonicalizes its roots, so they
+    // must exist.
 
     #[test]
     fn ordinary_relative_paths_resolve_under_the_root() {
@@ -259,15 +224,13 @@ mod tests {
 
     #[test]
     fn a_nonexistent_target_under_a_real_directory_is_allowed() {
-        // Edit writing a brand-new file: `src/` exists, `new.rs` doesn't yet.
         let root = tempdir().unwrap();
         std::fs::create_dir(root.path().join("src")).unwrap();
         let ws = Workspace::new(root.path());
         assert!(ws.resolve("src/new.rs").is_ok());
     }
 
-    /// The gap ADR 0007 closes: a second declared root is addressable, by
-    /// absolute path, from a session rooted elsewhere.
+    /// ADR 0007.
     #[test]
     fn a_second_root_is_reachable_by_absolute_path() {
         let project = tempdir().unwrap();
@@ -300,10 +263,7 @@ mod tests {
         assert_eq!(ws.roots().len(), 1);
     }
 
-    /// Regression test for the symlink-escape gap found in the tools audit:
-    /// a symlink lexically inside a root but pointing outside it used to pass
-    /// the lexical containment check even though the real I/O it enables
-    /// reaches outside the workspace.
+    /// Regression: a lexical check passed a symlink pointing outside.
     #[test]
     #[cfg(unix)]
     fn a_symlink_inside_a_root_pointing_outside_it_is_rejected() {
@@ -318,8 +278,6 @@ mod tests {
         ));
     }
 
-    /// A symlink that stays inside the workspace must not be rejected as a
-    /// false positive — only escaping symlinks are a problem.
     #[test]
     #[cfg(unix)]
     fn a_symlink_inside_a_root_pointing_inside_it_is_allowed() {
@@ -331,8 +289,6 @@ mod tests {
         assert!(ws.resolve("link/x.rs").is_ok());
     }
 
-    /// Same escape, but through a symlink to a not-yet-existing file (the
-    /// Edit-writing-a-new-file case).
     #[test]
     #[cfg(unix)]
     fn a_symlink_inside_a_root_pointing_outside_it_is_rejected_even_for_a_new_file() {
@@ -347,10 +303,8 @@ mod tests {
         ));
     }
 
-    /// Audit finding: roots are canonical, and the old lexical pre-check
-    /// compared them against the path *as typed* — so an absolute path that
-    /// reached a root through a symlink was refused. On macOS that is every
-    /// `/tmp/…` path.
+    /// Regression: a check on the path as typed refused this (every `/tmp`
+    /// path on macOS).
     #[test]
     #[cfg(unix)]
     fn an_absolute_path_reaching_a_root_through_a_symlink_is_allowed() {
@@ -364,9 +318,7 @@ mod tests {
         assert!(ws.resolve(alias.join("f.txt").to_str().unwrap()).is_ok());
     }
 
-    /// Lexical `..` and real `..` disagree after a symlink. With
-    /// `out -> <outside>/d`, `out/../secret` normalizes to `secret` — inside
-    /// — but the filesystem opens `<outside>/secret`.
+    /// `out/../secret` normalizes inside but opens `<outside>/secret`.
     #[test]
     #[cfg(unix)]
     fn dot_dot_after_a_symlink_cannot_be_used_to_climb_out() {
@@ -383,8 +335,6 @@ mod tests {
         ));
     }
 
-    /// `/reload-config` replaces the extra roots through one clone and every
-    /// other clone sees it; a root that does not exist is reported back.
     #[test]
     fn replaced_roots_are_seen_by_every_clone_and_dropped_ones_are_reported() {
         let project = tempdir().unwrap();

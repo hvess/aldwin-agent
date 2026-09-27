@@ -29,37 +29,20 @@ pub enum LspError {
     Io(#[from] std::io::Error),
 }
 
-/// LSP's `ContentModified`. The server discarded a computation because its
-/// view of the content changed underneath it: the answer is gone, but the
-/// request was well-formed and the state that invalidated it is transient.
-/// The protocol's intent is that a client quietly asks again rather than
-/// reporting a failure — rust-analyzer returns this throughout startup and
-/// reindexing, which is exactly when a developer asks the first question of
-/// a session.
+/// LSP's `ContentModified`: a transient error the protocol says to retry
+/// quietly. rust-analyzer returns it throughout startup and reindexing.
 const CONTENT_MODIFIED: i64 = -32801;
 
-/// How hard [`LspClient::request`] tries again after a `ContentModified`.
-/// Doubling from 100ms gives five attempts inside ~1.5s — long enough to
-/// ride out the churn of a reindex, short enough that a developer waiting
-/// on an answer does not conclude the tool has hung. A server that is
-/// *persistently* reindexing will still surface the error, which is
-/// correct: at that point it is information, not noise.
+/// Attempts [`LspClient::request`] makes on `ContentModified`: doubling from
+/// 100ms, ~1.5s in all, enough for a reindex without looking hung.
 const RETRY_ATTEMPTS: usize = 5;
 const RETRY_BACKOFF: Duration = Duration::from_millis(100);
-// `request`'s loop reads `attempt < RETRY_ATTEMPTS` to decide whether a
-// retry is left, so a budget of one would make the whole policy dead code
-// while still looking like one on the page.
+// With one attempt the retry loop in `request` would be dead code.
 const _: () = assert!(RETRY_ATTEMPTS > 1, "a single attempt is not a retry policy");
 
-/// Whether a failed request is worth re-sending unchanged.
-///
-/// Deliberately the narrowest possible rule — `ContentModified` and nothing
-/// else. Every other `Rpc` code reports something about the request itself
-/// (a bad position, an unsupported method, a malformed param), and re-sending
-/// an identical request can only produce an identical error while hiding it
-/// behind a delay. Kept as its own function so the policy is testable, and
-/// so widening it is a deliberate edit to a documented rule rather than a
-/// tweak to a match arm.
+/// Whether a failed request is worth re-sending unchanged: `ContentModified`
+/// only. Do not widen: every other code is about the request itself, and a
+/// retry only delays the same error.
 fn is_retriable(err: &LspError) -> bool {
     matches!(
         err,
@@ -70,17 +53,12 @@ fn is_retriable(err: &LspError) -> bool {
     )
 }
 
-/// Requests awaiting an answer. `None` once the reader has seen the server's
-/// stdout end: a request registered after that would never be answered, so
-/// closing the map is what turns it into `Closed` rather than a hang.
+/// Requests awaiting an answer. `None` once the server's stdout ends, so a
+/// later request fails `Closed` instead of hanging.
 type PendingMap = Arc<Mutex<Option<HashMap<i64, oneshot::Sender<Result<Value, LspError>>>>>>;
 
-/// What the server was last sent for one document.
-///
-/// The text itself, not a hash of it: a collision would mean an edit is never
-/// sent and every later position resolves against stale text — silently, and
-/// that is the exact failure `sync_document` exists to prevent. A source file
-/// already in the model's context is not worth saving.
+/// What the server was last sent for one document. The text, not a hash: a
+/// collision would silently leave the server on stale text.
 struct Synced {
     version: i64,
     text: String,
@@ -90,29 +68,23 @@ struct Inner {
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     next_id: AtomicI64,
     pending: PendingMap,
-    // A `tokio::sync::Mutex`, not `std::sync::Mutex`: `sync_document` must
-    // hold this lock across its notify `.await` (a check-then-insert split
-    // across the await let two concurrent calls on the same URI both see
-    // "not yet opened" and both send `didOpen` — a protocol violation).
+    // tokio's Mutex: `sync_document` holds it across `.await`, or two
+    // concurrent calls could both send `didOpen` for one URI.
     synced: tokio::sync::Mutex<HashMap<String, Synced>>,
-    // Kept alive so `kill_on_drop` ends the server when the last
-    // `LspClient` clone is dropped — with the session, or on a respawn.
+    // Held so `kill_on_drop` ends the server with the last `LspClient` clone.
     _child: tokio::process::Child,
 }
 
-/// A single language server's JSON-RPC connection over stdio. Cheap to
-/// clone (`Arc`-backed) — spawned once per language, persisted for the
-/// session (see `explain.rs`'s manager).
+/// One language server's JSON-RPC connection over stdio; clones share it.
+/// `ExplainTool` keeps one per language.
 #[derive(Clone)]
 pub struct LspClient {
     inner: Arc<Inner>,
 }
 
 impl LspClient {
-    /// Spawns `command` in the sandbox over `workspace` (a language server
-    /// runs build scripts and proc macros — repository code), performs the
-    /// `initialize`/`initialized` handshake against the project root, and
-    /// returns once the server has acknowledged it.
+    /// Spawns `command` in the sandbox (it runs build scripts and proc
+    /// macros) and completes the `initialize` handshake at the project root.
     pub async fn spawn(
         command: &str,
         args: &[&str],
@@ -162,19 +134,12 @@ impl LspClient {
         Ok(client)
     }
 
-    /// Makes the server's copy of `uri` match `text`: `didOpen` the first
-    /// time it is seen, a full-text `didChange` whenever the text differs
-    /// from what was last sent, nothing otherwise.
+    /// Makes the server's copy of `uri` match `text`: `didOpen` first, a
+    /// full-text `didChange` when it differs, else nothing. An open document
+    /// is answered from this copy, never from disk.
     ///
-    /// Servers answer position-based requests only for documents the client
-    /// has opened, and once one is open they answer from *that copy*, not
-    /// from disk. Opening once and never again meant every position asked
-    /// about after an `edit` to the same file was resolved against the text
-    /// from before it.
-    ///
-    /// Holds the lock across the `notify` `.await` so two concurrent calls
-    /// for the same URI (e.g. `definition` and `hover` dispatched in the same
-    /// step) can't both observe "not yet opened" and both send `didOpen`.
+    /// Holds the lock across the `.await` so concurrent calls cannot both
+    /// send `didOpen`.
     pub async fn sync_document(
         &self,
         uri: &str,
@@ -212,8 +177,7 @@ impl LspClient {
         Ok(())
     }
 
-    /// Takes `uri` out of the server's view, if it was ever shown: a file
-    /// that is gone must not keep answering for its last text.
+    /// Closes `uri` if it was shown, so a gone file stops answering.
     pub async fn close_document(&self, uri: &str) -> Result<(), LspError> {
         if self.inner.synced.lock().await.remove(uri).is_none() {
             return Ok(());
@@ -225,8 +189,7 @@ impl LspClient {
         .await
     }
 
-    /// Whether the server's stdout has ended. Nothing heals on the same
-    /// connection after that; the caller's recovery is a fresh `spawn`.
+    /// Whether the server's stdout has ended; recovery is a fresh `spawn`.
     pub fn is_closed(&self) -> bool {
         self.inner
             .pending
@@ -235,19 +198,10 @@ impl LspClient {
             .is_none()
     }
 
-    /// Sends one request and waits for its response, re-sending it while the
-    /// server answers `ContentModified` (see [`is_retriable`]).
-    ///
-    /// The retry lives here rather than in `explain.rs` because it is a
-    /// property of the protocol, not of any one caller: `ContentModified` is
-    /// the server telling the *client* to ask again. Before this, the error
-    /// travelled all the way out to the developer as a tool failure, so
-    /// asking a question while rust-analyzer was still indexing produced an
-    /// error that went away on its own if you asked twice.
-    ///
-    /// Each attempt takes a fresh request id — a retry is a new request, not
-    /// a re-await of the abandoned one, whose id the server has already
-    /// answered and will never answer again.
+    /// Sends one request and awaits its response, re-sending while the server
+    /// answers `ContentModified` (see [`is_retriable`]). The retry is here,
+    /// not in callers: it is protocol behaviour. Each attempt takes a fresh
+    /// id; the old one is already answered.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, LspError> {
         let mut backoff = RETRY_BACKOFF;
         for attempt in 1..=RETRY_ATTEMPTS {
@@ -259,9 +213,7 @@ impl LspClient {
             tokio::time::sleep(backoff).await;
             backoff *= 2;
         }
-        // `RETRY_ATTEMPTS` is a non-zero constant, so the loop either
-        // returned or slept its way to the final attempt, which returns
-        // unconditionally through the `_` arm above.
+        // The final attempt always returns through the `_` arm.
         unreachable!("the final attempt returns rather than retrying")
     }
 
@@ -294,11 +246,8 @@ impl LspClient {
         rx.await.unwrap_or(Err(LspError::Closed))
     }
 
-    /// Must actually write inline rather than fire-and-forget: LSP requires
-    /// message order to be preserved (in particular, `initialized` must
-    /// reach the server before any subsequent request) — a spawned,
-    /// unawaited write races the stdin lock against whatever the caller
-    /// sends next and can arrive out of order.
+    /// Sends a notification. Writes inline, never spawned: LSP needs message
+    /// order kept (`initialized` before any request).
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), LspError> {
         let message = json!({"jsonrpc": "2.0", "method": method, "params": params});
         self.write(&message).await
@@ -317,9 +266,8 @@ fn spawn_reader(stdout: tokio::process::ChildStdout, pending: PendingMap) {
         while let Ok(Some(message)) = read_message(&mut reader).await {
             dispatch_incoming(message, &pending);
         }
-        // Closed for good, under the same lock a new request registers
-        // itself under — so none can slip in behind the drain and wait on
-        // an answer that will never come.
+        // Closed under the lock requests register under, so none can slip in
+        // after the drain and hang.
         let abandoned = pending.lock().expect("pending lock poisoned").take();
         for (_, tx) in abandoned.into_iter().flatten() {
             let _ = tx.send(Err(LspError::Closed));
@@ -327,12 +275,9 @@ fn spawn_reader(stdout: tokio::process::ChildStdout, pending: PendingMap) {
     });
 }
 
-/// Routes one incoming JSON-RPC message: a response resolves the matching
-/// pending request; anything else (server->client requests, notifications
-/// like `window/logMessage` or progress) is silently ignored — V0 doesn't
-/// answer server-initiated requests, matching how rust-analyzer's basic
-/// definition/references/hover/implementation/workspace-symbol flow works
-/// without a client that does.
+/// Resolves the pending request a response answers. Server requests and
+/// notifications are ignored; rust-analyzer's queries used here work without
+/// answering them.
 fn dispatch_incoming(message: Value, pending: &PendingMap) {
     let Value::Object(mut obj) = message else {
         return;
@@ -366,9 +311,8 @@ fn dispatch_incoming(message: Value, pending: &PendingMap) {
     let _ = tx.send(result);
 }
 
-/// `path` as a `file://` URI. Percent-encoded: a bare `format!` produced an
-/// invalid URI for any path with a space or a non-ASCII character in it, and
-/// the server then answered about a document it had never been given.
+/// `path` as a percent-encoded `file://` URI; a space or non-ASCII byte must
+/// be escaped or the server sees a different document.
 pub fn file_uri(path: &Path) -> String {
     let mut uri = String::from("file://");
     for &byte in path.as_os_str().as_encoded_bytes() {
@@ -414,11 +358,7 @@ pub fn path_from_uri(uri: &str) -> String {
 mod tests {
     use super::*;
 
-    /// The retry rule, pinned at its own level because the loop that uses
-    /// it can only be exercised against a live server. Widening this is the
-    /// hazard: a client that silently re-sends every failed request turns a
-    /// deterministic error into a slow one and hides it from the developer
-    /// for as long as the backoff runs.
+    /// Pinned apart from the retry loop, which needs a live server.
     #[test]
     fn only_content_modified_is_retried() {
         assert!(is_retriable(&LspError::Rpc {
@@ -426,8 +366,6 @@ mod tests {
             message: "content modified".into()
         }));
 
-        // Every other code says something about the request itself, so
-        // re-sending it unchanged can only reproduce the same answer.
         for code in [-32700, -32600, -32601, -32602, -32603, -32802, -32803, 0, 1] {
             let err = LspError::Rpc {
                 code,
@@ -436,19 +374,14 @@ mod tests {
             assert!(!is_retriable(&err), "code {code} must not be retried");
         }
 
-        // Nor is anything that is not an `Rpc` answer at all: a dead server
-        // or a broken pipe will not heal by asking again on the same
-        // connection, and `spawn` is where that is recovered.
+        // A dead connection is recovered by `spawn`, not by retrying.
         assert!(!is_retriable(&LspError::Closed));
         assert!(!is_retriable(&LspError::Io(std::io::Error::other(
             "broken pipe"
         ))));
     }
 
-    /// Five attempts at 100ms doubling is ~1.5s of waiting in the worst
-    /// case. Pinned because both halves matter and pull opposite ways: too
-    /// short and the retry does not outlast a reindex, too long and a
-    /// developer waiting on an answer concludes the tool has hung.
+    /// Too short misses a reindex; too long looks hung.
     #[test]
     fn the_retry_budget_stays_inside_a_second_and_a_half() {
         let mut total = Duration::ZERO;
@@ -475,9 +408,7 @@ mod tests {
             .unwrap()
     }
 
-    /// The server answers from the copy it was sent, not from disk. The
-    /// document was opened once and never updated, so after an `edit` every
-    /// position was resolved against the text from before it.
+    /// Regression: a document opened once was never updated after an edit.
     #[tokio::test]
     async fn a_document_that_changed_is_sent_again_and_one_that_did_not_is_not() {
         let client = LspClient::spawn("python3", &[FAKE_SERVER], &Workspace::new("/"))
@@ -499,9 +430,7 @@ mod tests {
         );
     }
 
-    /// A request made after the server has gone must fail, not wait: the
-    /// reader drained the pending map once and exited, so anything
-    /// registered after that had nobody left to answer it.
+    /// Regression: a request registered after the reader's drain hung.
     #[tokio::test]
     async fn a_server_that_has_exited_reads_as_closed_and_later_requests_do_not_hang() {
         let client = LspClient::spawn("python3", &[FAKE_SERVER], &Workspace::new("/"))
@@ -537,11 +466,8 @@ mod tests {
         );
     }
 
-    /// Gated the way `llm/tests/live_lumo.rs` gates its live-API tests:
-    /// this one needs `rust-analyzer` on `PATH`, which the build does not
-    /// provide and a clean checkout on a fresh machine does not have. It
-    /// failed the whole suite there, which makes the review loop's stage 3
-    /// report a missing dependency as a broken workspace.
+    /// Ignored: needs `rust-analyzer` on `PATH`, which a fresh machine lacks,
+    /// and would fail the review loop's stage 3.
     ///
     ///     cargo test -p aldwin-tools -- --ignored
     #[tokio::test]

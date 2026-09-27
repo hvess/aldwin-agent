@@ -1,8 +1,6 @@
-//! `ask` — one question, one line of why, a short list of answers (ADR 0009
-//! §2). The design's rule is that the list always carries a yes, a no and
-//! "Chat about this"; the third is appended here if the model left it out,
-//! because it is the developer's way out of a question that was wrongly
-//! framed, and it is not the model's to omit.
+//! `ask`: one question, one line of why, a short list of answers (ADR 0009
+//! §2). "Chat about this" is appended when missing: it is the developer's
+//! way out of a wrongly framed question, never the model's to omit.
 
 use aldwin_core::{DispatchContext, Question};
 use async_trait::async_trait;
@@ -11,8 +9,7 @@ use serde_json::{json, Value};
 use crate::error::ToolError;
 use crate::registry::{Tool, ToolDescriptor};
 
-/// Beyond this the list is a menu, and a menu is a sign the question was
-/// not one question.
+/// Answers including "Chat about this"; more means it was not one question.
 const MAX_OPTIONS: usize = 5;
 
 pub struct AskTool {

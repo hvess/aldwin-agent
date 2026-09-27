@@ -1,12 +1,9 @@
 //! The staged changeset (ADR 0009 §4): every edit of a turn lands here, and
-//! nothing lands on disk until the developer approves the review.
+//! nothing reaches disk until the developer approves the review.
 //!
-//! An overlay rather than a write-then-revert: `edit` replaces text in the
-//! *staged* content of a file, `read` returns the staged content when there
-//! is one, and `run` never sees any of it — a staged changeset is reviewed
-//! before any run that would observe it (`Dispatcher::before_step`). That is
-//! what keeps "nothing is saved until you approve" literally true rather
-//! than true-after-an-undo, and it is why there is no undo to build.
+//! An overlay, never write-then-revert: `edit` and `read` see staged content,
+//! `run` sees disk, and the changeset is reviewed before any call that would
+//! observe disk (`Dispatcher::before_step`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,11 +17,10 @@ use crate::paths::Workspace;
 /// One staged file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Staged {
-    /// The path as the model named it — what the review shows.
+    /// The path as the model named it; the review shows it.
     pub rel: String,
-    /// The file as it was on disk when first staged; `None` for a file that
-    /// did not exist. Re-checked at write time: a file that moved underneath
-    /// the review is not overwritten (`Staging::write_all`).
+    /// The disk content when first staged; `None` for a new file.
+    /// `Staging::write_all` skips the file if disk no longer matches.
     pub before: Option<String>,
     pub after: String,
 }
@@ -32,19 +28,18 @@ pub struct Staged {
 #[derive(Debug, Default)]
 struct Inner {
     files: BTreeMap<PathBuf, Staged>,
-    /// Comments left at the last review of this changeset, and not yet
-    /// reported as resolved. Counted so the Saved row can say how many the
-    /// approve closed.
+    /// Review comments not yet reported resolved; the Saved row shows how
+    /// many the approve closed.
     pending_comments: usize,
 }
 
-/// The changeset of the current turn, shared by every tool and the
-/// dispatcher. Locked for the whole of a read-modify-stage, so two edits to
-/// one file in the same step cannot interleave.
+/// The current turn's changeset, shared by every tool and the dispatcher.
+/// Locked across each staged read-modify-insert, so two edits to one file
+/// cannot interleave.
 #[derive(Debug)]
 pub struct Staging {
     inner: Mutex<Inner>,
-    /// What each staged path is resolved through again at write time.
+    /// Re-resolves each staged path at write time.
     workspace: Workspace,
 }
 
@@ -57,7 +52,7 @@ impl Staging {
         }
     }
 
-    /// Whether nothing is staged — the review has nothing to open on.
+    /// Whether nothing is staged.
     pub fn is_empty(&self) -> bool {
         self.lock().files.is_empty()
     }
@@ -67,25 +62,21 @@ impl Staging {
         self.lock().files.get(resolved).map(|s| s.after.clone())
     }
 
-    /// Applies `change` to the file's current content — staged if staged,
-    /// otherwise what is on disk (`None` when the file does not exist) —
-    /// and stages the result. The lock is held across the read, so a
-    /// concurrent edit of the same file sees this one's output.
+    /// Applies `change` to the file's staged content, else its disk content
+    /// (`None` if absent), and stages the result.
     ///
     /// # Errors
     ///
-    /// Returns [`ToolError::Io`] when the file exists but cannot be read,
-    /// and passes on any error `change` returns. Nothing is staged on error.
+    /// [`ToolError::Io`] when the file exists but cannot be read; any error
+    /// `change` returns. Nothing is staged on error.
     pub async fn edit(
         &self,
         resolved: PathBuf,
         rel: &str,
         change: impl FnOnce(Option<&str>) -> Result<String, ToolError>,
     ) -> Result<(), ToolError> {
-        // The disk read happens outside the lock — it is async and a
-        // `std::sync::Mutex` must not be held across an await — and is only
-        // used when nothing is staged yet, in which case the lock's job is
-        // done by the `entry` check below.
+        // Read disk before locking: a `std::sync::Mutex` must not be held
+        // across an await. It is used only when nothing is staged yet.
         let on_disk = match tokio::fs::read_to_string(&resolved).await {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -129,23 +120,18 @@ impl Staging {
         }
     }
 
-    /// The developer left `count` comments on this changeset; the next
-    /// approve reports them resolved.
+    /// Records `count` review comments; the next approve reports them
+    /// resolved.
     pub fn note_comments(&self, count: usize) {
         self.lock().pending_comments += count;
     }
 
-    /// Writes every staged file and empties the staging area. Returns the
-    /// paths written, the comments closed, and any file that was **not**
-    /// written — because it changed on disk since it was staged (the review
-    /// showed a diff against content that is no longer there, and writing
-    /// over the newer content would clobber a change they never saw), or
-    /// because its path no longer resolves to where it was staged.
+    /// Writes every staged file and empties the staging area. Skips, and
+    /// reports, a file whose disk content no longer matches `before` or
+    /// whose path no longer resolves to where it was staged.
     ///
-    /// The second check holds the workspace boundary again immediately
-    /// before each write, not only at the edit: a review can stay open for
-    /// minutes, and a directory swapped for a symlink in that time would
-    /// otherwise carry an approved write out of the workspace.
+    /// The re-resolve is the workspace boundary at write time: a symlink
+    /// swapped in while the review was open must not carry the write out.
     pub async fn write_all(&self) -> Written {
         let (files, comments) = {
             let mut inner = self.lock();
@@ -319,7 +305,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
     }
 
-    /// The review showed a diff against content that is no longer there.
     #[tokio::test]
     async fn a_file_that_changed_under_the_review_is_not_overwritten() {
         let dir = tempdir().unwrap();
@@ -353,10 +338,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
     }
 
-    /// The review can stay open for minutes. A directory swapped for a
-    /// symlink in that time — or the file itself, pointing at a file outside
-    /// with the same text, so the `before` check passes — must not carry the
-    /// approved write out of the workspace.
+    /// Covers a swapped directory and a swapped file whose target has the
+    /// same text, so the `before` check alone would pass.
     #[tokio::test]
     async fn a_symlink_swapped_in_after_staging_does_not_redirect_the_write() {
         let dir = tempdir().unwrap();

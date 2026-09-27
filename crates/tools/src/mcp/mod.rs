@@ -9,38 +9,24 @@ use std::sync::Arc;
 use crate::error::ToolError;
 use crate::registry::Registry;
 
-/// One server's or one tool's registration failure — see
-/// `register_mcp_tools`. `tool: None` means the failure was at the
-/// server-enumeration level (the whole server never got any tools
-/// registered); `Some` means one specific tool within an otherwise-healthy
-/// server failed (a namespaced double-collision).
+/// A server or tool that `register_mcp_tools` could not register.
 #[derive(Debug)]
 pub struct McpRegistrationFailure {
     /// The server's name in `mcp.yaml`.
     pub server: String,
-    /// The tool that failed, or `None` when the whole server did.
+    /// The tool whose namespaced name also collided, or `None` when the
+    /// server could not be enumerated.
     pub tool: Option<String>,
     /// What went wrong.
     pub error: ToolError,
 }
 
-/// Enumerates every configured server's tools and registers them.
-/// Per aldwin-tools.md: MCP-supplied names that collide with a built-in
-/// (or another already-registered MCP tool) are namespaced `<server>:<name>`;
-/// otherwise the bare remote name is used. This is where each server
-/// actually gets spawned (via `McpBridge::list_tools`) — see `McpBridge`'s
-/// doc comment on why that's "lazy" in the sense the spec means, not
-/// deferred all the way to a tool's first call.
+/// Spawns each configured server (via [`McpBridge::list_tools`]) and
+/// registers its tools under the bare name, or `<server>:<name>` on a
+/// collision (aldwin-tools.md).
 ///
-/// Best-effort across servers: one server failing to enumerate (spawn
-/// failure, protocol error) does not stop any other server's tools from
-/// registering — everything that went wrong comes back in the returned
-/// list rather than aborting the whole call, so a caller can log it (or
-/// not) without one broken server taking down every other one, per
-/// bootstrap.rs's "a broken MCP server must not prevent the session from
-/// starting at all." A namespaced double-collision (two servers advertising
-/// the identical name) is likewise recorded and skipped, not fatal to the
-/// rest of the batch.
+/// Best-effort: a failed server or a colliding namespaced name is returned,
+/// never fatal, so a broken MCP server cannot stop the session starting.
 pub async fn register_mcp_tools(
     bridge: Arc<McpBridge>,
     registry: &mut Registry,
@@ -133,11 +119,7 @@ mod tests {
             Workspace::new("."),
             std::sync::Arc::new(crate::Staging::new(Workspace::new("."))),
         );
-        // Alias one built-in's registered name to "echo" indirectly isn't
-        // possible without changing a built-in's name, so instead prove the
-        // mechanism directly: pre-register something under "echo" the same
-        // way a built-in would, then confirm the MCP tool falls back to the
-        // namespaced form rather than erroring or overwriting it.
+        // No built-in is named "echo", so a stub stands in for one.
         struct Stub(ToolDescriptor);
         #[async_trait::async_trait]
         impl Tool for Stub {
@@ -167,7 +149,6 @@ mod tests {
             registry.get("fake:echo").is_some(),
             "should fall back to the namespaced name"
         );
-        // The pre-registered "echo" is untouched — built-ins win unprefixed.
         assert_eq!(
             registry.get("echo").unwrap().descriptor().description,
             "pretend built-in"

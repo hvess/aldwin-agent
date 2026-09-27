@@ -8,22 +8,20 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 
-/// A registered (name, input schema) pair, plus the one thing the
-/// dispatcher needs to know about a tool without knowing which tool it is.
-/// Built-ins register through `builtin_registry`; MCP tools through
-/// `register_mcp_tools`.
+/// A tool's model-facing surface plus what the dispatcher needs to know about
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
-    /// Whether a call sees the files as they are on disk rather than through
-    /// the staging overlay — a shell command, or an MCP server in its own
-    /// process. Staged edits are reviewed before any such call (ADR 0009 §4).
+    /// Whether a call sees disk rather than the staging overlay (a shell, an
+    /// MCP server). Staged edits are reviewed before any such call (ADR 0009
+    /// §4).
     pub observes_disk: bool,
 }
 
-/// One concrete tool: what it looks like to the model, and what a call does.
+/// One tool: its descriptor and its call.
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn descriptor(&self) -> &ToolDescriptor;
@@ -36,7 +34,7 @@ pub trait Tool: Send + Sync {
     ) -> Result<String, ToolError>;
 }
 
-/// In-process map of name -> tool, behind core's `ToolDispatcher` impl.
+/// Tools by name, behind core's `ToolDispatcher` impl.
 #[derive(Default)]
 pub struct Registry {
     tools: HashMap<String, Arc<dyn Tool>>,
@@ -57,13 +55,13 @@ impl Registry {
         Self::default()
     }
 
-    /// Duplicate names are rejected. Namespacing an MCP name that collides
-    /// (`<server>:<name>`) is `register_mcp_tools`' job, not the registry's.
+    /// Adds `tool`. Namespacing a colliding MCP name is `register_mcp_tools`'
+    /// job.
     ///
     /// # Errors
     ///
-    /// Returns [`ToolError::DuplicateTool`] when a tool of the same name is
-    /// already registered; the registry is left unchanged.
+    /// [`ToolError::DuplicateTool`] when the name is taken; the registry is
+    /// unchanged.
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
         let name = tool.descriptor().name.clone();
         if self.tools.contains_key(&name) {
@@ -78,8 +76,7 @@ impl Registry {
         self.tools.get(name).cloned()
     }
 
-    /// What core's `ToolDispatcher::definitions` needs — just the surface
-    /// the model sees, stripped of dispatch-only metadata.
+    /// The model-facing definitions, for core's `ToolDispatcher::definitions`.
     pub fn definitions(&self) -> Vec<aldwin_core::ToolDefinition> {
         self.tools
             .values()

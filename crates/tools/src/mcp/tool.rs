@@ -8,10 +8,9 @@ use crate::error::ToolError;
 use crate::registry::{Tool, ToolDescriptor};
 use aldwin_core::DispatchContext;
 
-/// One remote MCP tool, proxied through `McpBridge`. It runs in its own
-/// process over the real tree, so the dispatcher opens the review before it
-/// the way it does before `run`; an MCP tool that edits files does so
-/// without a diff (open-tasks 2), inside the workspace the sandbox allows.
+/// One remote MCP tool, proxied through `McpBridge`. It observes disk, so
+/// the review opens before it as before `run`. Its own writes bypass the
+/// review (open-tasks 2); the sandbox keeps them inside the workspace.
 pub struct McpTool {
     descriptor: ToolDescriptor,
     bridge: Arc<McpBridge>,
@@ -32,7 +31,6 @@ impl McpTool {
                 name: registered_name,
                 description: remote.description.clone().unwrap_or_default().into_owned(),
                 input_schema,
-                // Its own process, over the real tree.
                 observes_disk: true,
             },
             bridge,
@@ -130,8 +128,7 @@ mod tests {
     #[tokio::test]
     async fn is_error_result_becomes_a_structured_tool_error() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server()], Workspace::new(".")));
-        // Registered under the name "echo" but proxy to a remote name that
-        // doesn't exist server-side, to force an isError result.
+        // A remote name the server lacks forces an `isError` result.
         let mut broken = remote_echo_tool();
         broken.name = "missing".into();
         let tool = McpTool::new(bridge, "fake".into(), "fake:missing".into(), &broken);
@@ -141,8 +138,6 @@ mod tests {
         assert!(matches!(err, ToolError::McpToolError { .. }));
     }
 
-    /// An MCP server runs over the real tree, so the review opens before
-    /// any of its tools the way it does before `run`.
     #[test]
     fn an_mcp_tool_observes_the_disk() {
         let bridge = Arc::new(McpBridge::new(vec![], Workspace::new(".")));

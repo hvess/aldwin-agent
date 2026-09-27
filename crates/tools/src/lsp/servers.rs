@@ -1,7 +1,6 @@
-//! Per-language server config. V0 supports exactly one language (Rust, via
-//! rust-analyzer) — this stays a flat match rather than a pluggable registry
-//! on purpose; see aldwin-tools.md's Pitfalls on LSP scope creep. Adding a
-//! second language is one more match arm, not a new abstraction.
+//! Per-language server config; Rust only (rust-analyzer). A flat match on
+//! purpose, not a registry: a new language is one more arm (aldwin-tools.md,
+//! Pitfalls).
 
 use std::path::Path;
 

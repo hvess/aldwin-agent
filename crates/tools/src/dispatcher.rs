@@ -11,28 +11,25 @@ use crate::error::ToolError;
 use crate::registry::Registry;
 use crate::staging::Staging;
 
-/// Implements core's `ToolDispatcher`: resolve name -> tool and run it —
-/// and, at the two moments a staged changeset would otherwise be observed
-/// without one, open the review (ADR 0009 §4).
+/// Core's `ToolDispatcher`: runs a call by name, and opens the review before
+/// a staged changeset would be observed on disk (ADR 0009 §4).
 ///
-/// Nothing here decides whether a call may run. The workspace is the only
-/// boundary (ADR 0011): each tool resolves its paths through `Workspace`,
-/// and every process a tool starts is confined to writing inside it.
+/// No call is gated here: the workspace is the only boundary (ADR 0011),
+/// held by each tool and the sandbox.
 #[derive(Debug)]
 pub struct Dispatcher {
     registry: Registry,
     staging: Arc<Staging>,
-    /// Serialises the review across the concurrent calls of a step and the
-    /// turn's end, so one changeset is never reviewed twice at once.
+    /// Serialises reviews, so one changeset is never reviewed twice at once.
     review: tokio::sync::Mutex<()>,
-    /// Where the dispatcher's own notices go — a staged file an approve
-    /// could not write. `None` in tests that build one without a session.
+    /// Receives notices such as a staged file an approve could not write.
+    /// `None` without a session.
     notices: Option<mpsc::Sender<Event>>,
 }
 
 impl Dispatcher {
-    /// A dispatcher over `registry` that stages into `staging`, with nowhere
-    /// to send its notices until `with_notices` gives it a channel.
+    /// A dispatcher over `registry` and `staging`; notices are dropped until
+    /// `with_notices`.
     pub fn new(registry: Registry, staging: Arc<Staging>) -> Self {
         Self {
             registry,
@@ -42,16 +39,14 @@ impl Dispatcher {
         }
     }
 
-    /// Sends the dispatcher's own notices — a staged file an approve could
-    /// not write — to the session's event channel.
+    /// Sends the dispatcher's notices to the session's event channel.
     pub fn with_notices(mut self, notices: mpsc::Sender<Event>) -> Self {
         self.notices = Some(notices);
         self
     }
 
-    /// Whether any of a step's calls would see the disk rather than the
-    /// staging overlay — a property each tool declares, so the dispatcher
-    /// knows no tool by name.
+    /// Whether any call would see disk rather than the overlay. Read from
+    /// each descriptor: the dispatcher must know no tool by name.
     fn observes_disk(&self, calls: &[ToolCall]) -> bool {
         calls.iter().any(|call| {
             self.registry
@@ -93,9 +88,8 @@ impl Dispatcher {
                 .await;
                 Reviewed::Reason(render_comments(&comments))
             }
-            // Said in the developer's voice: at the end of a turn this text
-            // *is* the next turn's message, and the TUI echoes it as theirs
-            // (`Event::FollowUp`) — the discard is something they did.
+            // In the developer's voice: at a turn's end this is the next
+            // turn's message, echoed as theirs (`Event::FollowUp`).
             Some(ReviewDecision::Discard) => {
                 let files = self.staging.discard();
                 ctx.review_closed(ReviewOutcome::Discarded { files }).await;
@@ -116,15 +110,11 @@ impl Dispatcher {
 enum Reviewed {
     /// Written, or nothing was staged: the model may go on.
     Proceed,
-    /// A message for the model — the developer's comments, or that they
-    /// discarded the changes — meaning the work is not done.
+    /// Comments or a discard, for the model: the work is not done.
     Reason(String),
-    /// Nobody answered: the session is ending under the review. Nothing was
-    /// written and the staging area keeps what it had. A *cancel* never
-    /// lands here — the agent drops the review future instead
-    /// (`Agent::await_or_cancel`) — so this is shutdown, and the two hooks
-    /// treat it differently: a step's calls must not run, and a turn must
-    /// not start a next one.
+    /// Unanswered because the session is ending; nothing written, staging
+    /// kept. A cancel drops the future instead (`Agent::await_or_cancel`).
+    /// A step's calls must not run, and a turn must not start another.
     Gone,
 }
 
@@ -133,8 +123,7 @@ fn render_comments(comments: &[ReviewComment]) -> String {
     comments
         .iter()
         .map(|c| {
-            // A comment with no path is what the developer typed into the
-            // review's field — about the change as a whole, not a line.
+            // No path: a comment on the whole change.
             if c.path.is_empty() {
                 return c.text.clone();
             }
@@ -163,10 +152,8 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         self.registry.definitions()
     }
 
-    /// A staged changeset is reviewed before any call that would see the
-    /// disk without it — a test run over unapproved edits would otherwise
-    /// need the edits written first, which is the one thing that must not
-    /// happen without the review.
+    /// Reviews a staged changeset before any call that would see disk
+    /// without it: nothing reaches disk before an approve.
     async fn before_step(&self, calls: &[ToolCall], ctx: &DispatchContext) -> Option<String> {
         if self.staging.is_empty() || !self.observes_disk(calls) {
             return None;
@@ -180,8 +167,7 @@ impl aldwin_core::ToolDispatcher for Dispatcher {
         }
     }
 
-    /// The model has stopped. Whatever is staged is reviewed now, and a
-    /// comment starts the next turn.
+    /// Reviews whatever is staged; a comment or discard starts the next turn.
     async fn turn_ending(&self, ctx: &DispatchContext) -> Option<String> {
         match self.review(ctx).await {
             Reviewed::Proceed | Reviewed::Gone => None,
@@ -217,7 +203,6 @@ mod tests {
     use aldwin_core::{ChangedFile, Changeset, PendingReply, ToolDispatcher as _};
     use serde_json::{json, Value};
 
-    /// A stand-in tool that says whether it sees the disk.
     struct Fake(ToolDescriptor);
 
     #[async_trait]
@@ -247,9 +232,7 @@ mod tests {
         }
     }
 
-    /// A dispatcher over two fakes: `shell`, which sees the disk, and
-    /// `look`, which reads through the overlay. Neither name is one the
-    /// dispatcher could know.
+    /// `shell` observes disk and `look` does not; neither is a real tool name.
     fn dispatcher(root: &std::path::Path) -> (Dispatcher, Arc<Staging>) {
         let mut registry = Registry::new();
         registry.register(fake("shell", true)).unwrap();
@@ -267,7 +250,6 @@ mod tests {
         assert!(result.content.contains("no such tool"));
     }
 
-    /// Nothing is granted and nothing asks: a call runs when it is made.
     #[tokio::test]
     async fn a_call_runs_without_a_grant_and_without_a_prompt() {
         let (dispatcher, _) = dispatcher(std::path::Path::new("."));
@@ -277,8 +259,6 @@ mod tests {
         assert_eq!(result.content, "ran");
         assert!(events.try_recv().is_err(), "nothing was asked");
     }
-
-    // ── The review ────────────────────────────────────────────────────────
 
     async fn stage(staging: &Staging, dir: &tempfile::TempDir, name: &str, after: &str) {
         let path = dir.path().canonicalize().unwrap().join(name);
@@ -321,8 +301,6 @@ mod tests {
         assert!(events.try_recv().is_err());
     }
 
-    /// A read does not observe the disk — it reads through the overlay — so
-    /// a step of reads opens no review even with edits staged.
     #[tokio::test]
     async fn a_step_that_does_not_observe_the_disk_is_not_reviewed_first() {
         let dir = tempfile::tempdir().unwrap();
@@ -404,7 +382,6 @@ mod tests {
             })
         ));
 
-        // The next approve reports the comment resolved.
         let (ctx, mut events, pending) = dispatch_context();
         let ending = dispatcher.turn_ending(&ctx);
         let (outcome, _) = tokio::join!(
@@ -447,9 +424,7 @@ mod tests {
         );
     }
 
-    /// Nobody answers the review — the session is ending under it. A step's
-    /// calls must not run; a turn must not start a next one; and what was
-    /// staged stays staged, unwritten.
+    /// Staged edits also stay staged, unwritten.
     #[tokio::test]
     async fn an_unanswered_review_runs_nothing_and_starts_no_turn() {
         let dir = tempfile::tempdir().unwrap();

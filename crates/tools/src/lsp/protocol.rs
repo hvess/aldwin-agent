@@ -1,5 +1,5 @@
 //! LSP's JSON-RPC framing: `Content-Length: N\r\n\r\n<N bytes of UTF-8 JSON>`.
-//! No message shapes live here — just the byte-level envelope.
+//! The envelope only; no message shapes.
 
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -15,8 +15,8 @@ pub async fn write_message<W: AsyncWrite + Unpin>(
     writer.flush().await
 }
 
-/// `Ok(None)` on a clean EOF before any header line — the normal way a
-/// language server's stdout ends when it exits.
+/// Reads one message; `Ok(None)` on a clean EOF before any header, which is
+/// how a server's stdout ends when it exits.
 pub async fn read_message<R: AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> std::io::Result<Option<Value>> {

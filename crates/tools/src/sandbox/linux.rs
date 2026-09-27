@@ -1,18 +1,11 @@
-//! Landlock, spoken directly to the kernel.
+//! Landlock through raw syscalls, not a crate: the ruleset is built in the
+//! parent ([`Sandbox::build`]) and engaged in the forked child
+//! ([`Sandbox::engage`], two syscalls, no allocation). Allocating between
+//! `fork` and `execve` in a threaded process can deadlock the child.
 //!
-//! Three syscalls and two structs, rather than a crate, for one reason that
-//! matters here: the ruleset has to be **built in the parent and engaged in
-//! the child**. Building it opens file descriptors and allocates; doing that
-//! between `fork` and `execve` in a threaded process is how you get a child
-//! that deadlocks in the allocator. So [`Sandbox::build`] does all of it up
-//! front, and [`Sandbox::engage`] — the part that runs in the forked child —
-//! is two syscalls with no allocation, which is what `pre_exec` permits.
-//!
-//! The ruleset *handles* every write right the kernel's ABI knows and no
-//! read right. Handled-but-not-granted is denied, so everything handled is
-//! denied everywhere except beneath the rules added for the workspace roots
-//! and the incidental paths; everything not handled — execute, read a file,
-//! list a directory — stays allowed everywhere.
+//! The ruleset handles every write right the ABI knows and no read right:
+//! writes are denied except beneath the roots and incidental paths; execute
+//! and reads stay allowed.
 
 use std::ffi::CString;
 use std::io;
@@ -30,9 +23,9 @@ const SYS_RESTRICT_SELF: libc::c_long = 446;
 const CREATE_RULESET_VERSION: u32 = 1;
 const RULE_PATH_BENEATH: libc::c_int = 1;
 
-// Filesystem access bits, in the kernel's order. Bits 0–12 are ABI 1;
-// REFER is ABI 2 and TRUNCATE ABI 3. The three read-side bits of ABI 1 —
-// EXECUTE (0), READ_FILE (2), READ_DIR (3) — are deliberately absent.
+// Kernel filesystem access bits. 0–12 are ABI 1, REFER ABI 2, TRUNCATE
+// ABI 3. The read bits EXECUTE (0), READ_FILE (2), READ_DIR (3) are absent
+// on purpose: reads stay open.
 const FS_WRITE_FILE: u64 = 1 << 1;
 const FS_REMOVE_DIR: u64 = 1 << 4;
 const FS_REMOVE_FILE: u64 = 1 << 5;
@@ -57,10 +50,8 @@ const WRITE_ABI1: u64 = FS_WRITE_FILE
     | FS_MAKE_BLOCK
     | FS_MAKE_SYM;
 
-/// Only the filesystem half of the kernel's attr. The kernel accepts any
-/// size from this one field upward, so there is no per-ABI size to get
-/// wrong — the network field ABI 4 added is simply not sent, which leaves
-/// the network unrestricted, as ADR 0011 intends.
+/// Only the filesystem field of the kernel's attr, valid on every ABI.
+/// Omitting ABI 4's network field leaves the network open (ADR 0011).
 #[repr(C)]
 struct RulesetAttr {
     handled_access_fs: u64,
@@ -100,13 +91,11 @@ pub fn unavailable() -> Option<&'static str> {
     }
 }
 
-/// Every write right this ABI knows. A right must be *handled* before it can
-/// be denied, so one left out here is a write the sandbox silently permits —
-/// which is why this tracks the ABI upward.
+/// Every write right this ABI knows. An unhandled right is silently
+/// permitted, so this must track new ABIs.
 ///
-/// On ABI 1, which cannot handle REFER, the kernel refuses every rename or
-/// link across directories (`EXDEV`), inside the workspace too. Kernels
-/// before 5.19 are rare enough that this is stated rather than worked round.
+/// On ABI 1 (no REFER) every cross-directory rename or link fails with
+/// `EXDEV`, inside the workspace too; accepted, not worked around.
 fn handled_fs(abi: i32) -> u64 {
     let mut bits = WRITE_ABI1;
     if abi >= 2 {
@@ -118,10 +107,8 @@ fn handled_fs(abi: i32) -> u64 {
     bits
 }
 
-/// The rights granted beneath one writable path. The kernel refuses a rule
-/// that grants a directory-only right on a file — the whole `add_rule` fails
-/// with `EINVAL` — which is how `/dev/null` once came out unwritable: it was
-/// offered `MAKE_DIR` with everything else.
+/// The rights granted beneath one writable path. A file gets file rights
+/// only: a directory-only right on a file fails the whole rule (`EINVAL`).
 fn writable_rights(abi: i32, path: &Path) -> u64 {
     if path.is_dir() {
         return handled_fs(abi);
@@ -140,14 +127,14 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    /// Every root is writable, not only the project root: a second root
-    /// (ADR 0007) is workspace on the same terms as the first.
+    /// Builds the ruleset; every root is writable, not only the first (ADR
+    /// 0007).
     pub fn build(roots: &[PathBuf]) -> io::Result<Self> {
         let abi = abi_version()?;
         let attr = RulesetAttr {
             handled_access_fs: handled_fs(abi),
         };
-        // SAFETY: `attr` outlives the call and its size is what we pass.
+        // SAFETY: `attr` outlives the call and its size is the one passed.
         let fd = unsafe {
             libc::syscall(
                 SYS_CREATE_RULESET,
@@ -162,8 +149,8 @@ impl Sandbox {
         // SAFETY: the syscall returned a fresh, owned file descriptor.
         let ruleset = unsafe { OwnedFd::from_raw_fd(fd as RawFd) };
 
-        // A root that cannot be added is an error, not a skip: the workspace
-        // would be read-only and every run would fail without saying why.
+        // A root that cannot be added is an error, not a skip: a skipped
+        // root would fail every write silently.
         for root in roots {
             add_path_rule(&ruleset, root, handled_fs(abi))?;
         }
@@ -174,28 +161,25 @@ impl Sandbox {
         Ok(Self { ruleset })
     }
 
-    /// Unchanged on Linux: the confinement is engaged in the child, not by
-    /// wrapping the program.
+    /// Unchanged: Linux confines in the child, not by wrapping the program.
     pub fn command_line(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
         (program.to_string(), args.to_vec())
     }
 
     /// Confines whatever `cmd` spawns.
     pub fn install(self, cmd: &mut Command) {
-        // SAFETY: `engage` is two syscalls with no allocation, which is what
-        // `pre_exec` permits — see its own safety note.
+        // SAFETY: `engage` is two syscalls with no allocation; see its note.
         unsafe {
             cmd.pre_exec(move || self.engage());
         }
     }
 
-    /// Engage the ruleset on the calling process. Everything it goes on to
-    /// `exec`, and every child of that, inherits it and cannot widen it.
+    /// Engages the ruleset on the calling process; every descendant inherits
+    /// it and cannot widen it.
     ///
     /// # Safety
-    /// Intended for `pre_exec`, between `fork` and `execve`. It allocates
-    /// nothing and takes no locks, which is what makes it safe there.
-    /// Calling it on the parent would confine Aldwin itself, permanently.
+    /// For `pre_exec` only: it allocates nothing and takes no locks. Called
+    /// in the parent it confines Aldwin itself, permanently.
     unsafe fn engage(&self) -> io::Result<()> {
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
@@ -307,8 +291,7 @@ mod tests {
         assert!(!outside.path().join("new").exists());
     }
 
-    /// Rules are on the root's inode, not its name, so a symlink inside a
-    /// root that points out of it leads to somewhere the rule does not cover.
+    /// Rules bind the root's inode, so a symlink out is not covered.
     #[test]
     fn a_symlink_out_of_the_workspace_does_not_carry_write_access_with_it() {
         if !confinement_or_explicit_skip() {

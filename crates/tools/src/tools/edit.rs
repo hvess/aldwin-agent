@@ -9,9 +9,8 @@ use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
 
-/// Stage a single edit (path, before, after). Nothing is written here: the
-/// change lands in [`Staging`], and the review — at the end of the turn, or
-/// before any run that would observe it — is what writes it (ADR 0009 §4).
+/// Stages one replacement in [`Staging`]. Never writes to disk: only an
+/// approve at the review does (ADR 0009 §4).
 pub struct EditTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
@@ -89,9 +88,7 @@ impl Tool for EditTool {
 
         self.staging
             .edit(path.clone(), &rel, |current| match current {
-                // A file that does not exist is created — but only when the
-                // call said so with an empty `before`; a non-empty `before`
-                // against a missing file is a mistake about the file.
+                // Only an empty `before` creates a missing file.
                 None if args.before.is_empty() => Ok(args.after.clone()),
                 None => Err(ToolError::Io {
                     path: path.clone(),
@@ -238,8 +235,6 @@ mod tests {
         assert!(!dir.path().join("new.rs").exists());
     }
 
-    /// Two edits to one file in one step: the second sees the first, which
-    /// is what lets a model make several changes to a file in one turn.
     #[tokio::test]
     async fn a_second_edit_to_the_same_file_builds_on_the_first() {
         let dir = tempdir().unwrap();

@@ -1,5 +1,6 @@
 use futures::{future, StreamExt};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -12,6 +13,9 @@ use crate::{
     types::*,
 };
 
+/// The conversation loop: one per session. It owns the log, streams each
+/// step from `C`, and hands the step's tool calls to `D`; `run` drives it
+/// from a command channel and reports on an event channel.
 pub struct Agent<C, D> {
     client: C,
     dispatcher: D,
@@ -30,7 +34,22 @@ pub struct Agent<C, D> {
     last_step: u64,
 }
 
+/// Written by hand because neither `C` nor `D` need be `Debug`, and the
+/// system prompt is too long to be worth printing.
+impl<C, D> fmt::Debug for Agent<C, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Agent")
+            .field("log", &self.log)
+            .field("pending", &self.pending)
+            .field("last_turn", &self.last_turn)
+            .field("last_step", &self.last_step)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
+    /// An agent with an empty, historyless log, whose system prompt is the
+    /// base prompt with `additional_context` appended when there is one.
     pub fn new(client: C, dispatcher: D, additional_context: Option<&str>) -> Self {
         Self {
             client,

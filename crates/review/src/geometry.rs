@@ -14,7 +14,9 @@ use std::str::FromStr;
 /// font. Measured per run; never hardcoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cell {
+    /// Width in pixels.
     pub w: u32,
+    /// Height in pixels.
     pub h: u32,
 }
 
@@ -33,14 +35,19 @@ pub struct Cell {
 /// widths, so a size on that boundary would flip with a one-word copy change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Size {
+    /// 80×24, the floor.
     Small,
+    /// 104×32, the design's window body.
     Medium,
+    /// 200×50, a maximized terminal.
     Large,
 }
 
 impl Size {
+    /// Every size, in the order a run captures them.
     pub const ALL: [Size; 3] = [Size::Small, Size::Medium, Size::Large];
 
+    /// Columns and rows.
     pub fn cells(self) -> (u32, u32) {
         match self {
             Size::Small => (80, 24),
@@ -49,6 +56,7 @@ impl Size {
         }
     }
 
+    /// Width and height in pixels, through a measured `cell`.
     pub fn pixels(self, cell: Cell) -> (u32, u32) {
         let (cols, rows) = self.cells();
         (cols * cell.w, rows * cell.h)
@@ -83,11 +91,14 @@ impl FromStr for Size {
 /// not two renders of one capture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
+    /// The dark palette, the app's default.
     Dark,
+    /// The light palette, which inverts the ladder of grounds.
     Light,
 }
 
 impl Theme {
+    /// Both themes, in the order a run captures them.
     pub const ALL: [Theme; 2] = [Theme::Dark, Theme::Light];
 }
 

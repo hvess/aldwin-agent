@@ -84,11 +84,11 @@ Use `?` operator over explicit error conversions when error types can be
 automatically converted via `From` trait or `#[from]` attribute:
 
 ```rust
-// Good: Use ? when NoteError has #[from] std::io::Error
-let file = File::open("data.txt")?;
+// Good: Use ? when LspError has #[from] std::io::Error
+write_message(&mut *stdin, message).await?;
 
 // Avoid: Explicit map_err when automatic conversion works
-let file = File::open("data.txt").map_err(NoteError::from)?;
+write_message(&mut *stdin, message).await.map_err(LspError::Io)?;
 ```
 
 Use `map_err` only when you need custom error transformation that cannot be
@@ -96,7 +96,7 @@ handled by the `From` trait:
 
 ```rust
 // Good: Custom error context that can't be expressed via From
-let file = File::open("data.txt").map_err(|e| NoteError::IoWithContext(e, "failed to open config"))?;
+let mut child = cmd.spawn().map_err(|source| LspError::Spawn { command: command.to_string(), source })?;
 ```
 
 - Prefer `anyhow` or `thiserror` for application-level error handling
@@ -115,14 +115,17 @@ Group imports from same crate using curly braces:
 
 ```rust
 // Good: Grouped imports
-use mdnotes_lib::{NoteError, Result};
-use mdnotes_lib::repository::{NoteRepository, fs::FileSystemRepository};
+use aldwin_review::{scene, stages, tokens, Baseline, Compositor};
+use aldwin_review::capture::{capture, measure_cell};
 
 // Avoid: Multiple separate imports
-use mdnotes_lib::NoteError;
-use mdnotes_lib::Result;
-use mdnotes_lib::repository::NoteRepository;
-use mdnotes_lib::repository::fs::FileSystemRepository;
+use aldwin_review::scene;
+use aldwin_review::stages;
+use aldwin_review::tokens;
+use aldwin_review::Baseline;
+use aldwin_review::Compositor;
+use aldwin_review::capture::capture;
+use aldwin_review::capture::measure_cell;
 ```
 
 Use qualified paths sparingly — prefer imports over fully-qualified names in
@@ -130,12 +133,12 @@ function signatures:
 
 ```rust
 // Good: Using imported types
-pub async fn handle_create(title: String, content: Option<String>) -> Result<()> {
+pub async fn run() -> Result<(), StartupError> {
     // ...
 }
 
 // Avoid: Fully-qualified in signatures (verbose)
-pub async fn handle_create(title: String, content: Option<String>) -> mdnotes_lib::Result<()> {
+pub async fn run() -> Result<(), crate::error::StartupError> {
     // ...
 }
 ```
@@ -206,7 +209,10 @@ cargo run -p aldwin-review -- tokens --write
 ### Documentation
 
 - Use `///` for public API documentation
-- Include examples in doc comments
+- Include examples in the doc comments of public functions a change adds.
+  A doc written for an existing item — to satisfy `missing_docs`, or to add
+  an `# Errors` section — does not need one (the developer's scoping,
+  2026-09-27)
 - Document panics and errors
 
 ### Testing
@@ -234,8 +240,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-When a feature is finished, run `/review` as well. It runs clippy and the
-tests plus the design-token and rendered-frame stages.
+Before committing, run `/review`: an agent's commit is refused without a
+passing one. Its stage 2 enforces this skill's checkable rules as workspace
+lints, and its stage 7 judges the rest of this skill against the diff.
 
 ### Why These Checks Matter
 

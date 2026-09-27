@@ -22,14 +22,19 @@ pub enum InitOutcome {
     AlreadyPresent,
     /// `~/.aldwin/` exists but is missing one or more domain files. The
     /// caller must refuse to start rather than auto-fill the gap.
-    PartiallyPresent { missing: Vec<&'static str> },
+    PartiallyPresent {
+        /// The file names that are absent, in the order init writes them.
+        missing: Vec<&'static str>,
+    },
 }
 
 /// One (scope, domain) layer that failed to reload; the previous in-memory
 /// snapshot for that layer is left untouched.
 #[derive(Debug)]
 pub struct ReloadFailure {
+    /// The file that failed, so the developer can be told which.
     pub path: PathBuf,
+    /// Why it failed.
     pub error: ConfigError,
 }
 
@@ -115,6 +120,11 @@ impl Config {
     /// `~/.aldwin/`. See [`Config::open_at`] for the same thing with an
     /// explicit global root (used by tests, so they never touch the real
     /// home directory).
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::NoHomeDir`] when there is no home directory, and
+    /// otherwise whatever [`Config::open_at`] refuses.
     pub fn open(project_root: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
         let global_dir = home.join(".aldwin");
@@ -126,6 +136,14 @@ impl Config {
     /// persisted here yet" state and become empty defaults (or `None` for
     /// provider, which has no meaningful empty state) — only a malformed
     /// file, an unknown version, or an empty `api_key_env` refuses to start.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] for a file that exists but cannot be read,
+    /// [`ConfigError::Parse`] for one that is not valid for its schema,
+    /// [`ConfigError::UnknownVersion`] for one from a newer build, and
+    /// [`ConfigError::MissingApiKeyEnv`] for a `provider.yaml` with an empty
+    /// `api_key_env`.
     pub fn open_at(
         project_root: impl AsRef<Path>,
         global_dir: impl Into<PathBuf>,
@@ -198,6 +216,11 @@ impl Config {
 
     // ── Read ─────────────────────────────────────────────────────────────
 
+    /// The project's `permissions.yaml`, or an empty one when it has none.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn project_permissions(&self) -> PermissionsConfig {
         self.inner
             .project_permissions
@@ -206,6 +229,11 @@ impl Config {
             .clone()
     }
 
+    /// The global `permissions.yaml`, or an empty one when there is none.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn global_permissions(&self) -> PermissionsConfig {
         self.inner
             .global_permissions
@@ -215,6 +243,10 @@ impl Config {
     }
 
     /// `None` means no project-scope override — fall back to `global_provider`.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn project_provider(&self) -> Option<ProviderConfig> {
         self.inner
             .project_provider
@@ -225,6 +257,15 @@ impl Config {
 
     /// Unlike `project_provider`, absence here is an error: there is no
     /// meaningful default model or `api_key_env` to fall back to.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::ProviderNotConfigured`] when there is no global
+    /// `provider.yaml`.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn global_provider(&self) -> Result<ProviderConfig, ConfigError> {
         self.inner
             .global_provider
@@ -247,6 +288,11 @@ impl Config {
         }
     }
 
+    /// The MCP servers the project's `mcp.yaml` names.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn project_mcp(&self) -> McpConfig {
         self.inner
             .project_mcp
@@ -255,16 +301,30 @@ impl Config {
             .clone()
     }
 
+    /// The MCP servers the global `mcp.yaml` names.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn global_mcp(&self) -> McpConfig {
         self.inner.global_mcp.read().expect("lock poisoned").clone()
     }
 
+    /// The TUI's settings; `tui.yaml` is global only.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn global_tui(&self) -> TuiConfig {
         self.inner.global_tui.read().expect("lock poisoned").clone()
     }
 
     /// The account connected to `provider` — a catalogue id — or `None`
     /// when the developer has not connected one (ADR 0012).
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding this domain's lock.
     pub fn connection(&self, provider: &str) -> Option<ConnectionRecord> {
         self.inner
             .global_connections
@@ -321,6 +381,13 @@ impl Config {
         Ok(())
     }
 
+    /// Writes `provider.yaml` at `scope`, replacing what it said.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::MissingApiKeyEnv`] when `api_key_env` is empty, before
+    /// anything is written; [`ConfigError::Io`] or
+    /// [`ConfigError::Serialize`] when the file cannot be written.
     pub fn set_provider(&self, scope: Scope, provider: ProviderConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(scope, "provider");
         if !provider.has_valid_api_key_env() {
@@ -335,6 +402,12 @@ impl Config {
         })
     }
 
+    /// Writes the global `tui.yaml`, replacing what it said.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] or [`ConfigError::Serialize`] when the file cannot
+    /// be written; the in-memory snapshot is then left as it was.
     pub fn set_tui(&self, tui: TuiConfig) -> Result<(), ConfigError> {
         let path = self.domain_path(Scope::Global, "tui");
         self.with_domain_mut(
@@ -350,6 +423,11 @@ impl Config {
     /// token writes again. Global scope only, by decision (ADR 0012): a
     /// token inside a repository is a leak waiting to be committed. The
     /// atomic writer creates the file owner-only.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] or [`ConfigError::Serialize`] when the file cannot
+    /// be written; the in-memory snapshot is then left as it was.
     pub fn set_connection(
         &self,
         provider: &str,
@@ -370,6 +448,11 @@ impl Config {
     /// Forgets the account connected to `provider`: what a revoked refresh
     /// token leads to, so the next client built on the provider falls back
     /// to its key rather than to tokens the server will refuse.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] or [`ConfigError::Serialize`] when the file cannot
+    /// be written; the in-memory snapshot is then left as it was.
     pub fn remove_connection(&self, provider: &str) -> Result<(), ConfigError> {
         let path = self.domain_path(Scope::Global, "connections");
         let provider = provider.to_string();
@@ -389,6 +472,11 @@ impl Config {
     /// to parse keeps its previous in-memory snapshot — a bad hand-edit must
     /// not collapse an in-progress session — and is reported by path so the
     /// caller (the TUI's `/reload-config` handler) can name the failing file.
+    ///
+    /// # Errors
+    ///
+    /// One [`ReloadFailure`] for every layer that could not be re-read; the
+    /// layers that could are reloaded all the same.
     pub fn reload_all(&self) -> Result<(), Vec<ReloadFailure>> {
         let mut failures = Vec::new();
 
@@ -494,6 +582,17 @@ impl Config {
     /// answered it. Leaving the file absent is what makes "no provider is
     /// configured" a real state, and it is the state the launch card's `Model  not set` exists to
     /// resolve.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] when a file cannot be written, and whatever
+    /// reading it back refuses.
+    ///
+    /// # Panics
+    ///
+    /// If a writer panicked while holding a domain's lock, or if a file this
+    /// just wrote does not read back — the annotated text disagreeing with
+    /// its own schema.
     pub fn init_global_if_empty(&self) -> Result<InitOutcome, ConfigError> {
         let dir = &self.inner.global_dir;
 

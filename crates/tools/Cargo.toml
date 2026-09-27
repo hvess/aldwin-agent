@@ -17,3 +17,6 @@ rmcp          = { version = "3.1.4", default-features = false, features = ["clie
 [dev-dependencies]
 tempfile    = { workspace = true }
 aldwin-core = { path = "../core", features = ["test-util"] }
+
+[lints]
+workspace = true

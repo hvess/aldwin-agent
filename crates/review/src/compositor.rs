@@ -18,11 +18,12 @@
 //!   capture goes through [`Compositor::exec`], which hands the command to
 //!   sway to run in its own environment.
 
-use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+
+use crate::{Error, Result};
 
 /// The headless backend names its single output this. Fixed by wlroots, not
 /// by us — every `swaymsg output` and `grim -o` refers to it.
@@ -40,6 +41,9 @@ gaps inner 0
 gaps outer 0
 ";
 
+/// A running headless sway, owned: dropping it asks sway to exit, kills it if
+/// it will not, and removes its socket.
+#[derive(Debug)]
 pub struct Compositor {
     sock: PathBuf,
     child: Child,
@@ -48,6 +52,12 @@ pub struct Compositor {
 impl Compositor {
     /// Writes a config into `dir`, validates it, starts sway on the headless
     /// backend and waits for its IPC to answer.
+    ///
+    /// # Errors
+    ///
+    /// When the config cannot be written, `sway -C` rejects it, sway cannot be
+    /// spawned or its log created, or its IPC does not answer within ten
+    /// seconds.
     pub fn start(dir: &Path) -> Result<Self> {
         let cfg = dir.join("sway.cfg");
         std::fs::write(&cfg, CONFIG)?;
@@ -58,13 +68,10 @@ impl Compositor {
             .arg(&cfg)
             .output()?;
         if !check.status.success() {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "sway rejected the harness config: {}",
-                    String::from_utf8_lossy(&check.stderr).trim()
-                ),
-            ));
+            return Err(Error::Compositor(format!(
+                "sway rejected the harness config: {}",
+                String::from_utf8_lossy(&check.stderr).trim()
+            )));
         }
 
         // A unix socket path is capped at ~108 bytes, and a run directory
@@ -108,10 +115,15 @@ impl Compositor {
             }
             sleep(Duration::from_millis(100));
         }
-        Err(Error::new(ErrorKind::TimedOut, "sway did not come up"))
+        Err(Error::Compositor("sway did not come up".into()))
     }
 
     /// One `swaymsg` call against this compositor's own socket.
+    ///
+    /// # Errors
+    ///
+    /// When `swaymsg` cannot be run or exits unsuccessfully; the error carries
+    /// its stderr.
     pub fn msg(&self, args: &[&str]) -> Result<String> {
         let out = Command::new("swaymsg")
             .arg("-s")
@@ -119,7 +131,7 @@ impl Compositor {
             .args(args)
             .output()?;
         if !out.status.success() {
-            return Err(Error::other(format!(
+            return Err(Error::Compositor(format!(
                 "swaymsg {args:?} failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
@@ -129,12 +141,21 @@ impl Compositor {
 
     /// Run a command inside the session, so it inherits the headless
     /// `WAYLAND_DISPLAY` rather than the developer's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Compositor::msg`]: sway refused the `exec`. The command's own
+    /// failure is not seen here.
     pub fn exec(&self, command: &str) -> Result<()> {
         self.msg(&["exec", command]).map(|_| ())
     }
 
     /// Resize the output. The harness always passes an exact multiple of the
     /// measured cell, so the frame is a whole number of cells with no slack.
+    ///
+    /// # Errors
+    ///
+    /// As [`Compositor::msg`]: sway refused the mode.
     pub fn set_mode(&self, width: u32, height: u32) -> Result<()> {
         self.msg(&[
             "--",
@@ -153,9 +174,12 @@ impl Compositor {
     /// How many surfaces are on the output. A capture is only trustworthy
     /// when the answer is exactly one — anything else means something is
     /// sharing the frame with the app under test.
+    ///
+    /// # Errors
+    ///
+    /// As [`Compositor::msg`], or when sway's tree is not valid JSON.
     pub fn surface_count(&self) -> Result<usize> {
-        let tree: serde_json::Value = serde_json::from_str(&self.msg(&["-t", "get_tree"])?)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let tree: serde_json::Value = serde_json::from_str(&self.msg(&["-t", "get_tree"])?)?;
         fn walk(node: &serde_json::Value, n: &mut usize) {
             for key in ["nodes", "floating_nodes"] {
                 for child in node[key].as_array().into_iter().flatten() {
@@ -173,6 +197,11 @@ impl Compositor {
 
     /// Close every terminal on the output, so the next capture starts from an
     /// empty frame rather than tiling beside the last one.
+    ///
+    /// # Errors
+    ///
+    /// Never, today: a failed kill and a terminal that outlives the three
+    /// second wait are both tolerated, and the next surface count reports it.
     pub fn clear(&self) -> Result<()> {
         let _ = self.msg(&["[app_id=\"foot\"]", "kill"]);
         let deadline = Instant::now() + Duration::from_secs(3);

@@ -28,7 +28,10 @@ use aldwin_login::Account;
 /// in `provider.yaml`, and what picking it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
+    /// The model id as the provider's API takes it, written verbatim to
+    /// `provider.yaml`.
     pub id: &'static str,
+    /// What picking this model does, in the option row's words.
     pub purpose: &'static str,
     /// The model's context window in tokens, for the context bar. A seed
     /// like the rest of the row: a provider can change it without us, and
@@ -42,11 +45,14 @@ pub struct Provider {
     /// The lowercase name in the option's 16-cell field, and the word
     /// `/model` takes before the `/`.
     pub id: &'static str,
+    /// The wire dialect the provider speaks, which picks the client.
     pub kind: ProviderKind,
     /// What picking it does — the design's own row copy, which names the
     /// models and the key variable because both are what the developer
     /// needs before they can choose.
     pub purpose: &'static str,
+    /// The environment variable that holds the provider's API key, written
+    /// to `provider.yaml` as `api_key_env`.
     pub api_key_env: &'static str,
     /// The account a developer may connect instead of exporting a key
     /// (ADR 0012), where the provider offers one. A connected account is
@@ -55,6 +61,8 @@ pub struct Provider {
     /// The full chat-completions URL, used verbatim — not a prefix. `None`
     /// for Anthropic, whose client has a single well-known endpoint.
     pub base_url: Option<&'static str>,
+    /// The models suggested for this provider, the default first. Seeds,
+    /// not a ceiling: any model id is accepted.
     pub models: &'static [Model],
 }
 

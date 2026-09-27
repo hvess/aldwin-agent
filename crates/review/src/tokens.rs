@@ -1,4 +1,4 @@
-//! Stage 3 — the design tokens, generated rather than transcribed.
+//! Stage 4 — the design tokens, generated rather than transcribed.
 //!
 //! `crates/tui/src/tokens.rs` is emitted from `.claude/design/` and
 //! committed. The stage passes when regenerating produces no diff, which
@@ -28,11 +28,11 @@
 //! omission — see [`generate`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Error, ErrorKind, Result, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::Baseline;
+use crate::{Baseline, Error, Result};
 
 /// Roles the terminal does not draw, with the reason.
 const UNCARRIED: [(&str, &str); 10] = [
@@ -88,6 +88,7 @@ pub fn design_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.claude/design")
 }
 
+/// Where the generated file lives in the workspace at `root`.
 pub fn output_path(root: &Path) -> std::path::PathBuf {
     root.join(OUTPUT)
 }
@@ -99,6 +100,14 @@ type Roles = BTreeMap<String, Rgb>;
 ///
 /// `baseline` is an input like the design files: its contradictions license
 /// the glyphs in `MARKS_BY_EXCEPTION`.
+///
+/// # Errors
+///
+/// [`Error::Design`] when a design file this reads is missing something the
+/// app needs — a role, a grid token, a glyph list, the launch mark — or
+/// states it in a shape the generator does not parse, or when rustfmt rejects
+/// the output; [`Error::Io`] when a design file cannot be read or rustfmt
+/// cannot be run.
 pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let colors = strip_comments(&std::fs::read_to_string(
         design_dir.join("tokens/colors.css"),
@@ -127,15 +136,12 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
         for role in &carried {
             let rgb = match raw.get(*role) {
                 Some(value) => parse_color(value).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        format!("--{role}: {value} is not a colour this generator can read (oklch() or #hex)"),
-                    )
+                    Error::Design(format!("--{role}: {value} is not a colour this generator can read (oklch() or #hex)"))
                 })??,
                 None => inherited
                     .and_then(|roles| roles.get(*role).copied())
                     .ok_or_else(|| {
-                        Error::new(ErrorKind::InvalidData, format!("--{role} is not declared"))
+                        Error::Design(format!("--{role} is not declared"))
                     })?,
             };
             out.insert((*role).clone(), rgb);
@@ -155,10 +161,9 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
             .or_else(|| fallback.get(role))
             .and_then(|v| parse_oklch_or_hex(v))
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("--{role} is needed for a color-mix and does not parse"),
-                )
+                Error::Design(format!(
+                    "--{role} is needed for a color-mix and does not parse"
+                ))
             })
     };
 
@@ -280,10 +285,10 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
 
 /// The generated source as `cargo fmt` leaves it.
 ///
-/// The file is committed inside a workspace that stage 1 holds to `cargo fmt
+/// The file is committed inside a workspace that stage 2 holds to `cargo fmt
 /// --check`, so it is emitted formatted — the way bindgen and prost emit
 /// theirs — rather than written one way by this generator and rewritten
-/// another by the formatter, which would fail stage 1 or stage 3 whichever
+/// another by the formatter, which would fail stage 2 or stage 4 whichever
 /// ran last. The edition is the workspace's, which is what `cargo fmt` passes.
 fn rustfmt(source: &str) -> Result<String> {
     let mut child = Command::new("rustfmt")
@@ -301,12 +306,12 @@ fn rustfmt(source: &str) -> Result<String> {
         .write_all(source.as_bytes())?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        return Err(Error::other(format!(
+        return Err(Error::Design(format!(
             "rustfmt rejected the generated source: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    String::from_utf8(output.stdout).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+    String::from_utf8(output.stdout).map_err(|e| Error::Design(e.to_string()))
 }
 
 fn header() -> String {
@@ -315,7 +320,7 @@ fn header() -> String {
          //!\n\
          //! Emitted by `aldwin-review tokens --write` from `.claude/design/`:\n\
          //! `tokens/colors.css`, `tokens/layout.css`, `guidelines/glyphs.html` and\n\
-         //! the frame. The review loop's stage 3 regenerates this file and fails if\n\
+         //! the frame. The review loop's stage 4 regenerates this file and fails if\n\
          //! the result differs, so the app's palette and the imported design cannot\n\
          //! drift apart.\n\
          //!\n\
@@ -340,12 +345,9 @@ fn grid(layout: &str) -> Result<String> {
          // the two would surface as a stage-3 diff rather than hide in a sum.\n\n",
     );
     for (token, name) in GRID {
-        let value = resolved.get(token).ok_or_else(|| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("layout.css declares no --{token} in ch"),
-            )
-        })?;
+        let value = resolved
+            .get(token)
+            .ok_or_else(|| Error::Design(format!("layout.css declares no --{token} in ch")))?;
         out.push_str(&format!("pub(crate) const {name}: usize = {value};\n"));
     }
     out.push_str(&format!(
@@ -396,9 +398,8 @@ fn glyphs(card: &str, frame: &str, baseline: &Baseline) -> Result<String> {
         marks.extend(chunk[..end].chars().filter(|c| !c.is_whitespace()));
     }
     if marks.is_empty() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "guidelines/glyphs.html lists no glyphs",
+        return Err(Error::Design(
+            "guidelines/glyphs.html lists no glyphs".into(),
         ));
     }
     for window in frame_windows(frame) {
@@ -473,7 +474,7 @@ const MARK_TERMINAL_ROWS: usize = 7;
 /// between the frame's own, and each new half-row takes the fill of the
 /// frame half-row nearest it. At the frame's own height this is the frame.
 fn fit_to_terminal(mark: &[Vec<MarkCell>], rows: usize) -> Result<Vec<Vec<MarkCell>>> {
-    let invalid = |why: &str| Error::new(ErrorKind::InvalidData, format!("the mark {why}"));
+    let invalid = |why: &str| Error::Design(format!("the mark {why}"));
     let centre = mark[0].len() / 2;
 
     // Each frame half-row's left run, as (outer edge's distance from the
@@ -544,7 +545,7 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
     let launch = frame_windows(frame)
         .into_iter()
         .find(|w| w.contains("data-screen-label=\"A launch\""))
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "the frame has no `A launch` window"))?;
+        .ok_or_else(|| Error::Design("the frame has no `A launch` window".into()))?;
 
     let mut rows: Vec<Vec<MarkCell>> = Vec::new();
     for row_html in launch
@@ -565,12 +566,8 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
                 },
                 Some(at) => {
                     let inner = &style[at + "linear-gradient(".len()..];
-                    let (top, bottom) = split_gradient(inner).ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            format!("unreadable mark cell: {style}"),
-                        )
-                    })?;
+                    let (top, bottom) = split_gradient(inner)
+                        .ok_or_else(|| Error::Design(format!("unreadable mark cell: {style}")))?;
                     MarkCell {
                         top: mix_percent(top),
                         bottom: mix_percent(bottom),
@@ -584,16 +581,12 @@ fn mark_cells(frame: &str) -> Result<Vec<Vec<MarkCell>>> {
         }
     }
     if rows.is_empty() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "the launch frame has no mark rows",
-        ));
+        return Err(Error::Design("the launch frame has no mark rows".into()));
     }
     let width = rows[0].len();
     if rows.iter().any(|r| r.len() != width) {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "the mark's rows are not all the same width",
+        return Err(Error::Design(
+            "the mark's rows are not all the same width".into(),
         ));
     }
     Ok(rows)
@@ -655,10 +648,7 @@ fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
 fn check_gauge_against_frame(frame: &str) -> Result<()> {
     let gauges = frame_gauges(frame);
     if gauges.is_empty() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "the frame draws no context bar",
-        ));
+        return Err(Error::Design("the frame draws no context bar".into()));
     }
     for (filled, empty, shown) in gauges {
         let n = ((f64::from(shown) / 10.0).round() as usize).min(GAUGE_SEGMENTS);
@@ -669,10 +659,7 @@ fn check_gauge_against_frame(frame: &str) -> Result<()> {
                 .zip(&wanted)
                 .all(|(a, b)| (a - b).abs() < 0.01);
         if !close || empty != GAUGE_SEGMENTS - n {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("the frame's {shown}% context bar is {filled:?} + {empty} empty; ContextBar.jsx's rule gives {wanted:?} + {}", GAUGE_SEGMENTS - n),
-            ));
+            return Err(Error::Design(format!("the frame's {shown}% context bar is {filled:?} + {empty} empty; ContextBar.jsx's rule gives {wanted:?} + {}", GAUGE_SEGMENTS - n)));
         }
     }
     Ok(())
@@ -768,10 +755,9 @@ fn declarations(css: &str) -> BTreeMap<String, String> {
 fn scope_declarations(css: &str, selector: &str) -> Result<BTreeMap<String, String>> {
     let found = declarations(scope(css, selector));
     if found.is_empty() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("tokens/colors.css declares no roles in `{selector}`"),
-        ));
+        return Err(Error::Design(format!(
+            "tokens/colors.css declares no roles in `{selector}`"
+        )));
     }
     Ok(found)
 }
@@ -856,13 +842,10 @@ impl Oklch {
             self.c * self.h.to_radians().sin(),
         );
         oklab_to_rgb(self.l, a, b).map_err(|delta| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
+            Error::Design(format!(
                     "oklch({} {} {}) is outside sRGB by ΔE OK {delta:.3}, past CSS Color 4's {GAMUT_JND}: clipping it would draw a visibly different colour",
                     self.l, self.c, self.h
-                ),
-            )
+                ))
         })
     }
 }
@@ -911,7 +894,7 @@ fn parse_hex(value: &str) -> Option<Rgb> {
 /// difference; the generator does the same. Every role and mix the design
 /// declares today clips within it. Further out, CSS reduces chroma to find a
 /// different colour, and a terminal palette that silently drew a different
-/// colour from the design's is the drift stage 3 exists to prevent — so the
+/// colour from the design's is the drift stage 4 exists to prevent — so the
 /// generator refuses instead, and the design has to say what it means.
 const GAMUT_JND: f64 = 0.02;
 
@@ -997,6 +980,15 @@ fn mix_oklch_f(a: Oklch, b: Oklch, percent: f64) -> Oklch {
 // ---- The stage --------------------------------------------------------------
 
 /// The stage itself: regenerate, and report the first line that differs.
+///
+/// The inner result is the stage's verdict: `Ok` with a count of the colours
+/// and constants carried when the committed file is current, `Err` naming
+/// the first stale line when it is not.
+///
+/// # Errors
+///
+/// As [`generate`]. A stale or missing committed file is the inner `Err`,
+/// not this one.
 pub fn check(
     root: &Path,
     design_dir: &Path,

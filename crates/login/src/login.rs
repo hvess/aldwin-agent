@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -14,17 +15,26 @@ use crate::session::Credentials;
 /// that has to be read across.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompt {
+    /// Where the developer signs in, with the code already in it when the
+    /// server offers that form.
     pub url: String,
+    /// The code the developer enters at the URL.
     pub code: String,
+    /// How long the code is good for, counted from when it was issued.
     pub expires_in: Duration,
 }
 
+/// Why a login ended without credentials.
 #[derive(Debug, Error)]
 pub enum LoginError {
+    /// The developer turned the sign-in down at the account's page.
     #[error("the sign-in was refused in the browser")]
     Denied,
+    /// The code ran out before the developer approved it.
     #[error("the code expired before it was entered")]
     Expired,
+    /// The server could not be reached or answered outside the protocol;
+    /// the sentence says which.
     #[error("{0}")]
     Failed(String),
 }
@@ -43,12 +53,28 @@ pub struct Login {
     expires_in: Duration,
 }
 
+/// The device code is what the poll trades for tokens, so it is what
+/// `Debug` leaves out.
+impl fmt::Debug for Login {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Login")
+            .field("interval", &self.interval)
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
+}
+
 /// RFC 8628 §3.5: what `slow_down` adds to the interval.
 const SLOW_DOWN: Duration = Duration::from_secs(5);
 
 impl Login {
     /// Asks the account's server for a code. The prompt is for the screen;
     /// the login is for [`Login::wait`].
+    ///
+    /// # Errors
+    ///
+    /// [`LoginError::Failed`] when the HTTP client cannot be built, or the
+    /// server cannot be reached or does not answer with a code.
     pub async fn start(account: Account) -> Result<(Login, Prompt), LoginError> {
         Self::start_at(account.authority(), Some(oauth::REQUEST_TIMEOUT)).await
     }
@@ -82,6 +108,13 @@ impl Login {
     /// Polls until the account answers, or the code runs out. Meant to be
     /// spawned: it can take as long as the prompt said, and a server that
     /// cannot be reached for a while is waited out rather than given up on.
+    ///
+    /// # Errors
+    ///
+    /// [`LoginError::Denied`] when the developer refuses the sign-in,
+    /// [`LoginError::Expired`] when the code runs out first, and
+    /// [`LoginError::Failed`] when the server answers outside the protocol
+    /// or grants no refresh token.
     pub async fn wait(self) -> Result<Credentials, LoginError> {
         // `None` only for a lifetime too long to add to the clock, and
         // then the server's own `expired_token` is the deadline.

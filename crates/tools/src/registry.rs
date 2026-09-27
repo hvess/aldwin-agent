@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use aldwin_core::DispatchContext;
@@ -41,13 +42,28 @@ pub struct Registry {
     tools: HashMap<String, Arc<dyn Tool>>,
 }
 
+/// Lists the tools by name: a `dyn Tool` has no `Debug` of its own.
+impl fmt::Debug for Registry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registry")
+            .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 impl Registry {
+    /// An empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Duplicate names are rejected. Namespacing an MCP name that collides
     /// (`<server>:<name>`) is `register_mcp_tools`' job, not the registry's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError::DuplicateTool`] when a tool of the same name is
+    /// already registered; the registry is left unchanged.
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
         let name = tool.descriptor().name.clone();
         if self.tools.contains_key(&name) {
@@ -57,6 +73,7 @@ impl Registry {
         Ok(())
     }
 
+    /// The tool registered under `name`, if any.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }

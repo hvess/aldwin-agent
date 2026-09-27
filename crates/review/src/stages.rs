@@ -1,18 +1,24 @@
-//! Stages 0, 1, 2 and 4 — the ones that are somebody else's command.
+//! Stages 1, 2, 3 and 5 — the ones that are somebody else's command.
 //!
 //! Each returns the same shape so the loop's report reads uniformly, and each
 //! runs the tool the developer would run by hand. Nothing is reimplemented
 //! here: `cargo` is the authority on whether the workspace is clean, and a
 //! second opinion about that would be a second thing to keep in sync.
 
-use std::io::Result;
 use std::path::Path;
 use std::process::Command;
 
+use crate::Result;
+
+/// One stage's verdict, as the report shows it.
+#[derive(Debug)]
 pub struct Outcome {
+    /// The stage's number and name, as the report's first column shows it.
     pub stage: &'static str,
+    /// Whether the tool succeeded.
     pub passed: bool,
-    /// What the developer should read. Empty when the stage passed.
+    /// What the developer should read: the stage's stat line when it
+    /// passed, the tail of the tool's output when it failed.
     pub detail: String,
 }
 
@@ -61,7 +67,7 @@ impl Outcome {
 ///
 /// The loop inherits the developer's shell, and a shell that exported
 /// `UPDATE_SNAPSHOTS=1` for one deliberate regeneration would otherwise have
-/// stages 2 and 4 rewrite the baseline they exist to check, and report the
+/// stages 3 and 5 rewrite the baseline they exist to check, and report the
 /// rewrite as a pass.
 fn cargo(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("cargo");
@@ -72,7 +78,7 @@ fn cargo(root: &Path, args: &[&str]) -> Command {
     command
 }
 
-/// Stage 1 — formatting and static analysis.
+/// Stage 2 — formatting and static analysis.
 ///
 /// `cargo fmt --check` first, because it is the cheaper of the two. The
 /// workspace is formatted by stable rustfmt with no options, so its verdict
@@ -82,15 +88,20 @@ fn cargo(root: &Path, args: &[&str]) -> Command {
 /// only fires in a test module is still a warning the next reader has to read
 /// past. `-D warnings` because a warning nobody fails on is a warning nobody
 /// fixes.
+///
+/// # Errors
+///
+/// When `cargo` cannot be run at all. A formatting or lint failure is a
+/// failed [`Outcome`], not an error.
 pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
     let fmt = Outcome::from(
-        "1 lint · fmt",
+        "2 lint · fmt",
         cargo(root, &["fmt", "--all", "--check"]).output()?,
         40,
         |_| "formatted".to_string(),
     );
     let clippy = Outcome::from(
-        "1 lint · clippy",
+        "2 lint · clippy",
         cargo(
             root,
             &[
@@ -122,10 +133,15 @@ pub fn lint(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![fmt, clippy])
 }
 
-/// Stage 2 — the suite.
+/// Stage 3 — the suite.
+///
+/// # Errors
+///
+/// When `cargo` cannot be run at all. A failing test is a failed
+/// [`Outcome`], not an error.
 pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     Ok(vec![Outcome::from(
-        "2 test",
+        "3 test",
         cargo(root, &["test", "--workspace"]).output()?,
         60,
         |out| {
@@ -135,7 +151,7 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
     )])
 }
 
-/// Stage 4 — the rendered frames.
+/// Stage 5 — the rendered frames.
 ///
 /// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
 /// `TestBackend` buffers for sixteen scenes at three sizes in both themes:
@@ -151,14 +167,19 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 /// half ran against a real terminal until 2026-09-20 — a compositor, a
 /// subprocess and 2m45s — until it was noticed that a `TestBackend` buffer
 /// holds the same declared cells. The terminal now only makes pictures for
-/// stage 5.
+/// stage 8, the frames judge.
 ///
-/// This re-runs tests stage 2 already ran. That is deliberate and costs about
+/// This re-runs tests stage 3 already ran. That is deliberate and costs about
 /// a second: a failure here names the design rule that broke, where the same
 /// failure inside a workspace-wide run is one line among six hundred.
+///
+/// # Errors
+///
+/// When `cargo` cannot be run at all. A changed or non-conforming frame is a
+/// failed [`Outcome`], not an error.
 pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
     let outcome = Outcome::from(
-        "4 frames",
+        "5 frames",
         cargo(
             root,
             &["test", "-p", "aldwin-tui", "--test", "render_snapshot"],
@@ -188,9 +209,14 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
 /// Not hermeticity — `rust-toolchain.toml` is read by rustup and this machine
 /// installs Rust from pacman, so there is nothing to pin against. What this
 /// buys instead is honesty: clippy's lint set and rustc's diagnostics move
-/// between releases, so a stage 1 failure on untouched code is a real
+/// between releases, so a stage 2 failure on untouched code is a real
 /// possibility, and a recorded version turns it from a mystery into a line in
 /// the report.
+///
+/// # Errors
+///
+/// When `rustc` cannot be run. A version other than `expected` is a failed
+/// [`Outcome`], not an error.
 pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
     let output = Command::new("rustc")
         .current_dir(root)
@@ -199,13 +225,13 @@ pub fn toolchain(root: &Path, expected: &str) -> Result<Vec<Outcome>> {
     let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(vec![if found == expected {
         Outcome {
-            stage: "0 toolchain",
+            stage: "1 toolchain",
             passed: true,
             detail: found,
         }
     } else {
         Outcome {
-            stage:  "0 toolchain",
+            stage:  "1 toolchain",
             passed: false,
             detail: format!(
                 "this run is on {found:?}, the baseline records {expected:?}.\nLint results are not comparable across toolchains. If the upgrade is intended, record it in the `toolchain` field of crates/review/baseline.json."
@@ -220,7 +246,7 @@ mod tests {
 
     use super::*;
 
-    /// A shell that exported `UPDATE_SNAPSHOTS=1` once would have stage 4
+    /// A shell that exported `UPDATE_SNAPSHOTS=1` once would have stage 5
     /// regenerate `render.snap` and then pass against its own output.
     #[test]
     fn cargo_never_inherits_the_snapshot_regeneration_switch() {

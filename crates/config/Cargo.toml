@@ -11,3 +11,6 @@ serde_yaml_ng = "0.10"
 thiserror     = { workspace = true }
 tempfile      = { workspace = true }
 dirs          = "5"
+
+[lints]
+workspace = true

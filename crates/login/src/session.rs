@@ -15,7 +15,10 @@ use crate::oauth::{self, Authority, Refresh, TokenGrant};
 /// and nothing else.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Credentials {
+    /// The bearer token a request is authenticated with.
     pub access_token: String,
+    /// What a refresh trades for a new access token; the server may rotate
+    /// it on every refresh.
     pub refresh_token: String,
     /// Unix seconds. The moment the access token stops working, as the
     /// server stated it when the token was issued.
@@ -61,12 +64,16 @@ pub(crate) fn now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
+/// Why a session could not authenticate a request.
 #[derive(Debug, Error)]
 pub enum SessionError {
     /// The refresh token was rejected. Only a new sign-in recovers from
     /// this.
     #[error("the account is no longer connected")]
     LoggedOut,
+    /// A refresh failed without the server rejecting the refresh token —
+    /// unreachable, a server error, or an unusable answer. The credentials
+    /// are kept, so the next request tries again.
     #[error("the account's token could not be refreshed: {0}")]
     Failed(String),
 }
@@ -108,6 +115,10 @@ impl Session {
     /// with every refreshed set, and with `None` when the server revokes
     /// the refresh token, so the caller keeps whatever it stores in step
     /// with what the server now honours.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Failed`] when the HTTP client cannot be built.
     pub fn new(
         account: Account,
         credentials: Credentials,
@@ -145,6 +156,12 @@ impl Session {
 
     /// The headers that authenticate one request, on a token that will
     /// still be good when the request lands.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::LoggedOut`] when the server has rejected the refresh
+    /// token, now or earlier; [`SessionError::Failed`] when a needed
+    /// refresh fails otherwise, or the token is not a valid header value.
     pub async fn headers(&self) -> Result<HeaderMap, SessionError> {
         let guard = self.credentials.clone().lock_owned().await;
         let Some(credentials) = guard.as_ref() else {

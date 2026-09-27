@@ -48,6 +48,7 @@ const OUT_BUFFER: usize = 1 << 20;
 /// which of its rows the session is actually on, and the sessions
 /// `/resume` offers. All of it read by aldwin-cli: this crate reads no
 /// files.
+#[derive(Debug)]
 pub struct SessionProvider {
     /// The project — the working directory's own name.
     pub project: String,
@@ -128,6 +129,12 @@ pub struct SessionProvider {
 /// fixed `palette::Palette` every draw uses for the whole session; see
 /// `palette.rs`'s module doc comment for why this is a one-time, explicit
 /// choice rather than a runtime-switchable global.
+///
+/// # Errors
+///
+/// Returns the I/O error when raw mode, the alternate screen or the
+/// terminal cannot be set up, when a frame cannot be drawn or input
+/// cannot be read, or when the terminal cannot be restored.
 pub async fn run(
     events: mpsc::Receiver<Event>,
     commands: mpsc::Sender<Command>,

@@ -37,6 +37,11 @@ use tools::{AskTool, EditTool, ExplainTool, PlanTool, ReadTool, RunTool};
 /// Registers the six built-ins over `workspace` — every one that touches a
 /// file, `run` included, contained by it — and over `staging`, which `edit`
 /// writes into and `read` reads through.
+///
+/// # Panics
+///
+/// Panics if two built-ins share a name — a bug in this function, never
+/// something input can cause.
 pub fn builtin_registry(workspace: Workspace, staging: Arc<Staging>) -> Registry {
     let mut registry = Registry::new();
     registry

@@ -20,6 +20,7 @@ use std::sync::{Arc, RwLock};
 /// the hand-off to a writer task would be; a sink that did more would
 /// need that task.
 pub trait RecordSink: Send + Sync + std::fmt::Debug {
+    /// A record was committed to the log.
     fn append(&self, record: &LogRecord);
 
     /// The log was cleared (`/clear`): the records after this begin a new
@@ -36,6 +37,8 @@ pub trait RecordSink: Send + Sync + std::fmt::Debug {
     fn resumed(&self, session: &SessionId);
 }
 
+/// Every record of the conversation, in the order it was committed — what
+/// the next step's messages are rebuilt from. Clones share one log.
 #[derive(Debug, Default, Clone)]
 pub struct ConversationLog {
     inner: Arc<RwLock<Vec<LogRecord>>>,
@@ -45,6 +48,7 @@ pub struct ConversationLog {
 }
 
 impl ConversationLog {
+    /// An empty log that writes to memory only.
     pub fn new() -> Self {
         Self::default()
     }
@@ -57,6 +61,11 @@ impl ConversationLog {
         }
     }
 
+    /// Commits `record`, handing it to the sink first when there is one.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn append(&self, record: LogRecord) {
         // The sink sees the record before the lock is taken, not inside it:
         // a write that blocks on disk must not hold every other reader of
@@ -70,21 +79,39 @@ impl ConversationLog {
     /// An immutable view of every record so far. Clones each `LogRecord` —
     /// O(n) per call, accepted because it is called once per turn (from
     /// `messages_from_log`) and not on any hot path.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn snapshot(&self) -> Arc<[LogRecord]> {
         let guard = self.inner.read().expect("log lock poisoned");
         guard.as_slice().into()
     }
 
+    /// How many records the log holds.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn len(&self) -> usize {
         self.inner.read().expect("log lock poisoned").len()
     }
 
+    /// Whether the log holds no records.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// `/clear` — wipes every record so the next turn's
     /// `messages_from_log()` starts from nothing, and tells the sink.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn clear(&self) {
         self.inner.write().expect("log lock poisoned").clear();
         if let Some(sink) = &self.sink {
@@ -100,6 +127,10 @@ impl ConversationLog {
     /// second time. Resume is the one path that fills the log without
     /// filling the transcript; the sink is told which conversation it now
     /// continues instead.
+    ///
+    /// # Panics
+    ///
+    /// If the log's lock is poisoned — a thread panicked while holding it.
     pub fn replace(&self, session: &SessionId, records: Vec<LogRecord>) {
         *self.inner.write().expect("log lock poisoned") = records;
         if let Some(sink) = &self.sink {

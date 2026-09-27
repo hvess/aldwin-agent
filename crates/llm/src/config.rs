@@ -15,7 +15,9 @@ const DEFAULT_THINKING_BUDGET: u32 = 10_000;
 /// files.
 #[derive(Debug, Clone)]
 pub enum Auth {
+    /// The name of the environment variable that holds the API key.
     ApiKeyEnv(String),
+    /// The connected account's session, tried before a key.
     Connection(Arc<Session>),
 }
 
@@ -25,8 +27,11 @@ pub enum Auth {
 /// the on-disk shape, so this crate knows nothing of files or scopes.
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
+    /// The wire dialect, which picks the client.
     pub kind: ProviderKind,
+    /// The model id sent with every request.
     pub model: String,
+    /// How the provider is reached: a key or a connected account.
     pub auth: Auth,
     /// V0.5 — only used by the OpenAI-compatible adapter (`OpenAiCompatibleClient`).
     pub base_url: Option<String>,

@@ -53,7 +53,7 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
 /// four turns. Each entry keeps its own rows beside a copy of the entry they
 /// were built from, and [`Transcript::sync`] re-renders only the entries
 /// whose value changed, compared with `==`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Transcript {
     width: u16,
     theme: Option<Theme>,
@@ -66,6 +66,7 @@ pub(crate) struct Transcript {
     rebuilt: usize,
 }
 
+#[derive(Debug)]
 struct CachedBlock {
     entry: LogEntry,
     first: bool,

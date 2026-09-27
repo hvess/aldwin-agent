@@ -22,8 +22,16 @@ aldwin-llm    = { path = "../llm", features = ["test-server"] }
 tokio          = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
+thiserror   = { workspace = true }
 clap        = { version = "4", features = ["derive"] }
 libc        = "0.2"
 flate2      = "1"        # only to read a PNG back and check the parser against it
 unicode-width = "0.2"    # same crate the TUI measures with, so a wide glyph
                          # occupies the same number of cells in both
+
+[dev-dependencies]
+# A throwaway git repository for the gate's tests.
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -16,33 +16,58 @@ use aldwin_core::{PlanStep, RetryInfo, ReviewOutcome};
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogEntry {
     /// The developer's message, echoed on the `tint` ground with a `›`.
-    UserMessage { text: String },
+    UserMessage {
+        /// The message as it was sent.
+        text: String,
+    },
     /// A sentence — or several — from the agent. Markdown: fences and
     /// tables render, everything else is prose.
-    AssistantText { text: String },
+    AssistantText {
+        /// The text so far; streaming deltas append to it.
+        text: String,
+    },
     /// The work of one step, collapsed to a summary (`Read 3 files · Ran
     /// 6 tests`) that Space opens into exact paths and counts.
-    Work { items: Vec<WorkItem>, open: bool },
+    Work {
+        /// The calls of the step, in the order they were asked for.
+        items: Vec<WorkItem>,
+        /// Whether the disclosure is open onto its items.
+        open: bool,
+    },
     /// The plan as the `plan` tool last stated it. One per turn, replaced
     /// in place.
-    Plan { steps: Vec<PlanStep> },
+    Plan {
+        /// The steps, in order, each with its state.
+        steps: Vec<PlanStep>,
+    },
     /// A question the agent asked through `ask`, and how it was answered
     /// once it was. Drawn as the question, then ` · ` and the answer.
     Question {
+        /// The question as the agent put it.
         question: String,
+        /// The answer, once one is given.
         answer: Option<String>,
     },
     /// What a review left behind: `✓ Saved 3 files · 1 comment resolved`.
-    Review { outcome: ReviewOutcome },
+    Review {
+        /// What the developer decided and what it wrote.
+        outcome: ReviewOutcome,
+    },
     /// A message from outside the turn — the interceptor answering a slash
     /// command, a startup fact. A sentence in `label2`.
-    Notice { message: String },
+    Notice {
+        /// The sentence to show.
+        message: String,
+    },
     /// Something failed: a turn that errored, a cancelled turn, a provider
     /// retry. A sentence in `label`, the detail one disclosure below
     /// (ADR 0009 §5: no red, no glyph).
     Failure {
+        /// The sentence that says what failed.
         message: String,
+        /// The underlying error text, folded below the sentence.
         detail: Option<String>,
+        /// Whether the detail is disclosed.
         open: bool,
     },
     /// The turn ended cleanly — the blank row between turns.
@@ -98,8 +123,11 @@ fn ordinal(n: u32) -> String {
 /// What a call did, in the design's words — outcomes, never tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
+    /// A file was read.
     Read,
+    /// An edit was staged for the review.
     Changed,
+    /// A shell command was run.
     Ran,
     /// The design's own verb for a lookup — and eight characters, which is
     /// what fits the 9-cell `--detail-col` with its gap.
@@ -109,6 +137,7 @@ pub enum Verb {
 }
 
 impl Verb {
+    /// The verb as the summary and the disclosure print it.
     pub fn word(self) -> &'static str {
         match self {
             Verb::Read => "Read",
@@ -145,11 +174,15 @@ impl Verb {
 /// at, and the fact that came back (`412 lines`, `7 matches`, `exit 1`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkItem {
+    /// The tool call's id, which later events use to find this row.
     pub call_id: String,
+    /// What kind of work the call was.
     pub verb: Verb,
+    /// What it was pointed at: a path, a command, a symbol.
     pub target: String,
     /// Right-flush, once the call has finished.
     pub fact: Option<String>,
+    /// Whether the call's result was an error, counted in the summary.
     pub failed: bool,
 }
 

@@ -7,7 +7,7 @@ Work that is known, understood and not done. Each entry says what was seen, wher
 date (ADR 0009) closed or mooted eleven entries and added five (27–31); the
 closed ones are kept below, struck through, until the next renumbering.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-26
+**Last Updated:** 2026-09-27
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -145,6 +145,29 @@ contradicts) and the entry says so before it goes.
    which needs none either), and one for the notice, which needs the fake
    provider to stand in for `auth.x.ai` too.
 
+35. **A change that moves only uncaptured scenes gets no frames judge.**
+   Since 2026-09-27 stage 8's scenes are the ones whose `render.snap`
+   section changed, among those capture can draw. Seven snapshot scenes
+   have no capture script — `answering`, `commented`, `running`,
+   `selecting`, `stopping`, `working`, `wrapped` (30 and 31 say why for
+   four of them) — so a change confined to those passes with stages 1–5
+   alone; `review` names them in stage 8's reason when it happens. Closing
+   it means a capture script per scene, or a frames judge that can read a
+   `TestBackend` grid without a picture.
+
+36. **Three capture scenes have no snapshot, so no change can call for a
+   judge of them.** `launch_unconfigured`, `plan` and `resume` exist only in
+   `scene.rs`; stage 8 is triggered by the snapshot diff, so a change that
+   alters only those screens is never judged against the design. Closing it
+   means the three as `render_snapshot.rs` scenes.
+
+37. **A commit made through Aldwin's own `run` is not gated.** The
+   pre-commit gate checks `CLAUDECODE`, which Claude Code sets and Aldwin
+   does not, so an agent committing from inside Aldwin passes straight
+   through. Closing it means `run`'s shell setting a marker the hook also
+   reads — a product change to `crates/tools`, and a decision about whether
+   Aldwin's own commits should be gated at all.
+
 ## History (ADR 0005)
 
 18. ~~**No review scene reaches the `/resume` picker.**~~ **Done 2026-09-20**,
@@ -236,6 +259,6 @@ contradicts) and the entry says so before it goes.
 
 - .claude/adr/0009-the-review-is-the-only-gate.md — the decision most of the 2026-09-23 changes belong to.
 - .claude/spec/aldwin-review.md — the loop, and what it replaced.
-- .claude/skills/review/SKILL.md — the loop as run, including stage 5's prompt.
+- .claude/skills/review/SKILL.md — the loop as run, including the three judges' prompts.
 - crates/review/baseline.json — the design contradictions entries 1, 27 and 29 are about.
 - .claude/design/IMPORT.md — the reference, and how to re-sync it.

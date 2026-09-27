@@ -1,45 +1,62 @@
 # aldwin-review
 
-The feedback loop that runs after a change to Aldwin is ready for submission.
+The feedback loop every agent commit to Aldwin runs, and cannot land without.
 
 **Status:** active — built and in use. Replaced `mjolnir-screenshot` on
-2026-09-20; see Progress.
-**Scope:** the five-stage review loop — the crate `crates/review`
-(`aldwin-review`) that runs the four deterministic stages, and the `review`
-skill that drives the loop and owns the fifth. Excludes what the stages
-themselves test (that is each crate's own spec) and the design system's
-content.
+2026-09-20; became ten stages with a commit gate on 2026-09-27. See
+Progress.
+**Scope:** the ten-stage review loop — the crate `crates/review`
+(`aldwin-review`) that runs the five deterministic stages, decides which
+judges a change needs, writes their verdicts and keeps the pass record; the
+`review` skill that drives the loop and owns the three judges; and the hooks
+that make an agent's commit depend on it (`.githooks/`, `.claude/hooks/`,
+`.claude/settings.json`). Excludes what the stages themselves test (that is
+each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-24 (the audit)
+**Last Updated:** 2026-09-27 (the commit gate)
 
 ## Why
 
-A change to `crates/tui` needs two questions answered before it ships: did it
-break anything, and does it do what it set out to do. The first is mechanical
-and the second is not, and the whole design of this loop is keeping them
-apart.
+A change needs two questions answered before it lands: did it break
+anything, and does it hold to what this project has decided — its
+architecture, its Rust, its design. The first is mechanical and the second
+mostly is not, and the whole design of this loop is keeping them apart.
 
-Four stages are deterministic: they run a command, compare against something
-committed, and say yes or no. One is a subagent looking at pictures. Nothing
-in the deterministic four makes a judgement about whether the UI *looks like*
-the design, because the previous harness tried exactly that and the attempt is
-what this spec replaces.
+Five stages are deterministic: they run a command, compare against something
+committed, and say yes or no. Three are subagents, each reading one thing
+against one set of sources. Nothing in the deterministic five makes a
+judgement about whether the UI *looks like* the design, because the previous
+harness tried exactly that and the attempt is what this spec replaces.
+
+Whether the change is what the developer *wanted* is not a question the loop
+asks. That is the developer's to judge — the premise of a discussion-first
+tool — and every earlier attempt to ask it made the author write the
+rubric it was graded against.
 
 ## The stages
 
 | stage | answers | how | hermetic |
 | --- | --- | --- | --- |
-| 0 toolchain | are these results comparable to the last run's | `rustc --version` against the baseline | yes |
-| 1 lint | is it formatted, and does it build clean | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` | yes |
-| 2 test | does the suite pass | `cargo test --workspace` | yes |
-| 3 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
-| 4 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 5 confidence | does it match the designs, and did it do what it set out to do | a blind subagent, scored 0–100, threshold 100 | no, and cannot be |
+| 1 toolchain | are these results comparable to the last run's | `rustc --version` against the baseline | yes |
+| 2 lint | is it formatted, does it build clean, and does it keep the `rust` skill's checkable rules | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` with the workspace lints (`missing_docs`, `missing_debug_implementations`, `clippy::missing_errors_doc`, `clippy::missing_panics_doc`) | yes |
+| 3 test | does the suite pass | `cargo test --workspace` | yes |
+| 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
+| 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
+| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | a blind subagent over `change.diff`; runs when a crate or the workspace manifest changed | no |
+| 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
+| 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
+| 9 iterate | — | any failure: fix, run again from stage 1, fresh judges; at most five passes | — |
+| 10 gate | was exactly this tree reviewed, and did it pass | `aldwin-review gate`, run by `.githooks/pre-commit` for an agent's commit | yes |
 
-Stages 0–4 take about fifteen seconds and hold no clock, no network, no
-subprocess of the app and no compositor. Capture is not a stage: it runs after
-them to make the pictures stage 5 looks at, and its non-determinism is
-harmless there because a bad frame is something the judge says out loud.
+Stages 1–5 take about fifteen seconds and hold no clock, no network, no
+subprocess of the app and no compositor. Capture is not a stage: it runs
+after them, only for stage 8's scenes, and its non-determinism is harmless
+there because a bad frame is something the judge says out loud.
+
+Which judges run is read off the staged diff, never chosen, and the report
+states each one's reason — including the one that matters most: a change
+whose snapshot moved only in scenes capture cannot draw has no frames to
+judge, and says so rather than passing silently.
 
 ## Decisions
 
@@ -48,12 +65,12 @@ harmless there because a bad frame is something the judge says out loud.
    three sizes in both themes — 72 sections — in under a second, in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The
-   real terminal earns its place by producing **pictures for stage 5**, which
+   real terminal earns its place by producing **pictures for stage 8**, which
    is the one thing `TestBackend` cannot do.
 
 2. **The app's design system is generated, not transcribed.**
    `crates/tui/src/tokens.rs` is emitted from `.claude/design/tokens/*.css`
-   and committed; stage 3 regenerates it and fails on any diff. Before this,
+   and committed; stage 4 regenerates it and fails on any diff. Before this,
    `palette.rs` carried eighty-four hand-written hex literals with a
    `// neutral-200` comment beside each as the only link to the design.
 
@@ -74,20 +91,25 @@ harmless there because a bad frame is something the judge says out loud.
    mock's window measures — `--fw`, `--chrome-h`, the body heights — which
    are pixels, not cells, and which the app does not read. Emitting a
    constant nothing uses would be the generator asserting a layout rule;
-   whether the app *should* consume one is stage 5's question.
+   whether the app *should* consume one is stage 8's question.
 
-5. **Stage 5 judges only the screens the change touched.** The app has
+5. **Stage 8 judges only the scenes the change moved.** The app has
    deviations that cannot be fixed in `crates/tui` — there is no branch in
    `StatusInfo`, no clock in the workspace, and the design has no
    edit-approval screen. A judge assessing the whole app reports those every
    run and the loop never terminates, which is precisely how the previous
-   harness failed: five runs, never once exited.
+   harness failed: five runs, never once exited. Which scenes moved is read
+   off `render.snap`'s staged diff — a change to a shared helper moves
+   screens its code diff never names, but never one its snapshot diff does
+   not. It was a `--focus` the author wrote until 2026-09-27.
 
-6. **The score is a threshold, not a measurement.** Two runs will not produce
-   the same number. The findings are the output.
+6. **A judge passes with no findings, and that is the whole verdict.** Two
+   runs will not produce the same findings; the findings are the output. The
+   score this replaced had a threshold of 100 — the developer's, 2026-09-24
+   — so it only ever compared the findings against none.
 
 7. **Design contradictions live in `crates/review/baseline.json`.** The
-   reference disagrees with itself in places, and stage 3 cannot run against
+   reference disagrees with itself in places, and stage 4 cannot run against
    it without somewhere to record where. Each entry states both halves — two
    things the design says, or the design against Apple's HIG, each quoted —
    and which half the app follows, and is removed when the design is fixed
@@ -100,7 +122,7 @@ harmless there because a bad frame is something the judge says out loud.
    until 2026-09-20 — a compositor, a subprocess and 2m45s per run, none of
    it reproducible. A `TestBackend` buffer holds the same declared cells, so
    they moved and now cost under two seconds. What a real terminal uniquely
-   gives is a picture, and pictures are stage 5's.
+   gives is a picture, and pictures are stage 8's.
 
 9. **The copy and glyph rules are scoped to app-owned rows.** They govern
    Aldwin's own copy, not what it echoes: the transcript renders a model's
@@ -119,14 +141,16 @@ harmless there because a bad frame is something the judge says out loud.
     self-contained — no stylesheet, no script, no embedded frames — and does
     **not** apply the design system this loop enforces. Dressing the referee
     in the players' kit makes it harder to trust. The binary writes only what
-    was measured and leaves a marked placeholder; the skill appends the
-    judge's section, because the agent that made the change is the one that
-    would otherwise write the verdict sentence.
+    was measured and leaves a marked placeholder per required judge; `judge`
+    writes each verdict, verbatim, because the agent that made the change is
+    the one that would otherwise write the verdict sentence.
 
-12. **A review is not complete until stage 5 is written, and the exit code
-    says so.** `review` exits non-zero after a clean stages 0–4, because that
-    is not a review — only `stage5` can exit zero. `--stages-only` is the
-    explicit opt-out for the fast check during development.
+12. **A review is not complete until every required judge is written, and
+    the exit code says so.** `review` exits non-zero after a clean stages 1–5
+    whenever a judge is required, because that is not a review — only the
+    `judge` that completes the run exits zero, and it is what writes the pass
+    record. `--stages-only` is the explicit opt-out for the fast check during
+    development, and records nothing.
 
     This is the fourth fix for the same failure and the first one aimed at
     the cause. Stage 5's section came back empty on **five of seven runs**.
@@ -138,11 +162,41 @@ harmless there because a bad frame is something the judge says out loud.
     under attention pressure. Compare stage 3, which has never been skipped
     once, because skipping it fails the next run.
 
-13. **The judge emits its own JSON, and it goes into the report verbatim.**
+13. **Each judge emits its own JSON, and it goes into the report verbatim.**
     Transcribing prose findings into the report's schema by hand was tedious
     enough to be where the step died — and it routed the judge's conclusions
     through the hands of the agent whose work was being judged. The prompt
     now asks for exactly one fenced `json` block and nothing else.
+
+14. **The `rust` skill is enforced twice, and the split is by whether a
+    machine can check it.** What a lint can check is a workspace lint and
+    fails stage 2: public-API docs, `# Errors` and `# Panics` sections,
+    `Debug` on public types. What it cannot — iterator chains over loops,
+    `map_err` only where `From` cannot convert, grouped imports, doc
+    examples, a fix with its test — is stage 7's, and a finding stage 7
+    makes twice graduates to a lint or a test. Enabling the lints cost 608
+    fixes, made in the commit that enabled them.
+
+15. **The pass is recorded against the staged tree, and the commit checks
+    it.** `judge` writes the record into the repository's git directory,
+    `aldwin-review/<tree>.json`, when the last required judge passes and the
+    index still is the tree the run reviewed. `gate` — stage 10 — refuses a
+    commit whose tree has no passing record. Keyed by tree because the
+    commit does not exist yet when the hook runs, and because any edit after
+    the review changes the tree, so a record cannot be carried over to code
+    it did not see. A review requires the working tree to equal the index:
+    it builds and judges one and records the other, so they have to be the
+    same tree. A change that calls for no judge — docs only — is recorded by
+    `review` itself once stages 1–5 pass.
+
+16. **An agent's commit is gated; the developer's is not.** Claude Code sets
+    `CLAUDECODE` in every shell it starts, and `.githooks/pre-commit` checks
+    for it. The hooks directory is set by a `SessionStart` hook; a
+    `PreToolUse` guard refuses `--no-verify`, `-n`, anything naming the
+    hooks setting or the record directory, and the git commands that write
+    commits without `pre-commit` (`commit-tree`, `cherry-pick`, `revert`,
+    `rebase`, `am`). A merge commit runs `pre-merge-commit`, which is the
+    same gate. Edits to the settings, the hooks and the record are denied.
 
 ## Pitfalls
 
@@ -150,19 +204,78 @@ harmless there because a bad frame is something the judge says out loud.
   accounted for in Progress below. A previous version of this idea reached
   fourteen and then needed its own admission rule, at which point it had
   become the thing it was built to prevent.
-- **Running stage 5 on a failing stage 1–4.** A judge looking at frames drawn
-  with a drifted palette reports a consequence as a cause.
-- **Inferring the focus from the diff.** A change to a shared helper touches
-  screens its diff never names.
-- **Regenerating a snapshot to make stage 4 pass.** The regeneration is the
+- **Running a judge on a failing stage 1–5.** A judge looking at frames drawn
+  with a drifted palette, or at code that does not build, reports a
+  consequence as a cause.
+- **Inferring stage 8's scenes from the code diff.** A change to a shared
+  helper touches screens its code diff never names; the snapshot diff is
+  what names them.
+- **Asking the author what the change is for.** A goal written by the agent
+  being judged is a rubric it can always pass. Nothing the author writes is
+  an input to its own review; staging is the only statement it makes.
+- **Regenerating a snapshot to make stage 5 pass.** The regeneration is the
   deliberate act; reading the diff first is what makes it one.
-- **Reading a clean stage 4 as a correct UI.** Its baseline half proves the
+- **Reading a clean stage 5 as a correct UI.** Its baseline half proves the
   frames did not change, and its conformance half proves every cell came from
   the design. Neither says a band is in the right place — nothing mechanical
   here does, because the design ships no reference frame to compare against.
-- **Putting a check that needs a real terminal into stages 0–4.** They are
+- **Putting a check that needs a real terminal into stages 1–5.** They are
   hermetic and the value of that is the whole point; anything needing a
-  compositor belongs after them, feeding stage 5.
+  compositor belongs after them, feeding stage 8.
+- **Treating the gate as tamper-proof.** It makes skipping the loop a
+  deliberate act, never an oversight. An agent that edits the settings
+  through a shell, or deletes `.githooks/`, gets past it; the permission
+  denials make that harder, not impossible.
+- **Matching the guard on anything but commands.** The `PreToolUse` guard
+  reads a Bash command's text, so a script that merely *mentions* the hooks
+  setting or the record directory is refused too. Write such text with the
+  file tools; do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-27, the commit gate)
+
+The loop became ten stages and a commit depends on it. Before this it ran
+when someone remembered to run `/review`, and nothing stopped an agent from
+stopping at "the code is written".
+
+- **The goal and the focus are gone.** Both were written by the agent being
+  judged: a vague goal cannot fail, and a focus that missed a screen hid it.
+  The "blocking" severity went with the goal — "did not do what it set out
+  to do" needs a statement of intent, and whether the change is what the
+  developer wanted is the developer's call. Stage 8's scenes now come from
+  the snapshot diff.
+- **Stage 5 became three judges.** Code (stage 6) and Rust (stage 7) read
+  the staged diff; frames (stage 8) is the old stage 5. One subagent each
+  per iteration, fresh every time, run in parallel; a verdict passes with no
+  findings. `stage5` is now `judge --stage 6|7|8`.
+- **Stages renumbered** 0–4 → 1–5, so the list reads 1 to 10. Earlier
+  Progress entries keep the old numbers.
+- **The commit gate** (Decisions 15 and 16), and with it the rule that a
+  review is of the staged tree and nothing else.
+- **The `rust` skill's lints** (Decision 14). Its examples were replaced the
+  same day: four came from another project, and a judge citing them could
+  have taken `NoteError` for a type in this workspace.
+- **The loop's first run was on itself.** By its third iteration two of the
+  judges' findings were the sources disagreeing, and the developer settled
+  both rather than spend the remaining passes on them:
+  - *"Include examples in doc comments"* is scoped to public functions a
+    change adds. Unscoped, the lint backlog's ~70 new docs on existing items
+    each needed one, against the same skill's "keep changes minimal".
+  - *quality-gate §6 over §7*: `aldwin-review` reported every failure as an
+    `io::Error` with a sentence, and §7's "same error shape as the crate"
+    let new code keep doing so against §6's typed errors. The crate now has
+    one `thiserror` enum, `aldwin_review::Error`: every `io::Error` built
+    from a sentence and `keys::parse`'s string error became one of its
+    variants, so the two sections agree again. `tokens::check` keeps an inner
+    `Result<usize, String>` on purpose — a stale file is the stage's answer,
+    not a failure to run it.
+- **Known gaps, stated rather than hidden.** Seven snapshot scenes have no
+  capture script (`answering`, `commented`, `running`, `selecting`,
+  `stopping`, `working`, `wrapped`), so a change that moves only those has
+  no frames judge, and the report says why. Three capture scenes
+  (`launch_unconfigured`, `plan`, `resume`) have no snapshot, so no change
+  can call for a judge of them. Aldwin's own `run` tool does not set
+  `CLAUDECODE`; a commit made through Aldwin is not gated. All three are
+  open-tasks 35–37.
 
 ## Progress (2026-09-24, the audit)
 
@@ -322,8 +435,8 @@ plural pronoun for a count of one, on every 80×24 frame. It now reads
 
 ## References
 
-- .claude/skills/review/SKILL.md — the loop, and stage 5's prompt.
-- crates/review/src/tokens.rs — stage 3, and the roles it does not carry.
-- crates/tui/tests/render_snapshot.rs — stage 4's baseline.
+- .claude/skills/review/SKILL.md — the loop, and the three judges' prompts.
+- crates/review/src/tokens.rs — stage 4, and the roles it does not carry.
+- crates/tui/tests/render_snapshot.rs — stage 5's baseline.
 - crates/review/baseline.json — the design's own contradictions.
 - .claude/design/IMPORT.md — the reference, and its provenance.

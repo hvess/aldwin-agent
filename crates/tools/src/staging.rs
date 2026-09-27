@@ -29,7 +29,7 @@ pub struct Staged {
     pub after: String,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Inner {
     files: BTreeMap<PathBuf, Staged>,
     /// Comments left at the last review of this changeset, and not yet
@@ -41,6 +41,7 @@ struct Inner {
 /// The changeset of the current turn, shared by every tool and the
 /// dispatcher. Locked for the whole of a read-modify-stage, so two edits to
 /// one file in the same step cannot interleave.
+#[derive(Debug)]
 pub struct Staging {
     inner: Mutex<Inner>,
     /// What each staged path is resolved through again at write time.
@@ -48,6 +49,7 @@ pub struct Staging {
 }
 
 impl Staging {
+    /// An empty changeset whose writes are resolved through `workspace`.
     pub fn new(workspace: Workspace) -> Self {
         Self {
             inner: Mutex::default(),
@@ -55,6 +57,7 @@ impl Staging {
         }
     }
 
+    /// Whether nothing is staged — the review has nothing to open on.
     pub fn is_empty(&self) -> bool {
         self.lock().files.is_empty()
     }
@@ -68,6 +71,11 @@ impl Staging {
     /// otherwise what is on disk (`None` when the file does not exist) —
     /// and stages the result. The lock is held across the read, so a
     /// concurrent edit of the same file sees this one's output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError::Io`] when the file exists but cannot be read,
+    /// and passes on any error `change` returns. Nothing is staged on error.
     pub async fn edit(
         &self,
         resolved: PathBuf,

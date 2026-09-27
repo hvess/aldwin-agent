@@ -71,10 +71,13 @@ impl Workspace {
         dropped
     }
 
+    /// The first root: the project directory, which relative paths resolve
+    /// against.
     pub fn project_root(&self) -> PathBuf {
         self.read_roots()[0].clone()
     }
 
+    /// Every root the workspace reaches, canonical, the project root first.
     pub fn roots(&self) -> Vec<PathBuf> {
         self.read_roots().clone()
     }
@@ -115,6 +118,12 @@ impl Workspace {
     ///
     /// The **normalized** path is what is returned and used for I/O, so what
     /// was checked in (1) is what gets opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolError::PathEscapesWorkspace`] when either resolved form
+    /// lies outside every root, and [`ToolError::Io`] when the path's
+    /// existing prefix cannot be canonicalized.
     pub fn resolve(&self, path_str: &str) -> Result<PathBuf, ToolError> {
         let candidate = Path::new(path_str);
         let joined = if candidate.is_absolute() {

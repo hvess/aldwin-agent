@@ -16,8 +16,11 @@ use crate::registry::Registry;
 /// server failed (a namespaced double-collision).
 #[derive(Debug)]
 pub struct McpRegistrationFailure {
+    /// The server's name in `mcp.yaml`.
     pub server: String,
+    /// The tool that failed, or `None` when the whole server did.
     pub tool: Option<String>,
+    /// What went wrong.
     pub error: ToolError,
 }
 

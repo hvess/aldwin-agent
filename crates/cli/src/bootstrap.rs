@@ -201,6 +201,13 @@ fn context_files(cwd: &Path) -> Vec<PathBuf> {
 ///
 /// There is no first-run screen: every launch opens straight to the field
 /// under the launch card (ADR 0009 §6).
+///
+/// # Errors
+///
+/// Returns [`StartupError`] when the working directory cannot be read, a
+/// config layer fails to load, `~/.aldwin` is only partly present, the
+/// configured client cannot be built, the terminal fails, or the agent or
+/// interceptor task panicked.
 pub async fn run() -> Result<(), StartupError> {
     let cwd = std::env::current_dir().map_err(StartupError::Cwd)?;
 

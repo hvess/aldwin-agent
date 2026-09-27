@@ -23,6 +23,9 @@ use crate::{
 /// provides the two moments.
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync {
+    /// Runs one tool call to completion. A failure is a result with
+    /// `is_error` set, not a separate channel: the model reads it and
+    /// decides what to do next.
     async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult;
 
     /// The set of tools available to the model in the current session.
@@ -50,11 +53,17 @@ pub trait ToolDispatcher: Send + Sync {
 /// since a review is not a call. The two resolve to different shapes, so
 /// this carries whichever one the caller registered; one map means cleanup
 /// on abort cannot drain one kind and forget the other.
+#[derive(Debug)]
 pub enum PendingReply {
+    /// A question from the `ask` tool, awaiting `Command::Answer`.
     Answer(oneshot::Sender<Answer>),
+    /// A review, awaiting `Command::ReviewDecision`.
     Review(oneshot::Sender<ReviewDecision>),
 }
 
+/// Every round trip still waiting on the developer, shared between the
+/// agent's command loop (which resolves them) and the dispatch futures
+/// (which register them).
 pub type PendingMap = Arc<Mutex<HashMap<String, PendingReply>>>;
 
 /// Given to a dispatch future so it can reach the developer without reaching
@@ -62,7 +71,7 @@ pub type PendingMap = Arc<Mutex<HashMap<String, PendingReply>>>;
 /// question offers — lives in aldwin-tools; this only provides the round
 /// trips through the agent's existing event/command boundary, and the two
 /// one-way announcements the TUI draws from.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DispatchContext {
     turn_id: TurnId,
     step_id: StepId,
@@ -104,6 +113,11 @@ impl DispatchContext {
     /// Emit `QuestionAsked` for `call_id` and await the developer's `Answer`.
     /// Resolves to `None` if the agent shuts down, or the turn is cancelled,
     /// before an answer arrives.
+    ///
+    /// # Panics
+    ///
+    /// If the pending-reply lock is poisoned — a thread panicked while
+    /// holding it.
     pub async fn ask(&self, call_id: String, question: Question) -> Option<Answer> {
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -125,6 +139,11 @@ impl DispatchContext {
     /// before its calls run, or as the turn ends — and is answered before
     /// the step goes on, so a step has at most one open at a time; the
     /// agent mints step ids, so no second counter is needed.
+    ///
+    /// # Panics
+    ///
+    /// If the pending-reply lock is poisoned — a thread panicked while
+    /// holding it.
     pub async fn review(&self, changeset: Changeset) -> Option<ReviewDecision> {
         let review_id = format!("review-{}", self.step_id.0);
         let (tx, rx) = oneshot::channel();

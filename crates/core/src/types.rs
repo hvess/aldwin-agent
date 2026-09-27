@@ -7,9 +7,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// [`SessionId`].
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
+/// One turn: a developer's message and every step the agent takes to answer
+/// it. Minted by the `Agent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TurnId(pub u64);
 
+/// One step: a single request to the model and the tool calls it asked
+/// for. Minted by the `Agent`, and unique across turns, not within one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StepId(pub u64);
 
@@ -30,6 +34,8 @@ pub struct StepId(pub u64);
 pub struct SessionId(pub String);
 
 impl SessionId {
+    /// A fresh id, distinct from every other minted in this process and
+    /// ordered after them by the second it was minted in.
     pub fn mint() -> Self {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -48,30 +54,45 @@ impl std::fmt::Display for SessionId {
     }
 }
 
+/// Who a message is from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
+    /// The developer — and tool results, which the model reads as input.
     User,
+    /// The model.
     Assistant,
 }
 
+/// A tool call the model asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// The provider's id for the call, which its result must echo.
     pub id: String,
+    /// The tool's name, as its `ToolDefinition` declares it.
     pub name: String,
+    /// The arguments, as the model wrote them against the input schema.
     pub input: serde_json::Value,
 }
 
+/// What a tool call returned, as the model will read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
+    /// The `ToolCall::id` this answers.
     pub call_id: String,
+    /// The output, or a sentence saying why there is none.
     pub content: String,
+    /// Whether the call failed. A failure is still a result: the model reads
+    /// it and decides what to do next.
     pub is_error: bool,
 }
 
+/// One piece of a message's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
+    /// Prose.
     Text {
+        /// The text.
         text: String,
     },
     /// An extended-thinking block, kept verbatim with the signature the
@@ -86,22 +107,31 @@ pub enum ContentBlock {
     /// (14,096 tokens spent, nothing rendered, "Continue" typed by hand).
     /// See ADR 0006.
     Thinking {
+        /// The thinking text.
         text: String,
+        /// The provider's signature over it, sent back verbatim.
         signature: String,
     },
     /// Thinking the provider encrypted rather than showed. Opaque to us and
     /// echoed back untouched, for the same wire-correctness reason as
     /// `Thinking` — there is nothing here to render.
     RedactedThinking {
+        /// The encrypted payload.
         data: String,
     },
+    /// A tool call, on an assistant message.
     ToolUse(ToolCall),
+    /// A tool call's result, on the user message that follows it.
     ToolResult(ToolResult),
 }
 
+/// One message of the conversation as the provider is sent it, rebuilt from
+/// the log for each step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
+    /// Who it is from.
     pub role: Role,
+    /// Its blocks, in order.
     pub content: Vec<ContentBlock>,
 }
 
@@ -114,28 +144,41 @@ impl Message {
     }
 }
 
+/// A tool as the model is told about it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
+    /// The name the model calls it by.
     pub name: String,
+    /// What it does and when to use it, written for the model.
     pub description: String,
+    /// The JSON Schema its input must satisfy.
     pub input_schema: serde_json::Value,
 }
 
+/// Tokens one step read and wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageStats {
+    /// Tokens the step read.
     pub input_tokens: u32,
+    /// Tokens the step wrote.
     pub output_tokens: u32,
 }
 
+/// What the provider's prompt cache did for one step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheStats {
+    /// Input tokens written into the cache.
     pub cache_creation_input_tokens: u32,
+    /// Input tokens served from the cache.
     pub cache_read_input_tokens: u32,
 }
 
+/// Why the model stopped writing a step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
+    /// It finished its answer.
     EndTurn,
+    /// It is waiting on the results of the tool calls it made.
     ToolUse,
 }
 
@@ -145,8 +188,11 @@ pub enum StopReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepState {
+    /// Not started.
     Pending,
+    /// Being worked on now.
     Running,
+    /// Finished.
     Done,
 }
 
@@ -155,7 +201,9 @@ pub enum StepState {
 /// advances these; the TUI draws them as the design's `PlanStep` rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanStep {
+    /// The outcome, in plain words.
     pub text: String,
+    /// Where it stands.
     pub state: StepState,
 }
 
@@ -165,8 +213,11 @@ pub struct PlanStep {
 /// this"; the tool enforces the third and the prompt asks for the first two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
+    /// The one line of question.
     pub question: String,
+    /// The one line of why it is being asked.
     pub detail: String,
+    /// The answers on offer, ending with "Chat about this".
     pub options: Vec<String>,
 }
 
@@ -188,8 +239,16 @@ impl Question {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Answer {
-    Chose { index: usize },
-    Said { text: String },
+    /// They chose one of the options.
+    Chose {
+        /// Its index in `Question::options`.
+        index: usize,
+    },
+    /// They chose "Chat about this" and typed a reply.
+    Said {
+        /// What they typed.
+        text: String,
+    },
 }
 
 impl Answer {
@@ -220,23 +279,29 @@ impl Answer {
 /// edit to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
+    /// The file's path.
     pub path: String,
+    /// Its whole contents before the changeset, or `None` if it is new.
     pub before: Option<String>,
+    /// Its whole contents after every staged edit.
     pub after: String,
 }
 
 /// Everything a turn's edits have staged and nothing has written yet.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Changeset {
+    /// Each file the turn's edits touched, once.
     pub files: Vec<ChangedFile>,
 }
 
 /// A comment left on a run of lines in the review, on the *after* side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewComment {
+    /// The file the lines are in.
     pub path: String,
     /// Inclusive, 1-based line numbers in the file as it would be written.
     pub lines: (usize, usize),
+    /// What the developer wrote.
     pub text: String,
 }
 
@@ -248,7 +313,10 @@ pub enum ReviewDecision {
     Approve,
     /// Nothing is written; the comments go back to the agent and the
     /// changeset stays staged for the next review.
-    Comment { comments: Vec<ReviewComment> },
+    Comment {
+        /// The comments, each on a run of lines.
+        comments: Vec<ReviewComment>,
+    },
     /// Nothing is written and the changeset is dropped.
     Discard,
 }
@@ -257,23 +325,35 @@ pub enum ReviewDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewOutcome {
+    /// Approved: every file was written.
     Saved {
+        /// The paths written.
         files: Vec<String>,
+        /// How many comments from earlier reviews this changeset answered.
         comments_resolved: usize,
     },
+    /// Comments went back to the agent; nothing was written.
     Commented {
+        /// How many comments were left.
         comments: usize,
     },
+    /// The changeset was dropped; nothing was written.
     Discarded {
+        /// The paths that would have been written.
         files: Vec<String>,
     },
 }
 
+/// A failed attempt at a provider request that is being retried.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryInfo {
+    /// The provider being retried.
     pub provider: String,
+    /// The HTTP status of the failure, or `None` if there was no answer.
     pub status: Option<u16>,
+    /// What went wrong.
     pub message: String,
+    /// Which attempt failed, counting from 1.
     pub attempt: u32,
 }
 

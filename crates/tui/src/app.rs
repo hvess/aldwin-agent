@@ -29,8 +29,11 @@ const DOUBLE_CTRL_C_TICKS: u64 = 16;
 /// endpoint or a key variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderChoice {
+    /// The catalogue id, the `p` of `/model p/m`.
     pub id: String,
+    /// A few words on what the provider offers, beside its row.
     pub purpose: String,
+    /// The models it offers, in the order the question lists them.
     pub models: Vec<ModelChoice>,
     /// The subscription an account on this provider needs, when the
     /// provider can be reached through one (ADR 0012) — the fact beside
@@ -39,9 +42,12 @@ pub struct ProviderChoice {
     pub account: Option<String>,
 }
 
+/// One model a provider offers, as the model question lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelChoice {
+    /// The model id, the `m` of `/model p/m`.
     pub id: String,
+    /// A few words on what the model is for, beside its row.
     pub purpose: String,
     /// What the context bar divides by once this model is running.
     pub context: u32,
@@ -51,7 +57,9 @@ pub struct ModelChoice {
 /// commands: the name typed after the slash and what it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandChoice {
+    /// The command's name, without its slash.
     pub name: String,
+    /// What it is for, beside its row.
     pub summary: String,
 }
 
@@ -160,7 +168,9 @@ pub enum Mode {
 pub struct StatusInfo {
     /// The bare model id, or empty when nothing is configured yet.
     pub model_name: String,
+    /// The release version the launch card states.
     pub version: String,
+    /// The short git hash this build was made from.
     pub commit: String,
     /// The project — the working directory's own name.
     pub project: String,
@@ -187,6 +197,7 @@ impl StatusInfo {
 /// only ever reads from this; the terminal/event-loop glue (`run.rs`) only
 /// ever calls `apply_event`/`handle_key` and does no interpretation of its
 /// own — kept this way so both are unit-testable without a terminal.
+#[derive(Debug)]
 pub struct App {
     pub(crate) log: Vec<LogEntry>,
     pub(crate) mode: Mode,
@@ -241,6 +252,8 @@ pub struct App {
 }
 
 impl App {
+    /// A session in the conversation with an empty log, running on
+    /// `model_name` — empty when nothing is configured.
     pub fn new(model_name: String) -> Self {
         Self {
             log: Vec::new(),
@@ -279,6 +292,7 @@ impl App {
         }
     }
 
+    /// The past sessions bare `/resume` offers, newest first.
     pub fn with_sessions(mut self, sessions: Vec<SessionChoice>) -> Self {
         self.sessions = sessions;
         self
@@ -304,6 +318,7 @@ impl App {
         self
     }
 
+    /// The palette every draw uses for the session.
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
@@ -544,6 +559,8 @@ impl App {
         }
     }
 
+    /// Folds one event from the agent into the log, the mode and the
+    /// status; any command it calls for lands in the outbox.
     pub fn apply_event(&mut self, event: Event) {
         match event {
             Event::TurnStarted { .. } => {
@@ -687,6 +704,8 @@ impl App {
         }
     }
 
+    /// Acts on a key press for whatever holds the screen. Repeats and
+    /// releases are ignored.
     pub fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
@@ -1060,6 +1079,8 @@ impl App {
         matches!(self.mode, Mode::Review(_))
     }
 
+    /// The review takes the mouse whole; elsewhere the wheel scrolls the
+    /// transcript, unless a question or the menu holds the bottom band.
     pub fn handle_mouse(&mut self, event: MouseEvent) {
         if let Some(review) = self.review_mut() {
             review.handle_mouse(event.kind, event.column, event.row);
@@ -1084,6 +1105,8 @@ impl App {
         }
     }
 
+    /// Inserts a bracketed paste into the field as one piece, sanitised,
+    /// so its newlines never submit.
     pub fn paste(&mut self, text: &str) {
         if self.band_is_held() {
             return;
@@ -1200,10 +1223,12 @@ impl App {
         self.push(entry);
     }
 
+    /// The session facts, for a scene to set directly.
     pub fn status_mut(&mut self) -> &mut StatusInfo {
         &mut self.status
     }
 
+    /// The open review, when one is on screen.
     pub fn review_for_tests(&mut self) -> Option<&mut Review> {
         self.review_mut()
     }

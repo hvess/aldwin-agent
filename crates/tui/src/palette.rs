@@ -59,7 +59,7 @@ use crate::tokens::{
 
 /// The two palettes, **generated** from `.claude/design/tokens/` into
 /// [`crate::tokens`] and re-exported here so every call site keeps reading
-/// `palette::DARK`. The review loop's stage 3 regenerates the file and
+/// `palette::DARK`. The review loop's stage 4 regenerates the file and
 /// fails if the result differs, so the app's palette and the imported
 /// design cannot disagree.
 pub(crate) use crate::tokens::{DARK, LIGHT};
@@ -143,8 +143,10 @@ impl Palette {
 /// Which of the two fixed palettes a session renders with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
+    /// Light text on a dark ground — the default.
     #[default]
     Dark,
+    /// The ladder inverted: dark text on a light ground.
     Light,
 }
 

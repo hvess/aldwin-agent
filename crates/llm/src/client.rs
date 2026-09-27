@@ -9,18 +9,34 @@ use crate::config::{Auth, ProviderConfig};
 use crate::transport::{self, Dialect, Transport};
 use crate::wire::{self, Assembler, WireEvent};
 
+/// Why a client could not be built. Every variant is found at startup,
+/// before any request is sent, so a misconfiguration never surfaces as a
+/// failed turn.
 #[derive(Debug, Error)]
 pub enum LlmClientInitError {
+    /// The environment variable `provider.yaml` names for the key is unset.
     #[error("environment variable {var:?} (provider.yaml's api_key_env) is not set")]
-    MissingApiKeyEnv { var: String },
+    MissingApiKeyEnv {
+        /// The variable's name, verbatim from `provider.yaml`.
+        var: String,
+    },
+    /// The key's value cannot be sent as an HTTP header value.
     #[error("environment variable {var:?}'s value is not a valid HTTP header value")]
-    InvalidApiKeyValue { var: String },
+    InvalidApiKeyValue {
+        /// The variable's name — never its value, which is the secret.
+        var: String,
+    },
+    /// reqwest could not build the HTTP client.
     #[error("failed to construct the HTTP client: {0}")]
     HttpClient(#[source] reqwest::Error),
+    /// The OpenAI-compatible provider was configured without a `base_url`.
     #[error("provider.yaml's base_url is required for the openai-compatible provider")]
     MissingBaseUrl,
+    /// A connected account was handed to a client that only takes a key.
     #[error("this provider takes an API key, not a connected account")]
     AccountNotOffered,
+    /// The connected account's session could not be made ready, with the
+    /// reason as a sentence.
     #[error("the connected account's session could not be set up: {0}")]
     ConnectionSession(String),
 }
@@ -51,6 +67,14 @@ impl AnthropicClient {
     /// scoped to the OpenAI-compatible adapter. Honouring it here would
     /// silently redirect Anthropic requests for anyone who has a leftover
     /// base_url set while `provider: anthropic`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmClientInitError::AccountNotOffered`] when `config.auth`
+    /// is a connected account, [`LlmClientInitError::MissingApiKeyEnv`] when
+    /// the key's variable is unset, [`LlmClientInitError::InvalidApiKeyValue`]
+    /// when its value cannot be a header, and
+    /// [`LlmClientInitError::HttpClient`] when the HTTP client cannot be built.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let Auth::ApiKeyEnv(var) = &config.auth else {
             return Err(LlmClientInitError::AccountNotOffered);

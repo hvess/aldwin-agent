@@ -18,13 +18,14 @@
 //! turn leaves behind), and `selecting`/`commented` need a mouse drag
 //! (ADR 0010), which the key grammar does not send.
 
-use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
 
 use crate::fake::{self, Canned};
 use crate::geometry::Theme;
+use crate::{Error, Result};
 
 /// The static half of a scene: what it needs seeded and what it will be told.
+#[derive(Debug)]
 pub struct Script {
     /// One per request the scene makes, in order.
     pub replies: Vec<Canned>,
@@ -44,12 +45,18 @@ pub struct Script {
     pub provider: bool,
 }
 
+/// A scene seeded on disk and ready to launch the app into.
+#[derive(Debug)]
 pub struct Prepared {
+    /// The project directory the app is started in, canonical.
     pub cwd: PathBuf,
+    /// The `HOME` the app is started with, holding the seeded `~/.aldwin`.
     pub home: PathBuf,
+    /// The scene's keys, parsed to the bytes each one writes.
     pub keys: Vec<Vec<u8>>,
 }
 
+/// Every scene [`script`] knows, by name.
 pub const CATALOGUE: &[&str] = &[
     "launch",
     "launch_unconfigured",
@@ -87,12 +94,16 @@ fn plan(states: [&str; 3]) -> serde_json::Value {
     serde_json::json!({ "steps": texts.iter().zip(states).map(|(t, s)| serde_json::json!({ "text": t, "state": s })).collect::<Vec<_>>() })
 }
 
+/// The script for the scene called `name`.
+///
+/// # Errors
+///
+/// When `name` is not in [`CATALOGUE`].
 pub fn script(name: &str) -> Result<Script> {
     if !CATALOGUE.contains(&name) {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            format!("unknown scene {name:?}; see scene::CATALOGUE"),
-        ));
+        return Err(Error::Scene(format!(
+            "unknown scene {name:?}; see scene::CATALOGUE"
+        )));
     }
 
     let ask = "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter";
@@ -228,6 +239,11 @@ pub fn script(name: &str) -> Result<Script> {
 }
 
 /// Write the config a scene runs under, and parse its keys.
+///
+/// # Errors
+///
+/// When a directory or file cannot be created or written, the product's own
+/// config or history writer fails, or the scene's keys do not parse.
 pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Result<Prepared> {
     // Absolute, always. `HOME` is resolved by the app against its own working
     // directory, so a relative one sends it looking for `~/.aldwin` inside
@@ -242,10 +258,10 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
     // copy of its templates here.
     let global = home.join(".aldwin");
     let config = aldwin_config::Config::open_at(&cwd, &global)
-        .map_err(|e| Error::other(format!("seeding global config: {e}")))?;
+        .map_err(|e| Error::Scene(format!("seeding global config: {e}")))?;
     config
         .init_global_if_empty()
-        .map_err(|e| Error::other(format!("seeding global config: {e}")))?;
+        .map_err(|e| Error::Scene(format!("seeding global config: {e}")))?;
 
     // Theme is global-only and read once at startup, so it is seeded as config
     // rather than sent as a command.
@@ -274,8 +290,7 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         std::fs::write(file, contents)?;
     }
 
-    let keys = crate::keys::parse(&script.keys.replace("{CTRL_ENTER}", CTRL_ENTER))
-        .map_err(Error::other)?;
+    let keys = crate::keys::parse(&script.keys.replace("{CTRL_ENTER}", CTRL_ENTER))?;
     Ok(Prepared { cwd, home, keys })
 }
 
@@ -297,7 +312,7 @@ fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
             model: "gpt-5".into(),
         };
         let store = HistoryStore::create(&dir, &id, &header)
-            .map_err(|e| Error::other(format!("seeding history: {e}")))?;
+            .map_err(|e| Error::Scene(format!("seeding history: {e}")))?;
         for turn in 0..*turns {
             let turn_id = TurnId(turn as u64 + 1);
             let step_id = StepId(turn as u64 + 1);
@@ -324,7 +339,7 @@ fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
             ] {
                 store
                     .append(&record)
-                    .map_err(|e| Error::other(format!("seeding history: {e}")))?;
+                    .map_err(|e| Error::Scene(format!("seeding history: {e}")))?;
             }
         }
     }

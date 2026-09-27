@@ -198,15 +198,21 @@ impl Selection {
 /// What one key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
+    /// The key was handled within the review; nothing to send.
     Stay,
     /// The developer decided; the caller sends it.
     Decide(ReviewDecision),
 }
 
+/// The full-window review of one changeset: its files, which is shown,
+/// and the selection and comment in progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
+    /// The id the agent gave the review, echoed back with the decision.
     pub review_id: String,
+    /// One per changed file, in the changeset's order.
     pub files: Vec<ReviewFile>,
+    /// Which of `files` is on screen.
     pub current: usize,
     /// The lines selected for a comment in the current file. There is no
     /// line cursor — lines are selected with the mouse (ADR 0010), so a row
@@ -232,6 +238,8 @@ pub struct Review {
 }
 
 impl Review {
+    /// Opens on the changeset's first file, nothing selected and nothing
+    /// read.
     pub fn open(review_id: String, changeset: Changeset) -> Self {
         let files = changeset
             .files
@@ -252,6 +260,7 @@ impl Review {
         }
     }
 
+    /// The file on screen.
     pub fn file(&self) -> &ReviewFile {
         &self.files[self.current.min(self.files.len().saturating_sub(1))]
     }
@@ -261,10 +270,12 @@ impl Review {
         &mut self.files[i]
     }
 
+    /// How many files have been read.
     pub fn files_read(&self) -> usize {
         self.files.iter().filter(|f| f.read).count()
     }
 
+    /// Whether every file has been read.
     pub fn all_read(&self) -> bool {
         self.files.iter().all(|f| f.read)
     }
@@ -276,6 +287,7 @@ impl Review {
         self.selected.is_some()
     }
 
+    /// The comments left across every file.
     pub fn comment_count(&self) -> usize {
         self.files.iter().map(|f| f.comments.len()).sum()
     }

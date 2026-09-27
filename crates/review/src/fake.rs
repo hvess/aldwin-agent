@@ -24,6 +24,10 @@ pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 /// TUI actually receives from a live provider, and a scene that arrived whole
 /// would not exercise the incremental-render path (`e144409` fixed a
 /// re-render-the-world defect that only exists while streaming).
+///
+/// # Panics
+///
+/// Only if `serde_json` fails to encode a `String`, which it cannot.
 pub fn text(reply: &str) -> Canned {
     let mut body = String::new();
     for chunk in split_into_deltas(reply) {
@@ -67,6 +71,11 @@ pub fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> Canned {
 
 /// Several calls in one turn — which is how a scene stages more than one
 /// edit into a single changeset, or updates the plan beside a read.
+///
+/// # Panics
+///
+/// Only if `serde_json` fails to encode a `serde_json::Value` or a `String`,
+/// which it cannot.
 pub fn tool_calls(calls: &[(&str, &str, serde_json::Value)]) -> Canned {
     let encoded = calls
         .iter()

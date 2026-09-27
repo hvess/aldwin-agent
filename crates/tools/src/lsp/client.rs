@@ -293,9 +293,8 @@ impl LspClient {
 
     async fn write(&self, message: &Value) -> Result<(), LspError> {
         let mut stdin = self.inner.stdin.lock().await;
-        write_message(&mut *stdin, message)
-            .await
-            .map_err(LspError::Io)
+        write_message(&mut *stdin, message).await?;
+        Ok(())
     }
 }
 
@@ -528,7 +527,7 @@ mod tests {
     /// Gated the way `llm/tests/live_lumo.rs` gates its live-API tests:
     /// this one needs `rust-analyzer` on `PATH`, which the build does not
     /// provide and a clean checkout on a fresh machine does not have. It
-    /// failed the whole suite there, which makes the review loop's stage 2
+    /// failed the whole suite there, which makes the review loop's stage 3
     /// report a missing dependency as a broken workspace.
     ///
     ///     cargo test -p aldwin-tools -- --ignored

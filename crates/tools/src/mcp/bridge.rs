@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use aldwin_config::{McpServer, McpTransport};
@@ -42,7 +43,20 @@ pub struct McpBridge {
     running: tokio::sync::Mutex<HashMap<String, Arc<RunningService<RoleClient, ()>>>>,
 }
 
+/// Names the servers rather than printing their entries: an entry's `env`
+/// commonly carries a server's API token.
+impl fmt::Debug for McpBridge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpBridge")
+            .field("servers", &self.servers.keys().collect::<Vec<_>>())
+            .field("workspace", &self.workspace)
+            .finish_non_exhaustive()
+    }
+}
+
 impl McpBridge {
+    /// A bridge over `servers` whose processes are confined to `workspace`.
+    /// Nothing is spawned yet.
     pub fn new(servers: Vec<McpServer>, workspace: Workspace) -> Self {
         Self {
             servers: servers.into_iter().map(|s| (s.name.clone(), s)).collect(),
@@ -51,6 +65,7 @@ impl McpBridge {
         }
     }
 
+    /// The name of every configured server, in no particular order.
     pub fn server_names(&self) -> Vec<String> {
         self.servers.keys().cloned().collect()
     }
@@ -103,6 +118,13 @@ impl McpBridge {
 
     /// Enumerates every tool `server_name` advertises. Spawning happens here
     /// (or in `call_tool`, whichever runs first) — see the struct doc.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::UnknownServer`] when `server_name` is not
+    /// configured, [`McpError::UnsupportedTransport`] for a server that is
+    /// not stdio, [`McpError::Spawn`] when its process cannot be started, and
+    /// [`McpError::Rpc`] when the handshake or the listing fails.
     pub async fn list_tools(&self, server_name: &str) -> Result<Vec<rmcp::model::Tool>, McpError> {
         let client = self.client_for(server_name).await?;
         client.list_all_tools().await.map_err(|e| McpError::Rpc {
@@ -113,6 +135,12 @@ impl McpBridge {
 
     /// Returns `(content, is_error)` — the caller (McpTool) decides how to
     /// fold `is_error` into aldwin-tools' own `ToolError` convention.
+    ///
+    /// # Errors
+    ///
+    /// Fails as `list_tools` does when the server cannot be reached, and with
+    /// [`McpError::Rpc`] when the call itself fails in transport or protocol.
+    /// A tool that ran and reported failure is `Ok` with `is_error` set.
     pub async fn call_tool(
         &self,
         server_name: &str,

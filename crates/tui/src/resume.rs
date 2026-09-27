@@ -16,5 +16,6 @@ pub struct SessionChoice {
     pub title: String,
     /// When it started, already formatted (`2026-09-20 18:11`).
     pub when: String,
+    /// How many turns it ran.
     pub turns: usize,
 }

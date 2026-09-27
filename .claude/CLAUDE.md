@@ -20,12 +20,16 @@ ADR 0011 deleted its crate. Four stay active: tools, tui, review and
 login. When a spec step is completed, note it; when all steps are done, move the spec to
 `.claude/spec/archive/`.
 
-`aldwin-review.md` is the feedback loop that runs after a change is ready
-for submission — five stages, four of them deterministic and one a blind
-subagent. `.claude/skills/review/SKILL.md` drives it; run `/review` when a
-feature is finished. Read the spec's Progress entry before changing how any
-stage works: it records what the loop replaced and why, and the failure it
-replaced is easy to rebuild by accident.
+`aldwin-review.md` is the feedback loop every agent commit runs — ten
+stages: five deterministic, three blind subagent judges (code, Rust,
+frames), the iteration, and a gate. `.claude/skills/review/SKILL.md` drives
+it; run `/review` before every commit. **An agent's commit cannot land
+without it**: the pre-commit hook refuses any tree without a passing review,
+and a `PreToolUse` guard refuses the ways around the hook. If the gate
+refuses, run the loop — never look for another way to commit. Read the
+spec's Progress entries before changing how any stage works: they record
+what the loop replaced and why, and the failure it replaced is easy to
+rebuild by accident.
 
 `aldwin-open-tasks.md` is a ledger rather than a spec: known, understood,
 undone work, each entry citing its evidence.
@@ -103,7 +107,7 @@ Two rules that govern every layout decision:
 **The design system reaches the app by generation, not by hand.**
 `crates/tui/src/tokens.rs` is emitted from `.claude/design/` by
 `cargo run -p aldwin-review -- tokens --write` and committed; the review
-loop's stage 3 regenerates it and fails on any diff. It carries the palettes
+loop's stage 4 regenerates it and fails on any diff. It carries the palettes
 (OKLCH converted to sRGB by the generator), the mark's cells, the gauge's
 ramp table, the grid and the glyphs. Do not edit it, and do not add a colour
 or a grid constant to the app by writing a literal — add it to the design,

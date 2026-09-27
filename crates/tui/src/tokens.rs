@@ -2,7 +2,7 @@
 //!
 //! Emitted by `aldwin-review tokens --write` from `.claude/design/`:
 //! `tokens/colors.css`, `tokens/layout.css`, `guidelines/glyphs.html` and
-//! the frame. The review loop's stage 3 regenerates this file and fails if
+//! the frame. The review loop's stage 4 regenerates this file and fails if
 //! the result differs, so the app's palette and the imported design cannot
 //! drift apart.
 //!

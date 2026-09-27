@@ -18,6 +18,7 @@ use crate::staging::Staging;
 /// Nothing here decides whether a call may run. The workspace is the only
 /// boundary (ADR 0011): each tool resolves its paths through `Workspace`,
 /// and every process a tool starts is confined to writing inside it.
+#[derive(Debug)]
 pub struct Dispatcher {
     registry: Registry,
     staging: Arc<Staging>,
@@ -30,6 +31,8 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// A dispatcher over `registry` that stages into `staging`, with nowhere
+    /// to send its notices until `with_notices` gives it a channel.
     pub fn new(registry: Registry, staging: Arc<Staging>) -> Self {
         Self {
             registry,
@@ -39,6 +42,8 @@ impl Dispatcher {
         }
     }
 
+    /// Sends the dispatcher's own notices — a staged file an approve could
+    /// not write — to the session's event channel.
     pub fn with_notices(mut self, notices: mpsc::Sender<Event>) -> Self {
         self.notices = Some(notices);
         self

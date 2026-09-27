@@ -19,3 +19,14 @@ clap          = { version = "4", features = ["derive"] }
 libc          = "0.2"
 unicode-width = "0.2"
 assert_cmd    = "2"
+
+# The `rust` skill's checkable rules, enforced by stage 2 (`-D warnings`):
+# "Use `///` for public API documentation", "Document panics and errors",
+# and "Derive common traits: `Debug`, …".
+[workspace.lints.rust]
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"

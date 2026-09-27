@@ -8,7 +8,16 @@
 //! Everything else in the input path is real: what the app writes reaches
 //! foot, and foot's replies to the app's capability queries reach the app.
 
-pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>, String> {
+use crate::{Error, Result};
+
+/// Turns a scene's comma-separated key spec — `Down, "ok", Enter` — into the
+/// bytes each key writes, one entry per key.
+///
+/// # Errors
+///
+/// [`Error::Scene`] when a token is neither a known key name nor a quoted
+/// literal; the message names the token and the keys that are known.
+pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
     tokenise(spec)
         .into_iter()
         .map(|token| match token.as_str() {
@@ -27,7 +36,7 @@ pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>, String> {
                 // negotiated with the terminal rather than with us.
                 Ok(other[1..other.len() - 1].replace("\\e", "\x1b").into_bytes())
             }
-            other => Err(format!("unknown key {other:?} (Up|Down|Left|Right|Enter|Tab|Esc|Space|Backspace|\"literal\")")),
+            other => Err(Error::Scene(format!("unknown key {other:?} (Up|Down|Left|Right|Enter|Tab|Esc|Space|Backspace|\"literal\")"))),
         })
         .collect()
 }
@@ -88,6 +97,8 @@ mod tests {
 
     #[test]
     fn an_unknown_name_names_itself_in_the_error() {
-        assert!(parse("Meta").unwrap_err().contains("Meta"));
+        let unknown = parse("Meta").unwrap_err();
+        assert!(matches!(unknown, Error::Scene(_)));
+        assert!(unknown.to_string().contains("Meta"));
     }
 }

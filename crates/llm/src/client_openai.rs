@@ -32,6 +32,14 @@ impl OpenAiCompatibleClient {
     /// "OpenAI-compatible," unlike Anthropic's single well-known endpoint —
     /// and reads `std::env::var` for a key, or takes the connected
     /// account's session (ADR 0012).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmClientInitError::MissingBaseUrl`] when `config.base_url`
+    /// is `None`, [`LlmClientInitError::MissingApiKeyEnv`] when the key's
+    /// variable is unset, [`LlmClientInitError::InvalidApiKeyValue`] when its
+    /// value cannot be a header, and [`LlmClientInitError::HttpClient`] when
+    /// the HTTP client cannot be built.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let endpoint = config
             .base_url

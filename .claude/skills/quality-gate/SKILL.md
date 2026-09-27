@@ -137,7 +137,8 @@ handles every case.
    writing code. Structural mistakes are cheapest here.
 2. Before calling the change done: walk every section against the diff
    (`git diff`), then run the rust skill's required checks.
-3. When the feature is finished: run `/review`.
+3. Before committing: run `/review`. Its stage 6 judges the diff against
+   this gate, and an agent's commit is refused without a passing review.
 
 Report the result as a short list — one line per section, **pass** or the
 specific file and line that fails it. A gate with a failing line is not

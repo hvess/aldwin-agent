@@ -47,6 +47,8 @@ pub(crate) use transcript::Transcript;
 /// and one at the bottom, the frame's own.
 const BODY_PAD_ROWS: u16 = 1;
 
+/// Draws one frame of `app`: the review full-window when one is open,
+/// otherwise the conversation.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let pal = app.theme.palette();
     let area = frame.area();

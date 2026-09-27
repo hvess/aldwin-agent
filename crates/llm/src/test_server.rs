@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+/// One response the server gives, to one connection, in queue order.
+#[derive(Debug)]
 pub enum Canned {
     /// Non-streaming HTTP status + JSON body.
     Status(u16, String),
@@ -27,18 +29,27 @@ pub enum Canned {
     HangUp,
 }
 
+/// A running fake server. It lives until the test's runtime shuts down.
+#[derive(Debug)]
 pub struct FakeServer {
+    /// The local address it listens on, a free port on 127.0.0.1.
     pub addr: SocketAddr,
     requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeServer {
+    /// The server's URL with `path` appended, for a client's endpoint.
     pub fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.addr)
     }
 
     /// The head of every request received so far, in order — the request
     /// line and the headers, as sent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a connection handler panicked while holding the request
+    /// log, poisoning its lock.
     pub fn requests(&self) -> Vec<String> {
         self.requests
             .lock()
@@ -47,6 +58,14 @@ impl FakeServer {
     }
 }
 
+/// Starts a server on a free local port that answers each connection with
+/// the next of `responses`, and closes any connection that finds the queue
+/// empty. Must be called inside a tokio runtime.
+///
+/// # Panics
+///
+/// Panics if no local port can be bound or the listener cannot be handed
+/// to tokio — a broken test environment, not a test failure.
 pub fn spawn(responses: Vec<Canned>) -> FakeServer {
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local test port");
     std_listener.set_nonblocking(true).expect("set nonblocking");

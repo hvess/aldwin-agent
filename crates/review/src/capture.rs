@@ -6,10 +6,9 @@
 //! when the app stops drawing rather than after a hopeful interval.
 //!
 //! Every capture leaves two artefacts side by side: the PNG a human reads,
-//! and the declared cell grid stage 5 reads positions from. They are cross-checked against
+//! and the declared cell grid stage 8 reads positions from. They are cross-checked against
 //! each other before either is trusted.
 
-use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::sleep;
@@ -21,7 +20,7 @@ use crate::geometry::{Cell, Size, Theme};
 use crate::proxy::{foot_command, shell_quote, verify_against_pixels, Proxy};
 use crate::pty::Pty;
 use crate::vt::Grid;
-use crate::{fake, png, scene};
+use crate::{fake, png, scene, Error, Result};
 
 /// Measure foot's cell for the pinned font.
 ///
@@ -33,6 +32,12 @@ use crate::{fake, png, scene};
 /// taste. Measured with the developer's `foot.ini` in play the same font at
 /// the same size gives 8×19; with `--config=/dev/null` it gives 8×18. That
 /// gap is why the harness measures rather than remembers.
+///
+/// # Errors
+///
+/// When the compositor cannot be cleared or resized, the pty cannot be opened
+/// or queried, foot cannot be launched, or foot has not sized its pty within
+/// fifteen seconds (usually a missing font).
 pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
     const W: u32 = 1200;
     const H: u32 = 800;
@@ -55,9 +60,8 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
         }
         previous = now;
         if Instant::now() > deadline {
-            return Err(Error::new(
-                ErrorKind::TimedOut,
-                "foot never sized its pty; is the font installed?",
+            return Err(Error::Capture(
+                "foot never sized its pty; is the font installed?".into(),
             ));
         }
         sleep(Duration::from_millis(100));
@@ -75,6 +79,14 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
 /// proxy's pump threads open on a pty nobody would close and shared the frame
 /// with the next capture — which the surface count would then report as a
 /// failure belonging to the wrong scene.
+///
+/// # Errors
+///
+/// When the scene is unknown or cannot be seeded, the fake provider or the
+/// proxy cannot start, the app exits before it is captured, the output holds
+/// anything but one surface, no still frame with the caret shown arrives in
+/// five half-periods, the PNG is not the size asked for, too few cells can be
+/// cross-checked against it, or any file or compositor call fails.
 #[allow(clippy::too_many_arguments)]
 pub fn capture(
     comp: &Compositor,
@@ -150,7 +162,7 @@ fn take_frame(
     let mut proxy = Proxy::start(comp, &baseline.font, cols as u16, rows as u16, command)?;
     proxy.wait_quiet(quiet_for, Duration::from_secs(20))?;
     if !proxy.app_running() {
-        return Err(Error::other(format!(
+        return Err(Error::Capture(format!(
             "{} exited before it could be captured",
             binary.display()
         )));
@@ -164,7 +176,7 @@ fn take_frame(
 
     let surfaces = comp.surface_count()?;
     if surfaces != 1 {
-        return Err(Error::other(format!(
+        return Err(Error::Capture(format!(
             "{surfaces} surfaces on the output, expected exactly 1 — something is sharing the frame"
         )));
     }
@@ -200,12 +212,12 @@ fn take_frame(
         }
     }
     let Some(grid) = grid else {
-        return Err(Error::other("no still frame with the caret shown in five half-periods — something faster than the caret is animating"));
+        return Err(Error::Capture("no still frame with the caret shown in five half-periods — something faster than the caret is animating".into()));
     };
 
     let (w, h) = png::size(&path)?;
     if (w, h) != (px_w, px_h) {
-        return Err(Error::other(format!(
+        return Err(Error::Capture(format!(
             "frame is {w}×{h}, asked for {px_w}×{px_h} — capture invariant failed"
         )));
     }
@@ -217,7 +229,7 @@ fn take_frame(
 
     let checked = verify_against_pixels(&grid, &path, cell)?;
     if checked < (cols * rows / 10) as usize {
-        return Err(Error::other(format!(
+        return Err(Error::Capture(format!(
             "only {checked} cells could be cross-checked against the frame — too few to trust the grid"
         )));
     }
@@ -226,7 +238,7 @@ fn take_frame(
     // palette membership, the closed glyph table, the copy rules — is in
     // `crates/tui/tests/render_snapshot.rs`, where a `TestBackend` buffer
     // holds the same cells hermetically and in milliseconds. What a real
-    // terminal is for is the picture: stage 5 looks at these, and nothing
+    // terminal is for is the picture: stage 8 looks at these, and nothing
     // else does.
     drop(proxy);
     Ok(path)
@@ -259,10 +271,10 @@ fn wait_for_png(path: &Path) -> Result<()> {
         }
         sleep(Duration::from_millis(100));
     }
-    Err(Error::new(
-        ErrorKind::TimedOut,
-        format!("grim wrote no frame at {}", path.display()),
-    ))
+    Err(Error::Capture(format!(
+        "grim wrote no frame at {}",
+        path.display()
+    )))
 }
 
 #[cfg(test)]

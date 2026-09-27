@@ -39,17 +39,22 @@ pub const HISTORY_VERSION: u32 = 1;
 /// the one thing an append-only file should never do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionHeader {
+    /// The transcript's shape; [`HISTORY_VERSION`] when written by this build.
     pub version: u32,
     /// Unix epoch seconds. Rendered by the picker; never parsed back.
     pub started_at: u64,
+    /// The directory the session was started in.
     pub cwd: String,
+    /// The model the session began on, as the provider spells it.
     pub model: String,
 }
 
 /// One row of what `/resume` lists.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
+    /// The session, and the file name its transcript is under.
     pub id: SessionId,
+    /// Unix epoch seconds, from the header.
     pub started_at: u64,
     /// First user message, trimmed to one line — see [`derive_title`].
     pub title: String,
@@ -103,6 +108,10 @@ impl HistoryStore {
     /// The directory *is* created here, eagerly: it is the cheap half, and
     /// it is what lets a session that cannot write history say so at startup
     /// rather than at the first committed record.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] when the directory cannot be created.
     pub fn create(dir: &Path, id: &SessionId, header: &SessionHeader) -> Result<Self, ConfigError> {
         fs::create_dir_all(dir).map_err(|e| ConfigError::Io {
             path: dir.to_path_buf(),
@@ -157,6 +166,11 @@ impl HistoryStore {
     /// newline, and an append straight onto it would fuse the next record —
     /// the resumed turn's `TurnStarted` — into the torn line, where [`load`]
     /// skips both. So the line is closed first.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] when the transcript does not exist or cannot be
+    /// opened, read or written.
     pub fn reopen(dir: &Path, id: &SessionId) -> Result<Self, ConfigError> {
         let path = transcript_path(dir, id);
         let io = |e| ConfigError::Io {
@@ -182,6 +196,7 @@ impl HistoryStore {
         })
     }
 
+    /// Where the transcript is, or will be once the first record lands.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -189,6 +204,15 @@ impl HistoryStore {
     /// Append one record, creating the transcript if this is the first.
     /// `Err` on the first failure only; every call after that is a silent
     /// no-op (see [`Sink::Off`]).
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Io`] when the transcript cannot be created or the
+    /// record cannot be written.
+    ///
+    /// # Panics
+    ///
+    /// If an earlier append panicked while holding the transcript's lock.
     pub fn append(&self, record: &LogRecord) -> Result<(), ConfigError> {
         let mut guard = self.sink.lock().expect("history file lock poisoned");
 
@@ -291,6 +315,11 @@ pub fn list(dir: &Path) -> Vec<SessionSummary> {
 /// appended to the file that still holds the dead half turn, so on the next
 /// load it sits in the middle. No finished turn at all loads as nothing —
 /// half a turn is worse than none.
+///
+/// # Errors
+///
+/// [`ConfigError::Io`] when the transcript cannot be opened. A line that
+/// cannot be read or parsed is skipped, not an error.
 pub fn load(dir: &Path, id: &SessionId) -> Result<Vec<LogRecord>, ConfigError> {
     let path = transcript_path(dir, id);
     let file = File::open(&path).map_err(|e| ConfigError::Io {

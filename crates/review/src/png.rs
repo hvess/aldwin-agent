@@ -6,17 +6,25 @@
 //! refuses anything else rather than guessing. The encoder is test-only: it
 //! makes the images the decoder's tests read back.
 
-use std::io::{Error, ErrorKind, Read, Result};
+use std::io::Read;
 use std::path::Path;
 
+use crate::{Error, Result};
+
+/// A decoded frame: its pixels unfiltered, three or four bytes each.
+#[derive(Debug)]
 pub struct Image {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
     bpp: usize,
     data: Vec<u8>,
 }
 
 impl Image {
+    /// The RGB of the pixel at `x`, `y`, alpha dropped; black outside the
+    /// image rather than a panic.
     pub fn pixel(&self, x: u32, y: u32) -> (u8, u8, u8) {
         if x >= self.width || y >= self.height {
             return (0, 0, 0);
@@ -25,6 +33,8 @@ impl Image {
         (self.data[i], self.data[i + 1], self.data[i + 2])
     }
 
+    /// The pixels as packed RGB, alpha dropped, with the image's width and
+    /// height.
     #[cfg(test)]
     pub fn into_rgb(self) -> (u32, u32, Vec<u8>) {
         if self.bpp == 3 {
@@ -40,6 +50,11 @@ impl Image {
 
 /// Width and height from the IHDR alone — cheap, and enough to enforce the
 /// capture invariant without decompressing anything.
+///
+/// # Errors
+///
+/// When the file cannot be read or does not start with a PNG signature and
+/// IHDR chunk.
 pub fn size(path: &Path) -> Result<(u32, u32)> {
     let bytes = std::fs::read(path)?;
     header(&bytes).map(|h| (h.0, h.1))
@@ -47,20 +62,26 @@ pub fn size(path: &Path) -> Result<(u32, u32)> {
 
 fn header(bytes: &[u8]) -> Result<(u32, u32, u8, u8, u8)> {
     if bytes.len() < 33 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
-        return Err(Error::new(ErrorKind::InvalidData, "not a PNG"));
+        return Err(Error::Png("not a PNG".into()));
     }
     let n = |o: usize| u32::from_be_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
     Ok((n(16), n(20), bytes[24], bytes[25], bytes[28]))
 }
 
+/// Reads and decodes an 8-bit RGB or RGBA, non-interlaced PNG.
+///
+/// # Errors
+///
+/// When the file cannot be read, is not a PNG, is any other depth, colour
+/// type or interlacing, its image data does not inflate, is shorter than the
+/// header claims, or uses an unknown filter.
 pub fn decode(path: &Path) -> Result<Image> {
     let bytes = std::fs::read(path)?;
     let (width, height, depth, color, interlace) = header(&bytes)?;
     if depth != 8 || interlace != 0 || !(color == 2 || color == 6) {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("unsupported PNG (depth {depth}, colour type {color}, interlace {interlace})"),
-        ));
+        return Err(Error::Png(format!(
+            "unsupported PNG (depth {depth}, colour type {color}, interlace {interlace})"
+        )));
     }
     let bpp = if color == 6 { 4 } else { 3 };
 
@@ -86,7 +107,7 @@ pub fn decode(path: &Path) -> Result<Image> {
     // allocation, so the size a header merely claims is never trusted.
     let stride = width as usize * bpp;
     if (raw.len() as u64) < (stride as u64 + 1) * height as u64 {
-        return Err(Error::new(ErrorKind::InvalidData, "truncated PNG data"));
+        return Err(Error::Png("truncated PNG data".into()));
     }
     let mut data = vec![0u8; stride * height as usize];
     for y in 0..height as usize {
@@ -112,12 +133,7 @@ pub fn decode(path: &Path) -> Result<Image> {
                 2 => v.wrapping_add(b),
                 3 => v.wrapping_add((((a as u16) + (b as u16)) / 2) as u8),
                 4 => v.wrapping_add(paeth(a, b, c)),
-                other => {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        format!("unknown PNG filter {other}"),
-                    ))
-                }
+                other => return Err(Error::Png(format!("unknown PNG filter {other}"))),
             };
         }
     }
@@ -145,15 +161,21 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
+/// Writes `rgb`, packed 8-bit RGB, as a PNG at `path` — for the decoder's
+/// tests to read back.
+///
+/// # Errors
+///
+/// When `rgb` is not `width × height × 3` bytes, compression fails, or the
+/// file cannot be written.
 #[cfg(test)]
 pub fn encode(path: &Path, width: u32, height: u32, rgb: &[u8]) -> Result<()> {
     use std::io::Write;
 
     let stride = width as usize * 3;
     if rgb.len() != stride * height as usize {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "RGB buffer does not match the image size",
+        return Err(Error::Png(
+            "RGB buffer does not match the image size".into(),
         ));
     }
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -171,7 +193,8 @@ pub fn encode(path: &Path, width: u32, height: u32, rgb: &[u8]) -> Result<()> {
     chunk(&mut out, b"IHDR", &ihdr);
     chunk(&mut out, b"IDAT", &idat);
     chunk(&mut out, b"IEND", &[]);
-    std::fs::write(path, out)
+    std::fs::write(path, out)?;
+    Ok(())
 }
 
 #[cfg(test)]

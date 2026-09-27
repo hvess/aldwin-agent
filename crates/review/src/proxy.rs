@@ -5,7 +5,7 @@
 //!
 //! * **the declared cell grid** — the character and the foreground and
 //!   background the app asked for, per cell, which is the declared
-//!   grid stage 5 reads positions from;
+//!   grid stage 8 reads positions from;
 //! * **quiesce** — the app going quiet is observable, so a frame is captured
 //!   when it is finished rather than after a hopeful interval;
 //! * **input** — keystrokes go in as bytes.
@@ -23,7 +23,7 @@
 //! sees the 80×24 foot would otherwise have handed it.
 
 use std::fs::File;
-use std::io::{Error, ErrorKind, Result, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +36,11 @@ use crate::geometry::Cell as CellSize;
 use crate::png;
 use crate::pty::{self, Pty};
 use crate::vt::{Color, Grid, Vt};
+use crate::{Error, Result};
 
+/// foot and the app, each on its own pty, with the harness pumping bytes
+/// between them and parsing the app's side. Dropping it kills the app.
+#[derive(Debug)]
 pub struct Proxy {
     app: Pty,
     vt: Arc<Mutex<Vt>>,
@@ -69,6 +73,12 @@ pub(crate) fn shell_quote(s: &str) -> String {
 impl Proxy {
     /// Start foot, wait for it to size its pty, then start the app on a pty
     /// already at that size.
+    ///
+    /// # Errors
+    ///
+    /// When a pty cannot be opened, sized or cloned, foot cannot be launched,
+    /// foot has not sized its pty to `cols` × `rows` within fifteen seconds,
+    /// or the app cannot be spawned.
     pub fn start(
         comp: &Compositor,
         font: &str,
@@ -88,10 +98,9 @@ impl Proxy {
             }
             if Instant::now() > deadline {
                 let (c, r) = display.winsize()?;
-                return Err(Error::new(
-                    ErrorKind::TimedOut,
-                    format!("foot sized its pty {c}×{r}, expected {cols}×{rows} — output mode and cell disagree"),
-                ));
+                return Err(Error::Capture(format!(
+                    "foot sized its pty {c}×{r}, expected {cols}×{rows} — output mode and cell disagree"
+                )));
             }
             thread::sleep(Duration::from_millis(50));
         }
@@ -134,6 +143,11 @@ impl Proxy {
     /// This is the spec's quiesce rule, and it replaces a settle interval:
     /// the spinner stops when there is no turn running, so a frame taken here
     /// is one the app considers finished rather than one caught mid-draw.
+    ///
+    /// # Errors
+    ///
+    /// When `timeout` passes first — the message says whether the app drew
+    /// nothing or never settled.
     pub fn wait_quiet(&self, idle: Duration, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -143,13 +157,13 @@ impl Proxy {
                 return Ok(());
             }
             if Instant::now() > deadline {
-                return Err(Error::new(
-                    ErrorKind::TimedOut,
+                return Err(Error::Capture(
                     if last == 0 {
                         "the app drew nothing at all"
                     } else {
                         "the frame never settled — something on screen is still changing (a spinner? a counter?)"
-                    },
+                    }
+                    .into(),
                 ));
             }
             thread::sleep(Duration::from_millis(25));
@@ -180,6 +194,10 @@ impl Proxy {
     /// Send bytes as if typed. The harness chooses these, so they test the
     /// app's handling and not foot's key encoding — the one thing this
     /// arrangement cannot vouch for.
+    ///
+    /// # Errors
+    ///
+    /// When the write to the app's pty fails.
     pub fn send(&self, bytes: &[u8]) -> Result<()> {
         self.app.write_all(bytes)
     }
@@ -196,6 +214,10 @@ impl Proxy {
     /// So: note the last-output mark, send, wait for it to move, then wait
     /// for silence. A key that legitimately draws nothing falls through the
     /// grace period and costs only that.
+    ///
+    /// # Errors
+    ///
+    /// When the send fails, or as [`Proxy::wait_quiet`].
     pub fn send_key(&self, bytes: &[u8], quiet: Duration, timeout: Duration) -> Result<()> {
         let before = self.idle.load(Ordering::Relaxed);
         self.send(bytes)?;
@@ -207,10 +229,16 @@ impl Proxy {
         self.wait_quiet(quiet, timeout)
     }
 
+    /// A copy of the screen as the app has drawn it so far.
+    ///
+    /// # Panics
+    ///
+    /// When a pump thread panicked while holding the parser's lock.
     pub fn grid(&self) -> Grid {
         self.vt.lock().expect("vt lock poisoned").grid().clone()
     }
 
+    /// Whether the app is still alive; an exited app is reaped here.
     pub fn app_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
@@ -290,6 +318,14 @@ fn spawn_pump(mut from: File, mut to: File, mut observe: Option<Observer>) {
 /// parser calls "a space on a known ground" must be a flat block of exactly
 /// that colour in the frame. Where they disagree, one of them is lying and
 /// the run is not scoreable.
+///
+/// Returns how many cells were checked, so a caller can refuse a frame where
+/// too few could be.
+///
+/// # Errors
+///
+/// When the frame cannot be decoded, or any checked cell's pixel differs
+/// from the ground the parser recorded for it.
 pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Result<usize> {
     let image = png::decode(frame)?;
     let mut checked = 0;
@@ -311,7 +347,7 @@ pub fn verify_against_pixels(grid: &Grid, frame: &Path, cell: CellSize) -> Resul
         }
         let got = image.pixel(x, y);
         if got != (r, g, b) {
-            return Err(Error::other(format!(
+            return Err(Error::Capture(format!(
                 "parser and frame disagree at cell ({row},{col}): parsed ground #{r:02x}{g:02x}{b:02x}, frame shows #{:02x}{:02x}{:02x}",
                 got.0, got.1, got.2
             )));

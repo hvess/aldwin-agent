@@ -1,7 +1,7 @@
 //! A terminal emulator, cut down to what the app under test actually emits.
 //!
 //! This is what turns the proxy's byte stream into the thing capture waits on
-//! and stage 5 reads positions from — the `.txt` beside each frame: a grid of
+//! and stage 8 reads positions from — the `.txt` beside each frame: a grid of
 //! cells, each carrying its character and the foreground and
 //! background the app *declared* for it. Reading those off the PNG instead
 //! cannot work — font rasterization antialiases every glyph edge into colours
@@ -21,6 +21,7 @@
 
 use unicode_width::UnicodeWidthChar;
 
+/// A colour as the app declared it in SGR.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Color {
     /// The terminal's own default — the app never painted this cell. The
@@ -28,24 +29,39 @@ pub enum Color {
     /// variant is a finding, not a value.
     #[default]
     Default,
+    /// One of the terminal's 256 palette entries, whose colour is foot's to
+    /// choose rather than the app's.
     Indexed(u8),
+    /// A truecolour value, which is how every design token reaches the
+    /// terminal.
     Rgb(u8, u8, u8),
 }
 
+/// The SGR attributes a cell was drawn with.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Attrs {
+    /// SGR 1.
     pub bold: bool,
+    /// SGR 2.
     pub dim: bool,
+    /// SGR 3.
     pub italic: bool,
+    /// SGR 4.
     pub underline: bool,
+    /// SGR 7: foreground and background swapped; see [`Cell::effective`].
     pub reverse: bool,
 }
 
+/// One terminal cell as the app declared it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Cell {
+    /// The character, or `'\0'` for the right half of a double-width glyph.
     pub ch: char,
+    /// Foreground as written, before `reverse` is applied.
     pub fg: Color,
+    /// Background as written, before `reverse` is applied.
     pub bg: Color,
+    /// The attributes in force when the cell was written.
     pub attrs: Attrs,
 }
 
@@ -78,9 +94,12 @@ impl Cell {
     }
 }
 
-#[derive(Clone)]
+/// The screen the app has drawn: every cell, row-major, and the caret.
+#[derive(Clone, Debug)]
 pub struct Grid {
+    /// Width in cells.
     pub cols: u16,
+    /// Height in cells.
     pub rows: u16,
     cells: Vec<Cell>,
     /// Where the terminal's cursor stands while it is shown. The app's
@@ -104,6 +123,7 @@ impl Grid {
         self.caret
     }
 
+    /// The cell at `row`, `col`; a default, unpainted cell outside the grid.
     pub fn get(&self, row: u16, col: u16) -> Cell {
         if row >= self.rows || col >= self.cols {
             return Cell::default();
@@ -116,6 +136,8 @@ impl Grid {
         &mut self.cells[i]
     }
 
+    /// One row's characters, continuation halves skipped and trailing
+    /// spaces trimmed.
     pub fn row_text(&self, row: u16) -> String {
         (0..self.cols)
             .map(|c| self.get(row, c))
@@ -126,6 +148,8 @@ impl Grid {
             .to_string()
     }
 
+    /// Every row as [`Grid::row_text`], joined by newlines — the `.txt`
+    /// written beside each frame.
     pub fn text(&self) -> String {
         (0..self.rows)
             .map(|r| self.row_text(r))
@@ -149,12 +173,13 @@ impl Grid {
         hasher.finish()
     }
 
+    /// Every cell with its `(row, col)`, row-major.
     pub fn cells(&self) -> impl Iterator<Item = (u16, u16, Cell)> + '_ {
         (0..self.rows).flat_map(move |r| (0..self.cols).map(move |c| (r, c, self.get(r, c))))
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum State {
     Ground,
     Esc,
@@ -164,6 +189,8 @@ enum State {
     Skip1,
 }
 
+/// The parser: feed it the app's bytes and read the [`Grid`] they drew.
+#[derive(Debug)]
 pub struct Vt {
     grid: Grid,
     row: u16,
@@ -184,6 +211,7 @@ pub struct Vt {
 }
 
 impl Vt {
+    /// A blank screen of `cols` × `rows` with the cursor home and shown.
     pub fn new(cols: u16, rows: u16) -> Self {
         Vt {
             grid: Grid::new(cols, rows),
@@ -201,10 +229,13 @@ impl Vt {
         }
     }
 
+    /// The screen as the bytes fed so far have left it.
     pub fn grid(&self) -> &Grid {
         &self.grid
     }
 
+    /// Parses `bytes` into the grid. A sequence may be split across calls;
+    /// the parser's state carries over.
     pub fn feed(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.byte(b);
@@ -686,7 +717,7 @@ mod tests {
     #[test]
     fn an_unrecognised_sequence_is_skipped_rather_than_printed() {
         // A parser that prints what it cannot parse would fabricate cells,
-        // and the grid stage 5 reads would report on glyphs the app never
+        // and the grid stage 8 reads would report on glyphs the app never
         // drew.
         let vt = vt(b"\x1b]0;a window title\x07\x1b[?25lok");
         assert_eq!(vt.grid().row_text(0), "ok");

@@ -9,21 +9,32 @@ use thiserror::Error;
 /// themselves.
 #[derive(Debug, Error)]
 pub enum StartupError {
+    /// A config layer failed to load or the global directory could not be
+    /// initialised.
     #[error(transparent)]
     Config(#[from] aldwin_config::ConfigError),
 
+    /// `~/.aldwin` exists but lacks some of its required files, so it is
+    /// neither left alone nor reinitialised.
     #[error(
         "~/.aldwin is missing required file(s): {missing:?} — refusing to start. \
          Restore the missing file(s), or remove ~/.aldwin entirely to reinitialize it."
     )]
-    PartiallyPresentGlobalConfig { missing: Vec<&'static str> },
+    PartiallyPresentGlobalConfig {
+        /// The required file names that are absent.
+        missing: Vec<&'static str>,
+    },
 
+    /// The configured provider's client could not be built.
     #[error(transparent)]
     Llm(#[from] aldwin_llm::LlmClientInitError),
 
+    /// The terminal could not be taken over, drawn to or restored.
     #[error("terminal I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// The current working directory, which roots the workspace, could not
+    /// be read.
     #[error("could not read the current working directory: {0}")]
     Cwd(#[source] std::io::Error),
 
@@ -31,7 +42,9 @@ pub enum StartupError {
     /// interceptor — panicked. Found when the session is wound down.
     #[error("the {task} stopped unexpectedly: {source}")]
     TaskFailed {
+        /// Which task stopped: `"agent"` or `"interceptor"`.
         task: &'static str,
+        /// The join error carrying the panic.
         #[source]
         source: tokio::task::JoinError,
     },

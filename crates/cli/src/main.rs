@@ -1,3 +1,7 @@
+//! The `aldwin` binary: parses no flags beyond `--help` and `--version`,
+//! then hands the process to [`aldwin_cli::run`] and turns its outcome into
+//! an exit code.
+
 use clap::Parser;
 
 /// A tool for thought.

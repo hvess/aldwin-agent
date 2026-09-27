@@ -1,14 +1,10 @@
 //! OpenAI-compatible wire types and the SSE-to-`LlmEvent` assembler. Nothing
-//! here is `pub` outside the crate — same Wire Isolation rule as `wire.rs`.
+//! here may be public outside the crate (Wire Isolation, as `wire.rs`).
 //!
-//! Grounded in a live probe against Mistral's `/v1/chat/completions` (their
-//! docs don't show the streamed tool-call delta shape): SSE frames are
-//! untyped `data: {...}` lines terminated by a literal `data: [DONE]`, text
-//! streams via `choices[0].delta.content` fragments, and a tool call can
-//! arrive whole in one delta (full id/name/arguments) rather than
-//! fragmented — the assembler still buffers by index defensively, since
-//! OpenAI's documented behavior does fragment `arguments` across chunks for
-//! other backends.
+//! From a live probe of Mistral's `/v1/chat/completions`: untyped `data:`
+//! frames ending in `[DONE]`, text in `choices[0].delta.content`. Mistral
+//! sends a tool call whole, but OpenAI fragments `arguments`, so tool calls
+//! are buffered by index.
 
 use aldwin_core::{ContentBlock, LlmRequest, Message, Role, StopReason, ToolCall, UsageStats};
 use serde::{Deserialize, Serialize};
@@ -67,13 +63,10 @@ pub struct WireFunctionCall {
     pub arguments: String,
 }
 
-/// Builds the request body. No cache/thinking fields: OpenAI-compatible has
-/// neither concept, so `request.cache_breakpoint` is deliberately unused
-/// here — not an oversight, this provider has nothing to place a breakpoint
-/// on. `max_tokens` reuses `config.extended_thinking_budget` verbatim (no
-/// Anthropic-style headroom math): for this provider the field is just "max
-/// output tokens," which is exactly what aldwin-config's doc comment
-/// already promises it can be used for.
+/// Builds the request body. The wire has no cache or thinking fields, so
+/// `request.cache_breakpoint` is unused. `max_tokens` is the thinking budget
+/// with no headroom: here it means max output tokens, as aldwin-config
+/// documents.
 pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
     let tools = request
         .tools
@@ -106,16 +99,11 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     }
 }
 
-/// OpenAI's message shape doesn't allow mixed tool-result + text content in
-/// one message the way Anthropic's content-block array does, so this walks
-/// blocks rather than messages: consecutive `Text` blocks and any `ToolUse`
-/// blocks accumulate into one buffered message (role from `m.role`), and
-/// each `ToolResult` flushes as its own separate `role:"tool"` message. In
-/// practice (see aldwin-core's agent.rs) tool results always live in their
-/// own `Role::User` message and tool uses in their own `Role::Assistant`
-/// message, so this produces exactly one OpenAI message per core message in
-/// the common case — the per-block walk just also handles the mixed case
-/// correctly without assuming it can't happen.
+/// Maps one message block by block, as OpenAI cannot mix tool results and
+/// text in one message: `Text` and `ToolUse` accumulate into a message with
+/// `m.role`, and each `ToolResult` becomes its own `role:"tool"` message.
+/// aldwin-core's `agent.rs` keeps results and uses in separate messages, so
+/// the mixed case is handled but rare.
 fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
     let role = role_str(&m.role);
     let mut text = String::new();
@@ -144,12 +132,8 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
     for block in &m.content {
         match block {
             ContentBlock::Text { text: t } => text.push_str(t),
-            // Dropped on the way out, deliberately. An OpenAI-compatible
-            // endpoint has no assistant-side reasoning block to send one
-            // back into — `reasoning` is a response-only field — so echoing
-            // it the way Anthropic requires would be a 400 here. It is still
-            // carried in core's history: which provider can accept it back
-            // is a wire question, not a history one.
+            // Never sent: `reasoning` is response-only, and echoing it is a
+            // 400. Core's history still keeps it (ADR 0006).
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
             ContentBlock::ToolUse(call) => tool_calls.push(map_tool_call(call)),
             ContentBlock::ToolResult(result) => {
@@ -206,8 +190,7 @@ pub struct WireChoice {
 pub struct WireDelta {
     #[serde(default)]
     pub content: Option<String>,
-    /// Lumo (and other reasoning backends) stream thinking text here, in the
-    /// same deltas as content.
+    /// Thinking text from reasoning backends such as Lumo.
     #[serde(default)]
     pub reasoning: Option<String>,
     #[serde(default)]
@@ -239,10 +222,9 @@ pub struct WireUsage {
     pub completion_tokens: u32,
 }
 
-/// Parses an error body. Mistral has returned two different shapes: an
-/// observed `{"detail": "..."}` (e.g. an invalid API key) and the documented
-/// `{"message": "..."}`. Tries `detail` first, then `message`, else `None`
-/// and the caller falls back to the raw text.
+/// The message in an error body: Mistral's observed `{"detail": "..."}`
+/// (an invalid key) or its documented `{"message": "..."}`. `None` for any
+/// other shape.
 pub fn parse_error_body(text: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Detail {
@@ -277,34 +259,24 @@ struct ToolBuffer {
     json: String,
 }
 
-/// Turns a sequence of `WireChunk`s from one HTTP attempt into
-/// `aldwin_core::LlmEvent`s.
+/// Turns one HTTP attempt's `WireChunk`s into `LlmEvent`s.
 ///
-/// One assembler drives exactly one attempt, and the contract spans two
-/// methods: feed every chunk to [`Assembler::handle`], then call
-/// [`Assembler::finish`] once the stream stops for any reason. StepEnded can
-/// come out of either — `handle` emits it as soon as usage is known, and
-/// `finish` releases one that was still waiting for usage that never came.
-/// Skipping `finish` silently loses the end of such a turn.
+/// Feed every chunk to [`Assembler::handle`], then always call
+/// [`Assembler::finish`] when the stream stops: `StepEnded` comes from
+/// either, and skipping `finish` loses a step still waiting for usage.
 ///
-/// Tool-call deltas are buffered by
-/// `tool_calls[].index` and flushed once, in index order, when
-/// `finish_reason` is `"tool_calls"` (or `"stop"` with calls buffered); any
-/// other terminal `finish_reason` maps to `StopReason::EndTurn` — same
-/// "everything unmapped falls back to EndTurn" philosophy as the Anthropic
-/// assembler. Usage is taken verbatim from whichever chunk carries it: it's
-/// already a complete total here, unlike Anthropic's start+delta fold.
+/// Tool calls are buffered by `tool_calls[].index` and flushed in index order
+/// on a tool turn; any other `finish_reason` is `EndTurn`. Usage is a
+/// complete total, taken from whichever chunk carries it.
 #[derive(Default)]
 pub struct Assembler {
     tool_buffers: BTreeMap<usize, ToolBuffer>,
     usage: Option<WireUsage>,
-    /// Set when `finish_reason` arrived before any usage did — see
-    /// [`Assembler::end_step`].
+    /// Set when `finish_reason` came before usage ([`Assembler::end_step`]).
     pending_stop: Option<StopReason>,
-    /// Whether a ThinkingStart has been emitted without its ThinkingEnd.
+    /// A `ThinkingStart` has been emitted without its `ThinkingEnd`.
     in_reasoning: bool,
-    /// Reasoning text accumulated since `ThinkingStart`, handed over whole
-    /// on `ThinkingEnd`.
+    /// Reasoning since `ThinkingStart`, handed over on `ThinkingEnd`.
     reasoning_buf: String,
 }
 
@@ -316,9 +288,7 @@ impl Assembler {
 
         if let Some(usage) = chunk.usage {
             self.usage = Some(usage);
-            // Proton's Lumo puts usage in a trailing, choice-less chunk
-            // *after* the one carrying `finish_reason`; a StepEnded held back
-            // by that ordering can now be emitted with real token counts.
+            // Lumo sends usage in a choice-less chunk after `finish_reason`.
             if let Some(stop) = self.pending_stop.take() {
                 events.push(self.step_ended(stop));
             }
@@ -332,11 +302,9 @@ impl Assembler {
         let text = choice.delta.content.filter(|t| !t.is_empty());
         let tool_calls = choice.delta.tool_calls.unwrap_or_default();
 
-        // The first reasoning fragment opens a thinking block and the first
-        // non-reasoning thing closes it; the text is accumulated and handed
-        // over whole on the close (ADR 0006). There is no signature on this
-        // wire: the field is Anthropic's, and an empty one is honest about
-        // that rather than fabricating a stamp nothing issued.
+        // Reasoning opens a thinking block; the first non-reasoning delta
+        // closes it with the whole text (ADR 0006). This wire has no
+        // signature: leave it empty, never invent one.
         if let Some(fragment) = reasoning {
             if !self.in_reasoning {
                 events.push(LlmEvent::ThinkingStart);
@@ -374,9 +342,8 @@ impl Assembler {
         }
 
         match choice.finish_reason.as_deref() {
-            // `"stop"` with calls buffered is a tool turn too: some
-            // compatible backends never say `"tool_calls"`, and treating it
-            // as the end of the turn loses the calls without a word.
+            // `"stop"` with calls buffered is a tool turn: some backends never
+            // send `"tool_calls"`, and the calls would be lost silently.
             Some(reason)
                 if reason == "tool_calls"
                     || (reason == "stop" && !self.tool_buffers.is_empty()) =>
@@ -407,11 +374,9 @@ impl Assembler {
         Ok(events)
     }
 
-    /// Emits StepEnded now if usage is already known (Mistral puts it in the
-    /// same chunk as `finish_reason`), otherwise holds the stop reason until
-    /// a trailing usage chunk arrives or the stream ends. Holding it is what
-    /// makes token counts land for backends that report usage last; without
-    /// it every step from such a backend reports zero.
+    /// Emits `StepEnded` if usage is known (Mistral sends it with
+    /// `finish_reason`), else holds it for trailing usage or the stream's
+    /// end; emitting early reports zero tokens for such backends.
     fn end_step(&mut self, stop_reason: StopReason, events: &mut Vec<aldwin_core::LlmEvent>) {
         if self.usage.is_some() {
             events.push(self.step_ended(stop_reason));
@@ -420,10 +385,8 @@ impl Assembler {
         }
     }
 
-    /// Called when the stream ends for any reason — `[DONE]`, a closed
-    /// connection, an idle timeout, a framing error. A held-back StepEnded is
-    /// a *complete* turn whose usage chunk never came, so it flushes (with
-    /// zero usage) rather than surfacing as a stream failure.
+    /// Called however the stream ends. A held-back `StepEnded` is a complete
+    /// step without usage: it flushes with zero usage, not as a failure.
     pub fn finish(&mut self) -> Option<aldwin_core::LlmEvent> {
         self.pending_stop.take().map(|stop| self.step_ended(stop))
     }
@@ -549,9 +512,8 @@ mod tests {
         assert!(matches!(err, WireError::ToolInput { .. }));
     }
 
-    /// A compatible backend that ends a tool turn with `"stop"` rather than
-    /// `"tool_calls"`: the calls used to be dropped and the turn reported as
-    /// finished, which reads as the model saying nothing at all.
+    /// Regression: a tool turn ended with `"stop"`, not `"tool_calls"`, lost
+    /// its calls.
     #[test]
     fn tool_calls_still_flush_when_the_turn_ends_with_stop() {
         let mut a = Assembler::default();
@@ -583,8 +545,7 @@ mod tests {
     #[test]
     fn an_unmapped_finish_reason_falls_back_to_end_turn() {
         let mut a = Assembler::default();
-        // No usage anywhere in this stream, so StepEnded waits for the end of
-        // it — the mapping is what's under test, not the timing.
+        // No usage, so `StepEnded` comes from `finish`.
         assert!(a
             .handle(chunk(
                 r#"{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#
@@ -597,9 +558,8 @@ mod tests {
         assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
     }
 
-    /// Proton's Lumo shape, captured live: `finish_reason` lands in one
-    /// chunk and `usage` in a later, choice-less one. Emitting StepEnded at
-    /// the first would report zero tokens for every turn.
+    /// Lumo, captured live: `usage` comes in a choice-less chunk after
+    /// `finish_reason`; emitting `StepEnded` early reports zero tokens.
     #[test]
     fn usage_arriving_after_finish_reason_still_reaches_step_ended() {
         let mut a = Assembler::default();
@@ -654,11 +614,8 @@ mod tests {
         assert_eq!(outcome.usage.input_tokens, 3);
     }
 
-    /// `lumo-max` streams thinking as `delta.reasoning` alongside content.
-    /// The fragments still bracket into ThinkingStart/ThinkingEnd, but since
-    /// ADR 0006 the text is accumulated and handed over on the close rather
-    /// than dropped. There is no signature on this wire, so it closes with an
-    /// empty one rather than a fabricated stamp.
+    /// `lumo-max` streams `delta.reasoning`; it closes with the whole text
+    /// (ADR 0006) and an empty signature.
     #[test]
     fn reasoning_deltas_bracket_and_carry_their_text() {
         let mut a = Assembler::default();
@@ -713,8 +670,8 @@ mod tests {
     }
 
     #[test]
-    /// An OpenAI-compatible endpoint has no assistant-side reasoning block,
-    /// so a carried thinking block must not be echoed into the request.
+    /// This wire has no request-side reasoning field: carried thinking must
+    /// not be sent.
     fn thinking_blocks_are_not_sent_back_on_this_wire() {
         let messages = [Message {
             role: Role::Assistant,

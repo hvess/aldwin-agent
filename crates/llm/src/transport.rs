@@ -1,10 +1,5 @@
-//! The request, retry and SSE loop both provider clients run.
-//!
-//! The two providers differ in what a stream's events mean, not in how a
-//! stream is fetched: the same POST, the same retry policy (`retry.rs`), the
-//! same idle timeout, and the same rule that nothing is retried once an event
-//! has crossed the boundary. So the loop is written once, here, and each
-//! wire dialect supplies only what is its own — a [`Dialect`].
+//! The request, retry and SSE loop both provider clients share; each wire
+//! dialect supplies only its reading of events, a [`Dialect`].
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -22,36 +17,31 @@ use serde::Serialize;
 use crate::client::LlmClientInitError;
 use crate::retry::{self, backoff, is_retryable_status, should_retry, terminal_error};
 
-/// One provider's reading of its own stream: a fresh value per attempt,
-/// fed each SSE `data:` payload in order.
+/// One provider's reading of its stream: a fresh value per attempt, fed each
+/// SSE `data:` payload in order.
 pub(crate) trait Dialect: Default + Send {
-    /// Named in every `RetryAttempt`, so a retry is attributed to its
-    /// provider.
+    /// The provider named in every `RetryAttempt`.
     const PROVIDER: &'static str;
-    /// What the provider calls the end of a step, for the message a stream
-    /// that ended without one carries.
+    /// The provider's name for a step's end, used in the error when a stream
+    /// closes without one.
     const STEP_END: &'static str;
 
-    /// The message in an error response's body, when the body is the
-    /// provider's own error shape.
+    /// The message in an error body, when it has the provider's error shape.
     fn error_message(body: &str) -> Option<String>;
 
-    /// One SSE payload. `Err` is why the stream cannot be read any further.
+    /// Reads one SSE payload. `Err` says why the stream cannot be read further.
     fn read(&mut self, data: &str) -> Result<Vec<LlmEvent>, String>;
 
-    /// The stream ended, however it ended. A dialect that holds a finished
-    /// step back — waiting for usage that may come after it — completes it
-    /// here; `None` means there was nothing to complete.
+    /// Called once the stream ends, however it ends: returns a finished step
+    /// the dialect held back (waiting for trailing usage), or `None`.
     fn close(&mut self) -> Option<LlmEvent> {
         None
     }
 }
 
-/// A connected account behind a request, as the loop needs it (ADR 0012):
-/// the headers for one request, and a way to say the endpoint refused the
-/// token. The one implementation outside a test is aldwin-login's
-/// [`Session`]; a test's stands in for it so every answer a session can
-/// give is reachable without an account server.
+/// A connected account as the loop needs it (ADR 0012): one request's
+/// headers, and a way to report a refused token. Implemented by [`Session`];
+/// tests substitute their own to reach every answer without an account server.
 #[async_trait]
 pub(crate) trait Bearer: Send + Sync {
     async fn headers(&self) -> Result<HeaderMap, SessionError>;
@@ -69,8 +59,8 @@ impl Bearer for Session {
     }
 }
 
-/// A request authenticated by a connected account rather than a fixed
-/// header, and the sentence for the day the account is gone.
+/// Authentication by a connected account, and the error sentence for when
+/// the account is logged out.
 struct ConnectedAccount {
     bearer: Arc<dyn Bearer>,
     disconnected: String,
@@ -86,8 +76,8 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    /// One `reqwest::Client` per session — cheap to clone, expensive to
-    /// construct (rustls, HTTP/2 via the crate's features).
+    /// Builds one `reqwest::Client` per session: cheap to clone, expensive
+    /// to construct.
     pub(crate) fn new(endpoint: String, headers: HeaderMap) -> Result<Self, LlmClientInitError> {
         let http = reqwest::Client::builder()
             .build()
@@ -101,9 +91,8 @@ impl Transport {
         })
     }
 
-    /// Authenticates every request through `bearer`, resolved per attempt
-    /// so a token refreshed between two is the one sent. `disconnected` is
-    /// what the developer reads when the account is no longer good.
+    /// Authenticates every request through `bearer`, resolved per attempt so
+    /// a refreshed token is used. `disconnected` is the error once logged out.
     pub(crate) fn with_account(mut self, bearer: Arc<dyn Bearer>, disconnected: String) -> Self {
         self.account = Some(ConnectedAccount {
             bearer,
@@ -112,18 +101,16 @@ impl Transport {
         self
     }
 
-    /// A test's stand-in for the 60s idle timeout, so the retry path can be
-    /// exercised without waiting it out.
+    /// Replaces `retry::IDLE_TIMEOUT` in tests.
     #[cfg(test)]
     pub(crate) fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
         self.idle_timeout = idle_timeout;
         self
     }
 
-    /// POSTs `body` and streams the step back as `D` reads it, retrying what
-    /// `retry.rs` says is retryable — every attempt visible as a
-    /// `RetryAttempt` — until an event has been emitted, and never after:
-    /// a second attempt then would splice two completions into one log entry.
+    /// POSTs `body` and streams the step as `D` reads it. Retries (each
+    /// yielded as a `RetryAttempt`) only until the first event is emitted:
+    /// a later retry would splice two completions into one log entry.
     pub(crate) fn stream<'a, D: Dialect + 'a>(
         &'a self,
         body: impl Serialize + Send + Sync + 'a,
@@ -140,8 +127,7 @@ impl Transport {
 
         Box::pin(try_stream! {
             let mut attempt: u32 = 0;
-            // A token the endpoint refuses is refreshed once and the request
-            // sent again; a second refusal is the endpoint's answer.
+            // A refused token is refreshed once; a second 401 is final.
             let mut refreshed = false;
 
             'attempts: loop {
@@ -151,15 +137,13 @@ impl Transport {
                 if let Some(account) = &self.account {
                     match account.bearer.headers().await {
                         Ok(bearer) => headers.extend(bearer),
-                        // Nothing is sent, so the error is Aldwin's own
-                        // sentence: zero attempts, which the failure row
-                        // leads with as written.
+                        // Nothing was sent: `attempts: 0` makes the failure
+                        // row show `disconnected` as written.
                         Err(SessionError::LoggedOut) => {
                             Err(LlmError::Terminal { attempts: 0, message: account.disconnected.clone() })?;
                             continue;
                         }
-                        // The account server's passing trouble is the same
-                        // kind of failure as not reaching the provider.
+                        // Retried like a network failure.
                         Err(SessionError::Failed(message)) => {
                             if should_retry(attempt) {
                                 yield retrying(None, message, attempt);
@@ -237,10 +221,9 @@ impl Transport {
                             }
                         }
                         Err(message) => {
-                            // Every way a stream can end reaches this arm, so
-                            // this is where a step the dialect held back gets
-                            // completed. Only a stream that ended without
-                            // one falls through to the failure paths below.
+                            // Every stream end reaches this arm, so a held-back
+                            // step completes here; only a stream without one
+                            // is a failure.
                             if let Some(event) = dialect.close() {
                                 yield event;
                                 return;
@@ -264,9 +247,8 @@ impl Transport {
     }
 }
 
-/// The key the provider's `api_key_env` names, read now — a session refuses
-/// to start on a missing variable, naming it exactly as `provider.yaml`
-/// spelled it (aldwin-llm.md's Pitfalls).
+/// Reads the key `api_key_env` names. A missing variable refuses the session,
+/// named exactly as `provider.yaml` spells it (aldwin-llm.md, Pitfalls).
 pub(crate) fn api_key(var: &str) -> Result<String, LlmClientInitError> {
     std::env::var(var).map_err(|_| LlmClientInitError::MissingApiKeyEnv {
         var: var.to_string(),

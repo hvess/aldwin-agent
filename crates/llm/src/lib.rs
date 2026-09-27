@@ -1,7 +1,6 @@
-//! The provider clients implementing core's `LlmClient` trait, and the
-//! provider catalogue. See `.claude/spec/archive/aldwin-llm.md`. Every wire
-//! type stays in the private `wire` / `wire_openai` modules — nothing
-//! provider-shaped is part of this crate's public surface.
+//! Provider clients implementing core's `LlmClient`, and the provider
+//! catalogue (`.claude/spec/archive/aldwin-llm.md`). Wire types stay in the
+//! private `wire` / `wire_openai` modules: nothing provider-shaped is public.
 
 mod catalog;
 mod client;
@@ -12,15 +11,12 @@ mod transport;
 mod wire;
 mod wire_openai;
 
-/// A canned-response HTTP server, used by this crate's own tests and — behind
-/// the `test-server` feature — by the screenshot harness, which needs the TUI
-/// driven by a provider that answers the same way every run.
+/// A canned-response HTTP server for this crate's tests and, behind the
+/// `test-server` feature, the screenshot harness.
 ///
-/// The feature exists so the fake never reaches the shipped binary: nothing
-/// enables it except a dev-only crate. Note that Cargo unifies features across
-/// one build graph, so a `cargo build --workspace` does compile it into
-/// `aldwin-cli`; the release workflow builds `-p aldwin-cli`, where it stays
-/// off.
+/// Only a dev-only crate may enable the feature, so the fake stays out of the
+/// shipped binary. Cargo unifies features: `cargo build --workspace` compiles
+/// it into `aldwin-cli`; the release build (`-p aldwin-cli`) does not.
 #[cfg(any(test, feature = "test-server"))]
 pub mod test_server;
 

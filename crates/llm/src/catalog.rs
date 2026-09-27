@@ -1,81 +1,56 @@
-//! The provider catalogue — what the provider question (the first message
-//! with nothing configured, or bare `/model`) chooses between.
+//! The provider catalogue the provider question and bare `/model` choose
+//! from. aldwin-tui gets the display half (id, purpose) from the CLI; it must
+//! not depend on this crate, which would invert the dependency order.
 //!
-//! It lives here rather than in aldwin-tui or aldwin-cli because every
-//! field in it is knowledge this crate already owns: which wire dialect a
-//! host speaks, what its chat-completions URL is, and which environment
-//! variable holds its key. aldwin-tui is handed the display half of these
-//! rows (id and purpose) by the CLI rather than depending on this crate,
-//! which would invert the workspace's dependency order.
-//!
-//! **The model lists are seeds, not a ceiling.** A provider's real catalogue
-//! is a network call away and changes without us; `provider.yaml` takes any
-//! model id as a plain string, and so does `/model`. What is listed here is
-//! what the harness will *suggest*, and the first entry is what `/model
-//! provider` writes when the developer names a provider and nothing else.
-//!
-//! Every entry names an environment variable. A provider that needs no key
-//! at all — a local Ollama, say — has no representation here, because
-//! `api_key_env` is a required field of `provider.yaml` and
-//! `OpenAiCompatibleClient` refuses to start when the variable it names is
-//! unset. Supporting one means relaxing that field to an `Option`, which
-//! changes a persisted format and so wants its own decision record first.
+//! Model lists are suggestions: `provider.yaml` and `/model` accept any id.
+//! A key-less provider (a local Ollama) cannot be listed: `api_key_env` is
+//! required, and making it optional changes a persisted format (needs an ADR).
 
 use aldwin_config::ProviderKind;
 use aldwin_login::Account;
 
-/// One model on offer, in the shared 16-cell option row: the id that lands
-/// in `provider.yaml`, and what picking it does.
+/// One model on offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Model {
-    /// The model id as the provider's API takes it, written verbatim to
-    /// `provider.yaml`.
+    /// The API's model id, written verbatim to `provider.yaml`.
     pub id: &'static str,
-    /// What picking this model does, in the option row's words.
+    /// The option row's description.
     pub purpose: &'static str,
-    /// The model's context window in tokens, for the context bar. A seed
-    /// like the rest of the row: a provider can change it without us, and
-    /// the bar is a gauge, not an accounting.
+    /// Context window in tokens, for the context bar. Approximate: the
+    /// provider may change it.
     pub context: u32,
 }
 
 /// One provider on offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provider {
-    /// The lowercase name in the option's 16-cell field, and the word
-    /// `/model` takes before the `/`.
+    /// Lowercase, under 16 cells; the word before the `/` in `/model`.
     pub id: &'static str,
-    /// The wire dialect the provider speaks, which picks the client.
+    /// The wire dialect, which picks the client.
     pub kind: ProviderKind,
-    /// What picking it does — the design's own row copy, which names the
-    /// models and the key variable because both are what the developer
-    /// needs before they can choose.
+    /// The option row's description: the models and the key variable.
     pub purpose: &'static str,
-    /// The environment variable that holds the provider's API key, written
-    /// to `provider.yaml` as `api_key_env`.
+    /// The key's environment variable, written as `api_key_env`.
     pub api_key_env: &'static str,
-    /// The account a developer may connect instead of exporting a key
-    /// (ADR 0012), where the provider offers one. A connected account is
-    /// used before the key.
+    /// The account that may be connected instead of a key, tried first
+    /// (ADR 0012).
     pub account: Option<Account>,
-    /// The full chat-completions URL, used verbatim — not a prefix. `None`
-    /// for Anthropic, whose client has a single well-known endpoint.
+    /// The full chat-completions URL, posted to verbatim. `None` for
+    /// Anthropic, whose client has a fixed endpoint.
     pub base_url: Option<&'static str>,
-    /// The models suggested for this provider, the default first. Seeds,
-    /// not a ceiling: any model id is accepted.
+    /// Suggested models, the default first; any id is accepted.
     pub models: &'static [Model],
 }
 
 impl Provider {
-    /// What `/model provider` writes when the developer names this provider
-    /// and says nothing about a model. Never empty:
-    /// `every_provider_offers_a_model` pins that.
+    /// The model `/model provider` writes when no model is named. `models`
+    /// is never empty (`every_provider_offers_a_model`).
     pub fn default_model(&self) -> &'static str {
         self.models[0].id
     }
 }
 
-/// In the order the provider question lists them.
+/// The providers, in the order the provider question lists them.
 pub static PROVIDERS: &[Provider] = &[
     Provider {
         id: "anthropic",
@@ -224,26 +199,22 @@ pub static PROVIDERS: &[Provider] = &[
     },
 ];
 
-/// The catalogue entry for `id`, or `None` — the check `/model` runs before
-/// it will write a provider name into `provider.yaml`.
+/// The catalogue entry for `id`; `/model` checks it before writing a
+/// provider.
 pub fn provider(id: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
-/// Every provider id, in catalogue order — for a command that has to say
-/// what it would have accepted.
+/// Every provider id, in catalogue order.
 pub fn provider_ids() -> Vec<&'static str> {
     PROVIDERS.iter().map(|p| p.id).collect()
 }
 
-/// The catalogue entry whose `kind` and `base_url` match a `provider.yaml`'s,
-/// or `None` when the developer has hand-written an endpoint the catalogue
-/// has never heard of.
+/// The catalogue entry matching a `provider.yaml`'s `kind` and `base_url`;
+/// `None` for a hand-written endpoint.
 ///
-/// Matching on the endpoint rather than on a name stored in the file is
-/// deliberate: `provider.yaml` records what to *call*, not which row of a
-/// menu was clicked, and adding a name field would create a second source
-/// of truth that could disagree with the URL beside it.
+/// Do not store a provider name in `provider.yaml` instead: it would be a
+/// second source of truth that could disagree with the URL.
 pub fn identify(kind: ProviderKind, base_url: Option<&str>) -> Option<&'static Provider> {
     PROVIDERS
         .iter()
@@ -254,8 +225,7 @@ pub fn identify(kind: ProviderKind, base_url: Option<&str>) -> Option<&'static P
 mod tests {
     use super::*;
 
-    /// The context bar divides by this, so a zero would be a bar that never
-    /// moves — or a divide by zero, depending on who reads it.
+    /// The context bar divides by `context`.
     #[test]
     fn every_model_states_a_context_window() {
         for p in PROVIDERS {
@@ -271,8 +241,7 @@ mod tests {
         }
     }
 
-    /// `default_model()` indexes `[0]`, so an empty list would panic at
-    /// `/model provider` rather than at compile time.
+    /// `default_model()` indexes `[0]`.
     #[test]
     fn every_provider_offers_a_model() {
         for p in PROVIDERS {
@@ -284,9 +253,7 @@ mod tests {
         }
     }
 
-    /// Ids reach `/model` as the half before a `/`, and land in
-    /// `provider.yaml` — a duplicate would make `provider()` silently
-    /// prefer whichever came first.
+    /// `/model` splits on `/`, and `provider()` takes the first match.
     #[test]
     fn provider_ids_are_unique_and_lowercase() {
         let mut seen = std::collections::BTreeSet::new();
@@ -306,8 +273,8 @@ mod tests {
         }
     }
 
-    /// `OpenAiCompatibleClient::new` errors without a `base_url`, and
-    /// `AnthropicClient` has its own endpoint and would ignore one.
+    /// `OpenAiCompatibleClient::new` requires `base_url`; `AnthropicClient`
+    /// ignores it.
     #[test]
     fn only_the_openai_compatible_entries_carry_an_endpoint() {
         for p in PROVIDERS {
@@ -328,9 +295,8 @@ mod tests {
         }
     }
 
-    /// An account is offered beside a key, never instead of one: the
-    /// key-less row would be a provider that cannot be reached without an
-    /// account.
+    /// An account is offered beside a key, never instead of one (the key is
+    /// pinned by `every_provider_names_a_key_variable`).
     #[test]
     fn an_account_is_offered_beside_a_key_and_xai_offers_one() {
         for p in PROVIDERS {
@@ -342,8 +308,7 @@ mod tests {
         assert_eq!(provider("xai").unwrap().account, Some(Account::Xai));
     }
 
-    /// Every entry names an environment variable, and never a key: there is
-    /// deliberately no field a secret could travel in.
+    /// A variable name, never a key: no field may carry a secret.
     #[test]
     fn every_provider_names_a_key_variable() {
         for p in PROVIDERS {
@@ -361,8 +326,7 @@ mod tests {
         }
     }
 
-    /// The endpoint is what identifies a provider, so two rows sharing one
-    /// would make `identify` ambiguous.
+    /// `identify` matches on the endpoint.
     #[test]
     fn no_two_providers_share_an_endpoint() {
         let mut seen: Vec<(ProviderKind, Option<&str>)> = Vec::new();
@@ -377,11 +341,9 @@ mod tests {
         }
     }
 
-    /// These rows are drawn on the design system's shared option row: a
-    /// `▌` and two spaces at cell 13, a 16-cell name field, then the
-    /// purpose, all inside a 120-cell frame with a 3-cell right margin.
-    /// Nothing here can see that layout, so the budget is restated rather
-    /// than imported — a row that overflows it is a row the frame elides.
+    /// The design's option row: a `▌` and two spaces at cell 13, a 16-cell
+    /// name field, the purpose, in a 120-cell frame with a 3-cell right
+    /// margin. Restated here, as this crate cannot import the TUI's layout.
     #[test]
     fn every_row_fits_the_option_row_it_is_drawn_on() {
         const NAME_FIELD: usize = 16;

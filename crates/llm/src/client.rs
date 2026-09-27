@@ -9,12 +9,11 @@ use crate::config::{Auth, ProviderConfig};
 use crate::transport::{self, Dialect, Transport};
 use crate::wire::{self, Assembler, WireEvent};
 
-/// Why a client could not be built. Every variant is found at startup,
-/// before any request is sent, so a misconfiguration never surfaces as a
-/// failed turn.
+/// Why a client could not be built. Every variant is raised at startup,
+/// never as a failed turn.
 #[derive(Debug, Error)]
 pub enum LlmClientInitError {
-    /// The environment variable `provider.yaml` names for the key is unset.
+    /// The key's environment variable is unset.
     #[error("environment variable {var:?} (provider.yaml's api_key_env) is not set")]
     MissingApiKeyEnv {
         /// The variable's name, verbatim from `provider.yaml`.
@@ -23,26 +22,26 @@ pub enum LlmClientInitError {
     /// The key's value cannot be sent as an HTTP header value.
     #[error("environment variable {var:?}'s value is not a valid HTTP header value")]
     InvalidApiKeyValue {
-        /// The variable's name — never its value, which is the secret.
+        /// The variable's name. Never its value: that is the secret.
         var: String,
     },
     /// reqwest could not build the HTTP client.
     #[error("failed to construct the HTTP client: {0}")]
     HttpClient(#[source] reqwest::Error),
-    /// The OpenAI-compatible provider was configured without a `base_url`.
+    /// The OpenAI-compatible provider has no `base_url`.
     #[error("provider.yaml's base_url is required for the openai-compatible provider")]
     MissingBaseUrl,
     /// A connected account was handed to a client that only takes a key.
     #[error("this provider takes an API key, not a connected account")]
     AccountNotOffered,
-    /// The connected account's session could not be made ready, with the
-    /// reason as a sentence.
+    /// The connected account's session could not be set up; the reason as a
+    /// sentence.
     #[error("the connected account's session could not be set up: {0}")]
     ConnectionSession(String),
 }
 
-/// V0 Anthropic client implementing core's `LlmClient`. No Anthropic wire
-/// type crosses this struct's public surface — see `wire.rs`.
+/// The Anthropic client. No Anthropic wire type crosses its public surface
+/// (`wire.rs`).
 pub struct AnthropicClient {
     config: ProviderConfig,
     transport: Transport,
@@ -57,24 +56,18 @@ impl std::fmt::Debug for AnthropicClient {
 }
 
 impl AnthropicClient {
-    /// Reads `std::env::var(config.api_key_env)` now — refuses to start on a
-    /// missing var, surfacing the var name verbatim from the YAML (not a
-    /// canonicalised form), per aldwin-llm.md's Pitfalls.
+    /// Builds the client, reading the API key from the environment now.
     ///
-    /// `base_url` is deliberately not consulted: per provider.yaml's own
-    /// annotated comment ("base_url: only used when provider is
-    /// openai-compatible", see aldwin-config's annotated.rs), the field is
-    /// scoped to the OpenAI-compatible adapter. Honouring it here would
-    /// silently redirect Anthropic requests for anyone who has a leftover
-    /// base_url set while `provider: anthropic`.
+    /// Never reads `base_url`: it is scoped to openai-compatible (aldwin-config's
+    /// `annotated.rs`), and honouring it would silently redirect a leftover
+    /// setting's Anthropic requests.
     ///
     /// # Errors
     ///
-    /// Returns [`LlmClientInitError::AccountNotOffered`] when `config.auth`
-    /// is a connected account, [`LlmClientInitError::MissingApiKeyEnv`] when
-    /// the key's variable is unset, [`LlmClientInitError::InvalidApiKeyValue`]
-    /// when its value cannot be a header, and
-    /// [`LlmClientInitError::HttpClient`] when the HTTP client cannot be built.
+    /// [`LlmClientInitError::AccountNotOffered`] for a connected account,
+    /// [`LlmClientInitError::MissingApiKeyEnv`] for an unset variable,
+    /// [`LlmClientInitError::InvalidApiKeyValue`] for a key that is not a
+    /// header value, [`LlmClientInitError::HttpClient`] if reqwest fails.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let Auth::ApiKeyEnv(var) = &config.auth else {
             return Err(LlmClientInitError::AccountNotOffered);
@@ -84,10 +77,7 @@ impl AnthropicClient {
         Ok(Self { config, transport })
     }
 
-    /// Test-only: points at a local fake server instead of the real
-    /// Anthropic endpoint, with an injectable idle timeout, so the
-    /// retry/SSE state machine can be exercised against controlled
-    /// byte-level responses without a live API key or a real 60s wait.
+    /// A client pointed at a fake server, with a short idle timeout.
     #[cfg(test)]
     pub(crate) fn with_endpoint(
         config: ProviderConfig,
@@ -103,9 +93,8 @@ impl AnthropicClient {
     }
 }
 
-/// The key and the pinned API version. `Content-Type` is left to reqwest's
-/// `json`, which sets it. `var` is named when the key will not go in a
-/// header.
+/// The key and the pinned API version; reqwest's `json` sets `Content-Type`.
+/// `var` names the key in the error.
 fn headers(api_key: &str, var: &str) -> Result<HeaderMap, LlmClientInitError> {
     let key =
         HeaderValue::from_str(api_key).map_err(|_| LlmClientInitError::InvalidApiKeyValue {
@@ -317,10 +306,8 @@ data: {"type":"message_stop"}
 
     #[tokio::test]
     async fn mid_stream_failure_after_first_event_is_never_retried() {
-        // message_start + one text delta, then the connection just ends
-        // (no message_stop) — per spec, once at least one event has been
-        // emitted this attempt, a subsequent failure is terminal even
-        // though retry attempts remain.
+        // The stream ends without message_stop after an event: terminal,
+        // though attempts remain.
         let partial = r#"event: message_start
 data: {"type":"message_start","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
 

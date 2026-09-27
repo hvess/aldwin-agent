@@ -2,13 +2,9 @@ use std::time::Duration;
 
 use aldwin_core::LlmError;
 
-/// Chooses the terminal error variant for a failure we're not retrying.
-/// `attempt == 1` means nothing was ever retried — surface the specific
-/// cause (`Provider`/`Network`). `attempt > 1` means retries were exhausted
-/// — surface `Terminal`, core's "gave up after N attempts" bucket, since by
-/// that point the specific final-attempt cause is less useful than the
-/// attempt count. The rule is provider-agnostic; `transport.rs` applies it
-/// for both clients.
+/// The error for a failure that is not retried: the specific cause
+/// (`Provider`/`Network`) on the first attempt, `Terminal` with the attempt
+/// count once retries are spent. Shared by both clients via `transport.rs`.
 pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> LlmError {
     if attempt == 1 {
         match status {
@@ -23,27 +19,27 @@ pub fn terminal_error(attempt: u32, status: Option<u16>, message: String) -> Llm
     }
 }
 
-/// Max total attempts (the first try plus up to three retries).
+/// Total attempts, the first included.
 pub const MAX_ATTEMPTS: u32 = 4;
 const BASE: Duration = Duration::from_secs(1);
 const CAP: Duration = Duration::from_secs(30);
 
-/// 60s SSE silence drops the stream and engages the retry path.
+/// SSE silence this long drops the stream into the retry path.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn is_retryable_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 504 | 529)
 }
 
-/// Full-jitter exponential backoff: `random(0, min(cap, base * 2^(attempt-1)))`.
-/// `attempt` is the attempt number that just failed (1-indexed).
+/// Full-jitter exponential backoff. `attempt` is the 1-indexed attempt that
+/// just failed.
 pub fn backoff(attempt: u32) -> Duration {
     let exp = BASE.saturating_mul(1u32 << attempt.saturating_sub(1).min(30));
     let ceiling = exp.min(CAP);
     Duration::from_secs_f64(rand::random::<f64>() * ceiling.as_secs_f64())
 }
 
-/// Whether there's another attempt left after this one failed.
+/// Whether an attempt remains after `attempt` failed.
 pub fn should_retry(attempt: u32) -> bool {
     attempt < MAX_ATTEMPTS
 }
@@ -71,8 +67,7 @@ mod tests {
 
     #[test]
     fn backoff_grows_with_attempt_number_on_average() {
-        // Full jitter means any single sample can be near zero, but the
-        // ceiling should still climb — sample many draws and compare maxima.
+        // Full jitter: one sample can be near zero, so compare maxima.
         let max_at = |attempt: u32| (0..200).map(|_| backoff(attempt)).max().unwrap();
         assert!(max_at(1) < max_at(3));
     }

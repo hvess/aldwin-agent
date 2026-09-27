@@ -1,5 +1,5 @@
-//! Anthropic wire types and the SSE-to-`LlmEvent` assembler. Nothing here is
-//! `pub` outside the crate — see aldwin-llm.md's Wire Isolation decision.
+//! Anthropic wire types and the SSE-to-`LlmEvent` assembler. Nothing here may
+//! be public outside the crate (aldwin-llm.md, Wire Isolation).
 
 use aldwin_core::{
     CacheStats, ContentBlock, LlmRequest, Message, Role, StepOutcome, StopReason, ToolCall,
@@ -13,9 +13,7 @@ use crate::config::ProviderConfig;
 pub const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Headroom above `extended_thinking_budget` for the actual response
-/// content, so `max_tokens` isn't sized down to exactly the thinking spend
-/// with nothing left for the answer.
+/// Tokens added to the thinking budget in `max_tokens`, left for the answer.
 const MAX_TOKENS_HEADROOM: u32 = 4096;
 
 // ── Request ──────────────────────────────────────────────────────────────
@@ -32,13 +30,9 @@ pub struct WireRequest {
     pub messages: Vec<WireMessage>,
 }
 
-/// Adaptive thinking is the only mode current Claude models (Sonnet 5, Opus
-/// 5, and the rest of the 4.6+ family this project targets) accept —
-/// `{ "type": "enabled", "budget_tokens": N }` is the pre-4.6 shape and gets
-/// rejected with a 400 ("thinking.type.enabled is not support for this
-/// model") on all of them. No `budget_tokens` field exists on this variant;
-/// `extended_thinking_budget` still sizes `max_tokens`' headroom (see
-/// `build_request`) but no longer names a literal request field.
+/// Always adaptive: Claude 4.6+ models reject the older `{"type": "enabled",
+/// "budget_tokens": N}` with a 400. `extended_thinking_budget` only sizes
+/// `max_tokens` (`build_request`).
 #[derive(Debug, Serialize)]
 pub struct WireThinking {
     #[serde(rename = "type")]
@@ -86,10 +80,9 @@ pub enum WireContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
-    /// Echoed back verbatim on the assistant turn that produced it. The
-    /// signature is the provider's own stamp over the block: it is not
-    /// ours to regenerate, reorder or omit, and a turn that calls a tool
-    /// after thinking is rejected outright without it.
+    /// Echoed back verbatim on its assistant turn. Never regenerate, reorder
+    /// or omit `signature`: a turn calling a tool after thinking is rejected
+    /// without it.
     Thinking {
         thinking: String,
         signature: String,
@@ -138,15 +131,12 @@ impl WireContentBlock {
     }
 }
 
-/// Builds the request body. Cache placement per aldwin-llm.md: one
-/// breakpoint on the last tool definition (covers system + tools), one on
-/// the last content block of the message at `request.cache_breakpoint`
-/// (covers the conversation so far) — two in all, the V0 ceiling.
+/// Builds the request body, with two cache breakpoints (aldwin-llm.md): the
+/// last tool (system and tools) and the last cacheable block at or before
+/// `request.cache_breakpoint` (the conversation).
 ///
-/// Known cost, not fixed here: `WireRequest` owns everything, so this
-/// deep-clones every message once per step. A borrowing `Serialize` is
-/// possible but the cost is unmeasured against real session lengths, and the
-/// body is serialised and sent over the network straight afterwards.
+/// Deep-clones every message per step; a borrowing `Serialize` is possible
+/// but the cost is unmeasured.
 pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
     let mut tools: Vec<WireTool> = request
         .tools
@@ -162,15 +152,13 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
         last.cache_control = Some(WireCacheControl::ephemeral());
     }
 
-    // Indices are kept aligned with `request.messages` until the breakpoint
-    // is placed; a message that mapped to nothing is removed only afterwards.
+    // Indices must match `request.messages` until the breakpoint is placed;
+    // empty messages are removed only afterwards.
     let mut messages: Vec<WireMessage> = request.messages.iter().map(map_message).collect();
     if let Some(break_at) = request.cache_breakpoint {
-        // The provider refuses `cache_control` on a thinking block, and a
-        // message may have been emptied by `map_message`. So: the last block
-        // that can carry one, in the nearest message at or before the index
-        // that has one. Moving a breakpoint earlier only shortens the cached
-        // prefix; putting it on a thinking block fails the request.
+        // `cache_control` on a thinking block fails the request, and
+        // `map_message` may empty a message, so search backwards for a
+        // cacheable block; an earlier breakpoint only shortens the prefix.
         let end = break_at.min(messages.len().saturating_sub(1));
         if let Some(block) = messages
             .iter_mut()
@@ -187,8 +175,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     WireRequest {
         model: config.model.clone(),
         system: request.system.to_string(),
-        // Saturating: the budget is whatever a developer typed into
-        // provider.yaml, and an overflow here is a panic in a debug build.
+        // Saturating: the budget comes unchecked from provider.yaml.
         max_tokens: budget.saturating_add(MAX_TOKENS_HEADROOM),
         stream: true,
         thinking: WireThinking::adaptive(),
@@ -197,21 +184,14 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     }
 }
 
-/// Maps one message, deciding which of its thinking blocks may go back.
+/// Maps one message, dropping thinking the provider would reject (history
+/// keeps it, ADR 0006):
 ///
-/// Carrying thinking in history (ADR 0006) is unconditional; *sending* it is
-/// not, and two cases are dropped here rather than sent to fail:
-///
-/// - **A block with no signature.** It came from an OpenAI-compatible
-///   provider, which issues none, and `/model` can move a running session
-///   from one onto this wire. The signature is how this provider verifies the
-///   block is its own; an empty one is a guaranteed rejection.
-/// - **Thinking with nothing after it.** The provider wants thinking back
-///   when the same turn went on to call a tool. A turn that *only* thought —
-///   the 14,096-token case ADR 0006 opens with — has no tool call to justify
-///   it, and an assistant message made of nothing but thinking is not a reply
-///   the conversation can carry. The message maps to empty and
-///   `build_request` removes it; two user messages in a row are accepted.
+/// - **No signature:** from an OpenAI-compatible provider, reachable via
+///   `/model` mid-session; always rejected.
+/// - **Thinking only** (no text or tool block in the message): the message
+///   maps to empty and `build_request` removes it; two user messages in a
+///   row are accepted.
 fn map_message(m: &Message) -> WireMessage {
     let said_or_did_something = m.content.iter().any(|b| {
         matches!(
@@ -303,8 +283,7 @@ pub enum WireEvent {
         error: WireApiError,
     },
     Ping,
-    /// Anthropic may add event types over time; ignored rather than
-    /// treated as a parse failure.
+    /// Unknown event types are ignored, not a parse failure.
     #[serde(other)]
     Other,
 }
@@ -333,10 +312,8 @@ pub struct WireDeltaUsage {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireContentBlockStart {
-    // `text`/`thinking` bodies on these two start events are always empty
-    // in practice (content streams in via later deltas), so only the tag is
-    // needed. `redacted_thinking` is the exception: it does not stream, so
-    // its whole payload arrives here and is captured.
+    // `text`/`thinking` start with an empty body (deltas follow), so only the
+    // tag is read. `redacted_thinking` does not stream: its payload is here.
     Text,
     Thinking,
     RedactedThinking {
@@ -389,10 +366,9 @@ struct WireErrorBody {
     error: WireApiError,
 }
 
-/// Parses the `{"type":"error","error":{"type":...,"message":...}}` envelope
-/// Anthropic uses both for a non-streaming HTTP error body and for an
-/// in-stream `error` SSE event. `None` if the body isn't that shape — the
-/// caller falls back to the raw text.
+/// The message in Anthropic's `{"type":"error","error":{"type":...,"message":...}}`
+/// envelope, used by HTTP error bodies and in-stream `error` events. `None`
+/// for any other shape.
 pub fn parse_error_body(text: &str) -> Option<String> {
     serde_json::from_str::<WireErrorBody>(text)
         .ok()
@@ -428,23 +404,17 @@ struct ToolBuffer {
     json: String,
 }
 
-/// One in-flight thinking block: its text as the deltas build it, and the
-/// signature, which arrives as its own delta near the end.
+/// One in-flight thinking block; the signature arrives as its own delta
+/// near the end.
 #[derive(Default)]
 struct ThinkingBuffer {
     text: String,
     signature: String,
 }
 
-/// Turns a sequence of `WireEvent`s from one HTTP attempt into
-/// `aldwin_core::LlmEvent`s. Thinking is buffered like tool input and
-/// closed out on `content_block_stop`, so the whole block — text and the
-/// provider's signature over it — crosses the boundary as one
-/// `ThinkingEnd` (ADR 0006; it was dropped here until then, which both
-/// blanked reasoning-only turns and made the next request invalid). Tool
-/// input is buffered and emitted as one `ToolUseRequested` on
-/// `content_block_stop`; usage is folded from `message_start` +
-/// `message_delta`.
+/// Turns one HTTP attempt's `WireEvent`s into `LlmEvent`s. Thinking and tool
+/// input are buffered until `content_block_stop`: a thinking block crosses
+/// whole, with its signature, as one `ThinkingEnd` (ADR 0006).
 #[derive(Default)]
 pub struct Assembler {
     blocks: HashMap<usize, BlockKind>,
@@ -458,9 +428,8 @@ pub struct Assembler {
 }
 
 impl Assembler {
-    /// Zero, one, or (for `content_block_stop` closing a tool block) exactly
-    /// one `LlmEvent` for this wire event; `Err` on a malformed payload or an
-    /// upstream `error` event.
+    /// The `LlmEvent`s (at most one) for this wire event; `Err` on malformed
+    /// tool input or an upstream `error` event.
     pub fn handle(&mut self, event: WireEvent) -> Result<Vec<aldwin_core::LlmEvent>, WireError> {
         use aldwin_core::LlmEvent;
 
@@ -485,8 +454,7 @@ impl Assembler {
                         .insert(index, ThinkingBuffer::default());
                     vec![LlmEvent::ThinkingStart]
                 }
-                // Arrives whole rather than in deltas, so it is emitted on
-                // sight; there is no block to buffer.
+                // Arrives whole, not in deltas: nothing to buffer.
                 WireContentBlockStart::RedactedThinking { data } => {
                     self.blocks.insert(index, BlockKind::RedactedThinking);
                     vec![LlmEvent::RedactedThinking { data }]
@@ -520,17 +488,15 @@ impl Assembler {
                     }
                     vec![]
                 }
-                // Buffered *and* forwarded: the buffer is what gets committed
-                // to history at `content_block_stop`, the event is what lets
-                // the TUI show reasoning as it arrives instead of a spinner.
+                // Buffered for history at `content_block_stop`, and forwarded
+                // so the TUI shows reasoning live.
                 WireDelta::ThinkingDelta { thinking } => {
                     if let Some(buf) = self.thinking_buffers.get_mut(&index) {
                         buf.text.push_str(&thinking);
                     }
                     vec![LlmEvent::ThinkingDelta { text: thinking }]
                 }
-                // Never rendered — it is the provider's stamp over the block,
-                // carried only so the block can be echoed back intact.
+                // Never rendered; carried only to echo the block back intact.
                 WireDelta::SignatureDelta { signature } => {
                     if let Some(buf) = self.thinking_buffers.get_mut(&index) {
                         buf.signature.push_str(&signature);
@@ -601,11 +567,9 @@ impl Assembler {
         })
     }
 
-    /// Core's `StopReason` only has `EndTurn`/`ToolUse` — every other
-    /// Anthropic stop reason (`max_tokens`, `stop_sequence`, `pause_turn`,
-    /// `refusal`, ...) maps to `EndTurn`: the turn is over and no tool call
-    /// is pending either way, which is the only distinction core's enum can
-    /// represent.
+    /// Every stop reason but `tool_use` (`max_tokens`, `refusal`, ...) maps
+    /// to `EndTurn`: no tool call is pending, the one distinction core's
+    /// `StopReason` carries.
     fn resolve_stop_reason(&self) -> StopReason {
         match self.stop_reason.as_deref() {
             Some("tool_use") => StopReason::ToolUse,
@@ -637,9 +601,7 @@ mod tests {
     }
 
     #[test]
-    /// ADR 0006 reversed this: thinking used to be dropped at the parse site
-    /// and only its brackets crossed. It is now buffered across deltas and
-    /// handed over whole on stop, signature included.
+    /// ADR 0006: thinking crosses whole on stop, signature included.
     fn thinking_buffers_across_deltas_and_closes_with_its_signature() {
         let mut a = Assembler::default();
         let start = a.handle(ev(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#)).unwrap();
@@ -658,8 +620,7 @@ mod tests {
             .unwrap();
         assert!(matches!(&more[..], [LlmEvent::ThinkingDelta { .. }]));
 
-        // The signature is carried but never surfaced as an event: it is the
-        // provider's stamp, not something to render.
+        // The signature is carried, never emitted as an event.
         let sig = a.handle(ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}"#)).unwrap();
         assert!(sig.is_empty());
 
@@ -674,8 +635,7 @@ mod tests {
     }
 
     #[test]
-    /// The encrypted counterpart arrives whole on the start event rather than
-    /// in deltas, and is passed straight through.
+    /// Arrives whole on the start event and passes straight through.
     fn redacted_thinking_is_carried_opaquely() {
         let mut a = Assembler::default();
         let out = a
@@ -688,9 +648,8 @@ mod tests {
     }
 
     #[test]
-    /// The round trip ADR 0006 exists for: a thinking block that came back
-    /// from the provider has to serialise into the next request intact, or
-    /// the turn that follows it with a tool call is rejected.
+    /// ADR 0006: a returned thinking block must serialise back intact, or a
+    /// following tool-call turn is rejected.
     fn a_thinking_block_serialises_back_with_its_signature() {
         let messages = vec![Message {
             role: Role::Assistant,
@@ -857,9 +816,8 @@ mod tests {
         }
     }
 
-    /// Audit: the turn ADR 0006 was written for — a step that only thought —
-    /// became an assistant message of nothing but thinking, with the cache
-    /// breakpoint on the thinking block. Both are rejected by the provider.
+    /// Regression (ADR 0006): a thinking-only step was sent as a thinking-only
+    /// message with the cache breakpoint on it; the provider rejects both.
     #[test]
     fn a_thinking_only_turn_is_not_sent_and_never_carries_the_breakpoint() {
         let messages = vec![
@@ -889,7 +847,7 @@ mod tests {
         assert!(wire.messages.iter().all(|m| m.role == "user"));
         let json = serde_json::to_value(&wire).unwrap();
         assert!(!json.to_string().contains("\"thinking\":\"hmm\""));
-        // The breakpoint moved back onto the nearest block that can hold it.
+        // The breakpoint moved back to the nearest cacheable block.
         assert!(matches!(
             wire.messages[0].content[0],
             WireContentBlock::Text {
@@ -899,8 +857,8 @@ mod tests {
         ));
     }
 
-    /// Audit: `/model` can move a session from an OpenAI-compatible provider,
-    /// whose reasoning has no signature, onto this wire.
+    /// `/model` can move a session onto this wire from an OpenAI-compatible
+    /// provider, whose reasoning has no signature.
     #[test]
     fn unsigned_thinking_from_another_provider_is_not_sent() {
         let messages = vec![Message {
@@ -1016,8 +974,7 @@ mod tests {
         assert!(wire.max_tokens > config.thinking_budget());
     }
 
-    /// The budget is a developer-typed `u32`; the headroom sum must not
-    /// overflow on one that is already at the top of the range.
+    /// The headroom sum must not overflow on a budget of `u32::MAX`.
     #[test]
     fn build_request_max_tokens_saturates_rather_than_overflowing() {
         let config = crate::config::ProviderConfig {
@@ -1033,12 +990,9 @@ mod tests {
         assert_eq!(build_request(&config, &request).max_tokens, u32::MAX);
     }
 
-    /// Regression test: current Claude models (Sonnet 5, Opus 5, the rest of
-    /// the 4.6+ family) reject the pre-4.6 `{"type": "enabled",
-    /// "budget_tokens": N}` thinking shape outright — reported live as
-    /// `provider error 400: "thinking.type.enabled" is not support for this
-    /// model`. The request must send adaptive thinking instead, with no
-    /// `budget_tokens` field at all.
+    /// Regression: Claude 4.6+ models answer `{"type": "enabled",
+    /// "budget_tokens": N}` with a 400; only adaptive, with no
+    /// `budget_tokens`, is accepted.
     #[test]
     fn build_request_sends_adaptive_thinking_with_no_budget_tokens_field() {
         let config = crate::config::ProviderConfig {

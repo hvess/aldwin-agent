@@ -10,10 +10,9 @@ use crate::config::{Auth, ProviderConfig};
 use crate::transport::{self, Dialect, Transport};
 use crate::wire_openai::{self, Assembler, WireChunk};
 
-/// V0.5 OpenAI-compatible client implementing core's `LlmClient` — a sibling
-/// impl to `AnthropicClient` behind the same trait, not a refactor of it
-/// (see aldwin-llm.md). No OpenAI wire type crosses this struct's public
-/// surface — see `wire_openai.rs`.
+/// The OpenAI-compatible client, a sibling of `AnthropicClient`
+/// (aldwin-llm.md). No OpenAI wire type crosses its public surface
+/// (`wire_openai.rs`).
 pub struct OpenAiCompatibleClient {
     config: ProviderConfig,
     transport: Transport,
@@ -28,18 +27,16 @@ impl std::fmt::Debug for OpenAiCompatibleClient {
 }
 
 impl OpenAiCompatibleClient {
-    /// Requires `config.base_url` — there's no sane default URL for
-    /// "OpenAI-compatible," unlike Anthropic's single well-known endpoint —
-    /// and reads `std::env::var` for a key, or takes the connected
-    /// account's session (ADR 0012).
+    /// Builds the client on `config.base_url` (no default exists), with the API
+    /// key read from the environment now or the connected account's session
+    /// (ADR 0012).
     ///
     /// # Errors
     ///
-    /// Returns [`LlmClientInitError::MissingBaseUrl`] when `config.base_url`
-    /// is `None`, [`LlmClientInitError::MissingApiKeyEnv`] when the key's
-    /// variable is unset, [`LlmClientInitError::InvalidApiKeyValue`] when its
-    /// value cannot be a header, and [`LlmClientInitError::HttpClient`] when
-    /// the HTTP client cannot be built.
+    /// [`LlmClientInitError::MissingBaseUrl`] without `base_url`,
+    /// [`LlmClientInitError::MissingApiKeyEnv`] for an unset variable,
+    /// [`LlmClientInitError::InvalidApiKeyValue`] for a key that is not a
+    /// header value, [`LlmClientInitError::HttpClient`] if reqwest fails.
     pub fn new(config: ProviderConfig) -> Result<Self, LlmClientInitError> {
         let endpoint = config
             .base_url
@@ -55,8 +52,7 @@ impl OpenAiCompatibleClient {
         Ok(Self { config, transport })
     }
 
-    /// Test-only: points at a local fake server instead of a real endpoint,
-    /// with an injectable idle timeout — mirrors `AnthropicClient::with_endpoint`.
+    /// A client pointed at a fake server, with a short idle timeout.
     #[cfg(test)]
     pub(crate) fn with_endpoint(
         config: ProviderConfig,
@@ -71,8 +67,7 @@ impl OpenAiCompatibleClient {
         Self { config, transport }
     }
 
-    /// Test-only: a client on a connected account, against a local fake
-    /// server, with the account itself a stand-in.
+    /// A client on a stand-in connected account, pointed at a fake server.
     #[cfg(test)]
     pub(crate) fn with_account_at(
         config: ProviderConfig,
@@ -88,8 +83,8 @@ impl OpenAiCompatibleClient {
     }
 }
 
-/// The bearer key. `Content-Type` is left to reqwest's `json`, which sets
-/// it. `var` is named when the key will not go in a header.
+/// The bearer key; reqwest's `json` sets `Content-Type`. `var` names the key
+/// in the error.
 fn bearer(api_key: &str, var: &str) -> Result<HeaderMap, LlmClientInitError> {
     let bearer = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
         LlmClientInitError::InvalidApiKeyValue {
@@ -101,8 +96,8 @@ fn bearer(api_key: &str, var: &str) -> Result<HeaderMap, LlmClientInitError> {
     Ok(headers)
 }
 
-/// What the developer reads when the account server no longer honours the
-/// connection: the one failure a refresh cannot recover from (ADR 0012).
+/// The error sentence once the account is logged out, the one failure a
+/// refresh cannot recover (ADR 0012).
 fn disconnected(account: Account) -> String {
     format!(
         "Your {} account is no longer connected. Connect it again with /connect {}.",
@@ -120,9 +115,8 @@ impl Dialect for Assembler {
     }
 
     fn read(&mut self, data: &str) -> Result<Vec<LlmEvent>, String> {
-        // The literal end-of-stream marker. A finished step has already
-        // returned on its StepEnded, or is held back for usage and completed
-        // by `close` — so reaching it means the stream is over.
+        // End of stream: a finished step has already returned, or is held
+        // back and completed by `close`.
         if data == "[DONE]" {
             return Err(format!("stream closed before {}", Self::STEP_END));
         }
@@ -131,8 +125,8 @@ impl Dialect for Assembler {
         self.handle(chunk).map_err(|e| e.to_string())
     }
 
-    /// The assembler holds StepEnded back when `finish_reason` arrives
-    /// before usage does; the stream ending is what completes it.
+    /// Completes a `StepEnded` held back because `finish_reason` came before
+    /// usage.
     fn close(&mut self) -> Option<LlmEvent> {
         self.finish()
     }
@@ -211,10 +205,9 @@ mod tests {
         assert!(matches!(&events[1], LlmEvent::StepEnded { .. }));
     }
 
-    /// Frames copied from a live `lumo-api.proton.me/ai/v1` stream: usage
-    /// trails `finish_reason` in its own choice-less chunk. The trailing
-    /// `[DONE]` is never read — usage completes the step first — but is kept
-    /// so the fixture stays the shape the wire actually has.
+    /// Frames from a live `lumo-api.proton.me/ai/v1` stream: usage trails
+    /// `finish_reason` in a choice-less chunk. `[DONE]` is never read but
+    /// stays, to keep the wire's shape.
     fn lumo_sse() -> String {
         [
             r#"data:{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello","reasoning":null}}]}"#,
@@ -247,11 +240,9 @@ mod tests {
         assert_eq!(outcome.usage.output_tokens, 7);
     }
 
-    /// A stream that ends after `finish_reason` without ever sending usage is
-    /// a finished turn, not a dropped connection — it must not retry. Ends on
-    /// the literal `data:[DONE]` (no space, as Lumo writes it), which is the
-    /// same client arm a bare connection close, an idle timeout and a framing
-    /// error all reach.
+    /// A stream ending after `finish_reason` with no usage is a finished turn,
+    /// not a retry. `data:[DONE]` has no space, as Lumo writes it; it reaches
+    /// the same arm as a close, an idle timeout or a framing error.
     #[tokio::test]
     async fn stream_ending_after_finish_reason_completes_instead_of_retrying() {
         let sse = [
@@ -352,9 +343,8 @@ mod tests {
         ));
     }
 
-    /// A connected account, as the transport sees one: each attempt's
-    /// answer in turn, and a count of how often the endpoint's refusal was
-    /// passed back.
+    /// A stand-in account: one queued answer per attempt, and a count of
+    /// `invalidate` calls.
     struct FakeAccount {
         answers: std::sync::Mutex<std::collections::VecDeque<Result<&'static str, SessionError>>>,
         invalidated: std::sync::atomic::AtomicUsize,
@@ -403,8 +393,8 @@ mod tests {
         )
     }
 
-    /// The header on each request, lowercased — hyper writes standard
-    /// names in lowercase, and the test should not care either way.
+    /// Each request's `authorization` line, lowercased so header case does
+    /// not matter.
     fn authorizations(server: &test_server::FakeServer) -> Vec<String> {
         server
             .requests()
@@ -431,9 +421,8 @@ mod tests {
         assert_eq!(authorizations(&server), vec!["authorization: bearer tok-1"]);
     }
 
-    /// The session says the account is gone: nothing is sent, and the
-    /// error is the sentence that says what to do — at zero attempts, so
-    /// the failure row leads with it rather than with a provider's refusal.
+    /// Logged out: nothing is sent, and the error is the fix as a sentence at
+    /// zero attempts, so the failure row shows it as written.
     #[tokio::test]
     async fn a_disconnected_account_is_the_sentence_and_no_request() {
         let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
@@ -457,9 +446,8 @@ mod tests {
         assert!(server.requests().is_empty());
     }
 
-    /// The endpoint refuses the token the session thought good — revoked,
-    /// or a skewed clock. The session is told, and the request goes again
-    /// on what it hands out next; the retry is visible like any other.
+    /// A 401 on a token the session thought valid (revoked, clock skew)
+    /// invalidates it and resends with the next one, as a visible retry.
     #[tokio::test]
     async fn a_token_the_endpoint_refuses_is_refreshed_once_and_the_request_sent_again() {
         let server = test_server::spawn(vec![
@@ -490,8 +478,7 @@ mod tests {
         );
     }
 
-    /// A second refusal is the endpoint's answer, not a reason to keep
-    /// refreshing — and it is reported as the 401 it is.
+    /// A second 401 is final, reported as `Provider { status: 401 }`.
     #[tokio::test]
     async fn a_second_refusal_is_the_endpoints_answer() {
         let server = test_server::spawn(vec![
@@ -512,8 +499,7 @@ mod tests {
         assert_eq!(account.invalidated(), 1);
     }
 
-    /// The account server's passing trouble reads like a lost connection:
-    /// a visible retry, then the request as normal.
+    /// `SessionError::Failed` is retried like a lost connection.
     #[tokio::test]
     async fn a_refresh_the_account_server_fails_is_retried_like_a_lost_connection() {
         let server = test_server::spawn(vec![Canned::Sse(success_sse())]);
@@ -540,8 +526,8 @@ mod tests {
         assert_eq!(server.requests().len(), 1);
     }
 
-    /// The resend after a refused token is an attempt like any other, so a
-    /// 401 on the last attempt is the answer rather than a fifth request.
+    /// The resend after a 401 counts as an attempt: a 401 on the last one is
+    /// final, not a fifth request.
     #[tokio::test(start_paused = true)]
     async fn a_refused_token_on_the_last_attempt_is_not_sent_again() {
         let server = test_server::spawn(vec![

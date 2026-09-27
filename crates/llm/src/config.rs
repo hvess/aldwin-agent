@@ -3,16 +3,13 @@ use std::sync::Arc;
 use aldwin_config::ProviderKind;
 use aldwin_login::Session;
 
-/// Used when `provider.yaml` sets no `extended_thinking_budget` — extended
-/// thinking is enabled by default per aldwin-llm.md, so a default has to
-/// live somewhere even when the developer hasn't picked one.
+/// Used when `provider.yaml` sets no `extended_thinking_budget`; thinking is
+/// on by default (aldwin-llm.md).
 const DEFAULT_THINKING_BUDGET: u32 = 10_000;
 
-/// How the provider is reached (ADR 0012): the key in the environment
-/// variable `provider.yaml` names, or the account the developer connected
-/// — already read from disk and made a session by the composition root,
-/// which also decides between the two, so this crate knows nothing of
-/// files.
+/// How the provider is reached (ADR 0012): an API key from the environment,
+/// or a connected account's session. The composition root reads the files
+/// and chooses; this crate knows nothing of files.
 #[derive(Debug, Clone)]
 pub enum Auth {
     /// The name of the environment variable that holds the API key.
@@ -21,26 +18,25 @@ pub enum Auth {
     Connection(Arc<Session>),
 }
 
-/// What a client is built from: the provider settings in force, with the
-/// project and global `provider.yaml` already overlaid by aldwin-config
-/// (`Config::effective_provider`). Distinct from `aldwin_config::ProviderConfig`,
-/// the on-disk shape, so this crate knows nothing of files or scopes.
+/// The provider settings a client is built from, already overlaid by
+/// `Config::effective_provider`. Not `aldwin_config::ProviderConfig`, the
+/// on-disk shape: this crate knows nothing of files or scopes.
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     /// The wire dialect, which picks the client.
     pub kind: ProviderKind,
     /// The model id sent with every request.
     pub model: String,
-    /// How the provider is reached: a key or a connected account.
+    /// A key or a connected account.
     pub auth: Auth,
-    /// V0.5 — only used by the OpenAI-compatible adapter (`OpenAiCompatibleClient`).
+    /// Read only by `OpenAiCompatibleClient`.
     pub base_url: Option<String>,
     /// `None` takes this crate's default.
     pub extended_thinking_budget: Option<u32>,
 }
 
 impl ProviderConfig {
-    /// The budget in force — the developer's, or the default.
+    /// The configured budget, or `DEFAULT_THINKING_BUDGET`.
     pub(crate) fn thinking_budget(&self) -> u32 {
         self.extended_thinking_budget
             .unwrap_or(DEFAULT_THINKING_BUDGET)

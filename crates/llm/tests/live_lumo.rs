@@ -1,13 +1,11 @@
-//! Live smoke test against Proton's Lumo (`lumo-api.proton.me/ai/v1`), the
-//! OpenAI-compatible endpoint the unit tests only imitate. Ignored by
-//! default — it needs the network and a key:
+//! Live smoke test against Proton's Lumo (`lumo-api.proton.me/ai/v1`).
+//! Ignored by default: it needs the network and a key.
 //!
 //! ```sh
 //! LUMO_API_KEY=… cargo test -p aldwin-llm --test live_lumo -- --ignored --nocapture
 //! ```
 //!
-//! Point it elsewhere with `LUMO_BASE_URL` / `LUMO_MODEL` to smoke-test any
-//! other OpenAI-compatible endpoint through the same adapter.
+//! `LUMO_BASE_URL` / `LUMO_MODEL` point it at any OpenAI-compatible endpoint.
 
 use aldwin_core::{
     ContentBlock, LlmClient, LlmEvent, LlmRequest, Message, Role, StopReason, ToolDefinition,
@@ -77,8 +75,7 @@ async fn text_turn_streams_and_reports_usage() {
     println!("usage: {:?} stop: {:?}", outcome.usage, outcome.stop_reason);
     assert!(!text.is_empty(), "no text streamed");
     assert!(matches!(outcome.stop_reason, StopReason::EndTurn));
-    // The regression this whole wiring turned on: Lumo reports usage in a
-    // trailing chunk, so a zero here means StepEnded fired too early.
+    // Lumo sends usage in a trailing chunk: zero means StepEnded fired early.
     assert!(
         outcome.usage.input_tokens > 0,
         "no prompt tokens on StepEnded"

@@ -1,10 +1,6 @@
-//! A minimal hand-rolled HTTP/1.1 server for testing `AnthropicClient`
-//! against real bytes on a real socket, without a mocking dependency. Each
-//! accepted connection pops the next canned response off a shared queue —
-//! since a retried request opens a fresh connection, queuing
-//! `[Status(503, ..), Sse(success)]` tests "fails once, retries, succeeds"
-//! for real over TCP. Every request's head — its request line and headers —
-//! is kept, so a test can read back what was sent with it.
+//! A minimal HTTP/1.1 server that answers each connection with the next
+//! canned response. A retry opens a fresh connection, so a queued sequence
+//! scripts a retry over real TCP. Each request's head is kept for assertions.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -16,23 +12,21 @@ use tokio::net::TcpListener;
 /// One response the server gives, to one connection, in queue order.
 #[derive(Debug)]
 pub enum Canned {
-    /// Non-streaming HTTP status + JSON body.
+    /// A status with a JSON body.
     Status(u16, String),
-    /// 200 OK, `Content-Type: text/event-stream`, body is the raw SSE text.
+    /// 200 with the raw SSE text as body.
     Sse(String),
-    /// 200 OK + SSE headers, writes `prefix` then holds the connection open
-    /// forever without writing more — for idle-timeout tests under
-    /// `tokio::time::pause()`.
+    /// 200, writes the SSE prefix, then holds the connection open silently;
+    /// for idle-timeout tests.
     SseThenStall(String),
-    /// Accepts the connection, reads the request, then closes without
-    /// writing a response at all (simulates a transport-level failure).
+    /// Closes without a response: a transport-level failure.
     HangUp,
 }
 
 /// A running fake server. It lives until the test's runtime shuts down.
 #[derive(Debug)]
 pub struct FakeServer {
-    /// The local address it listens on, a free port on 127.0.0.1.
+    /// A free port on 127.0.0.1.
     pub addr: SocketAddr,
     requests: Arc<Mutex<Vec<String>>>,
 }
@@ -43,13 +37,11 @@ impl FakeServer {
         format!("http://{}{path}", self.addr)
     }
 
-    /// The head of every request received so far, in order — the request
-    /// line and the headers, as sent.
+    /// The request line and headers of every request so far, in order.
     ///
     /// # Panics
     ///
-    /// Panics if a connection handler panicked while holding the request
-    /// log, poisoning its lock.
+    /// If a connection handler panicked holding the request log's lock.
     pub fn requests(&self) -> Vec<String> {
         self.requests
             .lock()
@@ -58,14 +50,12 @@ impl FakeServer {
     }
 }
 
-/// Starts a server on a free local port that answers each connection with
-/// the next of `responses`, and closes any connection that finds the queue
-/// empty. Must be called inside a tokio runtime.
+/// Starts a server answering each connection with the next of `responses`;
+/// once the queue is empty, connections are closed. Needs a tokio runtime.
 ///
 /// # Panics
 ///
-/// Panics if no local port can be bound or the listener cannot be handed
-/// to tokio — a broken test environment, not a test failure.
+/// If no local port can be bound or tokio cannot adopt the listener.
 pub fn spawn(responses: Vec<Canned>) -> FakeServer {
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local test port");
     std_listener.set_nonblocking(true).expect("set nonblocking");
@@ -127,9 +117,8 @@ async fn handle_connection(
     }
 }
 
-/// Reads the request line, headers, and (if declared) exactly
-/// `Content-Length` body bytes — just enough HTTP/1.1 to avoid racing a
-/// response against a client still mid-write — and returns the head.
+/// Reads the head and `Content-Length` body bytes, so no response races a
+/// client still writing; returns the head.
 async fn drain_request(socket: &mut tokio::net::TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];

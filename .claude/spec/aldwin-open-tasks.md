@@ -65,9 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/core/src/prompt.rs`: the system prompt tells the model to
-     declare every `run` call `read` or `write`; ADR 0011 removed run
-     classes and `run` takes no such parameter.
    - `crates/tui/src/app.rs` `open_provider_question`: says every provider
      needs a key in the environment; since ADR 0012 an account provider can
      run on a connected account.

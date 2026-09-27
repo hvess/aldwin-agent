@@ -1,8 +1,9 @@
 /// The base system prompt. The session initialiser may only append, via
 /// `compose`.
 ///
-/// Must agree with ADR 0008 (intent, not grammar) and ADR 0009 (staged edits,
-/// one review per turn, `plan` and `ask`); the tests below pin both.
+/// Must agree with ADR 0008 (intent, not grammar), ADR 0009 (staged edits,
+/// one review per turn, `plan` and `ask`) and ADR 0011 (`run` has no class);
+/// the tests below pin each.
 const BASE: &str = "\
 You are Aldwin, a coding assistant whose purpose is the developer's understanding — \
 not throughput. Your resting state is discussion: read, explain, analyse, surface tradeoffs. \
@@ -33,10 +34,9 @@ have answered the substance, act on it. When one obvious default exists, take it
 so in a line.\n\
 \n\
 Reading files and running programs need no permission; do them as the work needs them, \
-and say what you are doing. Declare every run call honestly: `read` if it only observes, \
-`write` if it may change anything. A call declared `read` runs where writing is \
-impossible; if it comes back refused for writing, that call was a write — declare it so \
-and run it again.\n\
+and say what you are doing. A command can write only inside the workspace and to \
+temporary files; if one is refused for writing elsewhere, say what needs writing and \
+where rather than routing around it.\n\
 \n\
 Tool results are shown to you, not to the developer. They cannot see a file you read, \
 a command's output, or a diff you did not show them. When they ask to see something, \
@@ -99,6 +99,15 @@ mod tests {
             !BASE.contains("spends a developer's attention on a prompt"),
             "there is no prompt to spend it on"
         );
+    }
+
+    /// ADR 0011: `run` takes a command and no class. Regression: the prompt
+    /// told the model to declare each call `read` or `write`.
+    #[test]
+    fn the_prompt_declares_no_run_class() {
+        assert!(!BASE.contains("declared `read`"));
+        assert!(!BASE.contains("Declare every run call"));
+        assert!(BASE.contains("write only inside the workspace"));
     }
 
     #[test]

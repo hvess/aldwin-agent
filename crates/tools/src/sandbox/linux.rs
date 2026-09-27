@@ -17,7 +17,9 @@
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::incidental_writes;
 
@@ -179,7 +181,7 @@ impl Sandbox {
     }
 
     /// Confines whatever `cmd` spawns.
-    pub fn install(self, cmd: &mut tokio::process::Command) {
+    pub fn install(self, cmd: &mut Command) {
         // SAFETY: `engage` is two syscalls with no allocation, which is what
         // `pre_exec` permits — see its own safety note.
         unsafe {
@@ -254,7 +256,7 @@ mod tests {
             .stdin(std::process::Stdio::null());
         // SAFETY: two syscalls, no allocation — see `engage`.
         unsafe {
-            std::os::unix::process::CommandExt::pre_exec(&mut cmd, move || sandbox.engage());
+            cmd.pre_exec(move || sandbox.engage());
         }
         cmd.output().expect("spawns")
     }

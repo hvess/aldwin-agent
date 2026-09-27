@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -8,6 +10,7 @@ use crate::error::ToolError;
 use crate::lsp::{self, LspClient};
 use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
+use crate::staging::Staging;
 use aldwin_core::DispatchContext;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -26,14 +29,24 @@ enum Op {
 /// sandbox every process over the repository runs in (a language server
 /// runs build scripts and proc macros), and persist in `clients` for the
 /// session; each is killed when the tool is dropped.
+///
+/// The server sees the tree the agent sees: staged edits over the disk, as
+/// `read` serves it. A server reads the disk itself, and nothing is written
+/// before an approve, so without this a lookup after an edit answered about
+/// the code as it was.
 pub struct ExplainTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
+    staging: Arc<Staging>,
     clients: tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
+    /// Every file sent to a server so far. A file stays here after its edit
+    /// is approved or discarded, so the next call sends what the disk now
+    /// holds rather than leaving the server on the staged text.
+    shown: tokio::sync::Mutex<BTreeSet<PathBuf>>,
 }
 
 impl ExplainTool {
-    pub fn new(workspace: Workspace) -> Self {
+    pub fn new(workspace: Workspace, staging: Arc<Staging>) -> Self {
         Self {
             descriptor: ToolDescriptor {
                 name: "explain".into(),
@@ -54,8 +67,79 @@ impl ExplainTool {
                 observes_disk: false,
             },
             workspace,
+            staging,
             clients: tokio::sync::Mutex::new(HashMap::new()),
+            shown: tokio::sync::Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// The files in `language_id` a server should hold, and the text of each
+    /// as the agent sees it: every staged file, every file shown before, and
+    /// `queried` when there is one. Second, the files shown before that are
+    /// now gone — unstaged and not on disk — which the server must drop;
+    /// they are forgotten here. `queried` itself must be readable.
+    async fn view(
+        &self,
+        language_id: &str,
+        queried: Option<&Path>,
+    ) -> Result<(Vec<(PathBuf, String)>, Vec<PathBuf>), ToolError> {
+        let mut shown = self.shown.lock().await;
+        shown.extend(
+            self.staging
+                .changeset()
+                .files
+                .into_iter()
+                .filter_map(|f| self.workspace.resolve(&f.path).ok()),
+        );
+        shown.extend(queried.map(Path::to_path_buf));
+        // A loop, not a chain: each file is read with an `.await`.
+        let (mut view, mut gone) = (Vec::new(), Vec::new());
+        for path in shown.iter() {
+            if lsp::language_for_path(path).map(|s| s.language_id) != Some(language_id) {
+                continue;
+            }
+            let text = match self.staging.current(path) {
+                Some(staged) => staged,
+                None => match tokio::fs::read_to_string(path).await {
+                    Ok(text) => text,
+                    Err(source) if Some(path.as_path()) == queried => {
+                        return Err(ToolError::Io {
+                            path: path.clone(),
+                            source,
+                        })
+                    }
+                    Err(_) => {
+                        gone.push(path.clone());
+                        continue;
+                    }
+                },
+            };
+            view.push((path.clone(), text));
+        }
+        for path in &gone {
+            shown.remove(path);
+        }
+        Ok((view, gone))
+    }
+
+    /// Shows `client` the files of `view`, so it answers over staged edits,
+    /// not the disk, and closes the ones that are gone.
+    async fn sync(
+        &self,
+        client: &LspClient,
+        language_id: &str,
+        queried: Option<&Path>,
+    ) -> Result<(), ToolError> {
+        let (view, gone) = self.view(language_id, queried).await?;
+        for (shown, text) in view {
+            client
+                .sync_document(&lsp::file_uri(&shown), language_id, &text)
+                .await?;
+        }
+        for path in gone {
+            client.close_document(&lsp::file_uri(&path)).await?;
+        }
+        Ok(())
     }
 
     /// A server that has died is replaced rather than handed out again —
@@ -116,6 +200,7 @@ impl Tool for ExplainTool {
             let query = required_str(&input, "query")?;
             let server = lsp::language_by_id("rust").expect("rust is always configured");
             let client = self.client_for(server).await?;
+            self.sync(&client, server.language_id, None).await?;
             let result = client
                 .request("workspace/symbol", json!({ "query": query }))
                 .await?;
@@ -134,16 +219,8 @@ impl Tool for ExplainTool {
         })?;
         let client = self.client_for(server).await?;
 
+        self.sync(&client, server.language_id, Some(&path)).await?;
         let uri = lsp::file_uri(&path);
-        let text = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|source| ToolError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        client
-            .sync_document(&uri, server.language_id, &text)
-            .await?;
 
         let position = json!({ "line": line, "character": character });
         let text_document = json!({ "uri": uri });
@@ -290,6 +367,69 @@ fn extract_hover_text(contents: &Value) -> String {
 mod tests {
     use super::*;
 
+    fn explain_in(workspace: Workspace) -> ExplainTool {
+        let staging = Arc::new(Staging::new(workspace.clone()));
+        ExplainTool::new(workspace, staging)
+    }
+
+    /// The bug this closes: `explain` after an edit answered about the code
+    /// as it was, because the server was shown the disk.
+    #[tokio::test]
+    async fn the_server_is_shown_staged_edits_over_the_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "fn old() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/other.rs"), "fn other() {}\n").unwrap();
+        let staging = Arc::new(Staging::new(workspace.clone()));
+        let tool = ExplainTool::new(workspace.clone(), staging.clone());
+        let lib = workspace.resolve("src/lib.rs").unwrap();
+        staging
+            .edit(lib.clone(), "src/lib.rs", |_| Ok("fn new() {}\n".into()))
+            .await
+            .unwrap();
+
+        // Asked about another file, the server is still shown the staged one.
+        let other = workspace.resolve("src/other.rs").unwrap();
+        let made = workspace.resolve("src/made.rs").unwrap();
+        staging
+            .edit(made.clone(), "src/made.rs", |_| Ok("fn made() {}\n".into()))
+            .await
+            .unwrap();
+
+        let (view, _) = tool.view("rust", Some(&other)).await.unwrap();
+        assert!(view.contains(&(lib.clone(), "fn new() {}\n".to_string())));
+        assert!(view.contains(&(other.clone(), "fn other() {}\n".to_string())));
+        assert!(view.contains(&(made.clone(), "fn made() {}\n".to_string())));
+
+        // A symbol search asks about no file, and is shown it too; it had
+        // skipped the sync, so a symbol only an edit added was not found.
+        let (view, _) = tool.view("rust", None).await.unwrap();
+        assert!(view.contains(&(lib.clone(), "fn new() {}\n".to_string())));
+
+        // Discarded, the edit's file is shown the disk again, not left stale,
+        // and a file only the edit made is dropped, once — the server kept
+        // its text for the session.
+        staging.discard();
+        let (view, gone) = tool.view("rust", Some(&other)).await.unwrap();
+        assert!(view.contains(&(lib, "fn old() {}\n".to_string())));
+        assert_eq!(gone, [made]);
+        let (_, gone) = tool.view("rust", Some(&other)).await.unwrap();
+        assert!(gone.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_file_that_cannot_be_read_fails_only_when_it_is_the_one_asked_about() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path());
+        let tool = explain_in(workspace.clone());
+        let missing = workspace.resolve("src/missing.rs").unwrap();
+        assert!(matches!(
+            tool.view("rust", Some(&missing)).await,
+            Err(ToolError::Io { .. })
+        ));
+    }
+
     #[test]
     fn format_locations_normalises_single_location() {
         let out = format_locations(
@@ -349,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_op_is_invalid_input() {
-        let tool = ExplainTool::new(Workspace::new("."));
+        let tool = explain_in(Workspace::new("."));
         let err = tool
             .call("c1", json!({}), &crate::test_support::dispatch_context().0)
             .await
@@ -359,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn definition_without_path_is_invalid_input() {
-        let tool = ExplainTool::new(Workspace::new("."));
+        let tool = explain_in(Workspace::new("."));
         let err = tool
             .call(
                 "c1",
@@ -373,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_language_is_invalid_input_not_an_lsp_error() {
-        let tool = ExplainTool::new(Workspace::new("."));
+        let tool = explain_in(Workspace::new("."));
         let err = tool
             .call(
                 "c1",
@@ -407,7 +547,7 @@ mod tests {
         )
         .unwrap();
 
-        let tool = ExplainTool::new(Workspace::new(dir.path()));
+        let tool = explain_in(Workspace::new(dir.path()));
 
         // Poll until rust-analyzer has indexed enough to answer, rather than
         // a fixed sleep — indexing time varies with machine load.

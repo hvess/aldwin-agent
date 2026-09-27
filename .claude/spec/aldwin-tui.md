@@ -10,7 +10,23 @@ the top bar, the permission panel and first run are gone, and the entries
 that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-25
+**Last Updated:** 2026-09-27
+
+**Progress (2026-09-27, three changes the review loop's judges surfaced):**
+
+- **A list the developer opened has no status word.** `/resume`, `/model`
+  and `/theme` show `↑↓  Choose     ↩  Select     esc  Close` from the body
+  column, as frame F's command list does; the design never says `Ready`
+  over an open panel (`Status::None` in `ui/chrome.rs`, the developer's
+  call). At 80 columns `esc  Close` now fits too.
+- **A stop leaves one sentence.** `Stopping.` becomes `Stopped.` in place
+  when the cancelled turn ends, and a repeat from a second `esc` goes
+  (`a_stopped_turn_leaves_one_sentence`, the developer's call). The stop
+  notice is its own `LogEntry::Stopping`, so it is found by type, not by
+  its words.
+- **`Review` cannot be empty.** `Review::open` returns `None` for a
+  changeset with no files, and `files` is private behind a crate-only `files()`; the app
+  answers an empty review with a discard, as it did, but through the type.
 
 **Progress (2026-09-25, the frame re-synced):** The design-system project
 was unchanged; `Aldwin Agent TUI.dc.html` moved, and the app followed it.
@@ -125,7 +141,8 @@ ethos, quality — found the rest. What changed, each against its source:
   400.` put a status code on the surface; `log::failure_sentence` reads the
   error's kind and says what happened and what to do next ("Check your
   connection, then send again."), the error itself one disclosure below
-  (HIG "Writing", ADR 0009 §5). Reading a string is open-tasks 32.
+  (HIG "Writing", ADR 0009 §5). The kind is read from the error's text,
+  not a type — open-tasks 1.
 - **A turn is marked where it opens.** Six places scanned back to the last
   `UserMessage`, and an answer through "Chat about this" is one, mid-turn:
   a plan updated after it split in two. `App::this_turn` reads from the
@@ -3938,7 +3955,7 @@ move: the rule is the **two-space pad, one space between letters**, from which
 The reference frames still spell the old name, so the app and the design now
 disagree on that width by design — recorded as `wordmark-letters-are-the-old-name`
 in `crates/review/baseline.json` and retired when the design system is renamed
-upstream and re-synced (`aldwin-open-tasks.md` entry 2a). `render.snap` and the
+upstream and re-synced. `render.snap` and the
 three README screenshots were regenerated; stages 0–4 of the review loop are
 clean. Everything else was the name itself: crates `mjolnir-*` → `aldwin-*`,
 binary `mjolnir` → `aldwin`, config dir `~/.mjolnir/` → `~/.aldwin/` (with

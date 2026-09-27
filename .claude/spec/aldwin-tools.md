@@ -2,10 +2,34 @@
 
 ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every spawned process runs in, MCP bridge via rmcp.
 
-**Status:** active — one known gap, see Progress below
+**Status:** active — one known gap: an MCP tool's writes bypass the review (open-tasks 2).
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, staging, the sandbox, MCP bridge. Excludes agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-09-27
+
+**Progress (2026-09-27):**
+
+- **`explain` shows the language server staged edits.**
+  `ExplainTool::new` takes the `Staging`; before each request `view` syncs
+  every staged file in the server's language, every file shown before, and
+  the one asked about, each as `read` would serve it — staged text over the
+  disk. A symbol search asks about no file and is synced the same way; a
+  file only a discarded edit made is closed on the server
+  (`LspClient::close_document`). A file shown before goes back to its disk text once its edit is
+  approved or discarded. A server reads the disk, and nothing is written
+  before an approve, so a lookup after an edit answered about the old code.
+  Tests: `the_server_is_shown_staged_edits_over_the_disk`,
+  `a_file_that_cannot_be_read_fails_only_when_it_is_the_one_asked_about`.
+- **`sandbox::std_command`** is new and public: the same confinement and
+  `AGENT` as `command`, as a `std` command, for a caller with no runtime —
+  the cli's startup probes (`bash`/`sed`/`git --version`) now run through
+  it, confined. `command` is built on it.
+- **Every process Aldwin starts carries `AGENT=aldwin`** (set in
+  `std_command`). It names the agent a command runs for, so a repository's
+  own hooks can tell an agent's commit from the developer's — Aldwin's
+  review gate is one such hook. It is set in users' projects too; the
+  developer's call is that this does no harm, since nothing reads it unless
+  a project chooses to.
 
 **Progress (2026-09-24, ADR 0011 — the workspace is the only boundary):**
 Read `.claude/adr/0011-the-workspace-is-the-only-boundary.md` first; it
@@ -66,7 +90,7 @@ fired zero times.
 - **`run` contains its arguments.** Checked when absolute or climbing with
   `..`; everything else is relative under an already-contained `cwd`. Globs and
   flags are deliberately left alone (`path_like` and its test say which).
-  `bash -c '…'` is the stated hole — open-tasks entry 26.
+  `bash -c '…'` is the stated hole.
 - **`run` takes `cwd`.** Per call, contained like any path. This is what most
   of those 33 shell calls were standing in for.
 - **A timeout keeps the output.** `drain` accumulates into a shared buffer, so
@@ -97,8 +121,8 @@ fired zero times.
   created; and an unenforceable read consults the engine before it asks. The
   refusal message had named a `--root` flag that never existed.
 - **`sandbox/macos.rs` is compiled everywhere and used on macOS.** No FFI, so
-  no reason to hide it behind a `cfg` this project's machines never build.
-  Never run on a Mac — open-tasks entry 25.
+  no reason to hide it behind a `cfg` that Linux builds would never compile.
+  The developer runs it on macOS.
 
 **Progress (2026-09-20, ADR 0004 — `shell` is gone and a sandbox arrived):**
 The largest change this crate has had. Read

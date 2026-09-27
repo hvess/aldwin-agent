@@ -11,6 +11,7 @@
 //! Refusals are [`Error`] variants, so the gate's refusals are typed like the
 //! rest of the crate's failures.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::git::{common_dir, staged_tree};
@@ -53,13 +54,13 @@ pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
         return Err(Error::NotPassed);
     }
     let now = staged_tree(root)?;
-    if now != state.tree {
+    if now != state.tree() {
         return Err(Error::IndexMoved {
             now,
-            reviewed: state.tree.clone(),
+            reviewed: state.tree().to_string(),
         });
     }
-    let path = record_path(root, &state.tree)?;
+    let path = record_path(root, state.tree())?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -74,7 +75,10 @@ pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// When git cannot write the tree, or there is no passing record for it.
+/// [`Error::NoRecord`] when no review of this tree was recorded,
+/// [`Error::RecordFailed`] when the one recorded did not pass, and the I/O or
+/// JSON error itself when a record exists but cannot be read or parsed —
+/// a damaged record is not the same news as a missing one.
 ///
 /// # Examples
 ///
@@ -88,11 +92,12 @@ pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
 pub fn check(root: &Path) -> Result<PathBuf> {
     let tree = staged_tree(root)?;
     let path = record_path(root, &tree)?;
-    let state: RunState = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .ok_or_else(|| Error::NoRecord { tree: tree.clone() })?;
-    if state.tree != tree || !state.passed() {
+    let text = match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return Err(Error::NoRecord { tree }),
+        read => read?,
+    };
+    let state: RunState = serde_json::from_str(&text)?;
+    if state.tree() != tree || !state.passed() {
         return Err(Error::RecordFailed { tree });
     }
     Ok(path)
@@ -101,16 +106,21 @@ pub fn check(root: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
     use crate::git::fixture::Repo;
 
     /// A run of `repo`'s staged tree that passed every stage and needed no
     /// judge.
     fn passing(repo: &Repo) -> RunState {
-        RunState {
-            tree: staged_tree(repo.root()).unwrap(),
-            stages_passed: true,
-            assignments: vec![],
-        }
+        run(repo, true)
+    }
+
+    /// A run of `repo`'s staged tree that needed no judge, whose stages 1 to
+    /// 5 passed or not.
+    fn run(repo: &Repo, stages_passed: bool) -> RunState {
+        let tree = staged_tree(repo.root()).unwrap();
+        RunState::assess(tree, stages_passed, &[], &BTreeSet::new()).0
     }
 
     #[test]
@@ -151,8 +161,7 @@ mod tests {
     #[test]
     fn a_failed_run_is_never_recorded_and_a_failed_record_never_passes() {
         let repo = Repo::new();
-        let mut failed = passing(&repo);
-        failed.stages_passed = false;
+        let failed = run(&repo, false);
         assert!(matches!(
             write_record(repo.root(), &failed),
             Err(Error::NotPassed)
@@ -160,12 +169,24 @@ mod tests {
 
         // A record that says the run failed — written by hand, since
         // `write_record` refuses to — is still a refusal.
-        let path = record_path(repo.root(), &failed.tree).unwrap();
+        let path = record_path(repo.root(), failed.tree()).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_string(&failed).unwrap()).unwrap();
         assert!(matches!(
             check(repo.root()),
             Err(Error::RecordFailed { .. })
         ));
+    }
+
+    /// A damaged record used to read as "no passing review", which sent the
+    /// committer to review again when the record was the problem.
+    #[test]
+    fn a_damaged_record_is_reported_as_damaged_not_as_missing() {
+        let repo = Repo::new();
+        let tree = staged_tree(repo.root()).unwrap();
+        let path = record_path(repo.root(), &tree).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ not a record").unwrap();
+        assert!(matches!(check(repo.root()), Err(Error::Json(_))));
     }
 }

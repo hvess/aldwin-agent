@@ -212,6 +212,19 @@ impl LspClient {
         Ok(())
     }
 
+    /// Takes `uri` out of the server's view, if it was ever shown: a file
+    /// that is gone must not keep answering for its last text.
+    pub async fn close_document(&self, uri: &str) -> Result<(), LspError> {
+        if self.inner.synced.lock().await.remove(uri).is_none() {
+            return Ok(());
+        }
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+        .await
+    }
+
     /// Whether the server's stdout has ended. Nothing heals on the same
     /// connection after that; the caller's recovery is a fresh `spawn`.
     pub fn is_closed(&self) -> bool {

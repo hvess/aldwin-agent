@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aldwin_review::capture::{capture, measure_cell};
 use aldwin_review::geometry::{Size, Theme};
-use aldwin_review::judges::{self, Assignment, Judge, RunState, Standing};
+use aldwin_review::judges::{Assignment, Judge, RunState, Standing};
 use aldwin_review::report::{self, Verdict};
 use aldwin_review::stages::Outcome;
 use aldwin_review::{gate, git, scene, stages, tokens, Baseline, Compositor, Error, Result};
@@ -230,7 +230,7 @@ fn record(root: &Path, state: &RunState) -> Result<()> {
     let path = gate::write_record(root, state)?;
     println!(
         "\nreview passed — recorded for tree {} in {}",
-        state.tree,
+        state.tree(),
         path.display()
     );
     println!("Commit exactly what is staged; any further change needs the loop again.");
@@ -303,11 +303,7 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &Path) -> Result<
     let report = run.join("review.html");
     let passed = report::write_verdict(&report, judge, &verdict)?;
     let mut state = RunState::load(run)?;
-    for assignment in &mut state.assignments {
-        if assignment.judge() == judge {
-            assignment.record(passed)?;
-        }
-    }
+    state.record(judge, passed)?;
     state.save(run)?;
     println!(
         "stage {stage}, {}: {} finding(s) — {}",
@@ -322,7 +318,7 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &Path) -> Result<
         )));
     }
     let pending: Vec<String> = state
-        .assignments
+        .assignments()
         .iter()
         .filter(|a| a.standing() == Standing::Pending)
         .map(|a| format!("{} ({})", a.judge().stage(), a.judge().title()))
@@ -435,10 +431,11 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
         return stages_only_verdict(stages_passed);
     }
 
-    let (assignments, scenes) = judges::assign(
+    let (state, scenes) = RunState::assess(
+        tree.clone(),
+        stages_passed,
         &git::staged_paths(root)?,
         &git::changed_scenes(root)?,
-        scene::CATALOGUE,
     );
     let dir = frames_dir(root)?;
     let frames_needed = stages_passed && !scenes.is_empty() && !args.no_capture;
@@ -453,12 +450,12 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
         commit: &commit,
         tree: &tree,
         outcomes: &outcomes,
-        assignments: &assignments,
+        assignments: state.assignments(),
         frames: frames_needed.then_some(dir.as_path()),
         captured,
     };
-    let (written, state) = write_run(root, &dir, &run)?;
-    print_assignments(&assignments, &written);
+    let written = write_run(root, &dir, &run, &state)?;
+    print_assignments(state.assignments(), &written);
     hand_to_judges(root, &dir, &run, &state, &scenes)
 }
 
@@ -541,20 +538,15 @@ fn stages_only_verdict(stages_passed: bool) -> Result<()> {
 }
 
 /// Writes the run into `dir` — the diff the judges read, the report and
-/// `run.json` — and returns the report's path and the state it saved.
-fn write_run(root: &Path, dir: &Path, run: &report::Run) -> Result<(PathBuf, RunState)> {
+/// `run.json` — and returns the report's path.
+fn write_run(root: &Path, dir: &Path, run: &report::Run, state: &RunState) -> Result<PathBuf> {
     // The judges read the change from a file, the same bytes for
     // each: a judge that runs `git diff` itself can run a different
     // one.
     std::fs::write(dir.join("change.diff"), git::staged_diff(root)?)?;
     let written = report::write(dir, run)?;
-    let state = RunState {
-        tree: run.tree.to_string(),
-        stages_passed: run.outcomes.iter().all(|o| o.passed),
-        assignments: run.assignments.to_vec(),
-    };
     state.save(dir)?;
-    Ok((written, state))
+    Ok(written)
 }
 
 /// Prints whether each judge is required and why, then where the report is.
@@ -586,7 +578,7 @@ fn hand_to_judges(
     state: &RunState,
     scenes: &[String],
 ) -> Result<()> {
-    if !state.stages_passed {
+    if !state.stages_passed() {
         return Err(Error::Review(
             "a deterministic stage failed; no judge runs until stages 1–5 pass".into(),
         ));

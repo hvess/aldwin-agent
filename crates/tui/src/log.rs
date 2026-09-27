@@ -59,6 +59,12 @@ pub enum LogEntry {
         /// The sentence to show.
         message: String,
     },
+    /// A stop asked for and not yet done. Drawn as a notice; the turn's
+    /// end replaces it with one `Stopped.`.
+    Stopping {
+        /// The sentence to show.
+        message: String,
+    },
     /// Something failed: a turn that errored, a cancelled turn, a provider
     /// retry. A sentence in `label`, the detail one disclosure below
     /// (ADR 0009 §5: no red, no glyph).
@@ -268,7 +274,7 @@ pub(crate) fn plural(n: usize, noun: &str) -> String {
 /// `Display` (`aldwin-core`, `client.rs`): `network error: …`,
 /// `provider error 429: …`, `stream interrupted: …`, `terminal error after
 /// N attempts: …`. Anything else — an error from the loop itself — gets the
-/// plain fallback. Open-tasks 32 is carrying the kind instead.
+/// plain fallback. Open-tasks 1 is carrying the kind instead.
 ///
 /// Zero attempts is the one case whose message is the sentence already:
 /// nothing was sent, because Aldwin itself could not reach a model — none

@@ -23,6 +23,10 @@ pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
         .map(|token| match token.as_str() {
             "Up" => Ok(b"\x1b[A".to_vec()),
             "Down" => Ok(b"\x1b[B".to_vec()),
+            // The review's keyboard way to a selection (ADR 0010). Shift
+            // keeps the legacy form under the Kitty protocol's
+            // "disambiguate" flag, the only one the app pushes.
+            "ShiftDown" => Ok(b"\x1b[1;2B".to_vec()),
             "Right" => Ok(b"\x1b[C".to_vec()),
             "Left" => Ok(b"\x1b[D".to_vec()),
             "Enter" => Ok(b"\r".to_vec()),
@@ -36,7 +40,7 @@ pub fn parse(spec: &str) -> Result<Vec<Vec<u8>>> {
                 // negotiated with the terminal rather than with us.
                 Ok(other[1..other.len() - 1].replace("\\e", "\x1b").into_bytes())
             }
-            other => Err(Error::Scene(format!("unknown key {other:?} (Up|Down|Left|Right|Enter|Tab|Esc|Space|Backspace|\"literal\")"))),
+            other => Err(Error::Scene(format!("unknown key {other:?} (Up|Down|ShiftDown|Left|Right|Enter|Tab|Esc|Space|Backspace|\"literal\")"))),
         })
         .collect()
 }

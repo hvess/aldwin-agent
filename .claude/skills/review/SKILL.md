@@ -23,7 +23,8 @@ look at a picture. One is the loop itself, and the last is the gate.
 | 10 gate | the commit is refused unless exactly its tree passed | the pre-commit hook |
 
 **An agent's commit cannot land without this.** `.githooks/pre-commit`
-runs stage 10 for every commit made from a Claude Code shell, and a
+runs stage 10 for every commit made by an agent — any process with `AGENT`
+set, which Claude Code's project settings and Aldwin both set — and a
 `PreToolUse` guard refuses the ways around it (`--no-verify`, `-n`, changing
 where hooks are read from, and the git commands that write commits without
 the hook). That is deliberate and it is not to be worked around: if the gate
@@ -89,11 +90,13 @@ that still exports it cannot have stage 5 rewrite the baseline it checks.
 
 `review` decides, from what the staged diff touches:
 
-- **stage 6, code** — any path under `crates/`, or `Cargo.toml` / `Cargo.lock`;
+- **stage 6, code** — any path under `crates/`, `.githooks/` or
+  `.claude/hooks/`, or `Cargo.toml` / `Cargo.lock` / `.claude/settings.json`
+  — the gate's own enforcement is judged like code;
 - **stage 7, Rust** — any `.rs` file;
-- **stage 8, frames** — any scene whose section of `render.snap` changed,
-  among the scenes capture can draw. If the snapshot moved only in scenes it
-  cannot draw, the report says which, and stage 8 is not required.
+- **stage 8, frames** — any scene whose section of `render.snap` changed.
+  Every snapshot scene is also a capture scene (a test in `scene.rs` keeps
+  the two lists equal), so those are exactly the frames it looks at.
 
 A change that calls for no judge — docs only — is recorded as passed as soon
 as stages 1–5 pass. Otherwise `review` exits non-zero: a review whose judges
@@ -166,7 +169,11 @@ The shape all three return:
 > 3. `.claude/skills/quality-gate/SKILL.md` — every section.
 > 4. The spec for each crate the diff touches: `.claude/spec/aldwin-<crate>.md`,
 >    or `.claude/spec/archive/` for an archived one. A spec step the change
->    completes should be noted in it.
+>    completes should be noted in it. A change to `.githooks/`,
+>    `.claude/hooks/` or `.claude/settings.json` is the review loop's own
+>    enforcement: judge it against `.claude/spec/aldwin-review.md`,
+>    Decisions 15 and 16. Decision 16 says what the commit guard is for: a
+>    spelling built to get past it is out of its scope, not a finding.
 >
 > Read nothing else, and do not judge Rust idiom — a separate judge owns the
 > `rust` skill.
@@ -341,13 +348,12 @@ longer checklist.
   what the project has decided.
 - **Stage 5's baseline proves the frames did not change**, not that they were
   ever right. Whether they are is stage 8's, for the scenes that moved.
-- **Seven snapshot scenes have no capture script**, so a change that moves
-  only those has no frames judge; the report names them when it happens.
 - **Nothing mechanical checks layout.** Stages 4 and 5 check tokens,
   colours, glyphs and copy, not whether a band is in the right place.
 - **Capture is not hermetic and does not need to be.** It is stage 8's input,
   not a gate: a bad frame is something the judge will say out loud.
 - **The judges are not reproducible, and no prompt fixes that.** Treat the
   findings as the output.
-- **The gate binds agents running in Claude Code.** A commit made through
-  Aldwin's own `run` tool, or by the developer, is not gated.
+- **The guard binds Claude Code only.** An Aldwin session's commits meet
+  the gate, but nothing refuses its `--no-verify`; the developer's own
+  commits are not gated.

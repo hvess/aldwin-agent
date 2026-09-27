@@ -88,8 +88,7 @@ first cut's `/login` and `login:` field. How it reaches the app:
 - [ ] **Live run** on a subscription. Watch the token response's
   `expires_in`, the 403 some SuperGrok tiers get after a successful
   sign-in, and whether a stale token draws the 401 the retry is built for.
-- [ ] **Review scenes** for the list, the sentence and the notice
-  (open-tasks 34).
+- [ ] **Review scenes** for the list, the sentence and the notice.
 
 ## Progress
 

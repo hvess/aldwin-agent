@@ -19,14 +19,19 @@ futures       = { workspace = true }
 thiserror     = { workspace = true }
 clap          = { workspace = true }
 async-stream  = { workspace = true }
+# Already in the tree via aldwin-config: the git shim's directory (ADR 0013)
+# is a private temp dir that removes itself on a clean exit.
+tempfile      = { workspace = true }
 # Already in the tree via rmcp — this adds a name, not a build. `Local`
 # because a transcript's timestamp is read by the developer who made it,
 # and UTC in a picker row is a small daily subtraction problem.
 chrono        = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
-tempfile   = { workspace = true }
-assert_cmd = { workspace = true }
+assert_cmd  = { workspace = true }
+serde_json  = { workspace = true }
+# `DispatchContext::for_testing`: the shim is checked through the real `run`.
+aldwin-core = { path = "../core", features = ["test-util"] }
 
 [lints]
 workspace = true

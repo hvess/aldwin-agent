@@ -213,8 +213,8 @@ All done, 2026-09-20.
 - **History as a secrets surface.** Tool results carry file contents and
   command output — a key read out of a `.env`, a token echoed by a command.
   Ephemeral sessions made this a memory-lifetime problem; a transcript makes it
-  a disk-lifetime one. `0600` and project-scoped directories are the V1 floor,
-  and the absence of an opt-out is a known gap, not an oversight.
+  a disk-lifetime one. `0600` and project-scoped directories are the floor,
+  and there is no opt-out, by decision (the developer, 2026-09-27).
 - Resume quietly restoring permission grants along with the transcript, on the
   reasoning that "the developer already approved this" — it re-creates a
   persistent allowlist through the back door and breaks ADR 0004's grant model.
@@ -234,9 +234,9 @@ All done, 2026-09-20.
 
 ## Out of Scope
 
-- **Retention.** Nothing prunes and there is no `/history forget`. Clearing out
-  `~/.aldwin/history/` is the developer's business, the same as any other
-  directory of their own files.
+- **Retention.** Nothing prunes and there is no `/history forget`, by
+  decision (2026-09-27). Clearing out `~/.aldwin/history/` is the developer's
+  business, the same as any other directory of their own files.
 - Launch-time flags (see Decisions), and with them any `--continue`.
 - Cross-session memory, fact extraction, or end-of-session prompts to remember
   anything — parent spec, and deliberately.

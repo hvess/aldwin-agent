@@ -2,10 +2,10 @@
 # Stage 10 of the review loop (.claude/skills/review/SKILL.md): an agent's
 # commit lands only with a passing review of exactly the tree it commits.
 #
-# Claude Code sets CLAUDECODE in every shell it starts, which is how an
-# agent's commit is told from the developer's own; the developer's is not
-# gated. `gate` reads the index git is about to commit — GIT_INDEX_FILE
+# An agent is anything that sets AGENT: Claude Code through the project's
+# settings, Aldwin in every process it starts. The developer's own commit is
+# not gated. `gate` reads the index git is about to commit — GIT_INDEX_FILE
 # included, so `git commit -a` is checked against what it really commits.
-[ -n "$CLAUDECODE" ] || exit 0
+[ -n "$AGENT" ] || exit 0
 cd "$(git rev-parse --show-toplevel)" || exit 1
 exec cargo run --release --quiet -p aldwin-review -- gate

@@ -220,7 +220,7 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
 
     let mut lines: Vec<Line<'static>> = vec![fill(vec![], pal.tint)];
     let mut dots = vec![Span::styled(" ".repeat(MARGIN_X), on_tint)];
-    for file in &review.files {
+    for file in review.files() {
         let (glyph, fg) = if file.read {
             ("●", pal.accent)
         } else {
@@ -232,7 +232,7 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
     lines.push(fill(vec![], pal.tint));
 
     let mut last_dir: Option<String> = None;
-    for (i, file) in review.files.iter().enumerate() {
+    for (i, file) in review.files().iter().enumerate() {
         let (dir, name) = match file.path.rsplit_once('/') {
             Some((d, n)) => (d.to_string(), n.to_string()),
             None => (String::new(), file.path.clone()),

@@ -25,7 +25,7 @@
       "id": "frame-command-list-is-not-the-products",
       "design_says": "Frame `F commands` types `/c` and the list narrows to `changes` and `clear`, with no shortcut column; the design system's `CommandRow` still shows `changes`, `undo` (`↺`) and `quit` (`⌃D`), a key right-flush like a menu.",
       "design_also_says": "Nothing in the design names `/resume` (ADR 0005, a shipped feature), `/model`, `/connect` (ADR 0012) or `/theme`, and the product has neither `/changes` nor `/undo`.",
-      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/connect` (ADR 0012, 2026-09-26), `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` are open-tasks entry 27.",
+      "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/connect` (ADR 0012, 2026-09-26), `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` will not be built (the developer, 2026-09-27).",
       "glyphs": ""
     },
     {
@@ -40,6 +40,20 @@
       "design_says": "`tokens/colors.css`: `--label3` is the “tertiary: line numbers, folders, pending” tone — 2.5:1 on `--win` in the dark theme, 2.9:1 in the light — and the caption over the review frames G–J: “⌃↩ stays grey until every file is read, then turns blue.”",
       "design_also_says": "Apple's HIG (Accessibility): “Strive to meet color contrast minimum standards.” — 4.5:1 for text up to 17 pts — and “Convey information with more than color alone.”",
       "app_follows": "The design's `label3`, unchanged (the developer's decision, 2026-09-24). The not-ready approve does not rely on colour alone: until every file is read its words say so too, and they change when it is ready.",
+      "glyphs": ""
+    },
+    {
+      "id": "a-plan-step-has-no-note",
+      "design_says": "Frame `D`: under the running `● Check that it works` step, `Running the tests. About ten seconds.` in `label2` on the very next row — `<div style=\"white-space:pre;padding:0 5ch;color:var(--label2)\">`, a note belonging to the step.",
+      "design_also_says": "`PlanStep` is the design's component for a step, and it carries a glyph and one line of text; nothing in the component set gives a step a second line.",
+      "app_follows": "The developer's decision of 2026-09-27: a plan step has no note. What the agent says about the running step is its own prose — `label`, after a blank row — and the `stopping` scene draws that sentence as prose.",
+      "glyphs": ""
+    },
+    {
+      "id": "saved-review-is-not-reopened",
+      "design_says": "Frame `J` draws `›` at the end of the `✓ Saved 3 files` row, and the README calls the saved review “one line you can open again”.",
+      "design_also_says": "ADR 0009 §4: nothing is written before an approve, and the approve writes the changeset whole; after it, the files on disk and git's history are the record of what landed.",
+      "app_follows": "The developer's decision of 2026-09-27: a saved review is not reopened. The changeset is dropped at the write, and the row is drawn without the `›`.",
       "glyphs": ""
     },
     {

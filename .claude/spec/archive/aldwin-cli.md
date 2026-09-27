@@ -199,9 +199,23 @@ working directory, and `ModelSwitch` and `History::open` return typed errors.
 `tests/binary.rs` runs the binary through `assert_cmd`: `--version`, a
 refused argument, and a malformed `provider.yaml` refusing to start.
 
+**Post-archive addition (2026-09-27, ADR 0013, the git shim):** Before the
+startup sequence, `main` does two things, and so is no longer
+`#[tokio::main]`. Started as `git` — its file name, through a symlink — the
+binary is the git shim (`git_shim.rs`): it execs the real git from further
+down `PATH`, with `--trailer 'Co-Authored-By: Aldwin <noreply@aldwin.codes>'`
+after a `commit`, and exits without parsing a flag. Otherwise, after clap
+and before the tokio runtime starts a thread, it installs the shim: a `0700`
+temp directory holding a `git` symlink to itself, put first on the
+process's `PATH` so every process Aldwin starts inherits it, and removed on
+a clean exit. Unix only. `run` takes the install's error, if any, and says
+once at the top of the session that commits will not name Aldwin.
+`tests/git_shim.rs` commits through the shim against real git;
+`tests/git_shim_sandboxed.rs` commits through the real `run` tool, confined.
+
 ## Design
 
-- **Invocation:** Zero-arg binary. `aldwin` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files.
+- **Invocation:** Zero-arg binary. `aldwin` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files. (Since ADR 0013, 2026-09-27: started under the name `git`, the binary is the git shim instead, and a session puts that shim first on its own `PATH`.)
 - **Startup Sequence:**
   1. init_global_if_empty — first launch writes annotated global config; PartiallyPresent → refuse to start.
   2. Load all config layers — refuse to start on any parse failure, schema error, unknown major, or missing env var (error to stderr, non-zero exit; TUI has not yet launched).

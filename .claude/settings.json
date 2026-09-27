@@ -1,4 +1,7 @@
 {
+  "env": {
+    "AGENT": "claude-code"
+  },
   "permissions": {
     "deny": [
       "Edit(/.claude/settings.json)",

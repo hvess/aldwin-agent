@@ -101,7 +101,7 @@ pub enum Event {
         /// The step within that turn.
         step_id: StepId,
     },
-    /// Thinking text as it streams. Nothing draws it yet (open-tasks 24).
+    /// Thinking text as it streams. Nothing draws it yet (open-tasks 3).
     ThinkingDelta {
         /// The turn this belongs to.
         turn_id: TurnId,

@@ -4,7 +4,6 @@
 **Amends:** ADR 0004 §4 (the no-enforcement fallback) and §5 (the project-root
 boundary)
 **Affects:** `aldwin-tools`, `aldwin-config`, `aldwin-cli`
-**Closes:** open-tasks entry 15
 
 ## Context
 
@@ -201,10 +200,8 @@ still per ADR 0004 §1, and still owed as structured stages.
 **macOS is no longer a worse product by default**, and Windows still is —
 honestly, via §6. ADR 0004's Consequences anticipated exactly this split.
 
-**The macOS backend has not been run on macOS.** It compiles on every platform
-(it is ordinary Rust, no FFI) and its unit tests run everywhere, but the
-behaviour of `sandbox-exec` itself is unverified here. Recorded as open-tasks
-entry 25.
+**The macOS backend is ordinary Rust, no FFI.** It compiles on every
+platform and its unit tests run everywhere; the developer runs it on macOS.
 
 ## Alternatives rejected
 

@@ -172,6 +172,12 @@ pub fn changed_scenes(root: &Path) -> Result<BTreeSet<String>> {
     Ok(changed_in(&before, &after))
 }
 
+/// The scene a snapshot line names, when it is a section's `=== <theme>
+/// <scene> <size>` header. The one reader of that header.
+pub(crate) fn scene_of(line: &str) -> Option<&str> {
+    line.strip_prefix("=== ")?.split_whitespace().nth(1)
+}
+
 /// The scenes whose sections differ between two snapshots.
 ///
 /// A section starts at `=== <theme> <scene> <size>` and runs to the next;
@@ -181,7 +187,7 @@ fn changed_in(before: &str, after: &str) -> BTreeSet<String> {
         let mut out: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut current = None;
         for line in text.lines() {
-            if line.starts_with("=== ") {
+            if scene_of(line).is_some() {
                 current = Some(line);
             }
             if let Some(header) = current {
@@ -195,7 +201,7 @@ fn changed_in(before: &str, after: &str) -> BTreeSet<String> {
         .keys()
         .chain(after.keys())
         .filter(|header| before.get(*header) != after.get(*header))
-        .filter_map(|header| header.split_whitespace().nth(2))
+        .filter_map(|header| scene_of(header))
         .map(str::to_string)
         .collect()
 }

@@ -5,7 +5,7 @@ A coding agent harness where the developer's understanding is the product, not t
 **Status:** active
 **Scope:** Entire project — core, TUI, LLM client, tool layer.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-09-27
 
 ## Why
 
@@ -73,11 +73,13 @@ A tool for thought.
 
 - **No OS-level sandboxing in V0.** — *Reversed by ADR 0004; since ADR 0011 it is the boundary.* Every process Aldwin starts — a `run`, the language server, an MCP server — runs under Landlock (Linux) or Seatbelt (macOS) and can write only inside the workspace; reads and the network are open. Where neither exists, the developer is told once at startup. The original reasoning — that prompts and allowlists were the established model — described the product ADR 0009 replaced.
 
+- **Aldwin is a co-author of the commits it makes.** — ADR 0013, 2026-09-27: every `git commit` from anything Aldwin starts carries `Co-Authored-By: Aldwin <noreply@aldwin.codes>`. At startup Aldwin puts a symlink to its own binary, named `git`, first on its `PATH`; started under that name the binary execs the real git, adding `--trailer` to a `commit`. With a git older than 2.32, which has no `--trailer`, no shim is installed and that is said once. Merges, cherry-picks, rebases and a git called by absolute path get no trailer; a shim that could not be installed is said once.
+
 - **Agent loop is discussion-first; action follows intent.** — Amended by ADR 0008: resting state is conversation, and action follows the developer's *intent* rather than their grammatical mood. The agent proposes, explains, surfaces tradeoffs; the developer drives. Not OpenCode's build/plan toggle, not Claude Code's act-first model.
 
 - **Read and Explain are first-class tools; Edit has deliberate friction.** — Amended by ADR 0009: an edit is *staged*, every edit of a turn is one changeset, and the changeset is reviewed in a full-window review at the first moment it would be observed on disk — before a run, or at the turn's end. Nothing is written before an approve. Friction on Edit preserves the developer's role as conscious author; it is structural, and there is no setting for it.
 
-- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). What an MCP tool itself writes is outside the review; open-tasks 13.
+- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). What an MCP tool itself writes is outside the review; open-tasks 2.
 
 - **Permission model — the workspace is the only boundary.** — *Superseded by ADR 0009, then ADR 0011.* Reads and runs need no grant and never ask; every tool refuses a path outside the workspace, and every process Aldwin starts can write only inside it; where that cannot be enforced, the developer is told once. `run` takes a shell command. There is no class and no `deny:` lock. There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
 
@@ -111,6 +113,7 @@ A tool for thought.
 - .claude/spec/archive/aldwin-config.md — per-domain YAML, project and global scope, refuse-to-start.
 - .claude/adr/0009-the-review-is-the-only-gate.md — the review, staging, plan and ask, no first run.
 - .claude/adr/0011-the-workspace-is-the-only-boundary.md — the one boundary, and the sandbox that holds it.
+- .claude/adr/0013-aldwin-is-a-co-author-of-the-commits-it-makes.md — the co-author trailer, and the git shim that adds it.
 - https://docs.anthropic.com/en/api/messages — Anthropic Messages API.
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — prompt caching.
 - https://ratatui.rs/ — ratatui.

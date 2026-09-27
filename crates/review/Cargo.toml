@@ -32,6 +32,8 @@ unicode-width = "0.2"    # same crate the TUI measures with, so a wide glyph
 [dev-dependencies]
 # A throwaway git repository for the gate's tests.
 tempfile = { workspace = true }
+# The commit guard's tests run the hook script as a command.
+assert_cmd = { workspace = true }
 
 [lints]
 workspace = true

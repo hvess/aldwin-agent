@@ -16,6 +16,8 @@
 //! is therefore invisible to this harness, which is worth knowing before
 //! reading a clean run as coverage of both.
 
+use serde_json::Value;
+
 pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 
 /// An assistant reply streamed as text deltas.
@@ -29,16 +31,45 @@ pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 ///
 /// Only if `serde_json` fails to encode a `String`, which it cannot.
 pub fn text(reply: &str) -> Canned {
-    let mut body = String::new();
-    for chunk in split_into_deltas(reply) {
-        let escaped = serde_json::to_string(&chunk).expect("a string is always serialisable");
-        body.push_str(&format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{escaped}}},\"finish_reason\":null}}]}}\n\n"));
-    }
+    let mut body = deltas(reply);
     body.push_str(
         "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
     );
     body.push_str("data: [DONE]\n\n");
     Canned::Sse(body)
+}
+
+/// A reply that streams `reply` and then holds the turn open: the stream
+/// stays connected and says nothing more, so the app is caught mid-turn
+/// with `● Working…` in the footer. The fake answers everything else at
+/// once, and this is the only way a scene stays in a running turn long
+/// enough to be captured. The client's idle timeout is a minute, far past
+/// any capture.
+///
+/// # Examples
+///
+/// ```
+/// use aldwin_review::fake::{self, Canned};
+/// assert!(matches!(fake::held("Running the tests."), Canned::SseThenStall(_)));
+/// ```
+pub fn held(reply: &str) -> Canned {
+    Canned::SseThenStall(deltas(reply))
+}
+
+/// `reply` as the SSE events of its text deltas, and nothing that ends the
+/// step.
+///
+/// # Panics
+///
+/// Only if `serde_json` fails to encode a `String`, which it cannot.
+fn deltas(reply: &str) -> String {
+    split_into_deltas(reply)
+        .into_iter()
+        .map(|chunk| {
+            let escaped = serde_json::to_string(&chunk).expect("a string is always serialisable");
+            format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{escaped}}},\"finish_reason\":null}}]}}\n\n")
+        })
+        .collect()
 }
 
 /// Roughly 40-character pieces, split on whitespace so a delta boundary never
@@ -65,18 +96,37 @@ fn split_into_deltas(reply: &str) -> Vec<String> {
 /// call then does — a read, a staged edit, a question — is the real
 /// dispatcher's business, not the provider's, so a scene reaches those states
 /// through the real path rather than by faking a panel.
-pub fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> Canned {
+pub fn tool_call(id: &str, name: &str, arguments: Value) -> Canned {
     tool_calls(&[(id, name, arguments)])
 }
 
 /// Several calls in one turn — which is how a scene stages more than one
 /// edit into a single changeset, or updates the plan beside a read.
+pub fn tool_calls(calls: &[(&str, &str, Value)]) -> Canned {
+    said_then_calls("", calls)
+}
+
+/// Prose, then calls, in one reply — the agent saying what it is about to
+/// do before it does it, which is how a turn's text lands between its work
+/// rather than only at its end.
 ///
 /// # Panics
 ///
 /// Only if `serde_json` fails to encode a `serde_json::Value` or a `String`,
 /// which it cannot.
-pub fn tool_calls(calls: &[(&str, &str, serde_json::Value)]) -> Canned {
+///
+/// # Examples
+///
+/// ```
+/// use aldwin_review::fake::{self, Canned};
+/// let reply = fake::said_then_calls(
+///     "Reading the router.",
+///     &[("call-read", "read", serde_json::json!({ "path": "src/router.rs" }))],
+/// );
+/// let Canned::Sse(body) = reply else { unreachable!() };
+/// assert!(body.find("Reading").unwrap() < body.find("call-read").unwrap());
+/// ```
+pub fn said_then_calls(text: &str, calls: &[(&str, &str, Value)]) -> Canned {
     let encoded = calls
         .iter()
         .enumerate()
@@ -87,7 +137,7 @@ pub fn tool_calls(calls: &[(&str, &str, serde_json::Value)]) -> Canned {
         })
         .collect::<Vec<_>>()
         .join(",");
-    let mut body = String::new();
+    let mut body = deltas(text);
     body.push_str(&format!(
         "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{encoded}]}},\"finish_reason\":null}}]}}\n\n"
     ));

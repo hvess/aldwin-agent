@@ -16,8 +16,7 @@ Specs are in `.claude/spec/` — read before implementing. Six are archived
 under `.claude/spec/archive/`: config, core, llm and cli as of 2026-08-29,
 the transcript feature (history) as of 2026-09-20 — implemented, tested, and
 audited with no known gaps — and permissions as of 2026-09-24, closed when
-ADR 0011 deleted its crate. Four stay active: tools, tui, review and
-login. When a spec step is completed, note it; when all steps are done, move the spec to
+ADR 0011 deleted its crate. Four stay active: tools, tui, review and login. When a spec step is completed, note it; when all steps are done, move the spec to
 `.claude/spec/archive/`.
 
 `aldwin-review.md` is the feedback loop every agent commit runs — ten
@@ -123,7 +122,8 @@ and became the problem it was built to solve.
 disagreement is recorded.** The design's commands include `/changes` and
 `/undo`; the product ships `/resume`, `/model`, `/quit`, `/clear` (the
 developer's call, 2026-09-23), `/theme` (2026-09-25) and `/connect` (ADR
-0012, 2026-09-26), and `/changes` and `/undo` are open-tasks 27. That is in `baseline.json`. A frame is authority
+0012, 2026-09-26); `/changes` and `/undo` will not be built (the
+developer's call, 2026-09-27). That is in `baseline.json`. A frame is authority
 on tone and position, not on scope.
 
 ## Decision records
@@ -156,7 +156,8 @@ a decision they cover.
   and runs need no grant and never ask. An edit is staged, every edit of a
   turn is one changeset, and the review opens at the first moment the
   changeset would be observed on disk — before a `run`, or at the turn's
-  end. Nothing is written before an approve. There is no first run. `plan`
+  end. Nothing Aldwin writes lands before an approve; an MCP server's own
+  writes are the one exception (open-tasks 2). There is no first run. `plan`
   and `ask` carry the plan and a question to the screen. A failure is a
   sentence.
 - **0010 — Review lines are selected with the mouse.** The diff has no line
@@ -177,10 +178,18 @@ a decision they cover.
   through its key when exported, and otherwise every request answers with
   one sentence naming both fixes. The sign-in is the `aldwin-login` leaf
   crate.
+- **0013 — Aldwin is a co-author of the commits it makes.** Every `git
+  commit` from anything Aldwin starts carries `Co-Authored-By: Aldwin
+  <noreply@aldwin.codes>`. Aldwin's own binary is a git shim: at startup a
+  0700 directory holding a `git` symlink to it goes first on the process's
+  `PATH`, and started as `git` it runs the real one with `--trailer` added
+  after `commit`; git's own duplicate check keeps it to one. Merges,
+  cherry-picks, rebases, `commit-tree`, aliases and an absolute-path git get
+  no trailer. A shim that could not be installed is said once at startup.
 
 ## Key Constraints (non-negotiable)
 
-- Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole.
+- Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole. What an MCP tool itself writes is the one exception, not yet closed (open-tasks 2).
 - Edit is never allowlistable: there is nothing to allowlist it into. The review is structural, not a setting.
 - **The workspace is the only boundary** (ADR 0007, ADR 0011). It is `roots[0]` plus whatever the project `permissions.yaml` declares. Every tool refuses a path outside it, symlinks included, and an approved write is resolved again before it lands.
 - Every process Aldwin starts — `run`'s shell, the language server, an MCP server — can write only inside the workspace and the incidental paths, enforced by the kernel (Landlock, Seatbelt), not trusted. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0011 §3).

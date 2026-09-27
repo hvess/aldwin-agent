@@ -11,7 +11,7 @@ use aldwin_core::DispatchContext;
 /// One remote MCP tool, proxied through `McpBridge`. It runs in its own
 /// process over the real tree, so the dispatcher opens the review before it
 /// the way it does before `run`; an MCP tool that edits files does so
-/// without a diff (open-tasks 13), inside the workspace the sandbox allows.
+/// without a diff (open-tasks 2), inside the workspace the sandbox allows.
 pub struct McpTool {
     descriptor: ToolDescriptor,
     bridge: Arc<McpBridge>,

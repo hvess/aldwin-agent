@@ -539,11 +539,27 @@ impl App {
         match reason {
             TurnEndReason::EndTurn => self.push(LogEntry::TurnBreak),
             TurnEndReason::Cancelled => {
-                self.push(LogEntry::Failure {
+                // One sentence per stop: the first `Stopping` becomes
+                // "Stopped." in place, and a repeat from a second esc goes
+                // (developer, 2026-09-27).
+                let stopped = LogEntry::Failure {
                     message: "Stopped.".into(),
                     detail: None,
                     open: false,
-                });
+                };
+                let start = self.turn_start.min(self.log.len());
+                let notices: Vec<usize> = (start..self.log.len())
+                    .filter(|&i| matches!(self.log[i], LogEntry::Stopping { .. }))
+                    .collect();
+                match notices.split_first() {
+                    Some((&first, repeats)) => {
+                        for &i in repeats.iter().rev() {
+                            self.log.remove(i);
+                        }
+                        self.log[first] = stopped;
+                    }
+                    None => self.push(stopped),
+                }
                 self.push(LogEntry::TurnBreak);
             }
             TurnEndReason::Error(message) => {
@@ -642,14 +658,13 @@ impl App {
                 // The dispatcher never opens a review over nothing, and a
                 // review over nothing has nothing to draw: answer it rather
                 // than open it.
-                if changeset.files.is_empty() {
-                    self.outbox.push(Command::ReviewDecision {
+                match Review::open(review_id.clone(), changeset) {
+                    Some(review) => self.mode = Mode::Review(review),
+                    None => self.outbox.push(Command::ReviewDecision {
                         review_id,
                         decision: ReviewDecision::Discard,
-                    });
-                    return;
+                    }),
                 }
-                self.mode = Mode::Review(Review::open(review_id, changeset));
             }
             Event::ReviewClosed { outcome } => {
                 if matches!(self.mode, Mode::Review(_)) {
@@ -1188,7 +1203,7 @@ impl App {
             self.stopping = true;
             self.outbox.push(Command::Cancel);
         }
-        self.push(LogEntry::Notice {
+        self.push(LogEntry::Stopping {
             message: notice.into(),
         });
     }
@@ -2035,10 +2050,34 @@ pub(crate) mod tests {
         assert!(!a.should_quit, "a second esc does not leave Aldwin");
         assert_eq!(a.outbox, vec![Command::Cancel], "and asks for one stop");
         assert!(
-            matches!(a.log.last(), Some(LogEntry::Notice { message }) if message == "Stopping."),
+            matches!(a.log.last(), Some(LogEntry::Stopping { message }) if message == "Stopping."),
             "the notice names no key that was not pressed: {:?}",
             a.log
         );
+    }
+
+    /// "Stopping." then "Stopped." was two sentences for one stop.
+    #[test]
+    fn a_stopped_turn_leaves_one_sentence() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.handle_key(press(KeyCode::Esc));
+        a.handle_key(press(KeyCode::Esc));
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Cancelled,
+        });
+        let said: Vec<&str> = a
+            .log
+            .iter()
+            .filter_map(|e| match e {
+                LogEntry::Notice { message }
+                | LogEntry::Stopping { message }
+                | LogEntry::Failure { message, .. } => Some(message.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, ["Stopped."]);
     }
 
     #[test]
@@ -2047,7 +2086,7 @@ pub(crate) mod tests {
         a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
         a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(
-            matches!(a.log.last(), Some(LogEntry::Notice { message }) if message.contains("⌃C again"))
+            matches!(a.log.last(), Some(LogEntry::Stopping { message }) if message.contains("⌃C again"))
         );
     }
 

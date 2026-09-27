@@ -125,7 +125,8 @@ Recorded in `crates/review/baseline.json` under `contradictions`. As of the
 2026-09-25 re-sync the one about scope is the command list: the design's
 commands include `/changes` and `/undo` (frame F, `CommandRow`), where the
 product ships `/resume /model /quit /clear /theme` (the developer's calls,
-2026-09-23 and 2026-09-25); both are open-tasks entry 27. The frames'
+2026-09-23 and 2026-09-25); `/changes` and `/undo` will not be built
+(2026-09-27). The frames'
 placeholders and frame J's `↺ Undo`, which the import recorded against the
 product, are gone from the frame.
 

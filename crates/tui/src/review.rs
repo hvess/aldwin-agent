@@ -210,8 +210,10 @@ pub enum ReviewOutcome {
 pub struct Review {
     /// The id the agent gave the review, echoed back with the decision.
     pub review_id: String,
-    /// One per changed file, in the changeset's order.
-    pub files: Vec<ReviewFile>,
+    /// One per changed file, in the changeset's order. Never empty — `open`
+    /// refuses a changeset with no files, and nothing removes one — so
+    /// `file` always has something to return.
+    files: Vec<ReviewFile>,
     /// Which of `files` is on screen.
     pub current: usize,
     /// The lines selected for a comment in the current file. There is no
@@ -239,14 +241,35 @@ pub struct Review {
 
 impl Review {
     /// Opens on the changeset's first file, nothing selected and nothing
-    /// read.
-    pub fn open(review_id: String, changeset: Changeset) -> Self {
+    /// read — or `None` for a changeset with no files, which has nothing to
+    /// draw and nothing to decide.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use aldwin_core::{ChangedFile, Changeset};
+    /// use aldwin_tui::Review;
+    ///
+    /// assert!(Review::open("review-1".into(), Changeset::default()).is_none());
+    ///
+    /// let edit = ChangedFile {
+    ///     path: "src/lib.rs".into(),
+    ///     before: Some("fn a() {}\n".into()),
+    ///     after: "fn b() {}\n".into(),
+    /// };
+    /// let review = Review::open("review-2".into(), Changeset { files: vec![edit] }).unwrap();
+    /// assert_eq!(review.file().path, "src/lib.rs");
+    /// ```
+    pub fn open(review_id: String, changeset: Changeset) -> Option<Self> {
+        if changeset.files.is_empty() {
+            return None;
+        }
         let files = changeset
             .files
             .into_iter()
             .map(|f| file_from(&f.path, f.before.as_deref(), &f.after))
             .collect();
-        Self {
+        Some(Self {
             review_id,
             files,
             current: 0,
@@ -257,7 +280,12 @@ impl Review {
             comment: Draft::default(),
             confirm: None,
             keys_shown: false,
-        }
+        })
+    }
+
+    /// Every file in the review, in the changeset's order; never empty.
+    pub(crate) fn files(&self) -> &[ReviewFile] {
+        &self.files
     }
 
     /// The file on screen.
@@ -832,6 +860,7 @@ mod tests {
                 }],
             },
         )
+        .expect("a changeset with files")
     }
 
     /// The frame's own shape: a long unchanged run folds to one row with a
@@ -1141,7 +1170,8 @@ mod tests {
                     },
                 ],
             },
-        );
+        )
+        .expect("a changeset with files");
         pane_at(&mut r, 0);
         r.select(0, 0);
         r.handle_key(KeyCode::Tab, KeyModifiers::NONE, "");
@@ -1198,7 +1228,8 @@ mod tests {
                     },
                 ],
             },
-        );
+        )
+        .expect("a changeset with files");
         assert_eq!(
             r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),
             ReviewOutcome::Stay,
@@ -1347,7 +1378,8 @@ mod tests {
                     })
                     .collect(),
             },
-        );
+        )
+        .expect("a changeset with files");
         r.mark_read();
         assert_eq!(
             r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, ""),

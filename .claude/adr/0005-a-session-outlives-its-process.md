@@ -67,8 +67,8 @@ clause only.
 file contents and command output — a key read out of a `.env`, a token echoed
 by a command. This was a memory-lifetime exposure and is now a disk-lifetime
 one. `0600` and a project-scoped directory under `~/.aldwin/` are the floor.
-There is no opt-out in V1, and that is a known gap rather than a judgement that
-none is needed.
+There is no opt-out, by decision (the developer, 2026-09-27): transcripts are
+always written.
 
 **Nothing prunes.** Transcripts accumulate until the developer deletes them.
 Clearing out `~/.aldwin/history/` is their business, like any other directory

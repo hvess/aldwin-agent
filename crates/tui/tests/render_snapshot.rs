@@ -23,10 +23,11 @@
 use std::fmt::Write as _;
 
 use aldwin_core::{
-    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnId,
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnEndReason,
+    TurnId,
 };
 use aldwin_tui::{
-    App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem,
+    App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, SessionChoice, Theme, Verb, WorkItem,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -43,23 +44,26 @@ const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
 /// The ten frames of `Aldwin Agent TUI.dc.html`, by their letters, plus
 /// the states the design leaves to the product.
-const SCENES: [&str; 16] = [
-    "launch",    // A
-    "working",   // B
-    "details",   // C
-    "running",   // D
-    "question",  // E
-    "commands",  // F
-    "review",    // G
-    "selecting", // H
-    "commented", // I
-    "saved",     // J
-    "markdown",  // a table, a fence, a list and a quote — ADR 0002
-    "failure",   // ADR 0009 §5: a sentence, no red
-    "long",      // an overflowing transcript
-    "wrapped",   // a diff line wider than the pane — baseline long-diff-lines-wrap
-    "stopping",  // esc mid-turn: stopped, and nothing else
-    "answering", // "Chat about this": the question stays, the turn waits on you
+const SCENES: [&str; 19] = [
+    "launch",              // A
+    "working",             // B
+    "details",             // C
+    "running",             // D
+    "question",            // E
+    "commands",            // F
+    "review",              // G
+    "selecting",           // H
+    "commented",           // I
+    "saved",               // J
+    "markdown",            // a table, a fence, a list and a quote — ADR 0002
+    "failure",             // ADR 0009 §5: a sentence, no red
+    "long",                // an overflowing transcript
+    "wrapped",             // a diff line wider than the pane — baseline long-diff-lines-wrap
+    "stopping",            // esc mid-turn: stopped, and nothing else
+    "answering",           // "Chat about this": the question stays, the turn waits on you
+    "launch_unconfigured", // nothing configured: the card reads `Model  not set`
+    "plan",                // a finished turn: its plan, its work folded, its prose
+    "resume",              // bare `/resume` over two past sessions
 ];
 
 /// The scenes that are the full-window review, whose tree runs from the
@@ -117,16 +121,45 @@ fn commands() -> Vec<CommandChoice> {
     .collect()
 }
 
-fn fixed_identity(mut app: App) -> App {
+/// The past sessions bare `/resume` offers, newest first, as aldwin-cli
+/// hands them in. Pinned, like the catalogue — `when` is already formatted
+/// in the developer's own timezone, so it is a fact here, not a clock.
+fn sessions() -> Vec<SessionChoice> {
+    [
+        ("which providers are set up?", "2026-09-19 13:00", 1),
+        ("how should the retry loop back off?", "2026-09-18 13:00", 4),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (title, when, turns))| SessionChoice {
+        id: format!("session-{i}"),
+        title: title.into(),
+        when: when.into(),
+        turns,
+    })
+    .collect()
+}
+
+fn fixed_identity(mut app: App, provider: Option<&str>) -> App {
     app.status_mut().version = "1.0.0".into();
     app.status_mut().commit = "0000000".into();
     app.with_facts("gateway", Some("main"))
         .with_commands(commands())
-        .with_catalogue(catalogue(), Some("anthropic".into()))
+        .with_sessions(sessions())
+        .with_catalogue(catalogue(), provider.map(str::to_string))
 }
 
-fn app(theme: Theme) -> App {
-    fixed_identity(App::new("claude-sonnet-5".into()).with_theme(theme))
+/// The app `scene_name` is drawn from, put into that scene's state.
+/// `launch_unconfigured` is defined by what it is built without: no model
+/// and no provider, as aldwin-cli starts it when nothing is configured.
+fn app(scene_name: &str, theme: Theme) -> App {
+    let (model, provider) = match scene_name {
+        "launch_unconfigured" => ("", None),
+        _ => ("claude-sonnet-5", Some("anthropic")),
+    };
+    let mut app = fixed_identity(App::new(model.into()).with_theme(theme), provider);
+    scene(scene_name, &mut app);
+    app
 }
 
 #[test]
@@ -135,8 +168,7 @@ fn every_scene_renders_exactly_as_recorded() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
             for (width, height) in SIZES {
-                let mut app = app(theme);
-                scene(scene_name, &mut app);
+                let mut app = app(scene_name, theme);
                 let (buffer, caret) = render_with_caret(&mut app, width, height);
                 let _ = writeln!(out, "=== {theme:?} {scene_name} {width}x{height}");
                 let _ = writeln!(out, "caret {caret:?}");
@@ -173,8 +205,7 @@ fn every_cell_carries_a_colour_from_the_design_system() {
         let allowed: Vec<ratatui::style::Color> = aldwin_tui::design_palette(theme).to_vec();
         for scene_name in SCENES {
             for (width, height) in SIZES {
-                let mut app = app(theme);
-                scene(scene_name, &mut app);
+                let mut app = app(scene_name, theme);
                 let buffer = render(&mut app, width, height);
                 for y in 0..height {
                     for x in 0..width {
@@ -199,8 +230,7 @@ fn every_glyph_comes_from_the_closed_table() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
             for (width, height) in SIZES {
-                let mut app = app(theme);
-                scene(scene_name, &mut app);
+                let mut app = app(scene_name, theme);
                 let buffer = render(&mut app, width, height);
                 for y in 0..height {
                     for x in 0..width {
@@ -227,9 +257,9 @@ fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
         let (accent, del, add) = (pal[0], pal[5], pal[1]); // alphabetical: accent, add, addcode, addrow, amber, del …
         for scene_name in [
             "working", "details", "running", "failure", "saved", "long", "markdown", "stopping",
+            "plan",
         ] {
-            let mut app = app(theme);
-            scene(scene_name, &mut app);
+            let mut app = app(scene_name, theme);
             let buffer = render(&mut app, 104, 32);
             for y in 0..32 {
                 for x in 0..104 {
@@ -267,8 +297,7 @@ fn every_conversation_scene_respects_the_three_cell_margins() {
     const MARGIN: usize = 3;
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES.iter().filter(|s| !REVIEW_SCENES.contains(s)) {
-            let mut app = app(theme);
-            scene(scene_name, &mut app);
+            let mut app = app(scene_name, theme);
             let buffer = render(&mut app, 104, 32);
             for y in 0..32u16 {
                 let first = (0..104u16).find(|x| !buffer[(*x, y)].symbol().trim().is_empty());
@@ -291,8 +320,7 @@ fn every_conversation_scene_respects_the_three_cell_margins() {
 fn nothing_inside_a_frame_is_stroked() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES.iter().filter(|s| **s != "markdown") {
-            let mut app = app(theme);
-            scene(scene_name, &mut app);
+            let mut app = app(scene_name, theme);
             let buffer = render(&mut app, 104, 32);
             for y in 0..32u16 {
                 for x in 0..104u16 {
@@ -316,8 +344,7 @@ fn nothing_inside_a_frame_is_stroked() {
 fn no_cell_is_underlined() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES {
-            let mut app = app(theme);
-            scene(scene_name, &mut app);
+            let mut app = app(scene_name, theme);
             let buffer = render(&mut app, 104, 32);
             for y in 0..32u16 {
                 for x in 0..104u16 {
@@ -436,10 +463,10 @@ fn open_review(app: &mut App) {
         changeset: changeset(),
     });
     // The frame opens on the second file, with the first read.
-    press(app, KeyCode::Tab, KeyModifiers::NONE);
     if let Some(r) = app.review_for_tests() {
-        r.files[0].read = true;
+        r.mark_read();
     }
+    press(app, KeyCode::Tab, KeyModifiers::NONE);
 }
 
 fn scene(name: &str, app: &mut App) {
@@ -575,8 +602,16 @@ fn scene(name: &str, app: &mut App) {
             });
         }
         "stopping" => {
+            // What the developer is left looking at: `esc` says it is
+            // stopping, and core ends the turn as cancelled at once
+            // (the developer's call, 2026-09-27 — the instant between the
+            // two is never on screen long enough to be seen).
             scene("running", app);
             press(app, KeyCode::Esc, KeyModifiers::NONE);
+            app.apply_event(Event::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::Cancelled,
+            });
         }
         "answering" => {
             scene("question", app);
@@ -585,6 +620,43 @@ fn scene(name: &str, app: &mut App) {
             for c in "Only the ones".chars() {
                 press(app, KeyCode::Char(c), KeyModifiers::NONE);
             }
+        }
+        "launch_unconfigured" => {}
+        "plan" => {
+            // The turn the plan scene's capture plays out, ended: the read
+            // folds to its summary, and the step the plan still called
+            // running goes back to pending with it.
+            echo(app);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            app.seed(LogEntry::Work {
+                items: vec![WorkItem {
+                    call_id: "call-read".into(),
+                    verb: Verb::Read,
+                    target: "src/gateway/router.rs".into(),
+                    fact: Some("6 lines".into()),
+                    failed: false,
+                }],
+                open: false,
+            });
+            app.seed(plan([
+                StepState::Done,
+                StepState::Running,
+                StepState::Pending,
+            ]));
+            app.seed(LogEntry::AssistantText {
+                text: "Looking at how requests move through the gateway. Every request passes auth and tracing and nothing counts them, so a limit belongs beside the auth layer where the key is already known.".into(),
+            });
+            app.status_mut().context_used = Some(380_000);
+            app.apply_event(Event::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::EndTurn,
+            });
+        }
+        "resume" => {
+            // Bare `/resume`, chosen from the menu: the session question.
+            press(app, KeyCode::Char('/'), KeyModifiers::NONE);
+            press(app, KeyCode::Char('r'), KeyModifiers::NONE);
+            press(app, KeyCode::Enter, KeyModifiers::NONE);
         }
         other => panic!("unknown scene {other:?}"),
     }

@@ -20,6 +20,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::incidental_writes;
 
@@ -89,7 +90,7 @@ impl Sandbox {
 
     /// Nothing to install in the child: `sandbox-exec` confines itself and
     /// then `exec`s the real program.
-    pub fn install(self, _cmd: &mut tokio::process::Command) {}
+    pub fn install(self, _cmd: &mut Command) {}
 }
 
 /// Quotes a path as an SBPL string literal, or `None` if it cannot be

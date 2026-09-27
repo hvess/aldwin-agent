@@ -223,18 +223,128 @@ impl Assignment {
 /// What one run of the loop knows about itself, kept beside its report as
 /// `run.json` so `judge` can find it and, once every required judge has
 /// passed, copied into the pass record `gate` looks for.
+///
+/// Its fields are private and it is made only by [`RunState::assess`], so
+/// every run holds exactly the three judges, each as the staged diff called
+/// for it. A run assembled by hand with a judge left out would pass without
+/// it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
-    /// The staged tree this run reviewed, from `git write-tree`.
-    pub tree: String,
-    /// Whether stages 1 to 5 all passed.
-    pub stages_passed: bool,
-    /// The three judges and where each one stands.
-    pub assignments: Vec<Assignment>,
+    tree: String,
+    stages_passed: bool,
+    assignments: [Assignment; 3],
 }
 
 impl RunState {
     const FILE: &'static str = "run.json";
+
+    /// The run of `tree`, with each judge assigned from what the staged diff
+    /// touches — `paths` and the snapshot's `changed` scenes — and the scenes
+    /// stage 8 is to look at. Every snapshot scene is also a capture scene
+    /// (`scene.rs` has a test that says so), so the changed scenes are the
+    /// ones to capture.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::RunState;
+    /// let paths = vec!["crates/tui/src/app.rs".to_string()];
+    /// let changed = BTreeSet::from(["launch".to_string()]);
+    /// let (state, scenes) = RunState::assess("4b825dc", true, &paths, &changed);
+    /// assert!(state.assignments().iter().all(|a| a.standing().required()));
+    /// assert_eq!(scenes, ["launch"]);
+    /// ```
+    pub fn assess(
+        tree: impl Into<String>,
+        stages_passed: bool,
+        paths: &[String],
+        changed: &BTreeSet<String>,
+    ) -> (Self, Vec<String>) {
+        let (assignments, scenes) = assign(paths, changed);
+        let state = Self {
+            tree: tree.into(),
+            stages_passed,
+            assignments,
+        };
+        (state, scenes)
+    }
+
+    /// The staged tree this run reviewed, from `git write-tree`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::RunState;
+    /// let (state, _) = RunState::assess("4b825dc", true, &[], &BTreeSet::new());
+    /// assert_eq!(state.tree(), "4b825dc");
+    /// ```
+    pub fn tree(&self) -> &str {
+        &self.tree
+    }
+
+    /// Whether stages 1 to 5 all passed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::RunState;
+    /// let (state, _) = RunState::assess("t", false, &[], &BTreeSet::new());
+    /// assert!(!state.stages_passed());
+    /// ```
+    pub fn stages_passed(&self) -> bool {
+        self.stages_passed
+    }
+
+    /// The three judges, in stage order, and where each one stands.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::{Judge, RunState};
+    /// let (state, _) = RunState::assess("t", true, &[], &BTreeSet::new());
+    /// let judges: Vec<Judge> = state.assignments().iter().map(|a| a.judge()).collect();
+    /// assert_eq!(judges, Judge::ALL);
+    /// ```
+    pub fn assignments(&self) -> &[Assignment] {
+        &self.assignments
+    }
+
+    /// Records `judge`'s verdict: passed with no findings, failed with any.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Review`] when the change never called for `judge`, or when the
+    /// run holds no assignment for it — only possible in a `run.json` edited
+    /// by hand.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use aldwin_review::judges::{Judge, RunState};
+    /// let paths = vec!["Cargo.toml".to_string()];
+    /// let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new());
+    /// assert!(!state.passed());
+    /// state.record(Judge::Code, true)?;
+    /// assert!(state.passed());
+    /// # Ok::<(), aldwin_review::Error>(())
+    /// ```
+    pub fn record(&mut self, judge: Judge, passed: bool) -> Result<()> {
+        self.assignments
+            .iter_mut()
+            .find(|a| a.judge() == judge)
+            .ok_or_else(|| {
+                Error::Review(format!(
+                    "this run holds no assignment for stage {}",
+                    judge.stage()
+                ))
+            })?
+            .record(passed)
+    }
 
     /// Reads the state `review` left in `dir`.
     ///
@@ -248,7 +358,7 @@ impl RunState {
     /// use std::path::Path;
     /// use aldwin_review::judges::RunState;
     /// let state = RunState::load(Path::new("target/review-frames/run-1790488849"))?;
-    /// println!("reviewed tree {}", state.tree);
+    /// println!("reviewed tree {}", state.tree());
     /// # Ok::<(), aldwin_review::Error>(())
     /// ```
     pub fn load(dir: &Path) -> Result<Self> {
@@ -265,11 +375,12 @@ impl RunState {
     /// # Examples
     ///
     /// ```
+    /// use std::collections::BTreeSet;
     /// use aldwin_review::judges::RunState;
     /// let dir = tempfile::tempdir()?;
-    /// let state = RunState { tree: "4b825dc".into(), stages_passed: true, assignments: vec![] };
+    /// let (state, _) = RunState::assess("4b825dc", true, &[], &BTreeSet::new());
     /// state.save(dir.path())?;
-    /// assert_eq!(RunState::load(dir.path())?.tree, "4b825dc");
+    /// assert_eq!(RunState::load(dir.path())?.tree(), "4b825dc");
     /// # Ok::<(), aldwin_review::Error>(())
     /// ```
     pub fn save(&self, dir: &Path) -> Result<()> {
@@ -284,8 +395,10 @@ impl RunState {
     /// # Examples
     ///
     /// ```
+    /// use std::collections::BTreeSet;
     /// use aldwin_review::judges::RunState;
-    /// let docs_only = RunState { tree: "t".into(), stages_passed: true, assignments: vec![] };
+    /// let docs = vec![".claude/spec/aldwin-review.md".to_string()];
+    /// let (docs_only, _) = RunState::assess("t", true, &docs, &BTreeSet::new());
     /// assert!(docs_only.passed());
     /// ```
     pub fn passed(&self) -> bool {
@@ -297,61 +410,32 @@ impl RunState {
     }
 }
 
-/// Which judges the change calls for, read off what it touches, and the
-/// scenes stage 8 is to look at.
-///
-/// `catalogue` is capture's list of scenes. It is not the snapshot's: the
-/// snapshot draws scenes capture has no script for, and a change that moves
-/// only those has nothing stage 8 can look at — which is said in the reason
-/// rather than passed over.
-///
-/// # Examples
-///
-/// ```
-/// use std::collections::BTreeSet;
-/// use aldwin_review::judges::assign;
-/// let paths = vec!["crates/tui/src/app.rs".to_string()];
-/// let changed = BTreeSet::from(["launch".to_string()]);
-/// let (assignments, scenes) = assign(&paths, &changed, &["launch"]);
-/// assert!(assignments.iter().all(|a| a.standing().required()));
-/// assert_eq!(scenes, ["launch"]);
-/// ```
-pub fn assign(
-    paths: &[String],
-    changed: &BTreeSet<String>,
-    catalogue: &[&str],
-) -> (Vec<Assignment>, Vec<String>) {
-    let crate_changed = paths
-        .iter()
-        .any(|p| p.starts_with("crates/") || p == "Cargo.toml" || p == "Cargo.lock");
+/// Which judges the change calls for, in stage order, and the scenes stage 8
+/// is to look at — [`RunState::assess`]'s reading of the staged diff.
+fn assign(paths: &[String], changed: &BTreeSet<String>) -> ([Assignment; 3], Vec<String>) {
+    // The gate's own enforcement is code too: a change to what makes the
+    // loop binding is the change most worth a second reader.
+    let code_changed = paths.iter().any(|p| {
+        p.starts_with("crates/")
+            || p.starts_with(".githooks/")
+            || p.starts_with(".claude/hooks/")
+            || ["Cargo.toml", "Cargo.lock", ".claude/settings.json"].contains(&p.as_str())
+    });
     let rust_changed = paths.iter().any(|p| p.ends_with(".rs"));
-    let captured: Vec<String> = changed
-        .iter()
-        .filter(|s| catalogue.contains(&s.as_str()))
-        .cloned()
-        .collect();
-    let uncaptured: Vec<&str> = changed
-        .iter()
-        .map(String::as_str)
-        .filter(|s| !catalogue.contains(s))
-        .collect();
-
-    let frames_reason = match (captured.is_empty(), uncaptured.is_empty()) {
-        (true, true) => "no scene's snapshot changed".to_string(),
-        (true, false) => format!(
-            "the snapshot changed only in scenes capture does not draw ({}), so there are no frames to judge",
-            uncaptured.join(", ")
-        ),
-        (false, _) => format!("the snapshot changed in {}", captured.join(", ")),
+    let scenes: Vec<String> = changed.iter().cloned().collect();
+    let frames_reason = if scenes.is_empty() {
+        "no scene's snapshot changed".to_string()
+    } else {
+        format!("the snapshot changed in {}", scenes.join(", "))
     };
-    let assignments = vec![
+    let assignments = [
         Assignment::new(
             Judge::Code,
-            crate_changed,
-            if crate_changed {
-                "a crate or the workspace manifest changed"
+            code_changed,
+            if code_changed {
+                "a crate, the workspace manifest or the gate's hooks changed"
             } else {
-                "no crate and no workspace manifest changed"
+                "no crate, no workspace manifest and no gate hook changed"
             },
         ),
         Assignment::new(
@@ -363,9 +447,9 @@ pub fn assign(
                 "no Rust source changed"
             },
         ),
-        Assignment::new(Judge::Frames, !captured.is_empty(), frames_reason),
+        Assignment::new(Judge::Frames, !scenes.is_empty(), frames_reason),
     ];
-    (assignments, captured)
+    (assignments, scenes)
 }
 
 #[cfg(test)]
@@ -384,58 +468,77 @@ mod tests {
     #[test]
     fn a_docs_only_change_calls_for_no_judge() {
         let paths = vec![".claude/spec/aldwin-review.md".to_string()];
-        let (assignments, scenes) = assign(&paths, &BTreeSet::new(), &["launch"]);
+        let (assignments, scenes) = assign(&paths, &BTreeSet::new());
         assert!(required(&assignments).is_empty());
         assert!(scenes.is_empty());
     }
 
     #[test]
+    fn a_change_to_the_gate_itself_calls_for_the_code_judge() {
+        for path in [
+            ".githooks/pre-commit",
+            ".claude/hooks/commit-guard.sh",
+            ".claude/settings.json",
+        ] {
+            let (assignments, _) = assign(&[path.to_string()], &BTreeSet::new());
+            assert_eq!(required(&assignments), vec![Judge::Code], "{path}");
+        }
+    }
+
+    #[test]
     fn a_manifest_change_calls_for_the_code_judge_but_not_the_rust_one() {
         let paths = vec!["Cargo.toml".to_string()];
-        let (assignments, _) = assign(&paths, &BTreeSet::new(), &["launch"]);
+        let (assignments, _) = assign(&paths, &BTreeSet::new());
         assert_eq!(required(&assignments), vec![Judge::Code]);
     }
 
     #[test]
-    fn frames_are_judged_only_for_changed_scenes_capture_can_draw() {
+    fn frames_are_judged_for_exactly_the_scenes_whose_snapshot_changed() {
         let paths = vec!["crates/tui/src/app.rs".to_string(), SNAPSHOT.to_string()];
         let changed = BTreeSet::from(["launch".to_string(), "working".to_string()]);
-        let (assignments, scenes) = assign(&paths, &changed, &["launch", "plan"]);
+        let (assignments, scenes) = assign(&paths, &changed);
         assert_eq!(
             required(&assignments),
             vec![Judge::Code, Judge::Rust, Judge::Frames]
         );
-        assert_eq!(scenes, vec!["launch".to_string()]);
+        assert_eq!(scenes, ["launch", "working"]);
+        assert!(assignments[2].reason().contains("launch, working"));
 
-        let only_uncaptured = BTreeSet::from(["working".to_string()]);
-        let (assignments, scenes) = assign(&paths, &only_uncaptured, &["launch"]);
+        let (assignments, scenes) = assign(&paths, &BTreeSet::new());
         assert!(scenes.is_empty());
-        let frames = &assignments[2];
-        assert_eq!(frames.standing(), Standing::NotRequired);
-        assert!(frames.reason().contains("working"), "{}", frames.reason());
+        assert_eq!(assignments[2].standing(), Standing::NotRequired);
     }
 
     #[test]
     fn a_run_passes_only_when_every_required_judge_has_passed() {
-        let (assignments, _) = assign(
-            &["crates/core/src/lib.rs".to_string()],
-            &BTreeSet::new(),
-            &[],
-        );
-        let mut state = RunState {
-            tree: "t".into(),
-            stages_passed: true,
-            assignments,
-        };
+        let paths = ["crates/core/src/lib.rs".to_string()];
+        let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new());
         assert!(!state.passed(), "judges pending");
-        for a in &mut state.assignments {
-            if a.standing().required() {
-                a.record(true).unwrap();
-            }
-        }
+        state.record(Judge::Code, true).unwrap();
+        assert!(!state.passed(), "the Rust judge is still pending");
+        state.record(Judge::Rust, true).unwrap();
         assert!(state.passed());
-        state.stages_passed = false;
-        assert!(!state.passed());
+
+        let (failed_stages, _) = RunState::assess("t", false, &[], &BTreeSet::new());
+        assert!(!failed_stages.passed());
+    }
+
+    /// With public fields and a `Vec`, a run built or edited by hand with a
+    /// judge left out passed without that judge.
+    #[test]
+    fn a_run_missing_a_judge_does_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ["crates/core/src/lib.rs".to_string()];
+        let (state, _) = RunState::assess("t", true, &paths, &BTreeSet::new());
+        state.save(dir.path()).unwrap();
+
+        let file = dir.path().join(RunState::FILE);
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        json["assignments"].as_array_mut().unwrap().pop();
+        std::fs::write(&file, json.to_string()).unwrap();
+
+        assert!(matches!(RunState::load(dir.path()), Err(Error::Json(_))));
     }
 
     /// The flag-and-option pair this replaced could carry a pass for a judge

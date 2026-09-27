@@ -8,15 +8,21 @@
 //! something the snapshot cannot: the review below is opened by the real
 //! dispatcher over a really staged edit.
 //!
-//! The catalogue shares its names with `render_snapshot.rs` where the two
-//! can reach the same state. A scene that cannot be reached through the real
-//! path is reshaped or dropped **with a note here**, never quietly pointed at
-//! a different state under the same name. Three of the snapshot's scenes
-//! have no counterpart here: `working` and `running` are transient (the fake
-//! provider answers at once, so the amber dot is never on screen when the
-//! frame is taken — what this catalogue captures instead is the plan the
-//! turn leaves behind), and `selecting`/`commented` need a mouse drag
-//! (ADR 0010), which the key grammar does not send.
+//! The catalogue names the same scenes as `render_snapshot.rs`, so every
+//! scene is both pinned by the snapshot and capturable: stage 8 judges a
+//! scene only when its snapshot moved, and a name missing from either list
+//! is a scene no change can call a judge for. A scene here reaches the
+//! snapshot's state through the real path — the words and files are the
+//! fake's, the state is the same — and one that cannot is reshaped or
+//! dropped **with a note here**, never quietly pointed at a different state
+//! under the same name.
+//!
+//! Two kinds of state took more than typing. A turn still running
+//! (`working`, `running`) is held open by a reply that never ends
+//! (`fake::held`), since the fake otherwise answers at once and the turn is
+//! over before the frame is taken. A selection in the review (`selecting`,
+//! `commented`) is made with `Shift ↓` and the arrows, the keyboard's way to
+//! the same selection a drag leaves (ADR 0010).
 
 use std::path::{Path, PathBuf};
 
@@ -70,11 +76,24 @@ pub const CATALOGUE: &[&str] = &[
     "failure",
     "long",
     "resume",
+    "working",
+    "running",
+    "selecting",
+    "commented",
+    "wrapped",
+    "stopping",
+    "answering",
 ];
 
 const ROUTER: &str = "src/gateway/router.rs";
 
 const ROUTER_RS: &str = "pub fn app(cfg: &Config) -> Router {\n    Router::new()\n        .route(\"/v1/chat\", post(chat))\n        .layer(auth_layer(cfg))\n        .layer(TraceLayer::new_for_http())\n}\n";
+
+const MOD: &str = "src/gateway/mod.rs";
+
+const MOD_RS: &str = "mod router;\n\npub use router::app;\n";
+
+const LIMIT: &str = "src/gateway/limit.rs";
 
 const PROSE: &str = "Looking at how requests move through the gateway. Every request passes auth and tracing and nothing counts them, so a limit belongs beside the auth layer where the key is already known.";
 
@@ -92,6 +111,54 @@ fn plan(states: [&str; 3]) -> serde_json::Value {
         "Check that it works",
     ];
     serde_json::json!({ "steps": texts.iter().zip(states).map(|(t, s)| serde_json::json!({ "text": t, "state": s })).collect::<Vec<_>>() })
+}
+
+/// A turn that asks whether requests without a key are limited too.
+fn question() -> Vec<Canned> {
+    vec![fake::tool_call(
+        "call-ask",
+        "ask",
+        serde_json::json!({
+            "question": "Should requests without an API key be limited too?",
+            "detail":   "Right now they skip the limit. Limiting them by address stops anonymous floods.",
+            "options":  ["Yes, limit them by address", "No, let them through"],
+        }),
+    )]
+}
+
+/// A turn that stages one edit and creates one file, then says what it did.
+fn review() -> Vec<Canned> {
+    vec![
+        fake::tool_calls(&[
+            ("call-plan", "plan", plan(["done", "running", "pending"])),
+            (
+                "call-edit",
+                "edit",
+                serde_json::json!({
+                    "path":   ROUTER,
+                    "before": "        .layer(auth_layer(cfg))\n",
+                    "after":  "        .layer(RateLimitLayer::new(\n            Quota::per_minute(100),\n            cfg.limit_store.clone(),\n        ))\n        .layer(auth_layer(cfg))\n",
+                }),
+            ),
+            (
+                "call-new",
+                "edit",
+                serde_json::json!({ "path": LIMIT, "before": "", "after": "pub struct Limit { per_minute: u32, store: Arc<dyn LimitStore> }\n" }),
+            ),
+        ]),
+        fake::text("Each key gets 100 requests a minute; the rest are turned away before auth."),
+    ]
+}
+
+/// A turn on its last step, held open while the model is still saying so.
+fn running() -> Vec<Canned> {
+    vec![
+        fake::said_then_calls(
+            "The limit is in place. Checking that it works.",
+            &[("call-plan", "plan", plan(["done", "done", "running"]))],
+        ),
+        fake::held("Running the tests. About ten seconds."),
+    ]
 }
 
 /// The script for the scene called `name`.
@@ -153,43 +220,89 @@ pub fn script(name: &str) -> Result<Script> {
         },
 
         // The `ask` tool: the panel takes the band with the three answers.
-        "question" => Script {
-            replies: vec![fake::tool_call(
-                "call-ask",
-                "ask",
-                serde_json::json!({
-                    "question": "Should requests without an API key be limited too?",
-                    "detail":   "Right now they skip the limit. Limiting them by address stops anonymous floods.",
-                    "options":  ["Yes, limit them by address", "No, let them through"],
-                }),
-            )],
-            history: &[],
-            files:   vec![],
-            keys:    ask,
-            provider: true,
-        },
+        "question" => Script { replies: question(), history: &[], files: vec![], keys: ask, provider: true },
 
         // Frame F types `/c`: the list narrowed, the field completed in grey.
         "commands" => Script { replies: vec![], history: &[], files: vec![], keys: "\"/\",\"c\"", provider: true },
 
         // The review, opened by the real dispatcher at the end of a turn
         // that staged one edit and created one file (ADR 0009 §4).
-        "review" => Script {
-            replies: vec![
-                fake::tool_calls(&[
-                    ("call-plan", "plan", plan(["done", "running", "pending"])),
-                    ("call-edit", "edit", serde_json::json!({
-                        "path":   ROUTER,
-                        "before": "        .layer(auth_layer(cfg))\n",
-                        "after":  "        .layer(RateLimitLayer::new(\n            Quota::per_minute(100),\n            cfg.limit_store.clone(),\n        ))\n        .layer(auth_layer(cfg))\n",
-                    })),
-                    ("call-new", "edit", serde_json::json!({ "path": "src/gateway/limit.rs", "before": "", "after": "pub struct Limit { per_minute: u32, store: Arc<dyn LimitStore> }\n" })),
-                ]),
-                fake::text("Each key gets 100 requests a minute; the rest are turned away before auth."),
-            ],
+        "review" => Script { replies: review(), history: &[], files: vec![(ROUTER, ROUTER_RS)], keys: ask, provider: true },
+
+        // The router's first two added lines selected, and a comment typed
+        // against them: `Tab` to the router, `Shift ↓` selects the top row
+        // shown, the arrows carry it to the first added line and `Shift ↓`
+        // extends it by one.
+        "selecting" => Script {
+            replies: review(),
             history: &[],
             files:   vec![(ROUTER, ROUTER_RS)],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\"",
+            provider: true,
+        },
+
+        // The comment added: it rides on the lines, and the field closes.
+        "commented" => Script {
+            replies: review(),
+            history: &[],
+            files:   vec![(ROUTER, ROUTER_RS)],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\",Enter",
+            provider: true,
+        },
+
+        // A diff line wider than the pane wraps (baseline
+        // `long-diff-lines-wrap`).
+        "wrapped" => Script {
+            replies: vec![
+                fake::tool_call("call-edit", "edit", serde_json::json!({
+                    "path":   LIMIT,
+                    "before": "pub struct Limit;\n",
+                    "after":  "pub struct Limit;\n\nconst MESSAGE: &str = \"This key has made more than its 100 requests this minute; wait for the next minute, or ask for a higher limit.\";\n",
+                })),
+                fake::text("Requests over the limit are told why and when to try again."),
+            ],
+            history: &[],
+            files:   vec![(LIMIT, "pub struct Limit;\n")],
             keys:    ask,
+            provider: true,
+        },
+
+        // A turn in flight: its prose, its work folded, the plan with a
+        // step running, and the model still answering.
+        "working" => Script {
+            replies: vec![
+                fake::said_then_calls("Looking at how requests move through the gateway.", &[
+                    ("call-read-mod", "read", serde_json::json!({ "path": MOD })),
+                    ("call-read-router", "read", serde_json::json!({ "path": ROUTER })),
+                ]),
+                fake::said_then_calls("Nothing limits requests yet. Adding a limit for each key.", &[("call-plan", "plan", plan(["done", "running", "pending"]))]),
+                fake::held(""),
+            ],
+            history: &[],
+            files:   vec![(MOD, MOD_RS), (ROUTER, ROUTER_RS)],
+            keys:    ask,
+            provider: true,
+        },
+
+        // The last step running, and the model saying what it is doing.
+        "running" => Script { replies: running(), history: &[], files: vec![], keys: ask, provider: true },
+
+        // `esc` mid-turn: stopped, and nothing else.
+        "stopping" => Script {
+            replies: running(),
+            history: &[],
+            files: vec![],
+            keys: "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Esc",
+            provider: true,
+        },
+
+        // "Chat about this": the question stays, the turn waits on you,
+        // and what is typed is the answer.
+        "answering" => Script {
+            replies: question(),
+            history: &[],
+            files:   vec![],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,\"3\",\"Only the ones\"",
             provider: true,
         },
 
@@ -344,4 +457,35 @@ fn seed_history(script: &Script, global: &Path, cwd: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{script, CATALOGUE, CTRL_ENTER};
+
+    /// Stage 8 judges a scene only when its snapshot section moved and
+    /// capture can draw it, so a name on one list and not the other is a
+    /// scene no change can call a judge for.
+    #[test]
+    fn the_catalogue_names_the_snapshots_scenes() {
+        let snapshot = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tui/tests/snapshots/render.snap"
+        ))
+        .expect("render.snap is committed");
+        let pinned: BTreeSet<&str> = snapshot.lines().filter_map(crate::git::scene_of).collect();
+        let captured: BTreeSet<&str> = CATALOGUE.iter().copied().collect();
+        assert_eq!(captured, pinned);
+    }
+
+    #[test]
+    fn every_scene_has_a_script_whose_keys_parse() {
+        for name in CATALOGUE {
+            let keys = script(name).expect("in the catalogue").keys;
+            crate::keys::parse(&keys.replace("{CTRL_ENTER}", CTRL_ENTER))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
 }

@@ -19,6 +19,8 @@
 
 use std::io;
 use std::path::PathBuf;
+// `std`'s, named apart from tokio's `Command`, which `command` returns.
+use std::process::Command as StdCommand;
 
 /// Paths a process may write outside the workspace, because ordinary
 /// programs cannot run without them: the null and random devices, the
@@ -78,26 +80,61 @@ pub fn unavailable() -> Option<&'static str> {
 /// Building a ruleset is a handful of `open`/`stat` calls, synchronous on
 /// purpose: microseconds, and a `spawn_blocking` hop would cost more than it
 /// saves.
+///
+/// Every command carries [`AGENT`], confined or not: a commit made from
+/// anything Aldwin starts is an agent's commit, and the repository's
+/// pre-commit gate tells one from the developer's by that variable.
 pub(crate) fn command(
     program: &str,
     args: &[String],
     roots: &[PathBuf],
 ) -> io::Result<tokio::process::Command> {
+    std_command(program, args, roots).map(tokio::process::Command::from)
+}
+
+/// [`command`], as a `std` command: for a caller with no async runtime, such
+/// as a probe Aldwin runs at startup before its runtime exists. Same
+/// confinement, same `AGENT`.
+///
+/// # Errors
+///
+/// When the system can confine processes and building the confinement fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// let cwd = std::env::current_dir()?;
+/// let output = aldwin_tools::sandbox::std_command("git", &["--version"], &[cwd])?
+///     .output()?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+// `program` is text, not a path: the macOS backend writes it into the
+// `sandbox-exec` argument line (`command_line`).
+pub fn std_command(
+    program: &str,
+    args: &[impl AsRef<str>],
+    roots: &[PathBuf],
+) -> io::Result<StdCommand> {
+    let args: Vec<String> = args.iter().map(|a| a.as_ref().to_string()).collect();
     if unavailable().is_some() {
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args);
+        let mut cmd = StdCommand::new(program);
+        cmd.args(args).env(AGENT.0, AGENT.1);
         return Ok(cmd);
     }
     let sandbox = backend::Sandbox::build(roots)?;
-    // Asked for before anything else is configured: a backend that wraps the
-    // program (macOS) changes *what* is spawned, and `Command` has no getters
-    // for stdio or `pre_exec` hooks that a rebuild would have to preserve.
-    let (program, argv) = sandbox.command_line(program, args);
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(argv);
+    // Before anything else is configured: a backend that wraps the program
+    // (macOS) changes what is spawned, and `Command` has no getters for stdio
+    // or `pre_exec` hooks that a rebuild would have to preserve.
+    let (program, argv) = sandbox.command_line(program, &args);
+    let mut cmd = StdCommand::new(program);
+    cmd.args(argv).env(AGENT.0, AGENT.1);
     sandbox.install(&mut cmd);
     Ok(cmd)
 }
+
+/// The variable that names the agent a process runs for, and Aldwin's value
+/// for it.
+pub(crate) const AGENT: (&str, &str) = ("AGENT", "aldwin");
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -106,7 +143,7 @@ use linux as backend;
 
 // Compiled on every platform, used only on macOS. The backend is ordinary
 // Rust — a profile string and a command rewrite, no FFI — so there is no
-// reason to let it rot behind a `cfg` this project's own machines never
+// reason to let it rot behind a `cfg` a Linux build would never
 // build. Its unit tests run everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod macos;
@@ -117,6 +154,7 @@ use macos as backend;
 mod backend {
     use std::io;
     use std::path::PathBuf;
+    use std::process::Command;
 
     pub fn unavailable() -> Option<&'static str> {
         Some("processes can only be confined on Linux (Landlock) and macOS (Seatbelt)")
@@ -137,8 +175,27 @@ mod backend {
             match *self {}
         }
 
-        pub fn install(self, _cmd: &mut tokio::process::Command) {
+        pub fn install(self, _cmd: &mut Command) {
             match self {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pre-commit gate tells an agent's commit from the developer's by
+    /// this variable, so a shell Aldwin starts must carry it.
+    #[tokio::test]
+    async fn every_process_aldwin_starts_names_its_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = ["-c".to_string(), "printf %s \"$AGENT\"".to_string()];
+        let out = command("/bin/sh", &args, &[dir.path().to_path_buf()])
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), AGENT.1);
     }
 }

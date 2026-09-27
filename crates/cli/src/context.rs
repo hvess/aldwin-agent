@@ -32,7 +32,7 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
         ));
     }
 
-    sections.push(platform_facts());
+    sections.push(platform_facts(roots));
 
     for path in approved {
         // A file that went away between the caller finding it and this read
@@ -47,17 +47,17 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
 
 /// Facts about this machine that a shell script has to be right about.
 /// Detected, never assumed — a wrong fact here is worse than none.
-fn platform_facts() -> String {
+fn platform_facts(roots: &[PathBuf]) -> String {
     let mut facts = vec![format!("Platform: {}", std::env::consts::OS)];
 
-    if let Some(version) = program_version("bash", &["--version"]) {
+    if let Some(version) = program_version("bash", &["--version"], roots) {
         facts.push(format!("bash: {version}"));
     }
     // The distinction that actually bites: GNU `sed -i` takes no argument,
     // BSD `sed -i` requires one. Asked of the `sed` on PATH, not inferred
     // from the OS — a Mac with gnu-sed installed is GNU. GNU answers
     // `--version`; BSD sed has no such flag and fails.
-    match program_version("sed", &["--version"]) {
+    match program_version("sed", &["--version"], roots) {
         Some(version) if version.contains("GNU") => {
             facts.push("sed: GNU (in-place edit is `sed -i`)".to_string())
         }
@@ -77,10 +77,11 @@ fn which(program: &str) -> bool {
 }
 
 /// First line of `<program> <args>`, or `None` if it cannot be run or fails. Best
-/// effort: a missing program is a fact we simply do not state.
-fn program_version(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
-        .args(args)
+/// effort: a missing program is a fact we simply do not state. Run in the
+/// sandbox, as every process Aldwin starts is (ADR 0011).
+fn program_version(program: &str, args: &[&str], roots: &[PathBuf]) -> Option<String> {
+    let output = aldwin_tools::sandbox::std_command(program, args, roots)
+        .ok()?
         .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
@@ -105,6 +106,19 @@ mod tests {
         assert!(out.starts_with("Working directory: /some/project"));
         assert!(out.contains("Platform:"));
         assert!(!out.contains("---"), "no approved file sections");
+    }
+
+    /// Regression: the probes ran outside the sandbox (ADR 0011). Only
+    /// `sandbox::std_command` sets `AGENT`, so seeing it proves the route.
+    #[test]
+    fn a_probe_runs_through_the_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = program_version(
+            "sh",
+            &["-c", "printf %s \"$AGENT\""],
+            &[dir.path().to_path_buf()],
+        );
+        assert_eq!(seen.as_deref(), Some("aldwin"));
     }
 
     /// The facts are stated so the agent does not have to learn them by

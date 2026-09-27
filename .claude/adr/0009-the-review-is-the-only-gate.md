@@ -99,9 +99,9 @@ hook for each:
   and starts no turn (`Reviewed::Gone`); a *cancel* never reaches the
   dispatcher, because the agent drops the review future instead.
 
-Nothing is ever written before an approve. That is literally true, not
-true-after-an-undo, which is why undo is open-tasks 27 rather than a
-requirement of this ADR. A file that changed on disk between staging and
+Nothing is ever written before an approve. That is literally true of
+Aldwin's own writes — what an MCP server writes during its call is the one
+exception, not yet closed (open-tasks 2) — not true-after-an-undo, which is why undo is not a requirement of this ADR. A file that changed on disk between staging and
 approve is not overwritten (`Staging::write_all` re-checks `before`), and
 the developer is told which.
 
@@ -166,8 +166,14 @@ runs anything.
 
 ## What this does not decide
 
-- Undo (open-tasks 27). §4 makes it unnecessary for safety; it may still be
-  wanted for convenience.
+- Undo. §4 makes it unnecessary for safety. (Decided later, outside this
+  ADR: it will not be built — an approved change is undone with git. The
+  developer, 2026-09-27.)
 - Reopening a saved review's diff from its row (`›` in frame `J`).
+  (Decided later, outside this ADR: it will not be built — the changeset
+  is dropped at the write, and git holds what landed. `baseline.json`
+  records the design's `›` against the row the app draws. The developer,
+  2026-09-27.)
 - `explain` over staged edits: the LSP reads the disk, so a symbol lookup
-  after an edit sees the old code. Recorded as open-tasks 28.
+  after an edit saw the old code. Since 2026-09-27 `explain` shows the
+  server staged edits over the disk, as `read` serves them.

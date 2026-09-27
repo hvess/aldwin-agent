@@ -5,6 +5,7 @@
 //! here: `cargo` is the authority on whether the workspace is clean, and a
 //! second opinion about that would be a second thing to keep in sync.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -154,7 +155,8 @@ pub fn test(root: &Path) -> Result<Vec<Outcome>> {
 /// Stage 5 — the rendered frames.
 ///
 /// `crates/tui/tests/render_snapshot.rs`, which does two jobs against
-/// `TestBackend` buffers for sixteen scenes at three sizes in both themes:
+/// `TestBackend` buffers for every snapshot scene at three sizes in both
+/// themes:
 ///
 /// * **the baseline** — every cell's symbol, foreground, background and
 ///   modifiers, serialised and diffed against `tests/snapshots/render.snap`;
@@ -188,7 +190,12 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
         60,
         |out| {
             let (passed, _, _) = crate::report::test_counts(out);
-            format!("{passed} checks over 16 scenes x 3 sizes x 2 themes")
+            // Counted from the snapshot, not written down: a number in a
+            // string said sixteen for a day after there were nineteen.
+            let scenes = std::fs::read_to_string(root.join(crate::git::SNAPSHOT))
+                .map(|text| snapshot_scenes(&text))
+                .unwrap_or_default();
+            format!("{passed} checks over {scenes} scenes x 3 sizes x 2 themes")
         },
     );
     Ok(vec![if outcome.passed {
@@ -202,6 +209,15 @@ pub fn frames(root: &Path) -> Result<Vec<Outcome>> {
             ..outcome
         }
     }])
+}
+
+/// How many scenes a snapshot pins: distinct names in its `=== <theme>
+/// <scene> <size>` headers.
+fn snapshot_scenes(text: &str) -> usize {
+    text.lines()
+        .filter_map(crate::git::scene_of)
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 /// The toolchain this run measured against.
@@ -245,6 +261,13 @@ mod tests {
     use std::ffi::OsStr;
 
     use super::*;
+
+    #[test]
+    fn scenes_are_counted_once_across_sizes_and_themes() {
+        let snap =
+            "=== Dark launch 80x24\nrow\n=== Light launch 80x24\nrow\n=== Dark plan 104x32\nrow\n";
+        assert_eq!(snapshot_scenes(snap), 2);
+    }
 
     /// A shell that exported `UPDATE_SNAPSHOTS=1` once would have stage 5
     /// regenerate `render.snap` and then pass against its own output.

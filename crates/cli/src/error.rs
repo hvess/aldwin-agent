@@ -1,8 +1,8 @@
 use thiserror::Error;
 
-/// Why the process exits non-zero. Every one of these is printed after the
-/// TUI has let go of the terminal — before it launched, or after it has
-/// cleanly torn itself down — so each is safe to write straight to stderr.
+/// Why the process exits non-zero. Each is printed after the TUI has let go
+/// of the terminal — before it launched, or after it has cleanly torn itself
+/// down — so each is safe to write straight to stderr.
 /// Per aldwin-cli.md's Pitfall, none of these paraphrase the failing field;
 /// they all pass through a lower crate's own `Display` (already written to
 /// quote the exact path/var/domain verbatim) or quote it directly
@@ -47,5 +47,22 @@ pub enum StartupError {
         /// The join error carrying the panic.
         #[source]
         source: tokio::task::JoinError,
+    },
+}
+
+/// Why the git shim (ADR 0013) is not installed. Not fatal: the session
+/// starts without it, and says so once.
+#[derive(Debug, Error)]
+pub enum ShimError {
+    /// The shim's directory, symlink or `PATH` entry could not be made.
+    #[error(transparent)]
+    Install(#[from] std::io::Error),
+
+    /// The git on `PATH` has no `commit --trailer`, so the shim would fail
+    /// every commit.
+    #[error("{version} is older than 2.32, which `git commit --trailer` needs")]
+    GitTooOld {
+        /// What `git --version` answered.
+        version: String,
     },
 }

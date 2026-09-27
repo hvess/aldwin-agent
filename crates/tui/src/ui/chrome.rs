@@ -422,7 +422,11 @@ fn footer_state(app: &App) -> Footer {
         Mode::Question(asking) if matches!(asking.asker, Asker::Agent { .. }) => {
             Footer::new(Status::Waiting, choose.to_vec())
         }
-        Mode::Question(_) => Footer::new(Status::Ready, dismissible()),
+        // A list the developer opened — `/resume`, `/model`, `/theme` —
+        // reads as frame F's command list does: no status word, since the
+        // design never says "Ready" over an open panel and nothing is
+        // waiting to be answered (the developer's call, 2026-09-27).
+        Mode::Question(_) => Footer::new(Status::None, dismissible()),
         // Frame F: no status word, and a command is run, not selected.
         Mode::Commands(_) => Footer::new(
             Status::None,

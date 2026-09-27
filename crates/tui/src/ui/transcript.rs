@@ -295,7 +295,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 ))])
             }
         },
-        LogEntry::Notice { message } => at_body(wrap_line(
+        LogEntry::Notice { message } | LogEntry::Stopping { message } => at_body(wrap_line(
             Line::from(Span::styled(
                 message.clone(),
                 Style::default().fg(pal.label2),

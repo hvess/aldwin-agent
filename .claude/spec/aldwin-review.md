@@ -42,7 +42,7 @@ rubric it was graded against.
 | 3 test | does the suite pass | `cargo test --workspace` | yes |
 | 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | a blind subagent over `change.diff`; runs when a crate or the workspace manifest changed | no |
+| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | a blind subagent over `change.diff`; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
 | 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
 | 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
 | 9 iterate | — | any failure: fix, run again from stage 1, fresh judges; at most five passes | — |
@@ -54,15 +54,16 @@ after them, only for stage 8's scenes, and its non-determinism is harmless
 there because a bad frame is something the judge says out loud.
 
 Which judges run is read off the staged diff, never chosen, and the report
-states each one's reason — including the one that matters most: a change
-whose snapshot moved only in scenes capture cannot draw has no frames to
-judge, and says so rather than passing silently.
+states each one's reason. Every snapshot scene is also a capture scene —
+`scene.rs` has a test that fails if the two lists drift — so a change that
+moves any scene's snapshot has frames for stage 8 to judge.
 
 ## Decisions
 
 1. **One screenshot baseline, not two.** `render.snap` serialises every
-   cell's symbol, foreground, background and modifiers for thirteen scenes at
-   three sizes in both themes — 72 sections — in under a second, in-process.
+   cell's symbol, foreground, background and modifiers for nineteen scenes
+   at three sizes in both themes — 114 sections — in under a second,
+   in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The
    real terminal earns its place by producing **pictures for stage 8**, which
@@ -189,18 +190,49 @@ judge, and says so rather than passing silently.
     same tree. A change that calls for no judge — docs only — is recorded by
     `review` itself once stages 1–5 pass.
 
-16. **An agent's commit is gated; the developer's is not.** Claude Code sets
-    `CLAUDECODE` in every shell it starts, and `.githooks/pre-commit` checks
-    for it. The hooks directory is set by a `SessionStart` hook; a
-    `PreToolUse` guard refuses `--no-verify`, `-n`, anything naming the
-    hooks setting or the record directory, and the git commands that write
-    commits without `pre-commit` (`commit-tree`, `cherry-pick`, `revert`,
-    `rebase`, `am`). A merge commit runs `pre-merge-commit`, which is the
-    same gate. Edits to the settings, the hooks and the record are denied.
+16. **An agent's commit is gated; the developer's is not.** An agent is
+    anything that sets `AGENT`: Claude Code through the project settings'
+    `env`, Aldwin in every process it starts (`sandbox::command`), and
+    `.githooks/pre-commit` checks for it. It was `CLAUDECODE` until
+    2026-09-27, which Aldwin never set, so Aldwin's own commits passed
+    ungated. A Claude Code session started without the project's settings
+    has no `AGENT` and is not gated; the backstop is open-tasks 4. Any value of `AGENT` counts: a developer whose own shell exports
+    it for another tool has their commits gated too, and sees the gate's
+    sentence say so — accepted as rare and visible (the developer's call).
+    The guard below is a Claude Code hook and binds Claude Code only: an
+    Aldwin session's commits meet the gate, but nothing stops it from
+    passing `--no-verify`. Guarding Aldwin would mean Aldwin refusing git
+    flags in users' own projects, which they must never be forced into
+    (the developer's call, 2026-09-27).
+    The hooks directory is set by a `SessionStart` hook; a
+    `PreToolUse` guard refuses `--no-verify` and `-n` on `commit` and
+    `--no-verify` on `merge` and `pull` (and the abbreviations git takes
+    for it), anything that names `AGENT` other than to read it (`$AGENT`,
+    `${AGENT}`), `env -i` and `exec -c`, anything naming the hooks setting
+    (in any case, as git reads it) or the record directory, a git alias
+    whether defined with `-c` or saved with `git config`, and the git
+    commands that write commits without `pre-commit` (`commit-tree`,
+    `cherry-pick`, `revert`, `rebase`, `am`). Each is matched with the
+    command's quotes taken out, as the shell joins them. A command wrapped
+    onto a second line with a backslash is not yet read as one line, so a
+    `--no-verify` after the break gets through (open-tasks 5). A merge commit runs
+    `pre-merge-commit`, which is the same gate. Edits to the settings, the
+    hooks and the record are denied.
+    **What the guard is for, and what it is not.** It refuses the plain
+    spellings an agent reaches for by habit — the ways a commit skips the
+    gate by accident. It is not a parser of every shell a command could be
+    written in, and it is not a finding when it misses a spelling built to
+    get past it: brace expansion around a name, a quote split inside an
+    option, an `include.path` that loads the hooks setting from a file. A
+    command like that is the deliberate act the gate exists to make visible,
+    and whoever wrote it chose to skip the loop. Iterations 5, 7 and 8 of
+    the loop's first run each failed on new spellings of that kind; this
+    paragraph is the answer, so a judge is not argued with a fourth time
+    (the developer's call, 2026-09-27).
 
 ## Pitfalls
 
-- **Letting the contradictions list grow.** It is seven entries, each
+- **Letting the contradictions list grow.** It is nine entries, each
   accounted for in Progress below. A previous version of this idea reached
   fourteen and then needed its own admission rule, at which point it had
   become the thing it was built to prevent.
@@ -223,13 +255,17 @@ judge, and says so rather than passing silently.
   hermetic and the value of that is the whole point; anything needing a
   compositor belongs after them, feeding stage 8.
 - **Treating the gate as tamper-proof.** It makes skipping the loop a
-  deliberate act, never an oversight. An agent that edits the settings
+  deliberate act, never an oversight; no list of refusals here is claimed
+  complete (Decision 16). An agent that edits the settings
   through a shell, or deletes `.githooks/`, gets past it; the permission
   denials make that harder, not impossible.
-- **Matching the guard on anything but commands.** The `PreToolUse` guard
-  reads a Bash command's text, so a script that merely *mentions* the hooks
-  setting or the record directory is refused too. Write such text with the
-  file tools; do not loosen the guard to let a shell do it.
+- **Expecting the guard to tell data from commands.** It reads flags from the
+  command's words, so a commit *message* that mentions `-n` passes — but it
+  still refuses a Bash command that merely *mentions* the hooks setting,
+  the record directory or `alias.`, or that names `AGENT` (the gate's
+  variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
+  cannot know what the heredoc feeds. Write such text with the file tools;
+  do not loosen the guard to let a shell do it.
 
 ## Progress (2026-09-27, the commit gate)
 
@@ -268,14 +304,43 @@ stopping at "the code is written".
     variants, so the two sections agree again. `tokens::check` keeps an inner
     `Result<usize, String>` on purpose — a stale file is the stage's answer,
     not a failure to run it.
-- **Known gaps, stated rather than hidden.** Seven snapshot scenes have no
-  capture script (`answering`, `commented`, `running`, `selecting`,
-  `stopping`, `working`, `wrapped`), so a change that moves only those has
-  no frames judge, and the report says why. Three capture scenes
-  (`launch_unconfigured`, `plan`, `resume`) have no snapshot, so no change
-  can call for a judge of them. Aldwin's own `run` tool does not set
-  `CLAUDECODE`; a commit made through Aldwin is not gated. All three are
-  open-tasks 35–37.
+- **The guard reads commands, not text** (the same day, after its first
+  commit). Matching the raw text refused an ordinary commit whose message
+  said `-n`. It now splits the command into words as the shell would
+  (Python's `shlex`, so the hook needs `python3`; without it every command
+  takes a refusing text fallback), and reads a command run from inside
+  another — `sh -c`, `eval`, backticks, `$(…)` — as a command of its own.
+  The first rewrite missed that last part and let `bash -c 'git commit -n'`
+  through; the code judge caught it. `--no-verify`'s abbreviations are
+  refused too, since git accepts them. `crates/review/tests/commit_guard.rs`
+  pins both directions.
+- **The two scene lists agree** (the same day). Seven snapshot scenes had no
+  capture script and three capture scenes had no snapshot, so a change that
+  moved only those was never judged against the design. The three got
+  snapshot scenes and the seven got capture scripts — `selecting`
+  and `commented` through `Shift ↓`, `working` and `running` on a reply held
+  open (`fake::held`). `scene.rs` has a test that fails if the lists drift
+  apart. `stopping` now snapshots the settled state — `Stopped.`, then
+  ready — which is what the real app holds still for, and is captured too
+  (the developer's calls, 2026-09-27: snapshot the settled state, and let
+  `Stopping.` become `Stopped.` rather than stay beside it).
+- **The guard refuses naming `AGENT`, not spellings of emptying it** (the
+  same day). It listed `AGENT=`, `unset`, `env -u`, `export -n` and
+  `declare +x`; the code judge emptied it with `read` and `printf -v`,
+  which the list lacked. Any mention other than `$AGENT` or `${AGENT}` is
+  now refused, a commit message's included.
+- **The first change past the cap.** The fifth iteration ended with six
+  findings; the developer signed off a sixth (2026-09-27) rather than
+  commit with them open, and so on to a tenth. Two things kept a pass from
+  going clean. Spellings built to get past the guard, which Decision 16 now
+  places out of its scope. And MCP capture, whose put-back
+  wrote outside the sandbox: passes 6, 7 and 10 each found a new way a path
+  check in it could be fooled, so after the tenth the developer took it out
+  of the change, to come back with the put-back confined by the kernel
+  (open-tasks 2). The saved review's `›` and frame D's step note were
+  decided against on the way (`baseline.json`,
+  `saved-review-is-not-reopened` and `a-plan-step-has-no-note`). The cap stays five:
+  going past it is the developer's call each time, never the loop's.
 
 ## Progress (2026-09-24, the audit)
 
@@ -298,7 +363,7 @@ failed, and both are closed with a test that would have caught them.
   ./target/release/aldwin-review`, which builds debug and runs whatever
   release binary was last built. Every invocation is `cargo run --release
   -p aldwin-review --` now, in the skill and in the hint `review` prints.
-- **`cargo fmt --check` is back in stage 1** (open-tasks 3): the developer
+- **`cargo fmt --check` is back in stage 1**: the developer
   chose stable rustfmt and `516dd63` reformatted the workspace — including
   the generated `tokens.rs`, which stage 3 then reported stale. The
   generator now emits through `rustfmt`, as bindgen and prost do, so stage 1
@@ -375,7 +440,7 @@ The loop's shape is unchanged; what it measures moved with the design.
   gone from `Script`; `permissions.yaml` is not seeded at all. The `review`
   scene is the real dispatcher opening the real review over a really
   staged edit, which is the state the snapshot cannot reach. Three snapshot
-  scenes have no counterpart here and say why (open-tasks 30, 31).
+  scenes have no counterpart here and say why.
 - **`baseline.json`** went from seven contradictions to three: ADR 0002's
   table, and two that are the design against a decision.
 - **Capture and the caret.** The design's caret blinks (`motion.css`, 1.05s

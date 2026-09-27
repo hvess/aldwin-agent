@@ -48,13 +48,13 @@ pub fn builtin_registry(workspace: Workspace, staging: Arc<Staging>) -> Registry
         .register(Arc::new(ReadTool::new(workspace.clone(), staging.clone())))
         .expect("built-in names are unique");
     registry
-        .register(Arc::new(EditTool::new(workspace.clone(), staging)))
+        .register(Arc::new(EditTool::new(workspace.clone(), staging.clone())))
         .expect("built-in names are unique");
     registry
         .register(Arc::new(RunTool::new(workspace.clone())))
         .expect("built-in names are unique");
     registry
-        .register(Arc::new(ExplainTool::new(workspace)))
+        .register(Arc::new(ExplainTool::new(workspace, staging)))
         .expect("built-in names are unique");
     registry
         .register(Arc::new(PlanTool::new()))

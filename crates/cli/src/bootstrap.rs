@@ -13,7 +13,7 @@ use tokio::task::JoinError;
 
 use crate::connect::{self, Reach};
 use crate::context;
-use crate::error::StartupError;
+use crate::error::{ShimError, StartupError};
 use crate::history::History;
 use crate::slash;
 
@@ -208,7 +208,10 @@ fn context_files(cwd: &Path) -> Vec<PathBuf> {
 /// config layer fails to load, `~/.aldwin` is only partly present, the
 /// configured client cannot be built, the terminal fails, or the agent or
 /// interceptor task panicked.
-pub async fn run() -> Result<(), StartupError> {
+///
+/// `git_shim` is why the git shim could not be installed, if it could not
+/// (ADR 0013): the session starts anyway, and says so once.
+pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     let cwd = std::env::current_dir().map_err(StartupError::Cwd)?;
 
     let config = Config::open(&cwd)?;
@@ -314,11 +317,13 @@ pub async fn run() -> Result<(), StartupError> {
 
     // Said once, at the top of the session: a workspace wider than the
     // project, a `permissions.yaml` still carrying keys from an earlier
-    // model, and a system where nothing Aldwin starts can be confined.
+    // model, a system where nothing Aldwin starts can be confined, and
+    // commits that will not name Aldwin.
     let notices = [
         reach_notice,
         stale_keys_notice(&config),
         unconfined_notice(aldwin_tools::sandbox::unavailable()),
+        git_shim.map(unshimmed_notice),
     ];
     for message in notices.into_iter().flatten() {
         let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
@@ -402,6 +407,13 @@ fn stale_keys_notice(config: &Config) -> Option<String> {
 fn unconfined_notice(reason: Option<&str>) -> Option<String> {
     reason
         .map(|reason| format!("Commands can write outside the workspace on this system: {reason}."))
+}
+
+/// Where the git shim could not be installed, a commit made from anything
+/// Aldwin starts goes out without the co-author trailer (ADR 0013) — said
+/// once, here, like the sandbox's absence.
+fn unshimmed_notice(reason: &ShimError) -> String {
+    format!("Commits made in this session will not name Aldwin as a co-author: {reason}.")
 }
 
 /// Points `workspace` at the roots the project's `permissions.yaml` declares
@@ -709,6 +721,13 @@ mod tests {
         let notice = unconfined_notice(Some("this kernel has no Landlock support")).unwrap();
         assert!(notice.contains("outside the workspace"), "{notice}");
         assert!(notice.contains("Landlock"), "{notice}");
+    }
+
+    #[test]
+    fn a_missing_git_shim_is_said_with_its_reason() {
+        let notice = unshimmed_notice(&ShimError::Install(std::io::Error::other("no space left")));
+        assert!(notice.contains("co-author"), "{notice}");
+        assert!(notice.contains("no space left"), "{notice}");
     }
 
     #[test]

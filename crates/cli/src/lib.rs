@@ -11,8 +11,11 @@ mod bootstrap;
 mod connect;
 mod context;
 mod error;
+// Unix only, as the sandbox is: it needs `exec` and a symlink (ADR 0013).
+#[cfg(unix)]
+pub mod git_shim;
 mod history;
 mod slash;
 
 pub use bootstrap::run;
-pub use error::StartupError;
+pub use error::{ShimError, StartupError};

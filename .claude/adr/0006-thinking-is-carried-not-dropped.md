@@ -111,14 +111,14 @@ looks like a hang.
 **The TUI still does not draw thinking, and this ADR does not make it.**
 Reasoning is carried for the wire and the transcript; the log shows what the
 agent said, not what it thought. Drawing it needs a treatment the design
-system does not specify — recorded as open-tasks entry 24 rather than
-invented locally.
+system does not specify, and it is not invented locally; it is to be drawn
+once the design does (open-tasks 3).
 
 **Transcripts get larger**, by roughly the thinking budget per step. They are
 already `0600` under `~/.aldwin/history/` and already carry tool output; this
 does not change their sensitivity class, but it does mean reasoning about
-repository content is now on disk, and the opt-out that entry 19 already owes
-matters slightly more than it did.
+repository content is now on disk; transcripts are always written and never
+pruned, by decision (ADR 0005).
 
 **`ThinkingEnd` is no longer a unit variant.** Every match on it needed
 updating; two tests that pinned the old drop behaviour were rewritten to pin

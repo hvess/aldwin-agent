@@ -112,8 +112,9 @@ handles every case.
   the `expect` message states that invariant.
 - No dead code, commented-out code, or `TODO` without an entry in
   `.claude/spec/aldwin-open-tasks.md`.
-- Comments explain *why*, never *what*. Match the comment density and style
-  of the surrounding file.
+- Comments follow `.claude/skills/comments/SKILL.md`: only what the code
+  cannot say — a reason, an invariant, a warning, a hidden dependency, a
+  pointer — lean, and written for an LLM reader.
 
 ## 7. Consistency
 

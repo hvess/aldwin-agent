@@ -1,13 +1,9 @@
-//! Logging in to a provider's account, so a subscription — SuperGrok today —
-//! can stand in for an API key. See `.claude/spec/aldwin-login.md`.
+//! Logs in to a provider account so a subscription stands in for an API key
+//! (ADR 0012, `.claude/spec/aldwin-login.md`). A leaf crate: it depends on
+//! no other Aldwin crate.
 //!
-//! The crate knows no other part of Aldwin. It is handed an [`Account`] and
-//! gives back a [`Prompt`] to show the developer, [`Credentials`] to keep,
-//! and a [`Session`] that turns the credentials into request headers,
-//! refreshing them as they age. Everything OAuth-shaped — the grants, the
-//! endpoints, the client id, the wire JSON — stays in the private `oauth`
-//! and `account` modules, and none of it crosses this surface: the same
-//! rule aldwin-llm applies to a provider's wire types.
+//! OAuth wire types, endpoints and the client id stay in the private `oauth`
+//! and `account` modules; never export them from this surface.
 
 mod account;
 mod login;

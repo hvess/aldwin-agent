@@ -43,7 +43,7 @@ rubric it was graded against.
 | 3 test | does the suite pass | `cargo test --workspace` | yes |
 | 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 6 code judge | does the diff hold to `quality-gate`, the Key Constraints and the ADRs | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
+| 6 code judge | does the diff hold to `quality-gate` (with the `comments` skill it names), the Key Constraints and the ADRs | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
 | 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
 | 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
 | 9 iterate | — | any failure: fix, run again from stage 1, fresh judges for what changed; at most five passes | — |
@@ -306,6 +306,12 @@ moves any scene's snapshot has frames for stage 8 to judge.
   variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-27, comments)
+
+The code judge's third source now includes `.claude/skills/comments/SKILL.md`,
+which quality-gate's comment rule names: every comment is judged as written
+for an LLM reader. The rework it drives lands one crate per commit.
 
 ## Progress (2026-09-27, rounds, not readings)
 

@@ -58,3 +58,12 @@ contradicts) and the entry says so before it goes.
    call, 2026-09-27: its own change, with the put-back run inside the
    sandbox so the kernel refuses a write outside the workspace rather than
    a check in Aldwin.
+
+## Workspace
+
+4. **Comments predate the comments skill.** `.claude/skills/comments/SKILL.md`
+   holds every comment to what an LLM reader needs; the crates were written
+   before it. The rework lands one crate per commit, each through the review
+   loop and changing comments only: login (landed with the skill), then llm,
+   config, core, tools, cli, tui and review. Entry 1 waits on it. Closing it is the last crate's
+   commit.

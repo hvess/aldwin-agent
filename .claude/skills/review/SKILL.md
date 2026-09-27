@@ -180,7 +180,8 @@ The shape all three return:
 > 1. `.claude/CLAUDE.md`, the section **Key Constraints (non-negotiable)**.
 > 2. `.claude/adr/*.md` — numbered decisions. A change that follows a later
 >    ADR where an earlier one disagrees is conformant.
-> 3. `.claude/skills/quality-gate/SKILL.md` — every section.
+> 3. `.claude/skills/quality-gate/SKILL.md` — every section, and
+>    `.claude/skills/comments/SKILL.md`, which its section on comments names.
 > 4. The spec for each crate the diff touches: `.claude/spec/aldwin-<crate>.md`,
 >    or `.claude/spec/archive/` for an archived one. A spec step the change
 >    completes should be noted in it. A change to `.githooks/`,

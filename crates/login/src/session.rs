@@ -10,27 +10,25 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use crate::account::Account;
 use crate::oauth::{self, Authority, Refresh, TokenGrant};
 
-/// What a sign-in leaves behind, and what a [`Session`] runs on. Plain data
-/// by design: whoever keeps it on disk reads and writes these three fields
-/// and nothing else.
+/// The tokens a sign-in yields and a [`Session`] runs on. Plain data: the
+/// caller persists exactly these three fields.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Credentials {
-    /// The bearer token a request is authenticated with.
+    /// The bearer token for requests.
     pub access_token: String,
-    /// What a refresh trades for a new access token; the server may rotate
-    /// it on every refresh.
+    /// Traded for a new access token; the server may rotate it on any
+    /// refresh.
     pub refresh_token: String,
-    /// Unix seconds. The moment the access token stops working, as the
-    /// server stated it when the token was issued.
+    /// Unix seconds when the access token expires, per the server.
     pub expires_at: u64,
 }
 
-/// How long before the stated expiry a token is treated as gone: a request
-/// sent with seconds left could still arrive after them.
+/// Margin before `expires_at` at which a token counts as stale, so a request
+/// never lands after expiry.
 const EARLY: Duration = Duration::from_secs(120);
 
-/// The lifetime given to a token whose server stated none. The RFC only
-/// recommends stating one; a refresh is cheap, so an hour errs short.
+/// Lifetime assumed when the server states none; errs short because a
+/// refresh is cheap.
 const UNSTATED_LIFETIME: Duration = Duration::from_secs(60 * 60);
 
 impl Credentials {
@@ -48,8 +46,7 @@ impl Credentials {
     }
 }
 
-/// The tokens are the one thing here that must not reach a log, so they
-/// are what `Debug` leaves out.
+/// Omits both tokens: they must never reach a log.
 impl fmt::Debug for Credentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Credentials")
@@ -67,40 +64,31 @@ pub(crate) fn now() -> u64 {
 /// Why a session could not authenticate a request.
 #[derive(Debug, Error)]
 pub enum SessionError {
-    /// The refresh token was rejected. Only a new sign-in recovers from
-    /// this.
+    /// The refresh token was rejected; only a new sign-in recovers.
     #[error("the account is no longer connected")]
     LoggedOut,
-    /// A refresh failed without the server rejecting the refresh token —
-    /// unreachable, a server error, or an unusable answer. The credentials
-    /// are kept, so the next request tries again.
+    /// A refresh failed without the refresh token being rejected. The
+    /// credentials are kept, so the next request tries again.
     #[error("the account's token could not be refreshed: {0}")]
     Failed(String),
 }
 
-/// Told of every change to what the server honours: `Some` with a
-/// refreshed set, `None` when the server revoked the refresh token.
+/// Called with `Some` refreshed credentials, or `None` on revocation.
 type Persist = Arc<dyn Fn(Option<&Credentials>) + Send + Sync>;
 
 /// A logged-in account, ready to authenticate requests.
 ///
-/// The credentials live behind one lock that is held across a refresh, so
-/// two requests that find the token stale refresh it once between them:
-/// the second waits, then reads what the first fetched. A refresh that the
-/// server merely fails — a 500, a dropped connection — leaves the old
-/// credentials in place for the next caller to try again; one it rejects
-/// logs the session out for good, and every caller from then on is told
-/// [`SessionError::LoggedOut`] until a new sign-in replaces the session.
+/// The lock on the credentials is held across a refresh, so concurrent
+/// requests finding the token stale refresh it once. A rejected refresh
+/// token logs the session out for good ([`SessionError::LoggedOut`]).
 pub struct Session {
     account: Account,
     http: Client,
     authority: Authority,
     /// `None` once the server has rejected the refresh token.
     credentials: Arc<Mutex<Option<Credentials>>>,
-    /// Called with every refreshed set, since a rotated refresh token that
-    /// is not written down is a connection lost at the next start — and
-    /// with `None` on a revocation, so whoever stores the tokens stops
-    /// offering ones the server will refuse.
+    /// Must see every refreshed set: an unpersisted rotated refresh token
+    /// loses the connection at the next start.
     persist: Persist,
 }
 
@@ -111,10 +99,8 @@ impl fmt::Debug for Session {
 }
 
 impl Session {
-    /// A session on credentials a sign-in left behind. `persist` is called
-    /// with every refreshed set, and with `None` when the server revokes
-    /// the refresh token, so the caller keeps whatever it stores in step
-    /// with what the server now honours.
+    /// A session on stored credentials. `persist` is called with every
+    /// refreshed set, and with `None` when the refresh token is revoked.
     ///
     /// # Errors
     ///
@@ -154,8 +140,8 @@ impl Session {
         self.account
     }
 
-    /// The headers that authenticate one request, on a token that will
-    /// still be good when the request lands.
+    /// The headers that authenticate one request, refreshing a stale token
+    /// first.
     ///
     /// # Errors
     ///
@@ -170,12 +156,9 @@ impl Session {
         if !credentials.is_stale() {
             return bearer(&credentials.access_token);
         }
-        // Spawned rather than awaited in place, so the request that found
-        // the token stale can be cancelled — the developer stopping a turn
-        // — without cancelling this. By the time the server answers it may
-        // already have rotated the refresh token, and a rotation that never
-        // reaches memory and disk is a connection lost. The lock travels with
-        // the task, so nothing reads the credentials until it is done.
+        // Spawned, not awaited in place: cancelling the caller must not
+        // cancel a refresh the server may already have rotated, or the new
+        // token is lost. The guard moves into the task, keeping the lock.
         let refresh = refresh_under(
             guard,
             self.http.clone(),
@@ -187,9 +170,8 @@ impl Session {
             .map_err(|e| SessionError::Failed(format!("the refresh did not finish: {e}")))?
     }
 
-    /// The access token has been refused by the service it was for. The
-    /// next request refreshes rather than waiting out the stated lifetime,
-    /// which a revocation or a skewed clock makes wrong.
+    /// Marks the access token stale, so the next request refreshes. Call it
+    /// when the service refuses the token (revocation, clock skew).
     pub async fn invalidate(&self) {
         if let Some(credentials) = self.credentials.lock().await.as_mut() {
             credentials.expires_at = 0;
@@ -218,8 +200,7 @@ async fn refresh_under(
             return Err(SessionError::LoggedOut);
         }
     };
-    // A server that does not rotate leaves the refresh token out, and the
-    // one we have stays good.
+    // No refresh token in the grant: the server did not rotate; keep the current one.
     let refresh_token = grant
         .refresh_token
         .clone()
@@ -234,7 +215,7 @@ async fn refresh_under(
 fn bearer(access_token: &str) -> Result<HeaderMap, SessionError> {
     let mut value = HeaderValue::from_str(&format!("Bearer {access_token}"))
         .map_err(|_| SessionError::Failed("the access token is not a valid header value".into()))?;
-    // Kept out of any `Debug` of the map it lands in.
+    // Hides the token from `Debug`.
     value.set_sensitive(true);
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, value);
@@ -285,11 +266,10 @@ mod tests {
     const REFRESH: &str =
         "POST /token grant_type=refresh_token&refresh_token=old-refresh&client_id=the-client";
 
-    /// Everything a session told its persist hook, in order.
+    /// Every `persist` call, in order.
     type Persisted = Arc<StdMutex<Vec<Option<Credentials>>>>;
 
-    /// A session over `server`, and the record of everything it persisted.
-    /// No request timeout: most of these tests run on the paused clock.
+    /// No request timeout: see `oauth::client` on the paused clock.
     fn session(server: &FakeServer, credentials: Credentials) -> (Arc<Session>, Persisted) {
         session_bounded(server, credentials, None)
     }
@@ -401,9 +381,8 @@ mod tests {
         assert_eq!(persisted.lock().unwrap().len(), 1);
     }
 
-    /// The developer stops the turn while its request is refreshing. The
-    /// server has already rotated by then, so the refresh has to finish and
-    /// land, or the next request would refresh on a token that is gone.
+    /// Pins the spawned refresh in `headers`: a cancelled caller must not
+    /// lose a rotation the server already made.
     #[tokio::test(start_paused = true)]
     async fn a_request_cancelled_mid_refresh_still_lands_the_rotation() {
         let server = test_server::spawn(vec![Canned::Delayed(
@@ -461,10 +440,7 @@ mod tests {
         }
     }
 
-    /// A refresh the server merely fails is not a lost connection: the old
-    /// credentials stay, and the next request tries again. A 403 that is
-    /// not in the protocol's shape — a page from whatever fronts the
-    /// server — is that kind of failure, not a logout.
+    /// A 403 without an RFC 6749 §5.2 body is transient, not a logout.
     #[tokio::test]
     async fn a_failed_refresh_is_retried_by_the_next_request() {
         let server = test_server::spawn(vec![
@@ -500,9 +476,8 @@ mod tests {
         assert!(message.contains(&server.url("/token")), "{message}");
     }
 
-    /// A refresh the server never answers is bounded, so it cannot hold
-    /// the lock — and with it every request — for good. On the real
-    /// clock, with the bound cut short: see `oauth::client`.
+    /// An unanswered refresh must not hold the lock for good. Real clock,
+    /// short timeout: a paused clock fires it early (`oauth::client`).
     #[tokio::test]
     async fn a_stalled_refresh_times_out_and_the_next_request_tries_again() {
         let timeout = Duration::from_millis(200);

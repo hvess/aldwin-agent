@@ -9,18 +9,15 @@ use crate::account::Account;
 use crate::oauth::{self, Authority, Poll};
 use crate::session::Credentials;
 
-/// What the developer is shown: where to go, what to enter, and how long
-/// the code is good for. The URL carries the code when the server offers
-/// that form, so a click is enough; the code is still shown for a screen
-/// that has to be read across.
+/// What the developer is shown to approve a login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompt {
-    /// Where the developer signs in, with the code already in it when the
-    /// server offers that form.
+    /// Where the developer signs in; carries the code when the server
+    /// offers `verification_uri_complete`.
     pub url: String,
     /// The code the developer enters at the URL.
     pub code: String,
-    /// How long the code is good for, counted from when it was issued.
+    /// The code's lifetime, from when it was issued.
     pub expires_in: Duration,
 }
 
@@ -34,17 +31,15 @@ pub enum LoginError {
     #[error("the code expired before it was entered")]
     Expired,
     /// The server could not be reached or answered outside the protocol;
-    /// the sentence says which.
+    /// the message says which.
     #[error("{0}")]
     Failed(String),
 }
 
-/// One login, from the code being issued to the account approving it.
+/// One device-authorization login (RFC 8628), from code issued to approval.
 ///
-/// The device authorization flow (RFC 8628) is the one flow this crate
-/// runs: nothing listens on a port and no browser is opened from here, so
-/// the login works over SSH and inside the sandbox every process Aldwin
-/// starts runs in. The developer opens the URL wherever they like.
+/// Never listen on a port or open a browser here: the login must work over
+/// SSH and inside the ADR 0011 sandbox.
 pub struct Login {
     http: Client,
     authority: Authority,
@@ -53,8 +48,7 @@ pub struct Login {
     expires_in: Duration,
 }
 
-/// The device code is what the poll trades for tokens, so it is what
-/// `Debug` leaves out.
+/// Omits `device_code`: it is what the poll trades for tokens.
 impl fmt::Debug for Login {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Login")
@@ -68,8 +62,8 @@ impl fmt::Debug for Login {
 const SLOW_DOWN: Duration = Duration::from_secs(5);
 
 impl Login {
-    /// Asks the account's server for a code. The prompt is for the screen;
-    /// the login is for [`Login::wait`].
+    /// Asks the account's server for a code; show the [`Prompt`], then call
+    /// [`Login::wait`].
     ///
     /// # Errors
     ///
@@ -98,16 +92,16 @@ impl Login {
             http,
             authority,
             device_code: grant.device_code,
-            // The RFC lets a server name zero, which would poll flat out.
+            // A server may name zero; never poll flat out.
             interval: Duration::from_secs(grant.interval.max(1)),
             expires_in: prompt.expires_in,
         };
         Ok((login, prompt))
     }
 
-    /// Polls until the account answers, or the code runs out. Meant to be
-    /// spawned: it can take as long as the prompt said, and a server that
-    /// cannot be reached for a while is waited out rather than given up on.
+    /// Polls until the account answers or the code runs out. Spawn it: it
+    /// can run for the prompt's whole lifetime, and an unreachable server is
+    /// waited out, not given up on.
     ///
     /// # Errors
     ///
@@ -116,8 +110,7 @@ impl Login {
     /// [`LoginError::Failed`] when the server answers outside the protocol
     /// or grants no refresh token.
     pub async fn wait(self) -> Result<Credentials, LoginError> {
-        // `None` only for a lifetime too long to add to the clock, and
-        // then the server's own `expired_token` is the deadline.
+        // `None` on overflow; the server's `expired_token` is then the deadline.
         let deadline = Instant::now().checked_add(self.expires_in);
         let mut interval = self.interval;
         loop {
@@ -308,9 +301,8 @@ mod tests {
         assert!(matches!(login.wait().await, Err(LoginError::Expired)));
     }
 
-    /// The deadline is kept here too, so a server that keeps answering
-    /// `authorization_pending` past the code's lifetime cannot hold a wait
-    /// open forever.
+    /// Pins the local deadline: a server answering `authorization_pending`
+    /// forever must not hold the wait open.
     #[tokio::test(start_paused = true)]
     async fn the_wait_gives_up_when_the_code_is_out_of_time() {
         let server = test_server::spawn(vec![
@@ -332,8 +324,6 @@ mod tests {
         );
     }
 
-    /// A dropped connection or a 502 in the middle of a half-hour wait is
-    /// waited out, since neither says anything about the login.
     #[tokio::test(start_paused = true)]
     async fn trouble_reaching_the_server_is_waited_out_not_given_up_on() {
         let server = test_server::spawn(vec![
@@ -356,10 +346,7 @@ mod tests {
         );
     }
 
-    /// A poll the server never answers is bounded by the request timeout,
-    /// not by the wait's patience, and then waited out like any other
-    /// trouble. On the real clock, with the bound cut short: see
-    /// `oauth::client`.
+    /// Real clock, short timeout: a paused clock fires it early (`oauth::client`).
     #[tokio::test]
     async fn a_stalled_poll_is_given_up_on_and_the_wait_goes_on() {
         let timeout = Duration::from_millis(200);

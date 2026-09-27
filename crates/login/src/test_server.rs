@@ -1,9 +1,5 @@
-//! A minimal hand-rolled HTTP/1.1 server for testing the grants against
-//! real bytes on a real socket, without a mocking dependency — the shape of
-//! aldwin-llm's `test_server`, cut to what a token endpoint needs. Each
-//! accepted connection pops the next canned response off a shared queue,
-//! and every request is kept as `METHOD /path body`, so a test can read
-//! back exactly which grant was asked for, where, and with what.
+//! A minimal HTTP/1.1 test server on a real socket, modelled on aldwin-llm's
+//! `test_server`. Each connection pops the next [`Canned`] response.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -14,14 +10,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub enum Canned {
-    /// An HTTP status and a JSON body.
+    /// A status and a body, sent as `application/json`.
     Status(u16, String),
-    /// The same, after a pause — for a caller that goes away mid-request.
+    /// `Status` after a pause.
     Delayed(Duration, u16, String),
-    /// Accepts the connection, reads the request, then closes without
-    /// answering — a transport-level failure.
+    /// Reads the request, then closes without answering.
     HangUp,
-    /// Accepts the connection, reads the request, and never answers.
+    /// Reads the request and never answers.
     Stall,
 }
 
@@ -104,9 +99,8 @@ async fn answer(socket: &mut TcpStream, code: u16, body: &str) {
     let _ = socket.shutdown().await;
 }
 
-/// Reads the request line, the headers, and exactly `Content-Length` body
-/// bytes — just enough HTTP/1.1 to see what was asked without racing a
-/// response against a client still mid-write.
+/// Reads through `Content-Length` body bytes before answering, so a response
+/// never races a client still writing. Returns `METHOD /path body`.
 async fn read_request(socket: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -135,7 +129,6 @@ async fn read_request(socket: &mut TcpStream) -> Option<String> {
         buf.extend_from_slice(&chunk[..n]);
     }
 
-    // `POST /token HTTP/1.1` → `POST /token`.
     let mut request_line = head.lines().next().unwrap_or_default().split(' ');
     let method = request_line.next().unwrap_or_default();
     let path = request_line.next().unwrap_or_default();

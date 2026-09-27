@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Process-wide, unlike turn and step ids (which the `Agent` mints): a
-/// session id names a file every process in the project shares a directory
-/// with, and `/clear` mints a second one inside the same process — see
-/// [`SessionId`].
+/// Process-wide, unlike turn and step ids: `/clear` mints a second session in
+/// one process. See [`SessionId`].
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 /// One turn: a developer's message and every step the agent takes to answer
@@ -13,23 +11,20 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 pub struct TurnId(pub u64);
 
 /// One step: a single request to the model and the tool calls it asked
-/// for. Minted by the `Agent`, and unique across turns, not within one.
+/// for. Minted by the `Agent`; unique across turns, not only within one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StepId(pub u64);
 
 /// One conversation's identity, and the stem of its transcript filename.
 ///
-/// Three fields, each answering a different collision. Epoch seconds order
-/// the directory — the field is fixed-width until the year 2286, so ids sort
-/// lexicographically into start order and `list` can read a directory rather
-/// than every header in it. The pid separates two Aldwins running in the
-/// same project at the same time. The counter separates two sessions in *one*
-/// process: `/clear` seals and opens a new one, and seconds alone would hand
-/// two clears in the same second the same id — which, since transcripts are
-/// opened for appending, silently merged two conversations into one file.
+/// `{secs:010}-{pid}-{seq:06}`. Zero-padded epoch seconds make ids sort
+/// lexicographically into start order, which `list` relies on to avoid
+/// reading every header. The pid separates concurrent processes in one
+/// project; the counter separates sessions in one process (`/clear`), since
+/// transcripts open for appending and a shared id merges two conversations.
 ///
-/// It is deliberately not a timestamp *for display*. The transcript header
-/// carries `started_at` for that; this is a key.
+/// A key, not a display timestamp: the transcript header's `started_at` is
+/// that.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SessionId(pub String);
 
@@ -42,8 +37,7 @@ impl SessionId {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let seq = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
-        // The counter is fixed-width for the same reason the seconds are:
-        // unpadded, the tenth mint in one second sorted ahead of the second.
+        // Counter zero-padded so `-10` sorts after `-2`.
         Self(format!("{secs:010}-{}-{seq:06}", std::process::id()))
     }
 }
@@ -81,8 +75,7 @@ pub struct ToolResult {
     pub call_id: String,
     /// The output, or a sentence saying why there is none.
     pub content: String,
-    /// Whether the call failed. A failure is still a result: the model reads
-    /// it and decides what to do next.
+    /// Whether the call failed; the model still reads the result.
     pub is_error: bool,
 }
 
@@ -95,26 +88,19 @@ pub enum ContentBlock {
         /// The text.
         text: String,
     },
-    /// An extended-thinking block, kept verbatim with the signature the
-    /// provider stamped it with.
+    /// An extended-thinking block, kept verbatim with its provider signature.
     ///
-    /// It is carried rather than dropped for two separate reasons. The first
-    /// is correctness: when a turn that produced thinking goes on to call a
-    /// tool, the provider requires the thinking block back — signature and
-    /// all — on the assistant message that requested the call, and rejects
-    /// the request without it. The second is that a step whose entire output
-    /// was a thinking block used to reach the developer as a blank turn
-    /// (14,096 tokens spent, nothing rendered, "Continue" typed by hand).
-    /// See ADR 0006.
+    /// Must not be dropped (ADR 0006): the provider rejects a tool-calling
+    /// assistant message without its thinking block, and a thinking-only
+    /// step would otherwise render as a blank turn.
     Thinking {
         /// The thinking text.
         text: String,
         /// The provider's signature over it, sent back verbatim.
         signature: String,
     },
-    /// Thinking the provider encrypted rather than showed. Opaque to us and
-    /// echoed back untouched, for the same wire-correctness reason as
-    /// `Thinking` — there is nothing here to render.
+    /// Thinking the provider encrypted. Opaque, never rendered, and echoed
+    /// back untouched for the same reason as `Thinking`.
     RedactedThinking {
         /// The encrypted payload.
         data: String,
@@ -125,8 +111,8 @@ pub enum ContentBlock {
     ToolResult(ToolResult),
 }
 
-/// One message of the conversation as the provider is sent it, rebuilt from
-/// the log for each step.
+/// One message of the conversation as sent to the provider, rebuilt from
+/// the log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     /// Who it is from.
@@ -182,7 +168,7 @@ pub enum StopReason {
     ToolUse,
 }
 
-// ── The plan, a question, and a review (ADR 0009) ───────────────────────────
+// The plan, a question, and a review: ADR 0009.
 
 /// Where one step of the plan stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,46 +182,42 @@ pub enum StepState {
     Done,
 }
 
-/// One step of the plan: an outcome in plain words — *Count requests per
-/// key*, never a command — and where it stands. The `plan` tool declares and
-/// advances these; the TUI draws them as the design's `PlanStep` rows.
+/// One step of the plan and where it stands. Declared and advanced by the
+/// `plan` tool; drawn as the design's `PlanStep` rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanStep {
-    /// The outcome, in plain words.
+    /// The outcome in plain words ("Count requests per key"), never a command.
     pub text: String,
     /// Where it stands.
     pub state: StepState,
 }
 
-/// A question the agent puts to the developer through the `ask` tool: one
-/// line of question, one line of why, and a short list of answers. The
-/// design's rule is that the list always carries a yes, a no and "Chat about
-/// this"; the tool enforces the third and the prompt asks for the first two.
+/// A question from the `ask` tool. The design requires a yes, a no and
+/// "Chat about this" among the options; the tool enforces the last, the
+/// prompt asks for the others.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
-    /// The one line of question.
+    /// One line of question.
     pub question: String,
-    /// The one line of why it is being asked.
+    /// One line of why it is asked.
     pub detail: String,
     /// The answers on offer, ending with "Chat about this".
     pub options: Vec<String>,
 }
 
 impl Question {
-    /// The row every question ends with — the developer's way out of a
-    /// question that was wrongly framed. Sentence case, the design's copy.
+    /// The row every question ends with; the design's copy.
     pub const CHAT_ABOUT_THIS: &'static str = "Chat about this";
 
-    /// Whether `option` is that row, however the model cased it. The one
-    /// comparison: the tool that appends the row and the screen that
-    /// answers it must agree on what it is.
+    /// Whether `option` is that row, case-insensitively. The tool and the
+    /// TUI must both use this comparison.
     pub fn is_chat_about_this(option: &str) -> bool {
         option.trim().eq_ignore_ascii_case(Self::CHAT_ABOUT_THIS)
     }
 }
 
-/// The developer's answer to a [`Question`]: the option they chose, or —
-/// for "Chat about this" — what they typed instead.
+/// The developer's answer to a [`Question`]: an option, or text typed after
+/// "Chat about this".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Answer {
@@ -264,8 +246,8 @@ impl Answer {
         }
     }
 
-    /// The developer's own words back out of such a result — what the
-    /// transcript shows as the answer.
+    /// The developer's words from a `to_result` string, as the transcript
+    /// shows them.
     pub fn words_of(result: &str) -> &str {
         result
             .strip_prefix(Self::CHOSE)
@@ -274,9 +256,7 @@ impl Answer {
     }
 }
 
-/// One file of a staged changeset, as the review draws it: the whole file
-/// before (`None` for a file that did not exist) and after every staged
-/// edit to it.
+/// One file of a staged changeset, as the review draws it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
     /// The file's path.
@@ -309,7 +289,7 @@ pub struct ReviewComment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewDecision {
-    /// Write every file. The one way a change reaches disk.
+    /// Write every file; the only way a change reaches disk.
     Approve,
     /// Nothing is written; the comments go back to the agent and the
     /// changeset stays staged for the next review.
@@ -361,8 +341,7 @@ pub struct RetryInfo {
 mod tests {
     use super::*;
 
-    /// Two sessions in one process — `/clear` seals and opens a new one, and
-    /// two clears inside the same second must not name the same transcript.
+    /// Pins that two `/clear`s in one second do not share a transcript.
     #[test]
     fn minted_session_ids_are_distinct_within_one_process() {
         let ids: Vec<SessionId> = (0..64).map(|_| SessionId::mint()).collect();
@@ -372,8 +351,7 @@ mod tests {
         assert_eq!(unique.len(), ids.len(), "every mint is its own session");
     }
 
-    /// More than ten, so the counter crosses a digit boundary — unpadded,
-    /// `-10` sorted ahead of `-2` and this failed whenever it did.
+    /// More than ten mints, so the counter crosses a digit boundary.
     #[test]
     fn session_ids_sort_into_the_order_they_were_minted() {
         let mut ids: Vec<SessionId> = (0..24).map(|_| SessionId::mint()).collect();

@@ -1,11 +1,8 @@
-//! The agent loop and the boundary types around it. See
-//! `.claude/spec/archive/aldwin-core.md`.
+//! The agent loop and its boundary types; spec `.claude/spec/archive/aldwin-core.md`.
 //!
-//! Core drives a conversation: it takes `Command`s from the TUI, streams a
-//! step from an `LlmClient`, hands tool calls to a `ToolDispatcher`, and
-//! emits `Event`s back up. Both traits are implemented elsewhere
-//! (aldwin-llm, aldwin-tools), so no provider wire type and no filesystem
-//! dependency reaches this crate.
+//! `LlmClient` and `ToolDispatcher` are implemented in aldwin-llm and
+//! aldwin-tools, so no provider wire type or filesystem dependency reaches
+//! this crate.
 
 mod agent;
 mod client;

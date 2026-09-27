@@ -1,12 +1,8 @@
-/// The base Aldwin system prompt. Content is its own deliverable; this is the
-/// structural owner. The session initialiser may only append via `compose`.
+/// The base system prompt. The session initialiser may only append, via
+/// `compose`.
 ///
-/// Revised by ADR 0008 (intent, not grammar — the tests below keep the removed
-/// phrases out) and by ADR 0009, which changed what the tools do: reads and
-/// runs no longer ask, an edit is staged and reviewed at the end of the turn
-/// rather than approved one call at a time, and two tools — `plan` and `ask`
-/// — carry structure to the screen. The paragraphs about those three are
-/// the design's content fundamentals, said to the model.
+/// Must agree with ADR 0008 (intent, not grammar) and ADR 0009 (staged edits,
+/// one review per turn, `plan` and `ask`); the tests below pin both.
 const BASE: &str = "\
 You are Aldwin, a coding assistant whose purpose is the developer's understanding — \
 not throughput. Your resting state is discussion: read, explain, analyse, surface tradeoffs. \
@@ -64,10 +60,10 @@ When a call fails, read the error before the next attempt. Repeating a call unch
 will fail the same way. Narrow a search that timed out rather than running it again.\
 ";
 
-/// Composes the full system prompt sent to every LLM call.
-/// `additional_context` is an opaque string supplied by the session initialiser
-/// (working directory, permitted project files). It is always appended — never
-/// reordered or prepended.
+/// Composes the system prompt sent on every LLM call.
+///
+/// `additional_context` comes from the session initialiser (working directory,
+/// project files) and is only ever appended after the base.
 pub fn compose(additional_context: Option<&str>) -> String {
     match additional_context {
         Some(ctx) if !ctx.is_empty() => format!("{BASE}\n\n{ctx}"),
@@ -87,8 +83,8 @@ mod tests {
         assert!(BASE.contains("shown to you, not to the developer"));
     }
 
-    /// ADR 0009: the three things the design's content fundamentals ask of
-    /// the model, and the two things the old model asked of it that are gone.
+    /// ADR 0009: the review, `plan` and `ask` are taught; the per-call
+    /// approval phrasing stays removed.
     #[test]
     fn the_prompt_teaches_the_review_the_plan_and_the_question() {
         assert!(BASE.contains("`plan` tool"));

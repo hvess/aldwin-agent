@@ -13,29 +13,23 @@ use crate::{
     types::*,
 };
 
-/// The conversation loop: one per session. It owns the log, streams each
-/// step from `C`, and hands the step's tool calls to `D`; `run` drives it
-/// from a command channel and reports on an event channel.
+/// The conversation loop, one per session: streams each step from `C` and
+/// hands its tool calls to `D`.
 pub struct Agent<C, D> {
     client: C,
     dispatcher: D,
     log: ConversationLog,
     system: String,
-    // Pending questions (keyed by the `ask` call's id) and reviews (keyed by
-    // their own id) — see `PendingReply`. Shared rather than owned
-    // locally by `run` so `DispatchContext` — handed to a dispatch future
-    // that runs concurrently with the command loop — can register into the
-    // same map the loop resolves against.
+    // Shared with every `DispatchContext`: dispatch futures register while
+    // the command loop resolves, concurrently. See `PendingReply`.
     pending: PendingMap,
-    /// The last turn and step ids minted. The agent is the only thing that
-    /// mints them, so the counters live here rather than in a global; a
-    /// resumed conversation moves them past the highest id it carries.
+    /// The last turn and step ids minted; only the agent mints them. A resume
+    /// moves them past the highest id it carries (`continue_ids`).
     last_turn: u64,
     last_step: u64,
 }
 
-/// Written by hand because neither `C` nor `D` need be `Debug`, and the
-/// system prompt is too long to be worth printing.
+/// By hand: `C` and `D` need not be `Debug`, and the system prompt is omitted.
 impl<C, D> fmt::Debug for Agent<C, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Agent")
@@ -48,8 +42,8 @@ impl<C, D> fmt::Debug for Agent<C, D> {
 }
 
 impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
-    /// An agent with an empty, historyless log, whose system prompt is the
-    /// base prompt with `additional_context` appended when there is one.
+    /// An agent with an in-memory log; the system prompt is
+    /// `prompt::compose(additional_context)`.
     pub fn new(client: C, dispatcher: D, additional_context: Option<&str>) -> Self {
         Self {
             client,
@@ -67,10 +61,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         &self.log
     }
 
-    /// Write this session's records through to a transcript as well as to
-    /// memory. Builder-style rather than a `new` argument because every
-    /// caller but aldwin-cli's bootstrap — every test in this crate
-    /// included — wants the historyless log `new` already builds.
+    /// Writes this session's records through to `sink` as well as memory.
     pub fn with_sink(mut self, sink: Arc<dyn RecordSink>) -> Self {
         self.log = ConversationLog::with_sink(sink);
         self
@@ -86,8 +77,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         StepId(self.last_step)
     }
 
-    /// Moves the counters past every id in `records`, so a turn started
-    /// after a resume never reuses an id the resumed conversation carries.
+    /// Moves the counters past every id in `records`, so ids are not reused
+    /// after a resume.
     fn continue_ids(&mut self, records: &[LogRecord]) {
         for record in records {
             let (turn, step) = record.ids();
@@ -98,9 +89,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Resolve a pending question. An entry that turns out to be a review is
-    /// put back unconsumed — that shouldn't happen, but it must not destroy
-    /// a live entry if it somehow does.
+    /// Resolves a pending question. An entry of the other kind is put back,
+    /// never destroyed.
     fn resolve_answer(&self, call_id: &str, answer: Answer) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(call_id) {
@@ -114,7 +104,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Resolve a pending review — same shape as `resolve_answer`.
+    /// Resolves a pending review; see `resolve_answer`.
     fn resolve_review(&self, review_id: &str, decision: ReviewDecision) {
         let mut pending = self.pending.lock().expect("pending lock poisoned");
         match pending.remove(review_id) {
@@ -128,9 +118,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// A command that arrived while a turn is in flight. Returns `true` when
-    /// it is `Cancel`; everything that would change the history under a
-    /// running turn is discarded.
+    /// Handles a command that arrived mid-turn. Returns `true` for `Cancel`;
+    /// a command that would change the history is discarded with a `Notice`.
     async fn on_mid_turn_command(&self, cmd: Command, events: &mpsc::Sender<Event>) -> bool {
         let discarded = match cmd {
             Command::Cancel => return true,
@@ -149,8 +138,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             Command::ClearHistory => Some("the conversation was not cleared"),
             Command::Resume { .. } => Some("nothing was resumed"),
         };
-        // Said: the TUI has already drawn the submission, and a developer
-        // who sees it in the transcript assumes it arrived.
+        // Must be said: the TUI has already drawn the submission.
         if let Some(what) = discarded {
             let _ = events
                 .send(Event::Notice {
@@ -161,14 +149,13 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         false
     }
 
-    /// Drive the agent. Returns when the command channel closes.
+    /// Drives the agent until the command channel closes.
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>) {
         while let Some(cmd) = commands.recv().await {
             match cmd {
                 Command::Submit { text } => {
-                    // A review at the end of a turn can hand back comments,
-                    // which are a message from the developer and start the
-                    // next turn without them having to type it (ADR 0009 §4).
+                    // Review comments from `turn_ending` start the next turn
+                    // untyped (ADR 0009 §4).
                     let mut next = Some(text);
                     let mut typed = true;
                     while let Some(text) = next.take() {
@@ -209,10 +196,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     let _ = events.send(Event::HistoryCleared).await;
                 }
 
-                // `replace`, not a loop of `append` — see
-                // `ConversationLog::replace`. The event carries the records
-                // back out so the TUI rebuilds from the copy core just took
-                // rather than from a second read of the file.
+                // `replace`, not `append`: see `ConversationLog::replace`.
                 Command::Resume { session, records } => {
                     self.continue_ids(&records);
                     self.log.replace(&session, records.clone());
@@ -234,9 +218,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Runs one turn to its end. The second half of the result is a message
-    /// the developer left at the closing review — see `ToolDispatcher::turn_ending`
-    /// — which the caller starts a new turn with.
+    /// Runs one turn to its end. The second half of the result is the
+    /// follow-up from `ToolDispatcher::turn_ending`, which starts a new turn.
     async fn run_turn(
         &mut self,
         turn_id: TurnId,
@@ -245,9 +228,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     ) -> (TurnEndReason, Option<String>) {
         let _ = events.send(Event::TurnStarted { turn_id }).await;
 
-        // The just-submitted user message is already in `self.log`, so
-        // `messages_from_log` reconstructs it — pushing it again here would
-        // send it to the LLM twice.
+        // The user message is already in the log; pushing it again would send
+        // it twice.
         let mut messages = self.messages_from_log();
 
         loop {
@@ -264,10 +246,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         step_id,
                         outcome,
                     });
-                    // The model has stopped; anything staged is about to be
-                    // left un-reviewed, so the dispatcher gets the moment to
-                    // open the review (ADR 0009 §4). Still cancellable: the
-                    // review is a wait on the developer like any other.
+                    // The dispatcher's moment to open the review before the
+                    // turn ends (ADR 0009 §4). Must stay cancellable.
                     let ctx = DispatchContext::new(
                         turn_id,
                         step_id,
@@ -289,7 +269,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                         step_id,
                         outcome,
                     });
-                    // Tool results go back as a user-role message (Anthropic convention).
+                    // Tool results travel as a user-role message.
                     let tool_result_blocks: Vec<ContentBlock> = results
                         .iter()
                         .map(|r| ContentBlock::ToolResult(r.clone()))
@@ -311,10 +291,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                     results,
                     reason,
                 } => {
-                    // Dispatch was cut short after ToolUse records were already
-                    // logged. Close the step out in the shape of a completed
-                    // round trip so no ToolUse is left without a ToolResult and
-                    // a later replay of the log stays a valid request.
+                    // ToolUse records are already logged: each needs its
+                    // ToolResult, or every later replay is an invalid request.
                     self.log.append(LogRecord::StepBoundary {
                         turn_id,
                         step_id,
@@ -335,9 +313,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Drives `fut` while staying responsive to commands — `Cancel` above
-    /// all — the same way `dispatch_tools` does. `Err` is the reason the turn
-    /// ends instead.
+    /// Drives `fut` while handling commands, `Cancel` first. `Err` is the
+    /// reason the turn ends instead.
     async fn await_or_cancel<T>(
         &self,
         fut: impl std::future::Future<Output = T>,
@@ -377,21 +354,16 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
 
         let mut text_buf = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-        // This step's assistant content, **in the order it arrived**. The
-        // provider wants its blocks back as it emitted them; with interleaved
-        // thinking that can be thinking, text, thinking again, and sorting
-        // the thinking to the front would hand back a turn it never wrote.
-        // Text is flushed into here whenever something else interrupts it.
+        // In arrival order: the provider wants interleaved thinking and text
+        // back as emitted, so never sort thinking to the front.
         let mut content: Vec<ContentBlock> = Vec::new();
 
-        // Inner block: the stream lives here, releasing its borrow of
-        // `messages` at the end so the step's output can be pushed onto it.
+        // Inner block: the stream's borrow of `messages` ends with it.
         let stream_terminal: StepTerminal = {
             let request = LlmRequest {
                 system: &self.system,
                 tools: &tools,
                 messages: messages.as_slice(),
-                // The whole conversation so far is the cached prefix.
                 cache_breakpoint: messages.len().checked_sub(1),
             };
             let mut stream = self.client.stream(request);
@@ -467,10 +439,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             }
         }; // stream dropped here
 
-        // Commit this step's assistant content before anything else — a
-        // cancelled or failed step keeps what it said. Everything up to the
-        // last interruption is already in `content`; what remains is the
-        // trailing text.
+        // Before the terminal check: a cancelled or failed step keeps what it said.
         self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
         let produced_text = content
             .iter()
@@ -488,18 +457,12 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             StepTerminal::Ok(outcome) => outcome,
         };
 
-        // A call is committed only if it is about to be dispatched, because a
-        // ToolUse with no matching ToolResult is a torn log: every later
-        // request replays it and the provider rejects them all. So nothing is
-        // logged before the cancellation/error check above, and nothing is
-        // logged for a step that requested a call and then stopped for another
-        // reason — `max_tokens` landing after a complete tool_use block
-        // reaches here as `EndTurn`.
+        // Log a ToolUse only if it will be dispatched: one without a ToolResult
+        // tears the log and the provider rejects every later request. A
+        // `max_tokens` stop after a tool_use block arrives here as `EndTurn`.
         //
-        // Said: the TUI has already drawn the call as
-        // requested, and a step that also produced text does not reach the
-        // silent-turn notice below — so without this the call simply
-        // disappears between the reply and the end of the turn.
+        // Must be said: the TUI already drew the call, and a step with text
+        // skips the silent-turn notice below.
         if outcome.stop_reason != StopReason::ToolUse && !tool_calls.is_empty() {
             let dropped = tool_calls.len();
             tool_calls.clear();
@@ -512,10 +475,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 .await;
         }
 
-        // Committed to the live `messages` as well as the log: the ToolResult
-        // for this step rides as a `Role::User` message, and the provider
-        // rejects it unless the assistant message in front of it carries the
-        // matching ToolUse block — including on a step that produced no text.
+        // Also into live `messages`: the provider rejects a ToolResult whose
+        // preceding assistant message lacks the ToolUse, even with no text.
         for call in &tool_calls {
             self.log.append(LogRecord::ToolUse {
                 turn_id,
@@ -525,9 +486,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
             push_assistant_block(messages, ContentBlock::ToolUse(call.clone()));
         }
 
-        // The floor against a silent turn (ADR 0006): a step that ends the
-        // turn with no text and no tool call has nothing to render, so it
-        // says so rather than looking hung.
+        // ADR 0006: a turn with nothing to render says so instead of looking hung.
         if !produced_text && tool_calls.is_empty() {
             let _ = events
                 .send(Event::Notice {
@@ -536,8 +495,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 .await;
         }
 
-        // A `ToolUse` stop that named no call has nothing to dispatch, and an
-        // empty tool-result message would be rejected; the turn ends instead.
+        // A `ToolUse` stop with no call ends the turn: an empty tool-result
+        // message would be rejected.
         if tool_calls.is_empty() {
             return StepResult::EndTurn(outcome);
         }
@@ -554,9 +513,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Commits the text streamed so far as one block — to the log as it
-    /// happens, so a crash mid-step cannot lose it and a replay of the log
-    /// reproduces the same order.
+    /// Commits the buffered text as one block, logging it immediately so a
+    /// crash cannot lose it and replay keeps the order.
     fn flush_text(
         &self,
         turn_id: TurnId,
@@ -576,11 +534,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         content.push(ContentBlock::Text { text });
     }
 
-    /// Dispatch all tool calls for a step concurrently, staying responsive to
-    /// commands (Cancel above all) for the whole duration — a slow or stuck
-    /// tool must not make cancellation meaningless. A tool that needs the
-    /// developer blocks inside its own future via `DispatchContext`; the
-    /// agent loop just awaits.
+    /// Dispatches a step's calls concurrently, handling commands throughout
+    /// so a stuck tool cannot block `Cancel`.
     async fn dispatch_tools(
         &self,
         turn_id: TurnId,
@@ -591,10 +546,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     ) -> DispatchOutcome {
         let ctx = DispatchContext::new(turn_id, step_id, events.clone(), self.pending.clone());
 
-        // The dispatcher's moment before the step (ADR 0009 §4): a staged
-        // changeset that these calls would observe is reviewed first. A
-        // reason back means the calls do not run and are each answered with
-        // it — the developer's comments, or that the changes were discarded.
+        // ADR 0009 §4: a staged changeset these calls would observe is
+        // reviewed first. A reason back answers every call without running it.
         let before = self.dispatcher.before_step(&calls, &ctx);
         match self.await_or_cancel(before, events, commands).await {
             Ok(None) => {}
@@ -635,8 +588,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                 .await;
         }
 
-        // Drive all dispatch futures on the current task (cooperative).
-        // Dispatcher impls use spawn_blocking internally for CPU-heavy work.
+        // One task, cooperative: dispatchers must `spawn_blocking` heavy work.
         let futs: Vec<_> = calls
             .iter()
             .map(|call| self.dispatcher.dispatch(call.clone(), &ctx))
@@ -671,11 +623,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         }
     }
 
-    /// Close out a step whose tool dispatch was cut short (cancelled, or the
-    /// command channel closed) without leaving the already-logged ToolUse
-    /// records orphaned: every in-flight call gets a synthetic error
-    /// ToolResult, so the step still reads as a well-formed round trip and
-    /// never a torn one.
+    /// Closes out a step whose dispatch was cut short: every call gets a
+    /// synthetic error ToolResult, so no logged ToolUse is orphaned.
     async fn abort_dispatch(
         &self,
         turn_id: TurnId,
@@ -684,10 +633,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         events: &mpsc::Sender<Event>,
         reason: TurnEndReason,
     ) -> DispatchOutcome {
-        // A call whose dispatch future was mid-`ask` otherwise leaves a
-        // dangling entry here — nothing resolves it once the future holding
-        // its receiver is gone. A review in flight is keyed by its own id
-        // rather than a call's, so it is cleared separately.
+        // Nothing else removes an `ask` entry once its future is dropped.
+        // Reviews are not keyed by call id, so they are cleared separately.
         {
             let mut pending = self.pending.lock().expect("pending lock poisoned");
             for call in calls {
@@ -720,12 +667,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         DispatchOutcome::Aborted { results, reason }
     }
 
-    /// Reconstruct the wire message list from the append-only log.
-    ///
-    /// Thinking is logged as each block closes, and text is flushed to the
-    /// log whenever thinking interrupts it — so replaying in log order
-    /// reproduces the order the provider emitted, which is the order it wants
-    /// back (ADR 0006 §2).
+    /// Rebuilds the message list from the log. Log order is the provider's
+    /// emission order, which it wants back (ADR 0006 §2).
     fn messages_from_log(&self) -> Vec<Message> {
         let mut messages: Vec<Message> = Vec::new();
 
@@ -781,8 +724,8 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     }
 }
 
-/// Appends to the assistant message being built, or opens one: a step's
-/// blocks all belong to a single assistant message, in the order they arrived.
+/// Appends to the last assistant message, or opens one: a step's blocks
+/// form one assistant message.
 fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
     match messages.last_mut() {
         Some(last) if last.role == Role::Assistant => last.content.push(block),
@@ -792,8 +735,6 @@ fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
         }),
     }
 }
-
-// ── Internal ─────────────────────────────────────────────────────────────────
 
 enum StepTerminal {
     Ok(StepOutcome),
@@ -824,12 +765,8 @@ enum DispatchOutcome {
     },
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-//
-// Covers the loop's real failure modes per aldwin-core.md's Pitfalls: torn logs
-// on cancellation, tool round trips, and step/turn boundary bookkeeping. Not
-// exhaustive by design — these are the invariants a refactor is most likely to
-// break silently.
+// Pins the failure modes in `.claude/spec/archive/aldwin-core.md` Pitfalls:
+// torn logs on cancellation, tool round trips, step/turn bookkeeping.
 
 #[cfg(test)]
 mod tests {
@@ -841,9 +778,8 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Mutex;
 
-    /// Replays one canned event script per `stream()` call, one script per
-    /// step. Also records the `messages` slice it was called with, so a test
-    /// can inspect exactly what a later step's request looked like.
+    /// Replays one script per `stream()` call and records each request's
+    /// `messages`.
     struct ScriptedClient {
         scripts: Mutex<VecDeque<Vec<LlmEvent>>>,
         // `Arc` so a test keeps a handle after `self` moves into the agent.
@@ -882,7 +818,7 @@ mod tests {
         }
     }
 
-    /// Yields one delta then never terminates — for exercising mid-step cancellation.
+    /// Yields one delta then never terminates.
     struct StallingClient;
 
     impl LlmClient for StallingClient {
@@ -897,8 +833,7 @@ mod tests {
         }
     }
 
-    /// Yields a tool-use request then never terminates — for exercising cancellation
-    /// that lands after a tool call is requested but before the step ends.
+    /// Yields a tool-use request then never terminates.
     struct StallingAfterToolUseClient;
 
     impl LlmClient for StallingAfterToolUseClient {
@@ -932,8 +867,7 @@ mod tests {
         }
     }
 
-    /// Never resolves — for exercising cancellation that lands while tools are
-    /// actually dispatching (as opposed to mid-stream, before dispatch starts).
+    /// Never resolves: cancellation during dispatch, not mid-stream.
     struct StallingDispatcher;
 
     #[async_trait]
@@ -946,8 +880,7 @@ mod tests {
         }
     }
 
-    /// Opens a review from `turn_ending` — for exercising the review round
-    /// trip end to end, including a comment starting the next turn.
+    /// Opens a review from `turn_ending`.
     struct ReviewingDispatcher;
 
     #[async_trait]
@@ -991,8 +924,7 @@ mod tests {
         }
     }
 
-    /// Refuses every step from `before_step` — the comments-before-a-run
-    /// path, where the step's calls are answered rather than dispatched.
+    /// Refuses every step from `before_step`.
     struct RefusingDispatcher;
 
     #[async_trait]
@@ -1008,8 +940,7 @@ mod tests {
         }
     }
 
-    /// Blocks on `DispatchContext::ask` — for exercising the question
-    /// round trip end to end.
+    /// Blocks on `DispatchContext::ask`.
     struct AskingDispatcher;
 
     #[async_trait]
@@ -1085,10 +1016,8 @@ mod tests {
         assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
     }
 
-    /// ADR 0006. A step whose whole output was a thinking block used to
-    /// commit nothing: the block was dropped at the wire and the turn
-    /// reached the developer blank. The observed case spent 14,096 output
-    /// tokens that way and was answered by hand with "Continue".
+    /// ADR 0006. Regression: a thinking-only step committed nothing and
+    /// rendered blank.
     #[tokio::test]
     async fn a_thinking_only_step_is_neither_dropped_nor_silent() {
         let client = ScriptedClient::new(vec![vec![
@@ -1134,14 +1063,12 @@ mod tests {
                                           if text == "weighing it up" && signature == "sig-1")),
             "thinking must be persisted: {snap:?}"
         );
-        // ...and the developer was told the turn produced no reply, rather
-        // than being shown nothing at all.
+        // ...and the developer was told there was no reply.
         assert!(noticed, "a turn with no visible output must say so");
     }
 
-    /// The wire-correctness half: thinking that preceded a tool call has to
-    /// go back in front of it, in the assistant message that made the call,
-    /// or the provider rejects the next request.
+    /// The provider rejects the next request unless thinking precedes its
+    /// tool call in the same assistant message.
     #[tokio::test]
     async fn thinking_goes_back_ahead_of_the_tool_call_it_preceded() {
         let call = ToolCall {
@@ -1193,8 +1120,6 @@ mod tests {
             }
         }
 
-        // The second step's request is where the first step's assistant turn
-        // shows up as history.
         let seen = seen_messages.lock().unwrap();
         let second = &seen[1];
         let assistant = second
@@ -1213,9 +1138,8 @@ mod tests {
         );
     }
 
-    /// With interleaved thinking the provider can emit text *between* two
-    /// thinking blocks, and it wants the turn back as it wrote it — live, and
-    /// again when the log is replayed for the next turn.
+    /// Interleaved text and thinking go back in emission order, live and on
+    /// replay.
     #[tokio::test]
     async fn interleaved_blocks_keep_the_order_they_arrived_in() {
         let script = vec![
@@ -1286,9 +1210,8 @@ mod tests {
         assert_eq!(shape, vec!["one", "between", "two", "after"]);
     }
 
-    /// `messages_from_log` already includes the just-logged `UserMessage`;
-    /// an extra push of the same text once sent every message to the LLM
-    /// twice while the log itself stayed clean.
+    /// Regression: the submitted message was pushed on top of
+    /// `messages_from_log` and sent twice.
     #[tokio::test]
     async fn submitted_text_reaches_the_llm_exactly_once() {
         let client = ScriptedClient::new(vec![vec![
@@ -1439,10 +1362,8 @@ mod tests {
         assert!(matches!(snap.last().unwrap(), LogRecord::TurnEnded { .. }));
     }
 
-    /// `max_tokens` can land after a complete tool_use block, and the wire
-    /// layer reports every stop that is not `tool_use` as `EndTurn`. The call
-    /// is never dispatched, so committing it would leave a ToolUse with no
-    /// ToolResult — and every later request in the session would be rejected.
+    /// `max_tokens` after a complete tool_use block arrives as `EndTurn`; the
+    /// undispatched call must not be logged, or every later request fails.
     #[tokio::test]
     async fn a_call_the_step_did_not_stop_for_is_never_committed() {
         let client = ScriptedClient::new(vec![
@@ -1511,8 +1432,8 @@ mod tests {
         );
     }
 
-    /// A `ToolUse` stop with no call has nothing to dispatch; looping would
-    /// send the provider an empty tool-result message.
+    /// Looping on a callless `ToolUse` stop would send an empty tool-result
+    /// message.
     #[tokio::test]
     async fn a_tool_use_stop_that_named_no_call_ends_the_turn() {
         let client = ScriptedClient::new(vec![vec![
@@ -1547,8 +1468,7 @@ mod tests {
         );
     }
 
-    /// The TUI draws a submission the moment it is typed, so one that core
-    /// throws away has to be said out loud.
+    /// The TUI has already drawn the submission, so discarding it must be said.
     #[tokio::test]
     async fn a_command_discarded_mid_turn_is_said_not_only_logged() {
         let agent = Agent::new(StallingClient, EchoDispatcher, None);
@@ -1609,7 +1529,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for the partial delta so cancel lands mid-step, not before the step starts.
+        // Cancel mid-step, not before the step starts.
         loop {
             if let Event::TextDelta { .. } =
                 ev_rx.recv().await.expect("agent dropped the event channel")
@@ -1656,7 +1576,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait for the tool call to be requested so cancel lands after it, before StepEnded.
+        // Cancel after the tool call is requested, before StepEnded.
         loop {
             if let Event::ToolUseRequested { .. } =
                 ev_rx.recv().await.expect("agent dropped the event channel")
@@ -1675,8 +1595,7 @@ mod tests {
             }
         }
 
-        // The requested tool call was never dispatched, so it must not appear in the
-        // log — a logged ToolUse with no ToolResult/StepBoundary would be a torn log.
+        // Undispatched, so not logged: a ToolUse without ToolResult tears the log.
         let snap = log.snapshot();
         assert!(!snap.iter().any(|r| matches!(r, LogRecord::ToolUse { .. })));
         assert!(matches!(
@@ -1714,8 +1633,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Wait until the tool is actually dispatched (not merely requested) so
-        // cancel lands while dispatch_tools is awaiting it, not before.
+        // Cancel while `dispatch_tools` awaits the call, not merely once requested.
         loop {
             if let Event::ToolDispatched { .. } =
                 ev_rx.recv().await.expect("agent dropped the event channel")
@@ -1741,9 +1659,7 @@ mod tests {
         }
         assert!(saw_tool_completed);
 
-        // Every ToolUse must be followed by a matching ToolResult before
-        // TurnEnded — an unresolved one would make a later replay of this log
-        // an invalid request to the LLM (a dangling tool_use block).
+        // Every ToolUse needs its ToolResult before TurnEnded, or replay fails.
         let snap = log.snapshot();
         let tool_use_count = snap
             .iter()
@@ -1840,8 +1756,7 @@ mod tests {
         }
     }
 
-    /// A comment at the closing review is a message from the developer: the
-    /// turn ends and the next one starts with it, without a `Submit`.
+    /// A comment at the closing review starts the next turn without a `Submit`.
     #[tokio::test]
     async fn a_comment_at_the_closing_review_starts_the_next_turn() {
         let client = ScriptedClient::new(vec![
@@ -1958,8 +1873,6 @@ mod tests {
                 .any(|c| matches!(c, ContentBlock::Text { text } if text == "Use config"))));
     }
 
-    /// `before_step`'s refusal answers every call in the step and dispatches
-    /// none of them.
     #[tokio::test]
     async fn a_refused_step_answers_its_calls_without_dispatching_them() {
         let client = ScriptedClient::new(vec![
@@ -2087,8 +2000,7 @@ mod tests {
         assert!(saw_result);
     }
 
-    /// Cancelling with a question in flight must not leave a dangling
-    /// `oneshot::Sender` in `pending` — nothing else ever removes it.
+    /// Nothing but the abort path removes a cancelled question from `pending`.
     #[tokio::test]
     async fn cancel_during_a_pending_question_does_not_leak_its_entry() {
         let client = ScriptedClient::new(vec![vec![
@@ -2143,8 +2055,7 @@ mod tests {
         );
     }
 
-    /// The same for a review, which is keyed by its own id rather than a
-    /// call's and so needs its own clearing.
+    /// The same for a review, which is not keyed by call id.
     #[tokio::test]
     async fn cancel_during_a_pending_review_does_not_leak_its_entry() {
         let agent = Agent::new(one_edit_then_done(), ReviewingDispatcher, None);
@@ -2178,11 +2089,8 @@ mod tests {
         assert!(pending.lock().unwrap().is_empty());
     }
 
-    /// A live run surfaced this: a tool-use-only step (no text) got its
-    /// ToolUse block into the log but not the live `messages`, so the *next*
-    /// step's request carried a ToolResult with no ToolUse in front of it.
-    /// `messages_from_log` rebuilt it correctly, which is why the gap only
-    /// showed mid-turn, on a provider strict about role sequencing.
+    /// Regression: a tool-use-only step's ToolUse reached the log but not the
+    /// live `messages`, so the next step sent an orphan ToolResult.
     #[tokio::test]
     async fn multi_step_turn_carries_tool_use_into_the_next_steps_live_request() {
         let client = ScriptedClient::new(vec![
@@ -2260,8 +2168,7 @@ mod tests {
         );
     }
 
-    /// What the log told its sink: every record, and every time the sink
-    /// was moved.
+    /// Every record and move the log sent its sink.
     #[derive(Debug, Default)]
     struct SpySink {
         records: Mutex<Vec<LogRecord>>,
@@ -2283,8 +2190,7 @@ mod tests {
         }
     }
 
-    /// Answers each step from a script, and stalls once the script is spent
-    /// — a turn that stays open for as long as a test needs it to.
+    /// Answers each step from a script, then stalls.
     struct ScriptedThenStallingClient(Mutex<VecDeque<Vec<LlmEvent>>>);
 
     impl LlmClient for ScriptedThenStallingClient {
@@ -2334,12 +2240,8 @@ mod tests {
         }
     }
 
-    /// `/clear` or `/resume` sent in the gap between a review's follow-up
-    /// turns — after one turn's `TurnEnded`, before the next one's
-    /// `TurnStarted` — used to move the transcript writer on the way past,
-    /// though core then refused the command: the rest of the conversation
-    /// went into another session's file. The sink moves only when core acts,
-    /// and core does not act while the conversation is still going.
+    /// Regression: `/clear` or `/resume` between a follow-up's `TurnEnded`
+    /// and the next `TurnStarted` moved the sink although core refused it.
     #[tokio::test]
     async fn the_sink_moves_only_when_core_acts_and_never_between_follow_up_turns() {
         let client = ScriptedThenStallingClient(Mutex::new(VecDeque::from([vec![
@@ -2362,8 +2264,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The gap: the first turn has ended and its follow-up is announced,
-        // ahead of the follow-up turn's own `TurnStarted`.
+        // The gap: follow-up announced, its `TurnStarted` not yet sent.
         until(&mut ev_rx, |e| {
             matches!(e, Event::FollowUp { .. }).then_some(())
         })
@@ -2412,8 +2313,6 @@ mod tests {
         assert_eq!(*sink.moves.lock().unwrap(), ["cleared"]);
     }
 
-    /// Turn and step ids are minted by the agent, and a resumed conversation
-    /// carries its own: the next turn must not reuse one of them.
     #[tokio::test]
     async fn a_resumed_conversation_continues_past_its_highest_ids() {
         let client = ScriptedClient::new(vec![vec![
@@ -2445,8 +2344,7 @@ mod tests {
             })
             .await
             .unwrap();
-        // Said by core, once it has acted — never by the interceptor ahead
-        // of a resume core may refuse.
+        // Said by core after acting, not by the interceptor: core may refuse.
         let said = until(&mut ev_rx, |e| match e {
             Event::Notice { message } => Some(message),
             _ => None,

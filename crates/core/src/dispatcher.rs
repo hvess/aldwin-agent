@@ -11,48 +11,39 @@ use crate::{
     },
 };
 
-/// Implementors live in aldwin-tools. A tool that needs the developer — the
-/// `ask` tool, or the review a staged changeset opens — blocks inside its own
-/// future, using `DispatchContext` for the round trip; the agent loop just
-/// awaits.
+/// Runs tool calls; implemented in aldwin-tools. A call that needs the
+/// developer (`ask`, a review) awaits the round trip through
+/// `DispatchContext` inside its own future.
 ///
-/// Two hooks bracket a step (ADR 0009 §4). They exist so the dispatcher can
-/// open the review at the moments a staged change would otherwise be
-/// observed without one: before a step whose calls would see the disk, and
-/// when the turn is about to end. Core knows nothing about staging; it only
-/// provides the two moments.
+/// `before_step` and `turn_ending` are where the dispatcher opens the review
+/// (ADR 0009 §4); core knows nothing about staging.
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync {
     /// Runs one tool call to completion. A failure is a result with
-    /// `is_error` set, not a separate channel: the model reads it and
-    /// decides what to do next.
+    /// `is_error` set, which the model reads.
     async fn dispatch(&self, call: ToolCall, ctx: &DispatchContext) -> ToolResult;
 
-    /// The set of tools available to the model in the current session.
+    /// The tools available to the model this session.
     fn definitions(&self) -> Vec<crate::types::ToolDefinition>;
 
     /// Called once per step, before any of `calls` is dispatched. `Some` is
-    /// a reason the step's calls must **not** run — every one of them is then
-    /// answered with that text as an error result, and the model decides
-    /// what to do next. `None` proceeds.
+    /// why none of them may run; each is answered with that text as an error
+    /// result. `None` proceeds.
     async fn before_step(&self, _calls: &[ToolCall], _ctx: &DispatchContext) -> Option<String> {
         None
     }
 
-    /// Called when a turn is about to end because the model stopped calling
-    /// tools. `Some(text)` is a message from the developer that starts a new
-    /// turn immediately — the comments left at a review — and `None` lets
-    /// the turn end.
+    /// Called when the model stopped calling tools and the turn would end.
+    /// `Some(text)` is a developer message (review comments) that starts a
+    /// new turn at once; `None` lets the turn end.
     async fn turn_ending(&self, _ctx: &DispatchContext) -> Option<String> {
         None
     }
 }
 
-/// One outstanding round trip, keyed by its id in `PendingMap`. A question
-/// is keyed by the `ask` call's own id; a review by an id the context mints,
-/// since a review is not a call. The two resolve to different shapes, so
-/// this carries whichever one the caller registered; one map means cleanup
-/// on abort cannot drain one kind and forget the other.
+/// One outstanding round trip in `PendingMap`: a question keyed by its `ask`
+/// call id, a review by an id `DispatchContext::review` mints. One map for
+/// both, so cleanup on abort cannot drain one kind and forget the other.
 #[derive(Debug)]
 pub enum PendingReply {
     /// A question from the `ask` tool, awaiting `Command::Answer`.
@@ -61,16 +52,13 @@ pub enum PendingReply {
     Review(oneshot::Sender<ReviewDecision>),
 }
 
-/// Every round trip still waiting on the developer, shared between the
-/// agent's command loop (which resolves them) and the dispatch futures
-/// (which register them).
+/// Round trips waiting on the developer: dispatch futures register them,
+/// the agent's command loop resolves them.
 pub type PendingMap = Arc<Mutex<HashMap<String, PendingReply>>>;
 
-/// Given to a dispatch future so it can reach the developer without reaching
-/// into the agent's internals. Concrete policy — when a review opens, what a
-/// question offers — lives in aldwin-tools; this only provides the round
-/// trips through the agent's existing event/command boundary, and the two
-/// one-way announcements the TUI draws from.
+/// A dispatch future's way to the developer: round trips over the agent's
+/// event/command boundary, and one-way announcements. Policy (when a review
+/// opens, what a question offers) lives in aldwin-tools.
 #[derive(Debug, Clone)]
 pub struct DispatchContext {
     turn_id: TurnId,
@@ -94,12 +82,11 @@ impl DispatchContext {
         }
     }
 
-    /// Lets a `ToolDispatcher` implementor (aldwin-tools) build a real
-    /// context in its own test harness, holding a clone of `pending` to
-    /// resolve the round trip itself as `Agent`'s command loop would.
-    /// Feature-gated rather than making `new` `pub`: a context built outside
-    /// `Agent`'s run loop has no `Command` handler draining it, so a round
-    /// trip would hang forever.
+    /// Builds a context for a `ToolDispatcher` implementor's tests, which
+    /// resolve round trips through their own clone of `pending`.
+    ///
+    /// Feature-gated instead of making `new` public: outside `Agent`'s run
+    /// loop nothing drains the round trip, so it would hang forever.
     #[cfg(any(test, feature = "test-util"))]
     pub fn for_testing(
         turn_id: TurnId,
@@ -110,14 +97,12 @@ impl DispatchContext {
         Self::new(turn_id, step_id, events, pending)
     }
 
-    /// Emit `QuestionAsked` for `call_id` and await the developer's `Answer`.
-    /// Resolves to `None` if the agent shuts down, or the turn is cancelled,
-    /// before an answer arrives.
+    /// Emits `QuestionAsked` for `call_id` and awaits the developer's
+    /// `Answer`; `None` on shutdown or cancellation.
     ///
     /// # Panics
     ///
-    /// If the pending-reply lock is poisoned — a thread panicked while
-    /// holding it.
+    /// If the pending-reply lock is poisoned.
     pub async fn ask(&self, call_id: String, question: Question) -> Option<Answer> {
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -131,19 +116,15 @@ impl DispatchContext {
         rx.await.ok()
     }
 
-    /// Emit `ReviewRequested` and await the developer's decision. Resolves to
-    /// `None` on shutdown or cancellation — the caller treats that as
-    /// "nothing was written", which is also what it means.
+    /// Emits `ReviewRequested` and awaits the developer's decision; `None` on
+    /// shutdown or cancellation, meaning nothing was written.
     ///
-    /// Keyed by the step it opens in. A review opens at a step's boundary —
-    /// before its calls run, or as the turn ends — and is answered before
-    /// the step goes on, so a step has at most one open at a time; the
-    /// agent mints step ids, so no second counter is needed.
+    /// Keyed by step id: a review opens at a step boundary and is answered
+    /// before the step goes on, so a step has at most one open.
     ///
     /// # Panics
     ///
-    /// If the pending-reply lock is poisoned — a thread panicked while
-    /// holding it.
+    /// If the pending-reply lock is poisoned.
     pub async fn review(&self, changeset: Changeset) -> Option<ReviewDecision> {
         let review_id = format!("review-{}", self.step_id.0);
         let (tx, rx) = oneshot::channel();
@@ -161,12 +142,12 @@ impl DispatchContext {
         rx.await.ok()
     }
 
-    /// Announce how a review ended, once the decision has been acted on.
+    /// Announces how a review ended, once the decision has been acted on.
     pub async fn review_closed(&self, outcome: ReviewOutcome) {
         let _ = self.events.send(Event::ReviewClosed { outcome }).await;
     }
 
-    /// Announce the plan as it now stands.
+    /// Announces the plan as it now stands.
     pub async fn plan_updated(&self, steps: Vec<PlanStep>) {
         let _ = self
             .events
@@ -177,8 +158,7 @@ impl DispatchContext {
             .await;
     }
 
-    /// Drops every review entry — a review is not a call, so the abort path
-    /// cannot find it by call id.
+    /// Drops every review entry; the abort path cannot find one by call id.
     pub(crate) fn clear_reviews(pending: &PendingMap) {
         pending
             .lock()

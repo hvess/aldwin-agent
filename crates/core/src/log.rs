@@ -2,48 +2,37 @@ use crate::event::LogRecord;
 use crate::types::SessionId;
 use std::sync::{Arc, RwLock};
 
-/// Where a committed record goes *besides* memory.
+/// Where a committed record goes besides memory; implemented by aldwin-cli's
+/// `History` over aldwin-config's `HistoryStore`, so core gains no
+/// filesystem dependency.
 ///
-/// Core owns no filesystem dependency and must not grow one, so the
-/// transcript writer reaches it as a trait implemented elsewhere
-/// (aldwin-cli's `History`, over aldwin-config's `HistoryStore`). Core
-/// appends records; it never learns where they land, or whether they land
-/// at all.
+/// Infallible by design: history must never fail a turn. A sink reports its
+/// own failures (`History` emits one `Event::Notice`).
 ///
-/// Nothing here returns anything and nothing can fail upward, by design:
-/// history must never be able to fail a turn. A sink that cannot write
-/// reports it its own way — `History` emits `Event::Notice` once and then
-/// stays quiet.
-///
-/// Called synchronously, on the agent's task. A sink's work per record is
-/// one small append to a file it already holds open, which is cheaper than
-/// the hand-off to a writer task would be; a sink that did more would
-/// need that task.
+/// Called synchronously on the agent's task, so a sink must stay a small
+/// append to an already-open file; more work needs a writer task.
 pub trait RecordSink: Send + Sync + std::fmt::Debug {
     /// A record was committed to the log.
     fn append(&self, record: &LogRecord);
 
-    /// The log was cleared (`/clear`): the records after this begin a new
-    /// conversation, and belong somewhere new.
+    /// The log was cleared (`/clear`); later records begin a new conversation.
     fn cleared(&self);
 
-    /// The log was replaced by `session`'s records (`/resume`): the records
-    /// after this continue that conversation, and belong where it is kept.
+    /// The log was replaced by `session`'s records (`/resume`); later records
+    /// continue that conversation.
     ///
-    /// Both of these are called when core *acts* on the command, not when
-    /// it is sent: core refuses either one while a turn runs, and a sink
-    /// that moved on the way past would send the rest of that turn into
-    /// another conversation's file.
+    /// `cleared` and `resumed` fire when core acts on the command, not when
+    /// it is sent: core refuses both mid-turn, and a sink that moved early
+    /// would write the rest of that turn into another conversation's file.
     fn resumed(&self, session: &SessionId);
 }
 
-/// Every record of the conversation, in the order it was committed — what
-/// the next step's messages are rebuilt from. Clones share one log.
+/// Every record of the conversation in commit order; each turn's messages are
+/// rebuilt from it. Clones share one log.
 #[derive(Debug, Default, Clone)]
 pub struct ConversationLog {
     inner: Arc<RwLock<Vec<LogRecord>>>,
-    /// `None` is the ordinary no-history case — every test, and any session
-    /// whose store could not be opened.
+    /// `None` when there is no history: tests, or a store that could not open.
     sink: Option<Arc<dyn RecordSink>>,
 }
 
@@ -65,24 +54,21 @@ impl ConversationLog {
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn append(&self, record: LogRecord) {
-        // The sink sees the record before the lock is taken, not inside it:
-        // a write that blocks on disk must not hold every other reader of
-        // the log out for its duration.
+        // Sink before the lock: a write blocked on disk must not hold readers out.
         if let Some(sink) = &self.sink {
             sink.append(&record);
         }
         self.inner.write().expect("log lock poisoned").push(record);
     }
 
-    /// An immutable view of every record so far. Clones each `LogRecord` —
-    /// O(n) per call, accepted because it is called once per turn (from
-    /// `messages_from_log`) and not on any hot path.
+    /// An immutable copy of every record so far. O(n) clones per call,
+    /// acceptable only because the agent calls it once per turn.
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn snapshot(&self) -> Arc<[LogRecord]> {
         let guard = self.inner.read().expect("log lock poisoned");
         guard.as_slice().into()
@@ -92,7 +78,7 @@ impl ConversationLog {
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn len(&self) -> usize {
         self.inner.read().expect("log lock poisoned").len()
     }
@@ -101,17 +87,17 @@ impl ConversationLog {
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// `/clear` — wipes every record so the next turn's
-    /// `messages_from_log()` starts from nothing, and tells the sink.
+    /// `/clear`: wipes every record, so the next turn starts from nothing,
+    /// and tells the sink.
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn clear(&self) {
         self.inner.write().expect("log lock poisoned").clear();
         if let Some(sink) = &self.sink {
@@ -119,18 +105,15 @@ impl ConversationLog {
         }
     }
 
-    /// `/resume` — `session`'s loaded transcript *becomes* the conversation.
+    /// `/resume`: `session`'s loaded transcript becomes the conversation.
     ///
-    /// Deliberately not `append`-in-a-loop: these records are already on
-    /// disk in the file the session is about to continue writing to, and
-    /// replaying them through the sink would write every one of them a
-    /// second time. Resume is the one path that fills the log without
-    /// filling the transcript; the sink is told which conversation it now
-    /// continues instead.
+    /// Must not `append` the records: they are already on disk, and the sink
+    /// would write each a second time. The sink is only told which session
+    /// it now continues.
     ///
     /// # Panics
     ///
-    /// If the log's lock is poisoned — a thread panicked while holding it.
+    /// If the log's lock is poisoned.
     pub fn replace(&self, session: &SessionId, records: Vec<LogRecord>) {
         *self.inner.write().expect("log lock poisoned") = records;
         if let Some(sink) = &self.sink {
@@ -204,10 +187,7 @@ mod tests {
         assert_eq!(log.len(), 1);
     }
 
-    /// The resumed records are already in the file this session continues
-    /// writing to — replaying them through the sink would duplicate every
-    /// one of them on disk. The sink is told which conversation it now
-    /// continues instead.
+    /// Pins that resumed records are not written to disk a second time.
     #[test]
     fn replace_tells_the_sink_where_it_is_rather_than_writing_through() {
         let spy = Arc::new(Spy::default());

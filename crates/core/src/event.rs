@@ -1,7 +1,7 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
-// ── LLM-boundary events ─────────────────────────────────────────────────────
+// LLM-boundary events.
 
 /// How a step ended, and what it cost.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ pub struct StepOutcome {
     pub cache: CacheStats,
 }
 
-/// Events the LlmClient yields. Provider-agnostic; no Anthropic wire types cross this boundary.
+/// Events an `LlmClient` yields. No Anthropic wire type crosses this boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LlmEvent {
@@ -25,15 +25,13 @@ pub enum LlmEvent {
     },
     /// A thinking block opened.
     ThinkingStart,
-    /// One fragment of thinking text. Carried, not dropped — see
-    /// `ContentBlock::Thinking` and ADR 0006 for why.
+    /// One fragment of thinking text; carried, not dropped (ADR 0006).
     ThinkingDelta {
         /// The fragment, to be appended to what came before it.
         text: String,
     },
-    /// Closes the block opened by `ThinkingStart`, carrying the whole of it
-    /// so the caller can commit one `ContentBlock::Thinking` without having
-    /// to re-accumulate the deltas it already saw.
+    /// Closes the block opened by `ThinkingStart`, carrying the whole of it,
+    /// so the agent commits it without re-accumulating deltas.
     ThinkingEnd {
         /// The whole thinking text.
         text: String,
@@ -62,7 +60,7 @@ pub enum LlmEvent {
     },
 }
 
-// ── Core events (emitted upward) ─────────────────────────────────────────────
+// Core events, emitted upward.
 
 /// Why a turn ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +73,7 @@ pub enum TurnEndReason {
     Error(String),
 }
 
-/// All events the agent emits toward the TUI / future web client.
+/// Events toward the TUI, from the agent or aldwin-cli's interceptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -173,10 +171,9 @@ pub enum Event {
         reason: TurnEndReason,
     },
 
-    /// A turn the developer did not type: the comments they left at a
-    /// closing review, started as the next turn's message (ADR 0009 §4).
-    /// Sent before that turn's `TurnStarted`, so the TUI can echo what the
-    /// model is about to be asked — a typed message it echoes itself.
+    /// Review comments started as the next turn's message (ADR 0009 §4).
+    /// Sent before that turn's `TurnStarted` so the TUI can echo it; a typed
+    /// message the TUI echoes itself.
     FollowUp {
         /// The turn the follow-up is about to start.
         turn_id: TurnId,
@@ -184,8 +181,8 @@ pub enum Event {
         text: String,
     },
 
-    /// The `plan` tool declared or advanced the plan (ADR 0009 §2). The whole
-    /// list travels each time, so the TUI holds the latest and nothing else.
+    /// The `plan` tool declared or advanced the plan (ADR 0009 §2). Carries
+    /// the whole list each time; the TUI keeps only the latest.
     PlanUpdated {
         /// The turn this belongs to.
         turn_id: TurnId,
@@ -193,9 +190,8 @@ pub enum Event {
         steps: Vec<PlanStep>,
     },
 
-    /// The `ask` tool needs an answer. Keyed by the tool call's own id, the
-    /// way a review is keyed by its own — a call has at most one round trip
-    /// outstanding (see `PendingReply`).
+    /// The `ask` tool needs an answer. Keyed by the call id: a call has at
+    /// most one round trip outstanding (see `PendingReply`).
     QuestionAsked {
         /// The `ask` call's id, which `Command::Answer` must echo.
         call_id: String,
@@ -203,89 +199,69 @@ pub enum Event {
         question: Question,
     },
 
-    /// A changeset is staged and about to be observed — by a `run`, or by
-    /// the turn ending — so the review opens (ADR 0009 §4). The one gate a
-    /// change passes on its way to disk.
+    /// A staged changeset is about to be observed (by a `run`, or the turn
+    /// ending), so the review opens (ADR 0009 §4).
     ReviewRequested {
         /// The review's id, which `Command::ReviewDecision` must echo.
         review_id: String,
         /// Every file the turn has staged.
         changeset: Changeset,
     },
-    /// How the review ended. Emitted by the dispatcher once the decision has
-    /// been acted on — files written, comments handed back, or the
-    /// changeset dropped — so the row the conversation keeps describes what
-    /// actually happened.
+    /// How the review ended. Emitted by the dispatcher after the decision is
+    /// acted on, so it describes what happened.
     ReviewClosed {
         /// What was written, commented on, or dropped.
         outcome: ReviewOutcome,
     },
 
-    /// A message from outside the turn/step lifecycle — the session
-    /// initialiser (aldwin-cli) rejecting an unknown slash command or
-    /// reporting a `/reload-config` result, for example. It exists so a
-    /// layer above core (which owns no other vehicle for reaching the TUI's
-    /// log) has one. Not turn/step-scoped and never appended to the
-    /// conversation log — this is UI-facing only.
-    ///
-    /// Core emits it in exactly one case, added with ADR 0006: a step that
-    /// ends the turn having produced nothing the developer can see. That
-    /// used to render as a blank turn and read as a hang; the floor is that
-    /// a turn always says *something*, even if only that it said nothing.
+    /// A sentence for the developer, outside the turn/step lifecycle and
+    /// never logged. aldwin-cli sends it (e.g. an unknown slash command);
+    /// core sends it for a turn with nothing visible (ADR 0006), dropped
+    /// tool calls, a command refused mid-turn, and a completed resume.
     Notice {
         /// The sentence to show.
         message: String,
     },
 
-    /// `Command::ClearHistory` landed and `ConversationLog` was wiped — the
-    /// TUI wipes its own rendered log in step.
+    /// `Command::ClearHistory` wiped `ConversationLog`; the TUI wipes its own.
     HistoryCleared,
 
-    /// `Command::Resume` landed: `ConversationLog` now holds `records` and
-    /// nothing else. The exact counterpart of `HistoryCleared` — the TUI
-    /// rebuilds its own rendered log from these, the way it wipes its own on
-    /// a clear, rather than being told separately by whoever read the file.
+    /// `Command::Resume` replaced `ConversationLog` with `records`; the TUI
+    /// rebuilds its own log from them.
     ///
-    /// The records travel in the event rather than the TUI reading the
-    /// transcript itself: aldwin-tui depends only on core and has no
-    /// filesystem access by design, the same reason the model catalogue is
-    /// handed to it rather than looked up.
+    /// The records travel in the event because aldwin-tui has no filesystem
+    /// access by design.
     HistoryLoaded {
         /// The resumed conversation, in order.
         records: Vec<LogRecord>,
     },
 
-    /// `/theme light|dark` — the raw config value; aldwin-tui parses it. Core
-    /// never emits this: like `Notice`, it exists because aldwin-cli's
-    /// slash-command interceptor has no other vehicle to reach the TUI.
+    /// `/theme light|dark`. Emitted only by aldwin-cli's interceptor, never
+    /// by core.
     ThemeChanged {
         /// The raw value, for aldwin-tui to parse.
         theme: String,
     },
 
-    /// `/model` swapped the client the session is running on. Same "a layer
-    /// above core has no other vehicle" reasoning as `Notice` and
-    /// `ThemeChanged`: core is generic over `C: LlmClient` and has no idea
-    /// its client is swappable, so aldwin-cli's interceptor rebuilds the
-    /// client behind the trait and announces the result here.
+    /// `/model` swapped the session's client. Emitted only by aldwin-cli's
+    /// interceptor, which rebuilds the client behind `LlmClient`; core does
+    /// not know it is swappable.
     ///
-    /// `model` is the bare model id, the same value the session started
-    /// with; `provider` is the catalogue id of the row it belongs to, or
-    /// `None` when `provider.yaml` points at an endpoint the catalogue does
-    /// not know — the model picker opens on that pair, so both halves have to
-    /// travel together. `context_window` is that model's, when the catalogue
-    /// knows it, for the context bar.
+    /// The model picker opens on `provider` and `model`, so both must travel
+    /// together.
     ModelChanged {
-        /// The catalogue id of the model's provider, if the catalogue knows it.
+        /// The catalogue id of the model's provider; `None` when
+        /// `provider.yaml` points at an endpoint the catalogue does not know.
         provider: Option<String>,
-        /// The bare model id.
+        /// The bare model id, as the session started with.
         model: String,
-        /// The model's context window in tokens, if the catalogue knows it.
+        /// The model's context window in tokens, if the catalogue knows it;
+        /// drives the context bar.
         context_window: Option<u32>,
     },
 }
 
-// ── Commands (accepted downward) ─────────────────────────────────────────────
+// Commands, accepted downward.
 
 /// What the TUI (or aldwin-cli's interceptor) asks of the agent.
 #[derive(Debug, Clone, PartialEq)]
@@ -312,27 +288,14 @@ pub enum Command {
         /// Approve, comment or discard.
         decision: ReviewDecision,
     },
-    /// `/clear` — wipes `ConversationLog` so the next turn starts from a
-    /// blank slate. Refused with a `Notice` if received mid-turn, same as
-    /// `Submit` mid-turn: there's no sound meaning for "forget everything"
-    /// while a turn is still in flight using that same history.
+    /// `/clear`: wipes `ConversationLog`. Refused with a `Notice` mid-turn.
     ClearHistory,
 
-    /// `/resume` — the loaded transcript replaces `ConversationLog`, so the
-    /// next turn's `messages_from_log()` sees the resumed conversation.
-    /// Core acknowledges with `Event::HistoryLoaded`.
+    /// `/resume`: the loaded transcript replaces `ConversationLog`; core
+    /// answers with `Event::HistoryLoaded`. Refused with a `Notice` mid-turn.
     ///
-    /// It carries the records as well as the `SessionId` because core owns
-    /// no filesystem dependency: aldwin-cli's interceptor reads the file (it
-    /// holds the `Config` that knows where history lives) and core is handed
-    /// the result. The id goes on to the `RecordSink`, which continues that
-    /// session's transcript — at the moment core acts, not before. Same
-    /// division as `ClearHistory`, which core acts on without knowing what
-    /// `/clear` is.
-    ///
-    /// Refused with a `Notice` mid-turn, exactly as `ClearHistory` is:
-    /// there is no sound meaning for "replace the history" while a turn is
-    /// in flight using it.
+    /// aldwin-cli reads the records, since core has no filesystem
+    /// dependency; `session` goes to the `RecordSink` only when core acts.
     Resume {
         /// The conversation being resumed, which the sink continues.
         session: SessionId,
@@ -341,11 +304,10 @@ pub enum Command {
     },
 }
 
-// ── Log record ───────────────────────────────────────────────────────────────
+// Log record.
 
-/// What gets appended to the conversation log. Mirrors the event set but stripped
-/// of streaming-only entries (TextDelta and ThinkingStart/End accumulate into
-/// AssistantMessage before being committed).
+/// An entry in the conversation log. No streaming-only entries: deltas are
+/// committed accumulated, as `AssistantMessage` and `Thinking`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LogRecord {
@@ -370,10 +332,9 @@ pub enum LogRecord {
         /// The whole text.
         text: String,
     },
-    /// A completed extended-thinking block. Persisted because a resumed
-    /// session that dropped it would send the provider an assistant turn
-    /// whose tool call has no thinking in front of it, which is rejected —
-    /// ADR 0006 §3.
+    /// A completed extended-thinking block. Must be persisted: a resumed
+    /// tool call without its thinking is rejected by the provider (ADR 0006
+    /// §3).
     Thinking {
         /// The turn this belongs to.
         turn_id: TurnId,

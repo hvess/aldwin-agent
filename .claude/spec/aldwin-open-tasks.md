@@ -72,8 +72,6 @@ contradicts) and the entry says so before it goes.
      sandboxed `sed --version` reports a GNU `sed` as BSD.
    - `crates/cli/src/git_shim.rs` `install` passes `current_exe()` to
      `real_git` uncanonicalised; `exec_real_git` canonicalises.
-   - `crates/llm/src/transport.rs`: the idle-timeout error says 60s whatever
-     `with_idle_timeout` set.
    - `crates/config/src/history.rs` `SessionSummary::title`: a first
      message of blank lines gives an empty title, not `(untitled)`.
    - `crates/tools/src/tools/ask.rs`: a yes and a no are asked for in the

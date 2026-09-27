@@ -331,6 +331,33 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         ));
     }
 
+    /// Regression: the message said 60s whatever the timeout was.
+    #[tokio::test]
+    async fn a_stalled_stream_names_the_timeout_that_ran_out() {
+        let first = r#"event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+"#;
+        let server = test_server::spawn(vec![Canned::SseThenStall(first.to_string())]);
+        let client = client_at(&server, Duration::from_millis(50));
+
+        let events = collect(&client, &empty_messages()).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(Err(LlmError::StreamInterrupted(m))) if m.contains("for 50ms")
+            ),
+            "{:?}",
+            events.last()
+        );
+    }
+
     #[tokio::test]
     async fn retries_exhaust_into_a_terminal_error() {
         let server = test_server::spawn(vec![

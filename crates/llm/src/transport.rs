@@ -201,7 +201,10 @@ impl Transport {
 
                 loop {
                     let read = match tokio::time::timeout(self.idle_timeout, sse.next()).await {
-                        Err(_elapsed) => Err("idle timeout: no SSE activity for 60s".to_string()),
+                        Err(_elapsed) => Err(format!(
+                            "idle timeout: no SSE activity for {:?}",
+                            self.idle_timeout
+                        )),
                         Ok(None) => Err(format!("stream closed before {}", D::STEP_END)),
                         Ok(Some(Err(e))) => Err(format!("SSE framing error: {e}")),
                         Ok(Some(Ok(raw))) if raw.data.is_empty() => continue,

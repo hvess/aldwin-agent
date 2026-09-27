@@ -65,9 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/cli/src/bootstrap.rs` `git_branch` reads `<dir>/.git/HEAD`; in
-     a git worktree `.git` is a file, so it names an outer checkout's
-     branch.
    - `crates/cli/src/context.rs` `platform_facts`: any failure to start the
      sandboxed `sed --version` reports a GNU `sed` as BSD.
    - `crates/cli/src/git_shim.rs` `install` passes `current_exe()` to

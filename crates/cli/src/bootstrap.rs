@@ -143,17 +143,27 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
         .collect()
 }
 
-/// The launch card's `Branch`: the nearest ancestor's `.git/HEAD`, read
-/// without running git. A detached head is its first 8 hex digits.
+/// The launch card's `Branch`: the nearest checkout's `HEAD`, read without
+/// running git. A detached head is its first 8 hex digits. Never falls back
+/// to an outer checkout: its branch is not this one's.
 fn git_branch(dir: &Path) -> Option<String> {
-    dir.ancestors().find_map(|dir| {
-        let head = std::fs::read_to_string(dir.join(".git").join("HEAD")).ok()?;
-        let head = head.trim();
-        Some(
-            head.strip_prefix("ref: refs/heads/")
-                .map_or_else(|| head.chars().take(8).collect(), str::to_string),
-        )
-    })
+    let git = dir
+        .ancestors()
+        .map(|dir| dir.join(".git"))
+        .find(|git| git.exists())?;
+    // In a worktree or submodule `.git` is a file naming the real one.
+    let git = match std::fs::read_to_string(&git) {
+        Ok(link) => git
+            .parent()?
+            .join(link.trim().strip_prefix("gitdir:")?.trim()),
+        Err(_) => git,
+    };
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = head.trim();
+    Some(
+        head.strip_prefix("ref: refs/heads/")
+            .map_or_else(|| head.chars().take(8).collect(), str::to_string),
+    )
 }
 
 /// `CLAUDE.md` and `AGENTS.md` at the project root, whichever exist. Read
@@ -720,5 +730,31 @@ mod tests {
             Some("c82a5db0"),
             "detached, the short commit"
         );
+    }
+
+    /// Regression: inside a worktree nested in its main checkout, the main
+    /// checkout's branch was shown.
+    #[test]
+    fn a_worktree_shows_its_own_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = repo.path().join(".git");
+        let linked = git.join("worktrees/feature");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(linked.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        let tree = repo.path().join("worktrees/feature");
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        std::fs::write(tree.join(".git"), format!("gitdir: {}\n", linked.display())).unwrap();
+        assert_eq!(git_branch(&tree.join("src")).as_deref(), Some("feature"));
+
+        std::fs::write(tree.join(".git"), "gitdir: ../../.git/worktrees/feature\n").unwrap();
+        assert_eq!(
+            git_branch(&tree).as_deref(),
+            Some("feature"),
+            "a relative gitdir is read from the worktree"
+        );
+
+        std::fs::write(tree.join(".git"), "not a link\n").unwrap();
+        assert_eq!(git_branch(&tree), None, "never the main checkout's branch");
     }
 }

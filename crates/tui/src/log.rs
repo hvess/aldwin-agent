@@ -1,12 +1,7 @@
-//! What the conversation is made of, one entry per row group the design
-//! draws: the echoed prompt, a sentence from the agent, a disclosure of
-//! work, the plan, a settled question, the row a review leaves behind, and
-//! a failure said as a sentence.
+//! The conversation log's entries, one per row group the design draws.
 //!
-//! Append-only per aldwin-tui.md, with three entries that are updated in
-//! place because the design draws them that way: `Work` gains items as
-//! calls complete, `Plan` is replaced whenever the `plan` tool speaks, and
-//! `Question` gains its answer.
+//! Append-only (aldwin-tui.md) except three updated in place: `Work` gains
+//! items, `Plan` is replaced, `Question` gains its answer.
 
 use std::borrow::Cow;
 
@@ -20,69 +15,67 @@ pub enum LogEntry {
         /// The message as it was sent.
         text: String,
     },
-    /// A sentence — or several — from the agent. Markdown: fences and
-    /// tables render, everything else is prose.
+    /// The agent's prose, as markdown.
     AssistantText {
         /// The text so far; streaming deltas append to it.
         text: String,
     },
-    /// The work of one step, collapsed to a summary (`Read 3 files · Ran
-    /// 6 tests`) that Space opens into exact paths and counts.
+    /// One step's work, a summary (`Read 3 files · Ran 1 command`) that
+    /// Space opens.
     Work {
-        /// The calls of the step, in the order they were asked for.
+        /// The step's calls, in the order asked.
         items: Vec<WorkItem>,
-        /// Whether the disclosure is open onto its items.
+        /// Whether the disclosure is open.
         open: bool,
     },
-    /// The plan as the `plan` tool last stated it. One per turn, replaced
-    /// in place.
+    /// The plan as the `plan` tool last stated it; one per turn, replaced in
+    /// place.
     Plan {
-        /// The steps, in order, each with its state.
+        /// The steps, in order.
         steps: Vec<PlanStep>,
     },
-    /// A question the agent asked through `ask`, and how it was answered
-    /// once it was. Drawn as the question, then ` · ` and the answer.
+    /// A question asked through `ask`, drawn as the question, ` · `, and
+    /// the answer.
     Question {
         /// The question as the agent put it.
         question: String,
         /// The answer, once one is given.
         answer: Option<String>,
     },
-    /// What a review left behind: `✓ Saved 3 files · 1 comment resolved`.
+    /// A review's result row: `✓ Saved 3 files · 1 comment resolved`.
     Review {
-        /// What the developer decided and what it wrote.
+        /// The decision and what it wrote.
         outcome: ReviewOutcome,
     },
-    /// A message from outside the turn — the interceptor answering a slash
-    /// command, a startup fact. A sentence in `label2`.
+    /// A message from outside the turn (a slash command's answer, a startup
+    /// fact), in `label2`.
     Notice {
         /// The sentence to show.
         message: String,
     },
-    /// A stop asked for and not yet done. Drawn as a notice; the turn's
-    /// end replaces it with one `Stopped.`.
+    /// A stop requested but not done; the turn's end replaces it with
+    /// `Stopped.`.
     Stopping {
         /// The sentence to show.
         message: String,
     },
-    /// Something failed: a turn that errored, a cancelled turn, a provider
-    /// retry. A sentence in `label`, the detail one disclosure below
-    /// (ADR 0009 §5: no red, no glyph).
+    /// An errored or cancelled turn, or a provider retry: a sentence in
+    /// `label` with the detail disclosed below (ADR 0009 §5: no red, no
+    /// glyph).
     Failure {
-        /// The sentence that says what failed.
+        /// What failed.
         message: String,
-        /// The underlying error text, folded below the sentence.
+        /// The underlying error text.
         detail: Option<String>,
         /// Whether the detail is disclosed.
         open: bool,
     },
-    /// The turn ended cleanly — the blank row between turns.
+    /// The blank row after a turn that ended cleanly.
     TurnBreak,
 }
 
 impl LogEntry {
-    /// Whether Space has something here to open: a work disclosure, or a
-    /// failure's detail.
+    /// Whether Space can open something here.
     pub(crate) fn has_details(&self) -> bool {
         matches!(
             self,
@@ -94,8 +87,7 @@ impl LogEntry {
         )
     }
 
-    /// A provider retry, said as a failure with the provider's own message
-    /// as the detail.
+    /// A provider retry as a `Failure`, the provider's message as detail.
     pub fn retry(info: &RetryInfo) -> Self {
         let message = match info.status {
             Some(status) => format!(
@@ -126,7 +118,7 @@ fn ordinal(n: u32) -> String {
     }
 }
 
-/// What a call did, in the design's words — outcomes, never tool names.
+/// What a call did, as an outcome, never a tool name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
     /// A file was read.
@@ -135,10 +127,10 @@ pub enum Verb {
     Changed,
     /// A shell command was run.
     Ran,
-    /// The design's own verb for a lookup — and eight characters, which is
-    /// what fits the 9-cell `--detail-col` with its gap.
+    /// A lookup. Eight characters, the most a word can have to fit the
+    /// 9-cell `--detail-col` with its gap.
     Searched,
-    /// A tool the vocabulary has no word for: an MCP server's.
+    /// Any other tool, such as an MCP server's.
     Used,
 }
 
@@ -164,8 +156,9 @@ impl Verb {
         }
     }
 
-    /// The fact a finished call reports, from its result: a line count for
-    /// a read, `ok` for a run that exited cleanly, otherwise the first line.
+    /// A finished call's fact: a line count for a read, `ok` for a run,
+    /// `staged` for an edit; on failure or another verb, the result's first
+    /// line.
     pub fn fact(self, content: &str, failed: bool) -> String {
         match (self, failed) {
             (Verb::Read, false) => plural(content.lines().count(), "line"),
@@ -176,27 +169,25 @@ impl Verb {
     }
 }
 
-/// One call inside a `Work` disclosure — what it did, what it was pointed
-/// at, and the fact that came back (`412 lines`, `7 matches`, `exit 1`).
+/// One call inside a `Work` disclosure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkItem {
-    /// The tool call's id, which later events use to find this row.
+    /// The tool call's id; later events find the row by it.
     pub call_id: String,
     /// What kind of work the call was.
     pub verb: Verb,
-    /// What it was pointed at: a path, a command, a symbol.
+    /// A path, a command or a symbol.
     pub target: String,
-    /// Right-flush, once the call has finished.
+    /// The result fact (`412 lines`, `exit 1`), drawn right-flush; `None`
+    /// until the call finishes.
     pub fact: Option<String>,
-    /// Whether the call's result was an error, counted in the summary.
+    /// Whether the result was an error; counted in the summary.
     pub failed: bool,
 }
 
 impl WorkItem {
-    /// The verb and target for a tool call, from its name and input — the
-    /// one place a tool's name is read. `None` for `plan` and `ask`, which
-    /// are not work: the plan is drawn as itself and a question is its own
-    /// row.
+    /// The verb and target for a tool call; the only place a tool name is
+    /// read. `None` for `plan` and `ask`, which have their own entries.
     pub fn describe(name: &str, input: &serde_json::Value) -> Option<(Verb, String)> {
         let field = |key: &str| {
             input
@@ -226,9 +217,8 @@ impl WorkItem {
     }
 }
 
-/// The collapsed summary of a `Work` entry: one clause per verb, counted,
-/// joined with ` · `, in the order the verbs first appear. `Read 3 files ·
-/// Ran 2 commands`.
+/// A `Work` entry's summary: one counted clause per verb, in first-seen
+/// order, joined with ` · `.
 pub fn summarise_work(items: &[WorkItem]) -> String {
     let mut counts: Vec<(Verb, usize, usize)> = Vec::new();
     for item in items {
@@ -256,7 +246,7 @@ pub fn summarise_work(items: &[WorkItem]) -> String {
         .join(" · ")
 }
 
-/// `1 file`, `3 files` — every count the app writes.
+/// `1 file`, `3 files`: every count the app writes goes through this.
 pub(crate) fn plural(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
@@ -265,21 +255,14 @@ pub(crate) fn plural(n: usize, noun: &str) -> String {
     }
 }
 
-/// The sentence a failed turn leads with: what happened, in plain words, and
-/// what you can do about it (HIG, "Write clear error messages"). The error
-/// itself — status, body, retries — is the detail one disclosure below,
-/// exact and unabridged (ADR 0009 §5), so none of it is repeated here.
+/// The sentence a failed turn leads with: what happened and what to do.
+/// Status, body and retries stay in the detail (ADR 0009 §5).
 ///
-/// `TurnEndReason::Error` carries a string, so this reads `LlmError`'s
-/// `Display` (`aldwin-core`, `client.rs`): `network error: …`,
-/// `provider error 429: …`, `stream interrupted: …`, `terminal error after
-/// N attempts: …`. Anything else — an error from the loop itself — gets the
-/// plain fallback. Open-tasks 1 is carrying the kind instead.
+/// Parses `LlmError`'s `Display` (`crates/core/src/client.rs`); keep the
+/// prefixes in sync. Open-tasks 1 would carry the kind instead.
 ///
-/// Zero attempts is the one case whose message is the sentence already:
-/// nothing was sent, because Aldwin itself could not reach a model — none
-/// configured, or an account-or-key provider with neither (ADR 0012) — and
-/// said so in words written for this row.
+/// Zero attempts means Aldwin sent nothing (no model, or ADR 0012's no
+/// account and no key), and the message is already the sentence.
 pub fn failure_sentence(error: &str) -> Cow<'_, str> {
     match error.strip_prefix("terminal error after 0 attempts: ") {
         Some(said) => Cow::Borrowed(said),
@@ -287,10 +270,9 @@ pub fn failure_sentence(error: &str) -> Cow<'_, str> {
     }
 }
 
-/// The sentence for an error that came back from a provider. Kept apart
-/// from [`failure_sentence`] so the zero-attempt rule applies to the whole
-/// error only: a provider's own message that happens to begin the same way
-/// is still a provider's message, not a sentence of Aldwin's.
+/// The sentence for a provider's error. Separate from [`failure_sentence`]
+/// so the zero-attempt rule applies only to the whole error, never to a
+/// nested provider message.
 fn provider_sentence(error: &str) -> &'static str {
     const FALLBACK: &str = "The turn stopped before it finished. The detail says why.";
     if error.starts_with("network error:") {
@@ -300,7 +282,7 @@ fn provider_sentence(error: &str) -> &'static str {
         return "The reply was cut off partway. Send again to have it retried.";
     }
     if let Some(rest) = error.strip_prefix("terminal error after ") {
-        // Retries exhausted: say why they were needed, if the last one says.
+        // Retries exhausted: use the last error's sentence if it has one.
         return match rest
             .split_once(": ")
             .map(|(_, last)| provider_sentence(last))
@@ -339,8 +321,7 @@ pub fn first_line(content: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    /// No status code, no body, no retry count on the surface — each is in
-    /// the detail — and every sentence says what to do next.
+    /// No status, body or retry count in the sentence; those are the detail.
     #[test]
     fn a_failure_reads_as_what_happened_and_what_to_do() {
         let cases = [
@@ -387,9 +368,8 @@ mod tests {
         }
     }
 
-    /// Nothing was sent, and the message is Aldwin's own: it is the
-    /// sentence, whole — not "the provider kept failing", which would send
-    /// the developer to wait for a provider that was never asked.
+    /// Guards against "the provider kept failing" for a provider never
+    /// asked.
     #[test]
     fn a_turn_aldwin_could_not_send_leads_with_aldwins_own_sentence() {
         let said = "No x.ai account is connected and XAI_API_KEY is not set. Connect one with /connect xai, or set XAI_API_KEY and start Aldwin again.";
@@ -397,8 +377,7 @@ mod tests {
             failure_sentence(&format!("terminal error after 0 attempts: {said}")),
             said
         );
-        // A provider's message that begins the same way, after real
-        // attempts, is still the provider's, and never the headline.
+        // A nested zero-attempt prefix after real attempts is the provider's.
         assert_eq!(
             failure_sentence(
                 "terminal error after 4 attempts: terminal error after 0 attempts: pay here"

@@ -1,6 +1,5 @@
-//! The frame's fixed furniture: the field, the comment field, and the
-//! footer with its context bar. Everything here writes to a `Frame`
-//! directly rather than returning rows — none of it scrolls.
+//! The bottom band: the field, the comment field, and the footer with its
+//! context bar. Draws to the `Frame` directly; none of it scrolls.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -19,31 +18,27 @@ use crate::log::LogEntry;
 use crate::palette::Palette;
 use crate::tokens::{gauge_filled, GAUGE_SEGMENTS};
 
-/// The most rows the field may take, however long the draft is. Past this
-/// the draft scrolls inside the band, keeping the caret in view.
+/// The field's maximum height; a longer draft scrolls with the caret in view.
 pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
 
-/// The cell the caret's cursor sits in after the last character, held back
-/// from the draft's column so a row filled to its last character still has
-/// somewhere to put it.
+/// A cell reserved after the draft's column, so the caret has a place on a
+/// full row.
 const CARET_LEN: u16 = 1;
 
-/// Ticks the caret stays on, then off: motion.css's `--caret-period` of
-/// 1.05s, stepped, over `run.rs`'s 120ms tick. The design's motion tokens
-/// are not generated into `tokens.rs`, so this is the one place the
-/// period is restated.
+/// Ticks per caret phase: motion.css's `--caret-period` (1.05s) over
+/// `run.rs`'s 120ms tick. Motion tokens are not generated into `tokens.rs`;
+/// keep in step with both by hand.
 const CARET_TICKS: u64 = 9;
 
-/// The draft, wrapped to the field's column — measured **once** per frame
-/// and used for everything downstream of that measurement.
+/// The draft wrapped to the field's column, measured once per frame.
 pub(super) struct Composer {
     layout: draft::Layout,
     width: u16,
 }
 
 impl Composer {
-    /// `frame_width` less the field's two margins, the mark column, the
-    /// caret's cell, and `reserve` more on the right for an action.
+    /// Wraps to `frame_width` less the margins, the mark column, the caret's
+    /// cell, and `reserve` cells for an action.
     pub(super) fn new(input: &str, frame_width: u16, reserve: u16) -> Self {
         let width = frame_width
             .saturating_sub(MARGIN_X as u16 * 2)
@@ -62,20 +57,18 @@ impl Composer {
     }
 }
 
-/// What the bottom band holds, and the rows it needs — decided once so the
-/// layout and the draw cannot disagree.
+/// What the bottom band holds, decided once so `height` and `draw` agree.
+/// Each variant's `height` must match the rows its `draw` lays out.
 pub(super) enum Bottom {
-    /// blank / field / blank / footer / blank, the field with its action
-    /// when it has one.
+    /// blank / field / blank / footer / blank.
     Field(Composer, Option<Action>),
-    /// blank / question / detail / blank / options / blank, then blank /
-    /// footer / blank on the window ground.
+    /// Question panel, then blank / footer / blank.
     Question { rows: u16 },
-    /// blank / the command panel / field / blank / footer / blank — the
-    /// panel sits on the field, as frame F draws it.
+    /// blank / command panel / field / blank / footer / blank; the panel
+    /// sits directly on the field (frame F).
     Commands { rows: u16, composer: Composer },
-    /// The agent's question, answered in words: the question alone on
-    /// `--panel`, then blank / field / blank / footer / blank beneath it.
+    /// The agent's question answered in words: the question panel, then
+    /// blank / field / blank / footer / blank.
     Answering { rows: u16, composer: Composer },
 }
 
@@ -182,8 +175,8 @@ impl Bottom {
     }
 }
 
-/// The field's right-hand action: `Approve  ⌃↩`, `Send 1 Comment  ⌃↩`.
-/// Grey until it can run.
+/// The field's right-hand action, e.g. `Approve  ⌃↩`; accent only when
+/// `ready`.
 pub(super) struct Action {
     pub label: String,
     pub key: &'static str,
@@ -192,16 +185,14 @@ pub(super) struct Action {
 
 impl Action {
     pub fn width(&self) -> u16 {
-        // label, two spaces, key, and the 1-cell pad the frame keeps.
+        // Label, two spaces, key, and the frame's 1-cell pad.
         (self.label.width() + 2 + self.key.width() + 1) as u16
     }
 }
 
-/// The field: `margin: 0 3ch`, on `--field`, the accent `›` in the mark
-/// column, then the draft, with an optional action flush right. An empty
-/// field is the `›` and the caret and nothing else — no placeholder in any
-/// state. In the commands mode the draft is the `/` and the filter, and
-/// the current command completes it in grey (frame F).
+/// The field: the accent `›`, the draft, and an optional action flush
+/// right. No placeholder in any state. In commands mode the draft is `/`
+/// and the filter, completed by the current command (frame F).
 pub(super) fn draw_field(
     frame: &mut Frame,
     area: Rect,
@@ -225,10 +216,6 @@ pub(super) fn draw_field(
         )
     };
 
-    // The commands mode: the `›` as ever, then what was typed — `/` and
-    // the filter, in `label` until it spells a real command and in the
-    // accent once it does — the caret, and the current command's rest in
-    // `label3`.
     if let Mode::Commands(menu) = &app.mode {
         let typed = format!("/{}", menu.filter);
         let typed_fg = if menu.spells_a_command() {
@@ -306,8 +293,8 @@ pub(super) fn draw_field(
         })
         .collect();
 
-    // The action, or `4 lines`, flush right on the first row — whole or
-    // not at all.
+    // The action, or `N lines`, flush right on the first row: whole or not
+    // at all.
     if let Some(first) = lines.first_mut() {
         let used: usize = first.spans.iter().map(|s| s.content.width()).sum();
         let room = (inner.width as usize).saturating_sub(used);
@@ -346,11 +333,9 @@ fn caret_on(tick: u64) -> bool {
     (tick / CARET_TICKS).is_multiple_of(2)
 }
 
-/// The caret: the design's 2px accent bar between two cells, which a cell
-/// cannot draw and the glyph table has no mark for, so it is the
-/// terminal's own cursor — a bar in the accent, set up by `run.rs` — put
-/// on the cell whose left edge it stands at. Shown on the tick's shown
-/// half only: the blink is `--caret-period`, not the terminal's own.
+/// The caret is the terminal's cursor (an accent bar, set up by `run.rs`):
+/// the design's 2px bar between cells has no glyph. Blinks on
+/// `--caret-period` via `caret_on`, not the terminal's own blink.
 fn place_caret(frame: &mut Frame, x: u16, y: u16, tick: u64) {
     if caret_on(tick) {
         frame.set_cursor_position((x, y));
@@ -370,8 +355,7 @@ impl KeyHint {
     }
 }
 
-/// The footer's leading status: a word, or `● Working…` with the running
-/// amber dot in the mark column.
+/// The footer's leading status word.
 enum Status {
     Ready,
     Working,
@@ -380,14 +364,12 @@ enum Status {
     None,
 }
 
-/// What the footer says now — only the keys that work in this state.
+/// The footer's content: only keys that work in the current state.
 struct Footer {
     status: Status,
-    /// The keys of the moment, after the status word.
     keys: Vec<KeyHint>,
-    /// `/  Commands`: not a key of the moment but the way to everything
-    /// else, and frame A sets it apart — right-flush, one group gap before
-    /// the context bar.
+    /// `/  Commands`, right-flush one group gap before the context bar
+    /// (frame A).
     aside: Option<KeyHint>,
 }
 
@@ -401,15 +383,14 @@ impl Footer {
     }
 }
 
-/// Escape, named as every frame names it: the word, not `⎋`.
+/// Escape as every frame names it: the word, not `⎋`.
 const ESC: &str = "esc";
 
-/// Space still opens and closes the turn's work on an empty field, but no
-/// footer names it: frames B, C and J offer only the keys of the moment,
-/// and the disclosure's own `›` or `⌄` is what says it opens.
+/// The footer for `app`'s state. Space toggles the turn's work on an empty
+/// field but is deliberately unnamed (frames B, C, J): the disclosure's
+/// `›`/`⌄` says it opens.
 fn footer_state(app: &App) -> Footer {
-    // A list reads as frame E draws the agent's question: `↑↓  Choose` and
-    // `↩  Select`. A list you can dismiss adds the way out, `esc  Close`.
+    // Frame E's list keys; a dismissible list adds `esc  Close`.
     let choose = [KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")];
     let dismissible = || {
         let mut keys = choose.to_vec();
@@ -417,15 +398,13 @@ fn footer_state(app: &App) -> Footer {
         keys
     };
     match &app.mode {
-        // The agent is waiting on the answer, and its question cannot be
-        // dismissed — "Chat about this" is on the list itself (frame E).
+        // The agent's question cannot be dismissed; "Chat about this" is an
+        // option on the list (frame E).
         Mode::Question(asking) if matches!(asking.asker, Asker::Agent { .. }) => {
             Footer::new(Status::Waiting, choose.to_vec())
         }
-        // A list the developer opened — `/resume`, `/model`, `/theme` —
-        // reads as frame F's command list does: no status word, since the
-        // design never says "Ready" over an open panel and nothing is
-        // waiting to be answered (the developer's call, 2026-09-27).
+        // A list the developer opened (`/resume`, `/model`, `/theme`): no
+        // status word, as frame F's command list.
         Mode::Question(_) => Footer::new(Status::None, dismissible()),
         // Frame F: no status word, and a command is run, not selected.
         Mode::Commands(_) => Footer::new(
@@ -437,10 +416,9 @@ fn footer_state(app: &App) -> Footer {
             ],
         ),
         Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, dismissible()),
-        // Shift and Tab are words, as Space is: the glyph table has no mark
-        // for either, and "if it is not in the table, do not draw one." A
-        // click is named too: the mouse is the quick way to a run of lines
-        // (ADR 0010), and a key list that left it out would hide it.
+        // Shift, Tab and Space are words: the closed glyph table has no
+        // mark for them. The mouse is named because it is the main way to
+        // select (ADR 0010).
         Mode::Review(r) if r.keys_shown => {
             let mut keys = vec![
                 KeyHint::new("↑↓", "Scroll"),
@@ -458,7 +436,8 @@ fn footer_state(app: &App) -> Footer {
             Footer::new(Status::None, keys)
         }
         Mode::Review(_) => Footer::new(Status::None, vec![KeyHint::new("?", "Keys")]),
-        // Before `Working…`: the turn runs, but it is waiting on you.
+        // Must precede `Working…`: the turn is running but waits on the
+        // developer.
         Mode::Conversation if app.answering.is_some() => Footer::new(
             Status::Waiting,
             vec![KeyHint::new("↩", "Send"), KeyHint::new(ESC, "Back")],
@@ -469,8 +448,7 @@ fn footer_state(app: &App) -> Footer {
         Mode::Conversation if !app.draft.is_empty() => {
             Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
         }
-        // Frame J: after a turn that saved, the footer is the context bar
-        // alone.
+        // Frame J: after a saved turn, the context bar alone.
         Mode::Conversation if just_saved(app) => Footer::new(Status::None, Vec::new()),
         Mode::Conversation => Footer {
             status: Status::Ready,
@@ -480,9 +458,8 @@ fn footer_state(app: &App) -> Footer {
     }
 }
 
-/// Frame J: after a turn that saved, the field offers `Send  ↩` at its
-/// right edge, grey until there is something to send. No other frame's
-/// field carries it.
+/// Frame J's `Send  ↩`: offered on an idle field after a saved turn only,
+/// ready once there is a draft.
 fn send_action(app: &App) -> Option<Action> {
     let idle = matches!(app.mode, Mode::Conversation)
         && app.answering.is_none()
@@ -494,7 +471,7 @@ fn send_action(app: &App) -> Option<Action> {
     })
 }
 
-/// The last turn ended in an approve: it holds a `Saved` review row.
+/// Whether the current turn holds a `Saved` review row.
 fn just_saved(app: &App) -> bool {
     app.this_turn().iter().any(|e| {
         matches!(
@@ -506,9 +483,8 @@ fn just_saved(app: &App) -> bool {
     })
 }
 
-/// The footer: `padding: 0 3ch`, in `label2`. The status in the mark column
-/// and after it, the key groups `--group-gap` apart, and the context bar
-/// flush right.
+/// The footer, in `label2`: status, key groups `--group-gap` apart, and the
+/// context bar flush right.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
     let Footer {
@@ -517,9 +493,7 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         aside,
     } = footer_state(app);
     let dim = Style::default().fg(pal.label2);
-    // Every footer glyph is `label2`, as every footer in frames A–J draws
-    // it: the accent is for the action at the field's right edge, which is
-    // the one that is ready, not for a key the footer merely names.
+    // Never accent (frames A–J): blue is for the ready action in the field.
     let group = |key: KeyHint| {
         vec![
             Span::styled(key.glyph, dim),
@@ -538,8 +512,7 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("Waiting for you", dim),
         ]),
         Status::Working => {
-            // The dot is steady: the caret is the one thing the design
-            // animates (motion.css, "Nothing else animates").
+            // Steady: only the caret animates (motion.css).
             groups.push(vec![
                 Span::styled(
                     format!("{:<width$}", "●", width = MARK_COL),
@@ -552,11 +525,8 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     groups.extend(keys.into_iter().map(group));
 
-    // The context bar is never cut, and the status and the keys of the
-    // moment come before the aside: when the row cannot hold all three, the
-    // aside goes first — the way to the commands is `/` whether it is
-    // named or not. Then the last keys, whole: a key is named in full or
-    // not at all.
+    // When the row is short: the context bar is never cut; the aside is
+    // dropped first, then trailing key groups, whole.
     let width = area.width as usize;
     let bar = context_bar(app.status.context_percent(), pal);
     let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
@@ -586,8 +556,8 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
         left.extend(group);
     }
-    // The first group is the status, whose leading spaces are the mark
-    // column; a `Status::None` footer's first key sits right after them.
+    // `Status::None` is only the mark column's blank: drop the group gap
+    // after it so the first key sits where a status word would.
     if let (Some(first), Some(second)) = (left.first().cloned(), left.get(1).cloned()) {
         if first.content.trim().is_empty() && second.content.trim().is_empty() {
             left.remove(1);
@@ -607,9 +577,8 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(line)), area);
 }
 
-/// `Context ━━━━━━━━━━ 41%` — ten segments, the filled run ramping to
-/// full accent at its leading edge, the rest on `--track`. With nothing
-/// measured yet the bar is drawn empty at `0%`, as the launch frame does.
+/// `Context ━━━━━━━━━━ 41%`, coloured by `Palette::gauge` (`ContextBar.jsx`).
+/// `None` draws empty at `0%`, as the launch frame does.
 pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'static>> {
     let pct = percent.unwrap_or(0);
     let filled = gauge_filled(pct);
@@ -625,9 +594,8 @@ pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'stati
     spans
 }
 
-/// The comment field, two rows in place of the field while a selection is
-/// being commented on: the selection label on `--select`, the draft on
-/// `--field`, both with the accent `▎` edge.
+/// The comment field, two rows replacing the field while a selection is
+/// commented on: the label on `--select`, the draft on `--field`.
 pub(super) fn draw_comment_field(
     frame: &mut Frame,
     area: Rect,
@@ -695,8 +663,7 @@ pub(super) fn draw_comment_field(
         Style::default().fg(pal.accent).bg(pal.field),
     ));
     frame.render_widget(Paragraph::new(row).style(on_field), draft_row);
-    // After the `▎`, at the display column of the draft's `cursor`th
-    // character.
+    // `cursor` counts chars; the caret needs display cells.
     let column: usize = draft
         .chars()
         .take(cursor)

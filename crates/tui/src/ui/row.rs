@@ -1,18 +1,11 @@
-//! The one filled-row primitive every surface in the UI is built from.
-//!
-//! The echoed prompt's band, a fenced code block's row, a question's
-//! option row inset inside its panel and a blank spacer are all the same
-//! shape:
+//! The filled-row primitive every surface is built from:
 //!
 //! ```text
 //! │← margin →│← pad →│ content … fill │← margin →│
 //!  surround      bg                     surround
 //! ```
 //!
-//! Three numbers (margin, pad, bg) describe every one of them, and the
-//! content width they leave is `Row::avail`, computed once. Adding a surface
-//! is a new constructor, not another copy of the wrap → measure →
-//! pad-to-width loop.
+//! A new surface is a new constructor, not another wrap-and-pad loop.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -21,25 +14,20 @@ use unicode_width::UnicodeWidthStr;
 use super::grid::{Ctx, MARGIN_X};
 use super::wrap::wrap_line;
 
-/// Geometry and fill of one full-width row. `Copy`, so a caller holds one
-/// `Row` describing a surface and stamps out every row of it.
+/// Geometry and fill of one full-width row; one `Row` describes a surface.
 #[derive(Clone, Copy)]
 pub(super) struct Row {
-    /// Cells held off each edge of the column, painted in `surround` —
-    /// how far a box sits in from the surface it is quoted inside.
+    /// Cells off each edge of the column, painted in `surround`.
     margin: usize,
     surround: Color,
-    /// Cells of `bg` between the edge and the content — a fence's one cell
-    /// of padding.
+    /// Cells of `bg` on each side between the margin and the content.
     pad: usize,
-    /// The surface this row fills, edge to edge.
     bg: Color,
 }
 
 impl Row {
-    /// A band inset by `MARGIN_X` on each side — the echoed prompt's
-    /// `margin: 0 3ch` — with `surround` painted in the margins and no
-    /// padding of its own, so content starts at the band's edge.
+    /// A band inset `MARGIN_X` each side (the echoed prompt's
+    /// `margin: 0 var(--margin-x)`), no padding.
     pub fn band(bg: Color, surround: Color) -> Self {
         Self {
             margin: MARGIN_X,
@@ -49,10 +37,8 @@ impl Row {
         }
     }
 
-    /// A row inside a field — a fenced code block on `tint`. It has no
-    /// outline: nothing inside a window is stroked, so the only thing
-    /// marking the field's extent is the step between its own ground and
-    /// the surface it is quoted on.
+    /// A row filling the column edge to edge, such as a fenced code block on
+    /// `tint`. Never outlined: nothing inside a window is stroked.
     pub fn field(bg: Color) -> Self {
         Self {
             margin: 0,
@@ -62,8 +48,7 @@ impl Row {
         }
     }
 
-    /// Overrides how far the row sits in from each edge of its column —
-    /// frame E's option row, `margin: 0 1ch` inside the question panel.
+    /// Overrides the margin, e.g. frame E's option row (`margin: 0 1ch`).
     pub fn inset(self, cells: usize) -> Self {
         Self {
             margin: cells,
@@ -71,23 +56,15 @@ impl Row {
         }
     }
 
-    /// Overrides the cells of fill held between the row's edge and its
-    /// content. `CommandBlock.jsx` is the one surface that isn't on the
-    /// grid's own `MARGIN_X`: it is a field inset by `MARGIN_X` whose
-    /// *contents* start two cells further in (`padding-left: 18px`), so the
-    /// `$` lands on cell 5.
+    /// Overrides the padding, e.g. `CommandBlock.jsx`'s `padding-left: 18px`
+    /// that puts its `$` on cell 5.
     pub fn pad(self, cells: usize) -> Self {
         Self { pad: cells, ..self }
     }
 
-    /// Paints this row's own fill onto every span that didn't already ask
-    /// for a background of its own.
-    ///
-    /// Spans that *do* carry one (inline code's `tint`) are left exactly as
-    /// they are, which is what lets a caller mix a ground into an
-    /// otherwise-plain row. Done here because as the caller's job it was
-    /// quietly missed at three sites, and a span with no `bg` shows the
-    /// window's ground through the band.
+    /// Gives `bg` to every span without one; a span with its own (inline
+    /// code's `tint`) keeps it. Done here, not by callers: an unfilled span
+    /// shows the window's ground through the band.
     fn on_field(self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         spans
             .into_iter()
@@ -108,12 +85,8 @@ impl Row {
             .saturating_sub(2 * self.pad)
     }
 
-    /// Wraps `spans` to fit and returns one fully-built row per wrapped
-    /// line — each already `ctx.width` cells wide, inset, padded and
-    /// filled, so nothing downstream needs to wrap it again.
-    ///
-    /// A span that already carries a `bg` keeps it; one that doesn't gets
-    /// this row's fill (see [`Row::on_field`]).
+    /// Wraps `spans` and returns one built row per wrapped line, each
+    /// `ctx.width` cells wide and filled (see [`Row::on_field`]).
     pub fn build(self, spans: Vec<Span<'static>>, ctx: Ctx) -> Vec<Line<'static>> {
         let avail = self.avail(ctx.width);
         wrap_line(Line::from(spans), avail)
@@ -122,10 +95,9 @@ impl Row {
             .collect()
     }
 
-    /// Like [`Row::build`], for a row whose first span is a glyph column:
-    /// the rest wraps to what is left after `indent` cells, and every
-    /// continuation row is indented by `indent` so the text keeps one left
-    /// edge under itself rather than stepping back under the glyph.
+    /// Like [`Row::build`], but the first span is a glyph `indent` cells
+    /// wide and continuation rows are indented to align under the text.
+    /// Empty `spans` yields one blank row.
     pub fn build_indented(
         self,
         mut spans: Vec<Span<'static>>,
@@ -154,15 +126,13 @@ impl Row {
             .collect()
     }
 
-    /// A blank filled row — what an entry with no text of its own still
-    /// draws, so its band is not missing. Always exactly one row (empty
-    /// content never wraps).
+    /// One blank filled row.
     pub fn blank(self, ctx: Ctx) -> Line<'static> {
         self.assemble(Vec::new(), ctx)
     }
 
-    /// Wraps already-fitted `content` in this row's margins, padding and
-    /// fill, out to the column's full width.
+    /// Surrounds already-fitted `content` with margins, padding and fill to
+    /// the column's full width.
     fn assemble(self, content: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
         let width = ctx.width as usize;
         let content = self.on_field(content);
@@ -191,19 +161,9 @@ impl Row {
     }
 }
 
-/// A full-width band of `bg`, one row tall and carrying no glyph — the
-/// design system's replacement for every freestanding rule. Turn 13 settled
-/// separators as "a full row of a different ground, never a rule", and this
-/// is that row: the tonal step between the band and what sits either side
-/// of it *is* the boundary, so there is nothing to draw into the cells.
-///
-/// Painted as spaces rather than left empty because a `Line` shorter than
-/// the column would leave the cells past its end unstyled, and the
-/// render-snapshot suite asserts every painted cell carries a palette
-/// colour rather than the terminal's own default.
-///
-/// Not a `Row`: it fills the column edge to edge with no margin, padding or
-/// content of its own.
+/// A full-width row of `bg` with no glyph: the separator, since nothing is
+/// stroked. Painted as spaces because the render-snapshot tests require
+/// every cell to carry a palette colour.
 pub(super) fn band_row(bg: Color, ctx: Ctx) -> Line<'static> {
     Line::from(Span::styled(
         " ".repeat(ctx.width as usize),

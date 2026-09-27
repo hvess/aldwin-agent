@@ -1,6 +1,5 @@
-//! The full-window review (ADR 0009 §4) — the design's `ReviewHeader`,
-//! `FileTree`, `DiffRow` and `CommentField`, laid out as the four `G`–`I`
-//! frames draw them:
+//! The full-window review (ADR 0009 §4): the design's `ReviewHeader`,
+//! `FileTree`, `DiffRow` and `CommentField`, laid out as frames G–I:
 //!
 //! ```text
 //! blank
@@ -15,9 +14,7 @@
 //! blank
 //! ```
 //!
-//! No stroke anywhere: the tree is its ground, the current row is
-//! `--field`, a selection is the accent `▎` edge and brighter text, and
-//! added and removed rows keep their own grounds.
+//! No stroke anywhere: every boundary is a change of ground.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -43,8 +40,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(review) = app.review() else { return };
     let (title, summary) = (review_title(app), review_summary(app));
 
-    // The bottom band: the field, or the comment field, or the discard
-    // question.
+    // Bottom band height: the discard question, the comment field or the
+    // field; must match the draw below.
     let typed = !app.draft.text().trim().is_empty();
     let field_rows: u16 = match (&review.confirm, review.commenting()) {
         (Some(list), _) => question::panel_rows(&review.discard_question(), Some(list), area.width),
@@ -70,7 +67,6 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     ])
     .areas(area);
 
-    // Header.
     let width = area.width as usize;
     let right = "Nothing is saved until you approve";
     let title_line = justified(
@@ -91,7 +87,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         width,
     );
     frame.render_widget(Paragraph::new(title_line), title_row);
-    // Frame G: the summary is `padding: 0 5ch`, the prose column.
+    // Frame G: the summary is on the prose column.
     let prose = Ctx::new(pal, area.width).body().width as usize;
     let summary_line = Line::from(vec![
         Span::raw(" ".repeat(BODY_X)),
@@ -99,7 +95,6 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     ]);
     frame.render_widget(Paragraph::new(summary_line), summary_row);
 
-    // Two panes.
     let tree_w = (TREE_W as u16).min(body.width / 2);
     let [tree, _, diff, _] = Layout::horizontal([
         Constraint::Length(tree_w),
@@ -119,7 +114,6 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     let Some(review) = app.review() else { return };
 
-    // The bottom band.
     match (&review.confirm, review.commenting()) {
         (Some(list), _) => question::draw_panel(
             frame,
@@ -149,12 +143,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     chrome::draw_footer(frame, footer, app);
 }
 
-/// The field's action, which says in words what `⌃↩` will do: `Send N
-/// Comments` in accent once there is anything to send — a line typed in
-/// the field is one — else `Approve` in accent once every file is read.
-/// Before that it is grey, and its words say what it waits for, so the
-/// colour is never the only thing that changes (HIG, "Accessibility":
-/// convey information with more than color alone).
+/// The field's action, naming what `⌃↩` will do: send the comments (a typed
+/// draft counts as one), else approve once every file is read. When not
+/// ready its words say what it waits for, so colour is never the only
+/// signal (HIG, "Accessibility").
 fn action_for(review: &Review, typed: bool) -> Action {
     let comments = review.comment_count() + usize::from(typed);
     let (label, ready) = if comments > 0 {
@@ -174,8 +166,8 @@ fn action_for(review: &Review, typed: bool) -> Action {
     }
 }
 
-/// The last thing you asked for, as the review's title — sentence case, no
-/// trailing stop.
+/// The first line of the developer's last non-command message, without a
+/// trailing `.` or `!`; `Changes` if there is none.
 fn review_title(app: &App) -> String {
     let text = app.log.iter().rev().find_map(|e| match e {
         LogEntry::UserMessage { text } if !text.trim_start().starts_with('/') => {
@@ -188,7 +180,7 @@ fn review_title(app: &App) -> String {
         .to_string()
 }
 
-/// The agent's last sentence before the review opened.
+/// The last non-blank line of the agent's last prose.
 fn review_summary(app: &App) -> String {
     app.log
         .iter()
@@ -201,9 +193,8 @@ fn review_summary(app: &App) -> String {
         .unwrap_or_default()
 }
 
-/// The file tree on `--tint`: a blank row, the progress dots at the
-/// margin, a blank row, then folders in `label3` and files with their read
-/// `✓` or current `›` centred in a 3-cell column.
+/// The file tree on `--tint`: a progress dot per file, then folders and
+/// files with a read `✓` or current `›`.
 fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
     let on_tint = Style::default().bg(pal.tint);
     frame.render_widget(Block::new().style(on_tint), area);
@@ -286,11 +277,9 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
     frame.render_widget(Paragraph::new(Text::from(lines)).style(on_tint), area);
 }
 
-/// The diff pane: a blank row, the path in weight 600 with `+11 −2` flush
-/// right, a blank row, then the rows — a line wider than the pane on as
-/// many screen rows as it takes. Returns where the rows landed, which is
-/// what a click is measured against, and whether the last row was on
-/// screen whole.
+/// The diff pane: a header of path and `+N −N`, then the rows. Returns the
+/// `Pane` that mouse clicks are mapped against (ADR 0010), and whether the
+/// last row was shown whole (which marks the file read).
 fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (Pane, bool) {
     let file = review.file();
     let width = area.width as usize;
@@ -319,8 +308,7 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (
     let rows = file.rows();
     let height = (area.height as usize).saturating_sub(3);
     let selection = review.selection();
-    // A comment rides at the end of the *last* line of its range, once —
-    // frame `I` puts `◆ Use config` on 145 of a 144–145 comment.
+    // A comment is drawn once, on the last line of its range (frame I).
     let comment_for = |line: usize| {
         file.comments
             .iter()
@@ -336,8 +324,7 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (
         })
         .collect();
 
-    // The last top that still fills the pane: rows from the end until
-    // they no longer fit.
+    // The largest scroll offset that still fills the pane.
     let mut last_top = rows.len();
     let mut below = 0;
     while last_top > 0 && below + drawn[last_top - 1].len() <= height {
@@ -376,16 +363,12 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (
     (pane, saw_bottom)
 }
 
-/// One diff row: the 5-cell line number, the 2-cell sign, the code — on the
-/// row's own ground. Every number is `label3`, as frames G–I draw them.
-/// Selected rows take the accent `▎` in the first cell, a 4-cell number and
-/// `label` code. A comment rides at the end in accent, `◆ text`.
+/// One diff row's screen rows: line number, sign and code on the row's own
+/// ground. A selected row takes the accent `▎` in the gutter's first cell.
 ///
-/// Code wider than the pane wraps onto continuation rows whose gutter and
-/// sign are blank (baseline `long-diff-lines-wrap`: the design says the
-/// code is never broken up; the HIG's rows grow so text is not cropped,
-/// and the app follows the HIG). A comment with no room left on the last
-/// row takes a row of its own rather than being dropped.
+/// Long code wraps onto continuation rows with a blank gutter, against the
+/// design (baseline `long-diff-lines-wrap`; the app follows the HIG). A
+/// comment with no room on the last row gets a row of its own.
 fn diff_row(
     row: &DiffRow,
     selected: bool,
@@ -429,8 +412,7 @@ fn diff_row(
         ),
     };
     let on_bg = |fg: Color| Style::default().fg(fg).bg(bg);
-    // The gutter and sign of the first screen row; continuations carry the
-    // selection's edge and nothing else.
+    // Continuation rows pass `("", "")`: only the selection edge shows.
     let gutter = |number: &str, sign: &str| {
         let mut spans = Vec::with_capacity(3);
         let digits = if selected {
@@ -494,8 +476,7 @@ fn diff_row(
             .map(|s| s.content.width())
             .sum();
         let free = width.saturating_sub(code_w);
-        // Room for `◆`, a character and the gap before it; otherwise the
-        // comment gets a row of its own.
+        // Room for `◆`, a character and the gap before it, else a new row.
         if free >= 2 + 3 {
             last.spans.pop();
             let tag = elide(&format!("◆ {comment} "), free - 2);

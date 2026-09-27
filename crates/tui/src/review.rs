@@ -1,10 +1,8 @@
-//! The review's state (ADR 0009 §4): the files of a staged changeset as the
-//! design draws them — a tree with reading progress, a diff with folded
-//! runs, a selection made with the mouse (ADR 0010), and the comments left
-//! on it — and what each key and click does to that.
+//! The review's state (ADR 0009 §4): a changeset's files, folded diffs,
+//! reading progress, the mouse selection (ADR 0010) and pending comments,
+//! and what each key and click does.
 //!
-//! Pure state, no drawing: `ui::review` reads this and `App` drives it, so
-//! every rule here is testable without a terminal.
+//! No drawing here: `ui::review` reads this and `App` drives it.
 
 use aldwin_core::{Changeset, Question, ReviewComment, ReviewDecision};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
@@ -17,44 +15,40 @@ use crate::scroll::WHEEL_ROWS;
 /// Rows `PgUp` and `PgDn` scroll the diff.
 const PAGE_ROWS: usize = 10;
 
-/// Where the diff's rows were drawn last frame. Only valid for the rows it
-/// was drawn from — anything that changes them (another file, an opened
-/// fold) drops it until the next draw.
+/// Where the diff's rows were drawn last frame. Must be dropped whenever the
+/// drawn rows change (another file, an opened fold) until the next draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Pane {
-    /// The screen cell of the first row's left edge, below the pane's
-    /// header, and the pane's width.
+    /// Screen cell of the first row's left edge, below the pane's header;
+    /// with `y` and `width`.
     pub x: u16,
     pub y: u16,
     pub width: u16,
-    /// The drawn row each screen row shows, top to bottom. A line wider
-    /// than the pane wraps (baseline `long-diff-lines-wrap`), so one drawn
-    /// row can take several.
+    /// The drawn row each screen row shows, top to bottom; a wrapped line
+    /// (baseline `long-diff-lines-wrap`) takes several.
     pub lines: Vec<usize>,
     /// The first drawn row shown.
     pub top: usize,
     /// The last drawn row shown whole.
     pub bottom: usize,
-    /// The largest `top` that still fills the pane — how far the diff
-    /// scrolls.
+    /// The largest `top` that still fills the pane.
     pub last_top: usize,
 }
 
 /// Unchanged lines kept on each side of a change; the rest fold. One, as
-/// the frame draws it: `⋯ 141 lines`, line 143, the change, line 150, `⋯ 8
-/// lines`.
+/// the frame draws it.
 const CONTEXT: usize = 1;
 
 /// One row of a file's diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffRow {
-    /// A folded run of unchanged lines. `first` is the row index into the
-    /// unfolded list where it starts; `len` how many it hides.
+    /// A folded run of unchanged lines: `first` indexes the unfolded rows,
+    /// `len` is how many it hides.
     Fold {
         first: usize,
         len: usize,
     },
-    /// Unchanged, with its line number in the file as it would be written.
+    /// Unchanged, with its new-file line number.
     Context {
         line: usize,
         text: String,
@@ -63,8 +57,8 @@ pub enum DiffRow {
         line: usize,
         text: String,
     },
-    /// Removed; no line in the new file, so it carries the number of the
-    /// nearest line after it for a comment to anchor on.
+    /// Removed; `after` is the nearest new-file line after it, for a
+    /// comment to anchor on.
     Del {
         after: usize,
         text: String,
@@ -93,24 +87,23 @@ pub struct PendingComment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewFile {
     pub path: String,
-    /// The file did not exist before — the tree draws ` +` beside it.
+    /// A new file; the tree draws ` +` beside it.
     pub added: bool,
     /// Every row, unfolded.
     unfolded: Vec<DiffRow>,
-    /// Folds over `unfolded`, as (start row, length), in order. Expanded
-    /// ones are removed from this list.
+    /// Unexpanded folds over `unfolded`, as (start row, length), in order.
     folds: Vec<(usize, usize)>,
-    /// `+11 −2`.
+    /// The `+11` of `+11 −2`; `removed_lines` is the `−2`.
     pub added_lines: usize,
     pub removed_lines: usize,
-    /// The developer has seen the whole of it — `⌃↩` waits for every file.
+    /// Scrolled to the bottom; approve (`⌃↩`) waits for every file.
     pub read: bool,
     pub comments: Vec<PendingComment>,
 }
 
 impl ReviewFile {
-    /// Each drawn row as the run of unfolded rows it stands for: `(start,
-    /// len, folded)`. A fold is every line it hides; any other row is one.
+    /// Each drawn row as the unfolded rows it stands for: `(start, len,
+    /// folded)`.
     fn spans(&self) -> impl Iterator<Item = (usize, usize, bool)> + '_ {
         let mut i = 0;
         let mut folds = self.folds.iter().peekable();
@@ -163,7 +156,7 @@ impl ReviewFile {
         self.folds.retain(|&(start, _)| start != first);
     }
 
-    /// Opens every fold — the keyboard's way to the whole file.
+    /// Opens every fold.
     pub(crate) fn expand_all(&mut self) {
         self.folds.clear();
     }
@@ -173,10 +166,9 @@ impl ReviewFile {
     }
 }
 
-/// A selection, kept in *unfolded* rows so that opening a fold — which
-/// renumbers every drawn row after it — cannot move it onto other lines.
-/// Each end is the span of the drawn row it was made on: a drag that ends
-/// on a fold takes every line the fold hides.
+/// A selection in unfolded rows, so opening a fold (which renumbers drawn
+/// rows) cannot move it. Each end is a drawn row's span, so ending on a
+/// fold takes every line it hides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Selection {
     /// Where the press landed.
@@ -198,51 +190,45 @@ impl Selection {
 /// What one key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
-    /// The key was handled within the review; nothing to send.
+    /// Handled within the review; nothing to send.
     Stay,
-    /// The developer decided; the caller sends it.
+    /// A decision for the caller to send.
     Decide(ReviewDecision),
 }
 
-/// The full-window review of one changeset: its files, which is shown,
-/// and the selection and comment in progress.
+/// The full-window review of one changeset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
-    /// The id the agent gave the review, echoed back with the decision.
+    /// The review's id, echoed back with the decision.
     pub review_id: String,
-    /// One per changed file, in the changeset's order. Never empty — `open`
-    /// refuses a changeset with no files, and nothing removes one — so
-    /// `file` always has something to return.
+    /// One per changed file, in order. Never empty: `open` refuses an empty
+    /// changeset and nothing removes one; `file` relies on it.
     files: Vec<ReviewFile>,
     /// Which of `files` is on screen.
     pub current: usize,
-    /// The lines selected for a comment in the current file. There is no
-    /// line cursor — lines are selected with the mouse (ADR 0010), so a row
-    /// is marked only when it is part of a selection.
+    /// The lines selected for a comment. There is no line cursor (ADR
+    /// 0010); a row is marked only inside a selection.
     selected: Option<Selection>,
-    /// A button is down on the diff and the selection follows the pointer.
+    /// A button is down on the diff; the selection follows the pointer.
     dragging: bool,
-    /// First drawn row of the current file's pane. The keys and the wheel
-    /// move it, clamped to the last full pane once one has been drawn; the
-    /// drawing side clamps it again (the pane can shrink) and writes it back.
+    /// First drawn row of the pane. Keys and wheel clamp it to the last full
+    /// pane once drawn; the drawing side clamps it again and writes it back.
     pub scroll: usize,
-    /// Where the drawing side put the diff's rows on screen last frame —
-    /// what a click is measured against.
+    /// Where the last frame drew the diff's rows; clicks are measured
+    /// against it.
     pub(crate) pane: Option<Pane>,
-    /// What is typed into the comment field. `esc` closes the field and
-    /// keeps this, so a comment half-written is never lost to a key.
+    /// The comment field's text; `esc` closes the field but keeps it.
     pub(crate) comment: Draft,
-    /// `esc` with nothing selected asks before dropping the changes: the
-    /// question's list, while it is open.
+    /// The discard question's list, while open (`esc` with nothing
+    /// selected).
     pub(crate) confirm: Option<List>,
     /// `?` toggles the key list in the footer.
     pub keys_shown: bool,
 }
 
 impl Review {
-    /// Opens on the changeset's first file, nothing selected and nothing
-    /// read — or `None` for a changeset with no files, which has nothing to
-    /// draw and nothing to decide.
+    /// Opens on the first file, nothing selected or read; `None` for a
+    /// changeset with no files.
     ///
     /// # Examples
     ///
@@ -308,9 +294,8 @@ impl Review {
         self.files.iter().all(|f| f.read)
     }
 
-    /// The comment field is open whenever lines are selected: frame H
-    /// draws the two together, so a click shows what it selected at once
-    /// and `↩` adds the comment.
+    /// The comment field is open exactly when lines are selected, as frame H
+    /// draws it.
     pub(crate) fn commenting(&self) -> bool {
         self.selected.is_some()
     }
@@ -327,8 +312,7 @@ impl Review {
         Some((self.file().row_of(first), self.file().row_of(last)))
     }
 
-    /// Selects drawn rows `from` through `to` of the current file — what a
-    /// press on one and a drag to the other leaves behind.
+    /// Selects drawn rows `from` through `to`, as a press and drag would.
     pub fn select(&mut self, from: usize, to: usize) {
         let file = self.file();
         if let (Some(anchor), Some(head)) = (file.span_of(from), file.span_of(to)) {
@@ -336,11 +320,9 @@ impl Review {
         }
     }
 
-    /// An arrow with a selection: `extend` (Shift) carries its moving end a
-    /// row up or down; without it the selection becomes the one line past
-    /// that end. With nothing selected yet, Shift selects the first line
-    /// shown — there is no cursor to start from, so the top of the pane is
-    /// where the eye already is.
+    /// An arrow on a selection: `extend` (Shift) moves its head a row;
+    /// otherwise it becomes the one line past the head. With nothing
+    /// selected, selects the first line shown.
     fn step_selection(&mut self, up: bool, extend: bool) {
         let rows = self.file().rows().len();
         let Some(selected) = self.selected else {
@@ -371,8 +353,8 @@ impl Review {
         self.keep_in_view(next);
     }
 
-    /// Scrolls just far enough that drawn row `row` is in the pane, by as
-    /// many rows as the last frame showed whole.
+    /// Scrolls just enough to show drawn row `row`, using the last frame's
+    /// whole-row count.
     fn keep_in_view(&mut self, row: usize) {
         let shown = self.pane.as_ref().map_or(1, |p| p.bottom + 1 - p.top);
         if row < self.scroll {
@@ -382,27 +364,22 @@ impl Review {
         }
     }
 
-    /// Scrolls the diff by `delta` rows, never past the last full pane.
-    /// Before the first draw there is no pane to measure, so the drawing
-    /// side's clamp is the only one.
+    /// Scrolls by `delta` rows, never past the last full pane; before the
+    /// first draw only the drawing side clamps.
     fn scroll_by(&mut self, delta: isize) {
         let last_top = self.pane.as_ref().map_or(usize::MAX, |p| p.last_top);
         self.scroll = self.scroll.saturating_add_signed(delta).min(last_top);
     }
 
-    /// Something changed which rows are drawn: the pane recorded last frame
-    /// no longer says what is under a click, so none is honoured until the
-    /// next draw records it again.
+    /// Must be called when the drawn rows change: drops the stale pane, so
+    /// no click is honoured until the next draw.
     fn rows_changed(&mut self) {
         self.pane = None;
     }
 
-    /// One mouse event over the review. Only the diff pane answers: a press
-    /// on a line selects it and starts a drag, a drag carries the selection
-    /// to the row under the pointer, a release ends it, and a press on a
-    /// fold opens it. The wheel scrolls the diff wherever it is. The comment
-    /// field being open does not stop a click: it moves the selection, and
-    /// the words typed stay.
+    /// One mouse event (ADR 0010). A press selects a line or opens a fold,
+    /// a drag extends, the wheel scrolls anywhere; ignored while the discard
+    /// question is open. An open comment field keeps its text on a click.
     pub fn handle_mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
         if self.confirm.is_some() {
             return;
@@ -424,8 +401,7 @@ impl Review {
                 self.dragging = true;
             }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
-                // Past the pane's top or bottom edge the selection stops at
-                // the last row shown rather than being dropped.
+                // Past the pane's edge, clamp to the row shown there.
                 let head = self
                     .row_at(column, row, true)
                     .and_then(|at| self.file().span_of(at));
@@ -438,9 +414,8 @@ impl Review {
         }
     }
 
-    /// The row index under a screen cell, or `None` off the diff. With
-    /// `clamp`, a point above or below the pane (a drag carried past its
-    /// edge) lands on the first or last row shown.
+    /// The drawn row under a screen cell, or `None` off the diff. With
+    /// `clamp`, any point lands on the nearest row shown.
     fn row_at(&self, column: u16, row: u16, clamp: bool) -> Option<usize> {
         let pane = self.pane.as_ref()?;
         let shown = pane.lines.len();
@@ -452,8 +427,7 @@ impl Review {
         Some(pane.lines[(row.saturating_sub(pane.y) as usize).min(shown - 1)])
     }
 
-    /// `router.rs · 144–145` and `2 lines` — what the comment field's label
-    /// names.
+    /// The comment field's label: (`2 lines`, `router.rs · 144–145`).
     pub fn selection_label(&self) -> Option<(String, String)> {
         let (first, last) = self.selected?.lines();
         let lines = self.line_range(first, last)?;
@@ -484,19 +458,19 @@ impl Review {
         Some((*anchors.iter().min()?, *anchors.iter().max()?))
     }
 
-    /// The drawing side says the bottom of the current file was on screen.
+    /// Called by the drawing side once the current file's bottom is on
+    /// screen.
     pub fn mark_read(&mut self) {
         self.file_mut().read = true;
     }
 
-    /// Files not yet read to the bottom — what an approve is waiting for.
+    /// Files not yet read to the bottom; approve waits for them.
     pub fn unread(&self) -> usize {
         self.files.len() - self.files_read()
     }
 
-    /// An approve refused because a file is unread brings the first such
-    /// file up, so the key does something you can see; the words on the
-    /// action say why. The file on screen stays if it is unread itself.
+    /// On a refused approve, shows the first unread file, unless the file
+    /// on screen is unread itself.
     fn show_unread(&mut self) {
         if self.file().read {
             if let Some(i) = self.files.iter().position(|f| !f.read) {
@@ -517,8 +491,8 @@ impl Review {
         }
     }
 
-    /// Every pending comment, plus `general` if it is not empty, as the
-    /// decision to send.
+    /// Every pending comment, plus non-blank `general`, as a decision;
+    /// `None` when there are none.
     fn comments_decision(&self, general: &str) -> Option<ReviewDecision> {
         let mut comments: Vec<ReviewComment> = self
             .files
@@ -541,9 +515,8 @@ impl Review {
         (!comments.is_empty()).then_some(ReviewDecision::Comment { comments })
     }
 
-    /// One key, with the review's own field text (`general`, what the
-    /// developer typed into "Ask for a change") for the keys that send.
-    /// Typing into that field is the caller's; this handles the rest.
+    /// One key. `general` is the "Ask for a change" field's text, which the
+    /// caller edits; the keys that send read it.
     pub fn handle_key(
         &mut self,
         code: KeyCode,
@@ -562,9 +535,8 @@ impl Review {
         }
         let shift = modifiers.contains(KeyModifiers::SHIFT);
         match code {
-            // The keyboard's way to a selection (HIG, "Keyboards": Shift and
-            // an arrow extends a selection). With nothing selected the
-            // arrows scroll; once a line is selected they move it.
+            // Shift+arrow selects (HIG, "Keyboards"; ADR 0010). Plain arrows
+            // scroll until a line is selected, then move it.
             KeyCode::Up | KeyCode::Down if shift || self.commenting() => {
                 self.step_selection(code == KeyCode::Up, shift)
             }
@@ -574,8 +546,8 @@ impl Review {
             KeyCode::PageDown => self.scroll_by(PAGE_ROWS as isize),
             KeyCode::Tab => self.go_to_file((self.current + 1) % self.files.len().max(1)),
             KeyCode::BackTab => self.previous_file(),
-            // `⌃↩` with the comment field open adds what is typed first, so
-            // it is sent with the rest rather than left behind in the field.
+            // With the comment field open, add its comment first so it is
+            // sent too.
             KeyCode::Enter if modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.commenting() {
                     self.add_comment();
@@ -587,24 +559,22 @@ impl Review {
                 self.selected = None;
                 self.dragging = false;
             }
-            // Everything else in the comment field is typing — `←→` move
-            // its caret, and Space and `?` are characters.
+            // Must precede the arms below: in the comment field `←→` move
+            // the caret and Space and `?` are typed.
             code if self.commenting() => {
                 self.comment.edit(code, modifiers);
             }
             KeyCode::Right => self.go_to_file((self.current + 1) % self.files.len().max(1)),
             KeyCode::Left => self.previous_file(),
-            // Folds open with a click; this is the keyboard's way to the
-            // same lines, and the only one where the mouse is not captured.
+            // The keyboard's way to open folds, needed where the mouse is
+            // not captured.
             KeyCode::Char(' ') if general.is_empty() && self.file().has_folds() => {
                 self.file_mut().expand_all();
                 self.rows_changed();
             }
             KeyCode::Char('?') if general.is_empty() => self.keys_shown = !self.keys_shown,
-            // `↩` with nothing selected sends what was typed and — with
-            // nothing typed — stands in for `⌃↩`: a terminal without the
-            // Kitty keyboard protocol cannot tell the two apart, and a
-            // review with no way to approve is a review that cannot end.
+            // Must act like `⌃↩`: without the Kitty protocol the terminal
+            // cannot tell them apart, and the review could never be approved.
             KeyCode::Enter => return self.act(general),
             KeyCode::Esc => {
                 let rows = self.discard_question().options;
@@ -615,9 +585,8 @@ impl Review {
         ReviewOutcome::Stay
     }
 
-    /// The field's action, `⌃↩`: send the comments — what is typed in the
-    /// field counts as one — or approve once every file is read. Refused,
-    /// it brings up what is left to read.
+    /// `⌃↩`: send the comments (typed `general` counts as one), else approve
+    /// if every file is read, else show an unread file.
     fn act(&mut self, general: &str) -> ReviewOutcome {
         if let Some(decision) = self.comments_decision(general) {
             return ReviewOutcome::Decide(decision);
@@ -629,8 +598,8 @@ impl Review {
         ReviewOutcome::Stay
     }
 
-    /// `↩` in the comment field: the comment rides on the selection, and
-    /// the field closes.
+    /// `↩` in the comment field: attaches the comment to the selection and
+    /// closes the field.
     fn add_comment(&mut self) {
         let text = self.comment.take().trim().to_string();
         let lines = self
@@ -661,8 +630,8 @@ impl Review {
     }
 }
 
-/// A file's diff, folded. Common prefix and suffix are trimmed before the
-/// LCS so a small change in a large file costs the change, not the file.
+/// A file's diff, folded. The common prefix and suffix are trimmed before
+/// the LCS, so its cost scales with the change, not the file.
 fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     let before_lines: Vec<&str> = before.map(|b| b.lines().collect()).unwrap_or_default();
     let after_lines: Vec<&str> = after.lines().collect();
@@ -756,9 +725,9 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     }
 }
 
-/// Runs of context longer than `2 * CONTEXT` fold, keeping `CONTEXT` lines
-/// beside each change. A run at the very start or end keeps `CONTEXT` on
-/// its changed side only.
+/// Folds context runs, keeping `CONTEXT` lines beside each change (a run at
+/// the file's start or end keeps them on its changed side only). A fold
+/// hides at least two lines.
 fn fold_runs(rows: &[DiffRow]) -> Vec<(usize, usize)> {
     let mut folds = Vec::new();
     let mut i = 0;
@@ -789,9 +758,8 @@ enum Op<'a> {
     Add(&'a str),
 }
 
-/// Above this many cells the LCS table is not built: a rewrite of two
-/// large files would allocate it on the UI thread, and a rewrite that
-/// large reads as well as its old lines out and its new ones in.
+/// Above this many cells no LCS table is built (it runs on the UI thread);
+/// the diff is all old lines out, then all new lines in.
 const LCS_CELLS: usize = 1 << 20;
 
 fn lcs_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
@@ -863,8 +831,7 @@ mod tests {
         .expect("a changeset with files")
     }
 
-    /// The frame's own shape: a long unchanged run folds to one row with a
-    /// count, one context line survives on each side of the change.
+    /// The frame's shape.
     #[test]
     fn unchanged_runs_fold_with_one_line_of_context() {
         let before = numbered(160);
@@ -930,8 +897,8 @@ mod tests {
         );
     }
 
-    /// A 20-row pane whose rows start at screen row 10, column 30, showing
-    /// from row `top` of the file, no line of it wrapped.
+    /// A 20-row, unwrapped pane at screen (30, 10), showing from drawn row
+    /// `top`.
     fn pane_at(r: &mut Review, top: usize) {
         let rows = r.file().rows().len();
         let lines: Vec<usize> = (top..rows.min(top + 20)).collect();
@@ -1086,8 +1053,6 @@ mod tests {
         assert_eq!(r.selection_label().unwrap().1, "x.rs · 15");
     }
 
-    /// Keyboard alone reaches any line: Shift and an arrow selects the top
-    /// line shown, the arrows move it, and Shift extends it.
     #[test]
     fn shift_and_the_arrows_select_from_the_keyboard() {
         let mut r = review_of(None, &numbered(40));
@@ -1178,9 +1143,8 @@ mod tests {
         assert_eq!((r.current, r.selection(), r.pane), (1, None, None));
     }
 
-    /// A selection opens the comment field at once, as frame H draws it;
-    /// `↩` adds the comment. The field once waited for a `↩` of its own,
-    /// so a click showed no more than the `▎` edge.
+    /// Regression: the field waited for its own `↩`, so a click showed only
+    /// the `▎` edge.
     #[test]
     fn a_selection_opens_a_comment_on_the_new_file_lines() {
         let before = numbered(5);
@@ -1246,8 +1210,6 @@ mod tests {
         );
     }
 
-    /// Without the Kitty protocol `⌃↩` is `↩`, so a bare `↩` on a fully read
-    /// review with nothing selected or typed approves.
     #[test]
     fn a_bare_enter_approves_where_ctrl_enter_cannot_be_told_apart() {
         let mut r = review_of(Some("x\n"), "y\n");
@@ -1307,8 +1269,7 @@ mod tests {
         );
     }
 
-    /// The bug: the discard question took `1`, `2` and `esc` and nothing
-    /// else, where every other list answers the arrows and `↩`.
+    /// Regression: the discard question ignored the arrows and `↩`.
     #[test]
     fn the_discard_question_is_a_list_like_any_other() {
         let mut r = review_of(Some("x\n"), "y\n");
@@ -1324,7 +1285,7 @@ mod tests {
         assert!(r.confirm.is_none(), "esc closes it, keeping the review");
     }
 
-    /// The bug: `esc` in the comment field threw away what was typed.
+    /// Regression: `esc` in the comment field discarded the text.
     #[test]
     fn escape_leaves_the_comment_field_and_the_words_survive() {
         let mut r = review_of(Some("x\n"), "y\n");
@@ -1339,8 +1300,7 @@ mod tests {
         assert_eq!(r.comment.text(), "use config");
     }
 
-    /// With the field open the arrows still move the selection, and `⌃↩`
-    /// sends what was typed rather than leaving it in the field.
+    /// `⌃↩` sends the open field's text rather than leaving it behind.
     #[test]
     fn the_comment_field_leaves_the_selection_keys_working() {
         let mut r = review_of(None, &numbered(40));
@@ -1363,7 +1323,7 @@ mod tests {
         );
     }
 
-    /// The bug: `⌃↩` before every file was read did nothing at all.
+    /// Regression: `⌃↩` before every file was read did nothing visible.
     #[test]
     fn a_refused_approve_brings_up_the_first_unread_file() {
         let mut r = Review::open(
@@ -1389,8 +1349,8 @@ mod tests {
         assert_eq!(r.unread(), 2);
     }
 
-    /// The bug: a line typed in the review's field went out as a change
-    /// request on `⌃↩` while the action still read "Approve".
+    /// Regression: a typed line went out as a change request while the
+    /// action read "Approve".
     #[test]
     fn a_typed_line_is_sent_as_a_comment_rather_than_approved() {
         let mut r = review_of(Some("x\n"), "y\n");

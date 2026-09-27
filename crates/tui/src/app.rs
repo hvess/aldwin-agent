@@ -19,42 +19,36 @@ use crate::scroll::{ScrollState, WHEEL_ROWS};
 use crate::ui::Transcript;
 use crate::version::{GIT_HASH, VERSION};
 
-/// How long a second Ctrl+C still counts as "again" for the exit escape
-/// hatch in `App::interrupt`, in `App::tick`s — `run.rs` advances that
-/// counter every 120ms, so ~2 seconds.
+/// Ticks (120ms each, `run.rs`) within which a second Ctrl+C quits: ~2s.
 const DOUBLE_CTRL_C_TICKS: u64 = 16;
 
-/// The display halves of one provider the catalogue offers, handed in by
-/// aldwin-cli — an id, a purpose, and its models. This crate never sees an
-/// endpoint or a key variable.
+/// One catalogue provider, formatted by aldwin-cli; this crate never sees
+/// an endpoint or key variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderChoice {
     /// The catalogue id, the `p` of `/model p/m`.
     pub id: String,
-    /// A few words on what the provider offers, beside its row.
+    /// A short description, beside its row.
     pub purpose: String,
-    /// The models it offers, in the order the question lists them.
+    /// Its models, in listed order.
     pub models: Vec<ModelChoice>,
-    /// The subscription an account on this provider needs, when the
-    /// provider can be reached through one (ADR 0012) — the fact beside
-    /// its row in the `/connect` list. `None` for a provider that takes a
-    /// key only.
+    /// The subscription an account needs (ADR 0012), shown in the
+    /// `/connect` list; `None` for a key-only provider.
     pub account: Option<String>,
 }
 
-/// One model a provider offers, as the model question lists it.
+/// One model a provider offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelChoice {
     /// The model id, the `m` of `/model p/m`.
     pub id: String,
-    /// A few words on what the model is for, beside its row.
+    /// A short description, beside its row.
     pub purpose: String,
-    /// What the context bar divides by once this model is running.
+    /// Context window in tokens; the context bar's denominator.
     pub context: u32,
 }
 
-/// One row of the `/` menu, handed in by aldwin-cli, which owns the
-/// commands: the name typed after the slash and what it is for.
+/// One row of the `/` menu; aldwin-cli owns the commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandChoice {
     /// The command's name, without its slash.
@@ -63,19 +57,19 @@ pub struct CommandChoice {
     pub summary: String,
 }
 
-/// Who asked the question on screen, which decides where the answer goes.
+/// Who asked the question on screen; decides where the answer goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asker {
-    /// The agent, through `ask`. The answer is a `Command::Answer`.
+    /// The agent, through `ask`; answered with a `Command::Answer`.
     Agent { call_id: String },
-    /// This screen, because no model is configured: which provider. The
-    /// answer opens the model question.
+    /// No model is configured: which provider. The answer opens the model
+    /// question; `then` is the held first message.
     Provider { then: Option<String> },
     /// Bare `/connect`: which account (ADR 0012). The answer submits
     /// `/connect <provider>`.
     Connection,
-    /// Which of that provider's models. The answer submits `/model p/m`,
-    /// then the message that was waiting, if any.
+    /// Which of `provider`'s models. The answer submits `/model p/m`, then
+    /// `then` if any.
     Model {
         provider: String,
         then: Option<String>,
@@ -92,8 +86,7 @@ pub struct Asking {
     pub asker: Asker,
 }
 
-/// The `/` menu: the commands whose name starts with what is typed after
-/// the slash.
+/// The `/` menu: commands whose name starts with `filter`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMenu {
     pub filter: String,
@@ -110,8 +103,8 @@ impl CommandMenu {
         menu
     }
 
-    /// Narrows the rows to the filter, the current row back on the top
-    /// match: frame F completes the top match, and `↑↓` moves on from it.
+    /// Narrows the rows to the filter and selects the top match, which
+    /// frame F completes.
     fn refilter(&mut self, commands: &[CommandChoice]) {
         let rows = commands
             .iter()
@@ -121,27 +114,26 @@ impl CommandMenu {
         self.list = List::new(rows);
     }
 
-    /// What is typed so far, as the field would hold it.
+    /// What is typed so far, slash included.
     fn typed(&self) -> String {
         format!("/{}", self.filter)
     }
 
-    /// The current row's name, less its slash.
+    /// The current row's name, without its slash.
     fn current(&self) -> Option<&str> {
         let row = self.list.rows.get(self.list.selected)?;
         Some(row.label.strip_prefix('/').unwrap_or(&row.label))
     }
 
-    /// The rest of the current command after what is typed: the field's
-    /// grey completion, and what `↩` would run.
+    /// The current command's untyped rest: the field's grey completion.
     pub(crate) fn completion(&self) -> &str {
         self.current()
             .and_then(|name| name.strip_prefix(self.filter.as_str()))
             .unwrap_or_default()
     }
 
-    /// Whether what is typed spells a command whole — the one time the
-    /// field's text turns blue.
+    /// Whether the filter spells a whole command; the only time the field's
+    /// text is blue.
     pub(crate) fn spells_a_command(&self) -> bool {
         self.list
             .rows
@@ -166,24 +158,25 @@ pub enum Mode {
 /// Session facts the launch card and the footer draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusInfo {
-    /// The bare model id, or empty when nothing is configured yet.
+    /// The bare model id; empty when nothing is configured.
     pub model_name: String,
-    /// The release version the launch card states.
+    /// The release version.
     pub version: String,
-    /// The short git hash this build was made from.
+    /// The build's short git hash.
     pub commit: String,
-    /// The project — the working directory's own name.
+    /// The working directory's name.
     pub project: String,
-    /// The git branch, when the directory is a checkout.
+    /// The git branch, if a checkout.
     pub branch: Option<String>,
-    /// The model's context window in tokens, when the catalogue knows it.
+    /// The model's context window in tokens, if the catalogue knows it.
     pub context_window: Option<u32>,
-    /// Tokens the last request carried — the prompt at the last step.
+    /// Tokens the last request carried.
     pub context_used: Option<u32>,
 }
 
 impl StatusInfo {
-    /// The context bar's percentage, when both halves are known.
+    /// The context bar's percentage, capped at 100; `None` unless both
+    /// halves are known and the window is non-zero.
     pub fn context_percent(&self) -> Option<u8> {
         let (used, window) = (self.context_used?, self.context_window?);
         if window == 0 {
@@ -193,55 +186,49 @@ impl StatusInfo {
     }
 }
 
-/// Application state and the pure logic that mutates it. Rendering (`ui/`)
-/// only ever reads from this; the terminal/event-loop glue (`run.rs`) only
-/// ever calls `apply_event`/`handle_key` and does no interpretation of its
-/// own — kept this way so both are unit-testable without a terminal.
+/// Application state and the logic that mutates it. `ui/` only reads it;
+/// `run.rs` only feeds it events and keys and interprets nothing, so all
+/// behaviour is testable without a terminal.
 #[derive(Debug)]
 pub struct App {
     pub(crate) log: Vec<LogEntry>,
     pub(crate) mode: Mode,
     pub(crate) scroll: ScrollState,
-    /// The log area's real render width, last set by `ui::draw`. Scroll
-    /// navigation happens between draws with no render access of its own,
-    /// so it reads this cached value.
+    /// The log area's width, cached by `ui::draw` for scrolling between
+    /// draws.
     pub(crate) render_width: u16,
     /// What is typed into the field.
     pub(crate) draft: Draft,
-    /// The field's real text-column width, cached by the field's own draw
-    /// exactly as `render_width` is.
+    /// The field's text width, cached by its draw like `render_width`.
     pub(crate) composer_width: u16,
-    /// First visual row of the draft the field is showing.
+    /// First visual row of the draft the field shows.
     pub(crate) composer_top: usize,
     pub(crate) status: StatusInfo,
     pub(crate) should_quit: bool,
-    /// True from `TurnStarted` until the matching `TurnEnded`.
+    /// From `TurnStarted` until the matching `TurnEnded`.
     pub(crate) turn_active: bool,
-    /// True from a submitted message until the turn it asks for either
-    /// starts or is answered without one ever starting (a locally-handled
-    /// slash command).
+    /// From a submitted message until its turn starts, or it is answered
+    /// with no turn (a locally handled slash command).
     pub(crate) awaiting_turn: bool,
-    /// A stop has been asked for and the turn has not ended yet — a second
-    /// `esc` asks nothing more.
+    /// A stop was requested and the turn has not ended; another `esc` does
+    /// nothing.
     stopping: bool,
-    /// The agent's question the next submission answers in words — the
-    /// developer chose "Chat about this". Kept whole, so `esc` can go back
-    /// to its options.
+    /// The agent's question the next submission answers in words ("Chat
+    /// about this"); kept whole so `esc` can return to its options.
     pub(crate) answering: Option<Asking>,
-    /// Whether the work disclosures of the current turn are open. Space
-    /// toggles it, a key no footer names (frames B, C and J).
+    /// Whether the current turn's work disclosures are open; Space toggles
+    /// it (frames B, C and J).
     pub(crate) details_open: bool,
-    /// Where the current (or last) turn begins in `log`: the message that
-    /// opened it. Not simply the last `UserMessage` — an answer given
-    /// through "Chat about this" is one too, and it lands mid-turn.
+    /// Index in `log` of the message that opened the current (or last)
+    /// turn. Not the last `UserMessage`: a "Chat about this" answer is one
+    /// too, mid-turn.
     turn_start: usize,
     last_ctrl_c: Option<u64>,
     pub(crate) tick: u64,
-    /// Populated on `ToolUseRequested` (the one event that carries the
-    /// tool's name and input), consumed on `ToolDispatched`.
+    /// Filled on `ToolUseRequested` (the only event with a tool's name and
+    /// input), consumed on `ToolDispatched`.
     pending_calls: HashMap<String, (String, serde_json::Value)>,
-    /// Commands `handle_key`/`apply_event` want sent — drained by the event
-    /// loop after each call.
+    /// Commands to send; `run.rs` drains it after each call.
     pub(crate) outbox: Vec<Command>,
     catalogue: Vec<ProviderChoice>,
     current_provider: Option<String>,
@@ -252,8 +239,8 @@ pub struct App {
 }
 
 impl App {
-    /// A session in the conversation with an empty log, running on
-    /// `model_name` — empty when nothing is configured.
+    /// A session with an empty log on `model_name`, which is empty when
+    /// nothing is configured.
     pub fn new(model_name: String) -> Self {
         Self {
             log: Vec::new(),
@@ -304,8 +291,8 @@ impl App {
         self
     }
 
-    /// The catalogue and which row the session runs on. `context_window`
-    /// follows from the two when the row and model are known.
+    /// The catalogue and the session's provider row; sets `context_window`
+    /// when the row and model are found.
     pub fn with_catalogue(
         mut self,
         catalogue: Vec<ProviderChoice>,
@@ -318,15 +305,14 @@ impl App {
         self
     }
 
-    /// The palette every draw uses for the session.
+    /// The starting theme.
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
-    /// Where the session runs: the project's name and its git branch,
-    /// which the launch card states. Read by aldwin-cli — this crate reads
-    /// no files.
+    /// The project name and git branch for the launch card, read by
+    /// aldwin-cli.
     pub fn with_facts(mut self, project: &str, branch: Option<&str>) -> Self {
         self.status.project = project.into();
         self.status.branch = branch.map(str::to_string);
@@ -345,11 +331,9 @@ impl App {
         self.tick = self.tick.wrapping_add(1);
     }
 
-    /// Whether anything on screen reads `tick`: the caret, which blinks
-    /// wherever a field is drawn (`--caret-period`). Nothing else animates —
-    /// the running `●` is steady (motion.css: "Nothing else animates").
-    /// ratatui diffs cells, so a tick that moves nothing costs a draw and
-    /// no bytes.
+    /// Whether anything on screen reads `tick`: only the caret, blinking
+    /// wherever a field is drawn (`--caret-period`); the running `●` is
+    /// steady (motion.css).
     pub(crate) fn is_animating(&self) -> bool {
         matches!(
             self.mode,
@@ -390,16 +374,14 @@ impl App {
         &mut self.log[start..]
     }
 
-    /// A turn opens at `message`: it goes into the log and marks where
-    /// the turn begins.
+    /// Logs `message` and marks it as the turn's start.
     fn open_turn(&mut self, message: String) {
         self.turn_start = self.log.len();
         self.push(LogEntry::UserMessage { text: message });
     }
 
-    /// `TurnStarted` — live, or replayed on `/resume` — confirms the
-    /// message that opened the turn: the last one sent before it, since
-    /// nothing can be said inside a turn before the turn has begun.
+    /// On `TurnStarted` (live or replayed), the turn starts at the last
+    /// `UserMessage`; nothing is said inside a turn before it begins.
     fn mark_turn_started(&mut self) {
         if let Some(i) = self
             .log
@@ -449,7 +431,7 @@ impl App {
         self.transcript = transcript;
     }
 
-    /// The `Work` entry of the current step — the last entry, if it is one.
+    /// The current step's `Work` items: the last entry, if it is `Work`.
     fn open_work(&mut self) -> Option<&mut Vec<WorkItem>> {
         match self.log.last_mut() {
             Some(LogEntry::Work { items, .. }) => Some(items),
@@ -479,7 +461,7 @@ impl App {
     }
 
     fn finish_call(&mut self, call_id: &str, content: &str, is_error: bool) {
-        // A call the disclosure lists: the newest `Work` entry that holds it.
+        // Search every `Work` entry, newest first, not just the last one.
         for entry in self.log.iter_mut().rev() {
             if let LogEntry::Work { items, .. } = entry {
                 if let Some(item) = items.iter_mut().find(|i| i.call_id == call_id) {
@@ -489,9 +471,8 @@ impl App {
                 }
             }
         }
-        // Otherwise an `ask` answered: the newest unanswered question row
-        // gets its answer. (`plan` results land nowhere; the plan is drawn
-        // as itself.)
+        // Otherwise an `ask` result answers the newest open question row.
+        // `plan` results are dropped.
         if let Some(LogEntry::Question { answer, .. }) = self
             .log
             .iter_mut()
@@ -502,7 +483,7 @@ impl App {
         }
     }
 
-    /// One loaded record, as the entry the live path would have produced.
+    /// One loaded record, as the entry the live path would produce.
     fn replay(&mut self, record: LogRecord) {
         match record {
             LogRecord::UserMessage { text, .. } => self.log.push(LogEntry::UserMessage { text }),
@@ -526,9 +507,8 @@ impl App {
     }
 
     fn push_turn_end(&mut self, reason: TurnEndReason) {
-        // Amber means running, and once the turn is over nothing is. A step
-        // the plan still called running goes back to pending: it was not
-        // finished, and it is not happening.
+        // Amber means running only: an ended turn's running step goes back
+        // to pending.
         for entry in self.this_turn_mut() {
             if let LogEntry::Plan { steps } = entry {
                 for step in steps.iter_mut().filter(|s| s.state == StepState::Running) {
@@ -540,8 +520,7 @@ impl App {
             TurnEndReason::EndTurn => self.push(LogEntry::TurnBreak),
             TurnEndReason::Cancelled => {
                 // One sentence per stop: the first `Stopping` becomes
-                // "Stopped." in place, and a repeat from a second esc goes
-                // (developer, 2026-09-27).
+                // "Stopped." in place; repeats are removed.
                 let stopped = LogEntry::Failure {
                     message: "Stopped.".into(),
                     detail: None,
@@ -563,8 +542,8 @@ impl App {
                 self.push(LogEntry::TurnBreak);
             }
             TurnEndReason::Error(message) => {
-                // A sentence you can act on; the error itself, a provider's
-                // own body as often as not, is the detail (ADR 0009 §5).
+                // The sentence leads; the raw error is the detail (ADR 0009
+                // §5).
                 self.push(LogEntry::Failure {
                     message: failure_sentence(&message).into_owned(),
                     detail: Some(message),
@@ -575,8 +554,8 @@ impl App {
         }
     }
 
-    /// Folds one event from the agent into the log, the mode and the
-    /// status; any command it calls for lands in the outbox.
+    /// Folds one core event into the log, mode and status; any command it
+    /// calls for goes to the outbox.
     pub fn apply_event(&mut self, event: Event) {
         match event {
             Event::TurnStarted { .. } => {
@@ -624,7 +603,7 @@ impl App {
                 self.turn_active = false;
                 self.awaiting_turn = false;
                 self.stopping = false;
-                // A question the turn was waiting on is gone with it.
+                // The agent's pending question ends with the turn.
                 self.answering = None;
                 if matches!(&self.mode, Mode::Question(a) if matches!(a.asker, Asker::Agent { .. }))
                 {
@@ -632,8 +611,8 @@ impl App {
                 }
                 self.push_turn_end(reason);
             }
-            // The developer's review comments, echoed the way a typed
-            // message is — this is the one message the TUI did not send.
+            // Review comments, echoed like a typed message; the only
+            // message the TUI did not send.
             Event::FollowUp { text, .. } => {
                 self.awaiting_turn = true;
                 self.open_turn(text);
@@ -655,9 +634,8 @@ impl App {
                 review_id,
                 changeset,
             } => {
-                // The dispatcher never opens a review over nothing, and a
-                // review over nothing has nothing to draw: answer it rather
-                // than open it.
+                // An empty changeset (the dispatcher never sends one) is
+                // answered with a discard rather than opened.
                 match Review::open(review_id.clone(), changeset) {
                     Some(review) => self.mode = Mode::Review(review),
                     None => self.outbox.push(Command::ReviewDecision {
@@ -670,8 +648,8 @@ impl App {
                 if matches!(self.mode, Mode::Review(_)) {
                     self.mode = Mode::Conversation;
                 }
-                // A comment goes back as the next message; the row the log
-                // keeps is the saved or discarded one.
+                // A comment returns as a `FollowUp`; only saved or discarded
+                // get a row.
                 if !matches!(outcome, ReviewOutcome::Commented { .. }) {
                     self.push(LogEntry::Review { outcome });
                 }
@@ -706,7 +684,7 @@ impl App {
         }
     }
 
-    /// The plan is one entry per turn, replaced in place.
+    /// Replaces the turn's one `Plan` entry in place, or adds it.
     fn set_plan(&mut self, steps: Vec<PlanStep>) {
         if let Some(entry) = self
             .this_turn_mut()
@@ -719,7 +697,7 @@ impl App {
         }
     }
 
-    /// Acts on a key press for whatever holds the screen. Repeats and
+    /// Handles a key press for whatever holds the screen; repeats and
     /// releases are ignored.
     pub fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
@@ -741,8 +719,8 @@ impl App {
             (KeyCode::Enter, _) => self.submit(),
             (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.draft.insert('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.interrupt(),
-            // Answering in words: `esc` goes back to the options, the draft
-            // kept. Otherwise `esc  Stop` while working, and nothing idle.
+            // Answering in words: back to the options, draft kept. Otherwise
+            // stop while busy; nothing when idle.
             (KeyCode::Esc, _) => {
                 if let Some(asking) = self.answering.take() {
                     self.mode = Mode::Question(asking);
@@ -750,12 +728,9 @@ impl App {
                     self.stop("Stopping.");
                 }
             }
-            // `/` into an empty field opens the menu; anywhere else it types.
             (KeyCode::Char('/'), _) if self.draft.is_empty() => {
                 self.mode = Mode::Commands(CommandMenu::open(&self.commands))
             }
-            // Space opens or closes the work — on an empty field only;
-            // otherwise it is a space.
             (KeyCode::Char(' '), _) if self.draft.is_empty() && self.has_work() => {
                 self.toggle_details()
             }
@@ -785,7 +760,7 @@ impl App {
         }
     }
 
-    /// Whether the current turn has any work to show or hide.
+    /// Whether the current turn has anything Space can open.
     fn has_work(&self) -> bool {
         self.this_turn().iter().any(LogEntry::has_details)
     }
@@ -806,11 +781,9 @@ impl App {
         }
     }
 
-    /// The `/` menu. Letters filter it and a digit picks a row, as in every
-    /// other list. Anything else typed — a space before an argument, the
-    /// `-` of `/reload-config` — or a filter nothing matches means the
-    /// command is not one the menu offers, so the menu steps aside and
-    /// what was typed goes on in the field.
+    /// The `/` menu: letters filter, a digit picks a row. Any other
+    /// character (a space before an argument, a `-`), or a filter matching
+    /// nothing, closes the menu and moves the text into the field.
     fn handle_commands_key(&mut self, key: KeyEvent) {
         let Mode::Commands(menu) = &mut self.mode else {
             return;
@@ -858,8 +831,7 @@ impl App {
     }
 
     fn handle_question_key(&mut self, key: KeyEvent) {
-        // `⌃C` interrupts the turn the agent's question is part of, as it
-        // does everywhere else a turn runs.
+        // `⌃C` on the agent's question interrupts the turn, not the list.
         let agent =
             matches!(&self.mode, Mode::Question(a) if matches!(a.asker, Asker::Agent { .. }));
         if agent && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -881,9 +853,9 @@ impl App {
         }
     }
 
-    /// `esc` on a question. The agent's cannot be dismissed — the tool is
-    /// waiting — so it is "Chat about this". Any other puts back the
-    /// message it was holding, so closing it loses nothing.
+    /// `esc` on a question. The agent's cannot be dismissed (its tool
+    /// waits), so it becomes "Chat about this"; the provider and model
+    /// questions put their held message back in the field.
     fn close_question(&mut self, asking: Asking) {
         match asking.asker {
             Asker::Agent { .. } => self.answering = Some(asking),
@@ -969,7 +941,7 @@ impl App {
         });
     }
 
-    /// The rows of the catalogue that can be reached through an account.
+    /// Catalogue rows reachable through an account.
     fn connectable(&self) -> Vec<&ProviderChoice> {
         self.catalogue
             .iter()
@@ -977,8 +949,8 @@ impl App {
             .collect()
     }
 
-    /// Bare `/connect`: the accounts there are to connect (ADR 0012), each
-    /// with the subscription it needs as its fact.
+    /// Bare `/connect`: the connectable accounts (ADR 0012), each with its
+    /// required subscription.
     fn open_connection_question(&mut self) {
         let connectable = self.connectable();
         let rows = connectable
@@ -1047,7 +1019,7 @@ impl App {
     }
 
     fn handle_review_key(&mut self, key: KeyEvent) {
-        // Ctrl+C in a review interrupts the turn (which cancels the review).
+        // Ctrl+C interrupts the turn, which cancels the review.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.interrupt();
             return;
@@ -1056,9 +1028,9 @@ impl App {
         let typing = self
             .review()
             .is_some_and(|r| !r.commenting() && r.confirm.is_none());
-        // Text keys go to the review's own field unless a comment draft has
-        // them; everything else is the review's. Space and `?` are keys of
-        // their own until something is typed.
+        // Text keys edit `draft` (the review's "Ask for a change" field)
+        // unless the comment field or discard question is open. Space, `?`
+        // and Backspace are review keys until something is typed.
         let is_text = match key.code {
             KeyCode::Char(' ' | '?') => !general.is_empty(),
             KeyCode::Char(_) => !key.modifiers.contains(KeyModifiers::CONTROL),
@@ -1087,15 +1059,14 @@ impl App {
         }
     }
 
-    /// Whether the mouse should be captured: only while a review is open,
-    /// where lines are selected by dragging across them (ADR 0010). The
-    /// conversation leaves the mouse to the terminal's own selection.
+    /// Capture the mouse only while a review is open (ADR 0010); the
+    /// conversation keeps the terminal's own selection.
     pub(crate) fn wants_mouse(&self) -> bool {
         matches!(self.mode, Mode::Review(_))
     }
 
-    /// The review takes the mouse whole; elsewhere the wheel scrolls the
-    /// transcript, unless a question or the menu holds the bottom band.
+    /// Routes a mouse event to the review if open; otherwise the wheel
+    /// scrolls the transcript unless a question or the menu is up.
     pub fn handle_mouse(&mut self, event: MouseEvent) {
         if let Some(review) = self.review_mut() {
             review.handle_mouse(event.kind, event.column, event.row);
@@ -1120,8 +1091,9 @@ impl App {
         }
     }
 
-    /// Inserts a bracketed paste into the field as one piece, sanitised,
-    /// so its newlines never submit.
+    /// Inserts a bracketed paste into the field whole and sanitised, so its
+    /// newlines never submit; ignored unless the conversation holds the
+    /// screen.
     pub fn paste(&mut self, text: &str) {
         if self.band_is_held() {
             return;
@@ -1149,8 +1121,8 @@ impl App {
         self.send(text);
     }
 
-    /// A line sent from the field or picked from the `/` menu — one path,
-    /// so a command reads the same however it was reached.
+    /// The one path for a line typed or picked from the `/` menu, so both
+    /// behave the same.
     fn send(&mut self, text: String) {
         // "Chat about this": what was typed answers the question.
         if let Some(asking) = self.answering.take() {
@@ -1164,8 +1136,8 @@ impl App {
             return;
         }
         let command = text.trim();
-        // No model yet: the first message is held while the two questions
-        // are answered, then sent.
+        // No model yet: hold the first message through the provider and
+        // model questions, then send it.
         if self.status.model_name.is_empty()
             && !self.catalogue.is_empty()
             && !command.starts_with('/')
@@ -1173,8 +1145,8 @@ impl App {
             self.open_provider_question(Some(text));
             return;
         }
-        // Bare `/resume` and `/model` are asked here, as a list; with
-        // nothing to list, the interceptor answers them.
+        // Bare `/resume`, `/model` and `/connect` are asked here as a list;
+        // with nothing to list, the interceptor answers them.
         if command == "/resume" && !self.sessions.is_empty() {
             self.open_session_question();
             return;
@@ -1190,14 +1162,14 @@ impl App {
         self.submit_text(text);
     }
 
-    /// The tail every submission shares, typed or picked.
+    /// Logs and submits `text`; every submission ends here.
     fn submit_text(&mut self, text: String) {
         self.awaiting_turn = true;
         self.open_turn(text.clone());
         self.outbox.push(Command::Submit { text });
     }
 
-    /// Asks the running turn to stop, once, and says so.
+    /// Sends `Cancel` once per turn and logs `notice` each time.
     fn stop(&mut self, notice: &str) {
         if !self.stopping {
             self.stopping = true;
@@ -1208,9 +1180,8 @@ impl App {
         });
     }
 
-    /// `⌃C`, as a terminal has it: stop what is running, or clear what is
-    /// typed, or — with neither, or pressed again within
-    /// `DOUBLE_CTRL_C_TICKS` — leave.
+    /// `⌃C`: stop a running turn, else clear the draft, else quit; a second
+    /// press within `DOUBLE_CTRL_C_TICKS` always quits.
     fn interrupt(&mut self) {
         let repeat = self
             .last_ctrl_c
@@ -1228,12 +1199,11 @@ impl App {
     }
 }
 
-/// The seams `tests/render_snapshot.rs` and `examples/preview.rs` seed a
-/// scene through — states a real session reaches only after a provider
-/// has streamed a turn.
+/// Seams for `tests/render_snapshot.rs` and `examples/preview.rs` to seed
+/// scenes without a provider.
 #[cfg(feature = "test-util")]
 impl App {
-    /// Appends an entry as the live path would have.
+    /// Appends an entry as the live path would.
     pub fn seed(&mut self, entry: LogEntry) {
         self.push(entry);
     }
@@ -1337,9 +1307,7 @@ pub(crate) mod tests {
         ]
     }
 
-    /// Bare `/connect` lists the accounts there are, with the subscription
-    /// each needs as its fact, and the answer is the command with the
-    /// provider filled in. A provider that takes a key only is not listed.
+    /// A key-only provider is not listed.
     #[test]
     fn bare_connect_lists_the_accounts_and_submits_the_command() {
         let mut a = app().with_catalogue(catalogue(), Some("anthropic".into()));
@@ -1361,8 +1329,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// With nothing to list, bare `/connect` goes to the interceptor, which
-    /// reports rather than asks — as bare `/model` does with no catalogue.
+    /// The interceptor then reports rather than asks.
     #[test]
     fn connect_with_no_account_to_offer_is_forwarded() {
         let mut a = app().with_catalogue(catalogue()[..2].to_vec(), Some("anthropic".into()));
@@ -1449,8 +1416,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// `/exit` is a menu row too: `/e` narrows to it rather than stepping
-    /// the menu aside, and `↩` runs it.
+    /// `/e` must narrow to `/exit`, not close the menu.
     #[test]
     fn exit_is_offered_by_the_menu_as_well_as_quit() {
         let mut a = app();
@@ -1493,9 +1459,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// No wizard: with nothing configured the first message is held, the
-    /// two questions are asked, and then both the `/model` and the message
-    /// go, in that order.
+    /// `/model` must be sent before the held message.
     #[test]
     fn with_no_model_the_first_message_waits_for_the_two_questions() {
         let mut a = App::new(String::new())
@@ -1577,9 +1541,8 @@ pub(crate) mod tests {
         assert!(a.answering.is_none());
     }
 
-    /// The bug this pins: `finish_call` used to stop at the first `Work`
-    /// entry whether or not it held the call, so an `ask` answered after any
-    /// other work in the turn never reached its question row.
+    /// Regression: `finish_call` stopped at the first `Work` entry, so the
+    /// answer never reached its question row.
     #[test]
     fn an_answered_question_gets_its_answer_even_after_other_work() {
         let mut a = app();
@@ -1735,8 +1698,7 @@ pub(crate) mod tests {
         plans[0].iter().map(|s| s.state).collect()
     }
 
-    /// Amber means running: once the turn has ended, nothing in its plan is
-    /// — whether it finished or was stopped.
+    /// Amber means running; applies to finished and stopped turns alike.
     #[test]
     fn a_step_still_running_when_the_turn_ends_goes_back_to_pending() {
         use StepState::{Done, Pending, Running};
@@ -1764,9 +1726,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// An answer typed through "Chat about this" goes into the log as a
-    /// message, mid-turn. It is not a new turn: the plan is still replaced
-    /// in place after it, and still settled when the turn ends.
+    /// The plan is still replaced in place after the answer, and settled at
+    /// the turn's end.
     #[test]
     fn a_chat_about_this_answer_does_not_split_the_turn() {
         use StepState::{Done, Pending, Running};
@@ -1809,7 +1770,7 @@ pub(crate) mod tests {
         assert_eq!(plan_states(&a), vec![Done, Pending]);
     }
 
-    /// ADR 0010 §3: the mouse is the review's, and only while it is open.
+    /// ADR 0010 §3.
     #[test]
     fn the_mouse_is_wanted_while_a_review_is_open_and_goes_to_it() {
         let mut a = app();
@@ -2039,8 +2000,8 @@ pub(crate) mod tests {
         });
     }
 
-    /// The bug: `esc` called the same function as `⌃C`, so a second `esc`
-    /// inside two seconds counted as "again" and quit mid-turn.
+    /// Regression: `esc` shared `⌃C`'s path, so a second `esc` within two
+    /// seconds quit mid-turn.
     #[test]
     fn escape_only_ever_stops_and_asks_once() {
         let mut a = app();
@@ -2056,7 +2017,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// "Stopping." then "Stopped." was two sentences for one stop.
+    /// Regression: "Stopping." then "Stopped." was two sentences for one
+    /// stop.
     #[test]
     fn a_stopped_turn_leaves_one_sentence() {
         let mut a = app();
@@ -2090,9 +2052,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// The bug: the question's list took `⌃C` as "close", which for the
-    /// agent's question meant "Chat about this" — the one key that stops a
-    /// turn everywhere else answered it instead.
+    /// Regression: the list took `⌃C` as close, which for the agent's
+    /// question meant "Chat about this".
     #[test]
     fn ctrl_c_during_an_agent_question_stops_the_turn() {
         let mut a = app();
@@ -2111,8 +2072,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// The bug: with nothing configured the first message is held while the
-    /// provider is asked, and closing the question dropped it.
+    /// Regression: closing the provider question dropped the held message.
     #[test]
     fn closing_the_provider_question_puts_the_held_message_back() {
         for close in [
@@ -2131,8 +2091,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// The bug: after "Chat about this" the question vanished, the footer
-    /// said `Working…`, and `esc` stopped the whole turn.
+    /// Regression: after "Chat about this" the question vanished and `esc`
+    /// stopped the whole turn.
     #[test]
     fn escape_while_answering_in_words_goes_back_to_the_options() {
         let mut a = app();
@@ -2150,8 +2110,8 @@ pub(crate) mod tests {
         assert_eq!(a.draft.text(), "it depends", "and the words are kept");
     }
 
-    /// The bug: the menu swallowed every key but a letter, so `/theme
-    /// light` and `/model x` could not be typed at all.
+    /// Regression: the menu swallowed every key but a letter, so `/theme
+    /// light` could not be typed.
     #[test]
     fn a_command_the_menu_does_not_offer_is_typed_in_the_field() {
         let mut a = app();
@@ -2174,7 +2134,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A pick and a typed command take one path: both open the list.
     #[test]
     fn picking_resume_and_typing_it_do_the_same_thing() {
         let session = SessionChoice {
@@ -2195,7 +2154,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The bug: `⌃C` at idle quit with a half-typed message in the field.
+    /// Regression: `⌃C` at idle quit with a half-typed message.
     #[test]
     fn ctrl_c_at_idle_clears_a_draft_before_it_quits() {
         let mut a = app();

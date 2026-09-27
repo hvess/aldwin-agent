@@ -1,26 +1,9 @@
-//! Word-wrapping for one logical line, done *before* anything is inset or
-//! filled.
+//! Word-wrapping for one logical line, before anything is inset or filled.
 //!
-//! This exists instead of leaning on a `Paragraph`'s own
-//! `Wrap { trim: false }` because `Wrap` has no concept of the body-column
-//! inset `grid::at_body` applies afterward, nor of the margin and padding
-//! columns `row::Row` adds: it treats one logical `Line`'s
-//! spans as a single continuous run of styled graphemes, so a wrapped
-//! continuation row it produced came out flush against the panel edge
-//! instead of under the rest of the turn's content (reported as: "the first
-//! line of text is correctly in line, but when the text wraps onto a second
-//! line, it doesn't respect the padding").
-//!
-//! Wrapping here means every row handed downstream is already ≤ its column
-//! width and already fully inset and filled on its own, so the wrap happens
-//! exactly once. Both `Row` and the prose path depend on that discipline;
-//! see `aldwin-tui.md`'s Progress notes for the bugs it exists to prevent
-//! from recurring.
-//!
-//! For the transcript there is no longer any downstream wrapper to fall back
-//! on at all — `transcript::draw_log` renders a plain slice of already-sized
-//! rows — so a builder that skips this step gets truncation, not a
-//! badly-placed fold.
+//! Not `Paragraph`'s `Wrap`: it knows nothing of the inset `grid::at_body` or
+//! `row::Row` adds afterwards, so its continuation rows land flush against
+//! the edge (`aldwin-tui.md` Progress notes). `transcript::draw_log` does not
+//! wrap, so a builder that skips this step gets truncated rows.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -28,19 +11,14 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::draft;
 
-/// Word-wraps one logical `Line` to `max_width` display columns, breaking
-/// only at whitespace and preserving each span's style across a break, into
-/// however many `Line`s it takes.
+/// Word-wraps `line` to `max_width` display cells, keeping each span's
+/// style. Breaks at whitespace; a word wider than `max_width` is hard-broken.
+/// `max_width == 0` returns `line` unchanged.
 ///
-/// Doesn't hang-indent list/blockquote markers under wrapped continuation
-/// text (a wrapped `· ` item's second row starts at the same column every
-/// other prose row does, not under the first row's text) — only the flat
-/// inset every prose row gets from `grid::at_body` regardless of what
-/// produced it.
+/// No hanging indent: a continuation row starts at column 0.
 pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'static>> {
-    // One per `char`, and `Copy`: this runs over every character of every
-    // rebuilt transcript entry, and a `String` per character was the single
-    // largest allocation count in a streamed reply's re-render.
+    // One `Copy` value per `char`, not a `String`: this runs over every
+    // character of a streamed reply on each re-render.
     #[derive(Clone, Copy)]
     struct Grapheme {
         ch: char,
@@ -59,10 +37,8 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         let style = span.style;
         for ch in span.content.chars() {
             match ch {
-                // A tab has no width of its own and ratatui draws no cell
-                // for it, so left in place it deleted a Go or Makefile
-                // line's indentation outright. Expanded to `draft::TAB`, as
-                // everywhere else a tab is drawn.
+                // ratatui draws no cell for a tab, which erases indentation;
+                // expand to `draft::TAB` as everywhere else.
                 '\t' => graphemes.extend(
                     [Grapheme {
                         ch: ' ',
@@ -71,10 +47,8 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
                         is_space: true,
                     }; draft::TAB.len()],
                 ),
-                // Any other control character is dropped: ratatui skips it
-                // too, but `UnicodeWidthStr` counts it as one cell, so
-                // `Row::assemble` measured a cell nothing drew and left the
-                // row's fill one cell short of its right edge.
+                // Dropped: ratatui draws no cell for it, but `UnicodeWidthStr`
+                // counts one, which leaves `Row::assemble`'s fill a cell short.
                 ch if ch.is_control() => {}
                 ch => graphemes.push(Grapheme {
                     ch,
@@ -89,16 +63,13 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         return vec![Line::default()];
     }
 
-    // Finished rows, and the one being filled.
     let mut rows: Vec<Vec<Grapheme>> = Vec::new();
     let mut row: Vec<Grapheme> = Vec::new();
     let mut row_width = 0usize;
     let mut i = 0;
 
-    // The line's own genuine leading whitespace (if any) is kept as literal
-    // content on the first row — only whitespace a wrap decision below
-    // introduces at a row break gets dropped, so a hand-indented prose line
-    // keeps its indentation.
+    // The line's own leading whitespace is kept, so an indented line stays
+    // indented; only whitespace at a wrap break is dropped.
     if graphemes[0].is_space {
         let end = graphemes
             .iter()
@@ -109,11 +80,8 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
         i = end;
     }
 
-    // Greedy fill: walk whitespace/non-whitespace runs in order, breaking
-    // before whichever run would overflow the current row. A run of
-    // whitespace is only ever kept mid-row (never used to open one), so a
-    // wrapped row never starts with the space that caused the break — the
-    // convention ratatui's own word-wrapper follows.
+    // Greedy fill over whitespace/word runs. Whitespace never opens a row,
+    // as in ratatui's own word-wrapper.
     while i < graphemes.len() {
         let is_space = graphemes[i].is_space;
         let start = i;
@@ -141,8 +109,7 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
             row_width = 0;
         }
         if run_width > max_width {
-            // A single word wider than the whole row (e.g. a long URL):
-            // hard-break it character by character rather than overflowing.
+            // A word wider than a row (a long URL): hard-break per character.
             for g in run {
                 if row_width > 0 && row_width + g.width > max_width {
                     rows.push(std::mem::take(&mut row));
@@ -160,13 +127,10 @@ pub(super) fn wrap_line(line: Line<'static>, max_width: usize) -> Vec<Line<'stat
 
     rows.into_iter()
         .map(|row| {
-            // A wrap decision can leave trailing whitespace dangling at a
-            // row's end (the space that caused the break, kept out of the
-            // *next* row but already appended to this one); trim it so it
-            // doesn't count toward width for anyone measuring this row.
+            // Trailing whitespace is trimmed so it does not count toward
+            // the row's measured width.
             let end = row.iter().rposition(|g| !g.is_space).map_or(0, |i| i + 1);
             let mut spans: Vec<Span<'static>> = Vec::new();
-            // Consecutive characters of one style become one span.
             for run in row[..end].chunk_by(|a, b| a.style == b.style) {
                 spans.push(Span::styled(
                     run.iter().map(|g| g.ch).collect::<String>(),

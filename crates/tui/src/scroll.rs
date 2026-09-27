@@ -1,22 +1,13 @@
-/// Rows one wheel notch moves — the transcript, and the review's diff —
-/// the same three a terminal's own alternate-scroll translation sends as
-/// cursor keys.
+/// Rows one wheel notch moves, in the transcript and the review's diff;
+/// matches a terminal's alternate-scroll translation.
 pub(crate) const WHEEL_ROWS: usize = 3;
 
-/// Log scroll position, in rendered *wrapped* terminal rows — `total_len`
-/// in every method below must be `App::total_lines()` (see its doc
-/// comment), not `App::log`'s entry count and not a logical (pre-wrap)
-/// line count either. `viewport_height` is real rendered rows too (only
-/// known at render time); comparing that against an *entry* count in
-/// `max_offset` is what made scrolling a near-total no-op before
-/// `total_lines` existed — a handful of entries routinely render to far
-/// more rows than the viewport, so `max_offset` stayed 0 long after there
-/// was real content below the fold. `offset` indexes straight into
-/// `ui::Transcript`, which is one screen row per element by construction.
+/// Log scroll position, in rendered wrapped rows. Every `total_len` must be
+/// `App::total_lines()`, never an entry or pre-wrap line count; `offset`
+/// indexes `ui::Transcript`, one screen row per element.
 ///
-/// Auto-follows new content while `following` is true; scrolling up
-/// disengages it, and jumping to the bottom (End) re-engages it — see
-/// aldwin-tui.md's Conversation Log scroll behaviour.
+/// Follows new content while `following`; scrolling up disengages it and
+/// reaching the bottom re-engages it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScrollState {
     pub offset: usize,
@@ -35,26 +26,17 @@ impl Default for ScrollState {
 }
 
 impl ScrollState {
-    /// Call once per frame with the actual rendered log-area height (only
-    /// known at render time) and the current row count — keeps a
-    /// following viewport pinned to the bottom across a terminal resize
-    /// instead of showing a stale offset from before it.
+    /// Must be called once per frame with the rendered log height, so a
+    /// resize keeps a following viewport at the bottom.
     pub fn set_viewport_height(&mut self, height: usize, total_len: usize) {
         self.viewport_height = height.max(1);
         if self.following {
             self.offset = self.max_offset(total_len);
             return;
         }
-        // A *disengaged* offset still has to stay reachable. It only ever
-        // moves down under `line_down`/`page_down`, which clamp against the
-        // `max_offset` of the moment — but that maximum shrinks whenever the
-        // viewport grows (a wider terminal rewraps the transcript into fewer
-        // rows; a resolved permission panel hands its band back to the log),
-        // and nothing was pulling the offset back with it. The transcript
-        // then scrolled off the top of its own viewport into blank space,
-        // and getting back to the conversation meant holding Up for as many
-        // presses as the terminal had grown by — the "scrolling up and down
-        // is very difficult" half of the report.
+        // Clamp a disengaged offset too: `max_offset` shrinks when the
+        // viewport grows or the log shrinks, leaving the transcript
+        // scrolled into blank space.
         self.offset = self.offset.min(self.max_offset(total_len));
     }
 
@@ -62,8 +44,7 @@ impl ScrollState {
         total_len.saturating_sub(self.viewport_height)
     }
 
-    /// Called whenever a new entry is pushed to the log, with the new row
-    /// count.
+    /// Must be called on every push to the log, with the new row count.
     pub fn on_content_grew(&mut self, total_len: usize) {
         if self.following {
             self.offset = self.max_offset(total_len);
@@ -97,11 +78,8 @@ impl ScrollState {
         self.following = self.offset >= max;
     }
 
-    /// A page, with two rows of overlap — the rows that were at the far
-    /// edge stay on screen as the ones the next page is read against.
-    /// Paging by the *whole* viewport swapped the screen for an entirely
-    /// unfamiliar one and left nothing to place it against, which is why
-    /// every pager does this.
+    /// A viewport less two rows of overlap, so the far edge stays on screen
+    /// as context; at least one row.
     fn page(&self) -> usize {
         self.viewport_height.saturating_sub(2).max(1)
     }
@@ -198,10 +176,8 @@ mod tests {
         assert_eq!(s.offset, 2);
     }
 
-    /// The other half of the pair above: an offset that was legal for a
-    /// small viewport is *past the end* once the viewport grows, and left
-    /// alone it parks the transcript off the top of its own log area with
-    /// nothing on screen and no fast way back.
+    /// Regression: a grown viewport left the transcript scrolled into blank
+    /// space with no fast way back.
     #[test]
     fn a_disengaged_offset_past_the_new_end_is_pulled_back_to_it() {
         let mut s = ScrollState {
@@ -220,8 +196,7 @@ mod tests {
         );
     }
 
-    /// Same clamp, driven by content rather than by size: `/clear` and a
-    /// history rewrite both shrink the log out from under an offset.
+    /// `/clear` and a history rewrite shrink the log under an offset.
     #[test]
     fn a_disengaged_offset_past_a_shrunken_log_is_pulled_back_to_it() {
         let mut s = ScrollState {
@@ -246,8 +221,6 @@ mod tests {
         assert_eq!(s.offset, 20);
     }
 
-    /// The overlap must never eat the whole step: on a frame short enough
-    /// that a page is two rows or fewer, paging still has to move.
     #[test]
     fn paging_a_tiny_viewport_still_advances() {
         let mut s = ScrollState {

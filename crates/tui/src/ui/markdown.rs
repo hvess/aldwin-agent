@@ -1,17 +1,12 @@
-//! The LLM-authored-markdown reader: fenced-block splitting, per-line block
-//! prefixes, tables, and the inline delimiter pass.
+//! Markdown from the LLM: fence splitting, per-line block prefixes, tables,
+//! and the inline pass.
 //!
-//! Hand-rolled rather than pulling in a CommonMark crate — a real
-//! block-level parser normalizes blank lines and reflows paragraphs, which
-//! would fight the line-for-line streaming render that happens on every
-//! delta. Per-line block-prefix detection (heading, list, blockquote, rule)
-//! plus a recursive-descent inline pass covers what LLMs actually emit.
+//! Hand-rolled, not a CommonMark crate: a block parser reflows paragraphs
+//! and normalizes blank lines, which breaks the line-for-line render redone
+//! on every streamed delta.
 //!
-//! A table is the one construct here that a line cannot render on its own —
-//! a column is only as wide as the widest cell *anywhere* in the block, so
-//! the rows have to be measured together. [`render_prose`] is therefore the
-//! entry point rather than [`render_line`]: it groups a table's rows and
-//! hands every other line to the per-line path unchanged.
+//! Enter through [`render_prose`], not [`render_line`]: a table's rows must
+//! be measured together.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -21,17 +16,15 @@ use super::grid::{truncate_spans, Ctx, MARK_COL};
 use super::row::band_row;
 use super::wrap::wrap_line;
 
-/// One piece of assistant text — either prose or a fenced code block.
+/// One piece of assistant text: prose or a fenced code block.
 pub(super) enum Segment {
     Prose(String),
     Code { lang: String, body: String },
 }
 
-/// Splits on ` ``` ` fences (optionally followed by a language tag on the
-/// opening fence). An unterminated fence — the closing ` ``` ` hasn't
-/// streamed in yet — still renders as code up to the end of the buffer
-/// rather than falling back to prose, since re-rendering happens on every
-/// delta and the fence will close on a later redraw.
+/// Splits on ` ``` ` fences; the opening fence may carry a language tag. An
+/// unterminated fence is code to the end of the text: while streaming, its
+/// close has not arrived yet.
 pub(super) fn split_code_fences(text: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut prose = String::new();
@@ -68,13 +61,9 @@ pub(super) fn split_code_fences(text: &str) -> Vec<Segment> {
     segments
 }
 
-/// Renders one prose segment — every line already fitted to `ctx.width`, so
-/// nothing downstream wraps (see [`super::transcript::Transcript`] on why
-/// that equivalence is load-bearing).
-///
-/// Ordinary lines go one at a time through [`render_line`]. A table is the
-/// exception: it is consumed as a block, because its column widths are a
-/// property of every row at once.
+/// Renders one prose segment, each line fitted to `ctx.width` (see
+/// [`super::transcript::Transcript`]). A table is consumed as a block; every
+/// other line goes through [`render_line`].
 pub(super) fn render_prose(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let src: Vec<&str> = text.lines().collect();
     let mut out: Vec<Line<'static>> = Vec::with_capacity(src.len());
@@ -91,8 +80,7 @@ pub(super) fn render_prose(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     out
 }
 
-/// Which edge a column's cells are flush to — the delimiter row's `:`
-/// markers (`:--` left, `--:` right, `:-:` centre).
+/// A column's alignment, from the delimiter row (`:--`, `--:`, `:-:`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Align {
     Left,
@@ -100,44 +88,30 @@ enum Align {
     Right,
 }
 
-/// One GFM pipe table, still as source text: the inline pass runs later, on
-/// the cells, so a `**bold**` cell is measured at its rendered width rather
-/// than its source width.
+/// One GFM pipe table as source text; the inline pass runs later, per cell.
 struct Table {
     header: Vec<String>,
     aligns: Vec<Align>,
     rows: Vec<Vec<String>>,
 }
 
-/// One table cell, already through the inline pass — so it is measured at
-/// the width it will actually occupy rather than at its source width, which
-/// a `**bold**` or `` `code` `` cell overstates by four cells or two.
+/// One table cell after the inline pass, so it is measured at its rendered
+/// width, not its source width.
 type Cell = Vec<Span<'static>>;
 
-/// Cells of clearance between a column's rule and its content, on each
-/// side. One, so a column occupies `width + 2` cells between its two `│`.
-/// Two would double every interior boundary's cost — on a 120-column frame
-/// a five-column table would spend 15 cells on air — and a drawn rule needs
-/// far less breathing room than a rule-less layout did, since the rule
-/// itself is what parts the columns now.
+/// Cells between a column's `│` and its content, each side.
 const CELL_PAD: usize = 1;
 
-/// Reads a table off the front of `lines`, returning it with the number of
-/// lines it consumed.
-///
-/// A header row alone is not a table — the delimiter row underneath it is
-/// what commits, exactly as GFM has it. That is also what makes this safe
-/// under streaming: a half-arrived table renders as prose (its header line
-/// still contains literal pipes) until the delimiter lands, and snaps into
-/// columns on the next delta.
+/// Reads a table off the front of `lines`, with the number of lines consumed.
+/// As in GFM, only the delimiter row commits a table, so a half-streamed
+/// table renders as prose until it arrives.
 fn parse_table(lines: &[&str]) -> Option<(Table, usize)> {
     let header = split_row(lines.first()?)?;
     let aligns = parse_delimiter(lines.get(1)?, header.len())?;
 
     let mut rows = Vec::new();
     let mut consumed = 2;
-    // The table runs until the first line that is not a row — a blank line,
-    // or ordinary prose with no pipe in it.
+    // Ends at the first line with no pipe.
     while let Some(cells) = lines.get(consumed).and_then(|l| split_row(l)) {
         rows.push(cells);
         consumed += 1;
@@ -152,9 +126,8 @@ fn parse_table(lines: &[&str]) -> Option<(Table, usize)> {
     ))
 }
 
-/// Splits one `| a | b |` row into trimmed cells, or `None` if the line
-/// carries no pipe at all. Leading and trailing pipes are optional (LLMs
-/// emit both forms); `\|` is a literal pipe and does not split.
+/// Splits `| a | b |` into trimmed cells, or `None` with no pipe. Outer
+/// pipes are optional; `\|` is a literal pipe.
 fn split_row(line: &str) -> Option<Vec<String>> {
     let trimmed = line.trim();
     if !trimmed.contains('|') {
@@ -184,10 +157,8 @@ fn split_row(line: &str) -> Option<Vec<String>> {
     Some(cells)
 }
 
-/// The `|---|:--:|---:|` row, which both commits the table and fixes each
-/// column's alignment. Every cell must be dashes with optional end colons,
-/// and there must be exactly one per header cell — a mismatch means this
-/// was never a table, so it falls back to prose rather than guessing.
+/// Parses the `|---|:--:|---:|` row into alignments. `None` (prose) unless
+/// every cell is dashes with optional end colons, one per header cell.
 fn parse_delimiter(line: &str, columns: usize) -> Option<Vec<Align>> {
     let cells = split_row(line)?;
     if cells.len() != columns || columns == 0 {
@@ -211,44 +182,20 @@ fn parse_delimiter(line: &str, columns: usize) -> Option<Vec<Align>> {
         .collect()
 }
 
-/// Lays the table out on `ctx.width`, as a drawn grid.
+/// Lays the table out on `ctx.width` as a drawn grid, rules in `label3`.
 ///
-/// **This is the design system's one stroked component, and the exception is
-/// deliberate** — see `.claude/adr/0002-markdown-tables-are-drawn.md`. Turn
-/// 13's rule ("nothing inside a frame is stroked; every boundary is a step
-/// on the ground ladder") and the closed glyph table (`tokens::MARKS`, none of it box-drawing)
-/// still hold everywhere else in this crate, and a boundary that separates
-/// one *region* from another — a turn break, a markdown `---`, a panel from
-/// its bar — is still a band. What a table needs is different in kind: a
-/// two-dimensional grid of boundaries, one per column, repeated down every
-/// row. The ground ladder has no way to express that (a ladder is one
-/// dimension), and the first build of this proved it — column position
-/// alone held the shape only until a cell was empty or a neighbouring
-/// column was narrow, at which point the rows read as ragged prose.
+/// The only stroked component (ADR 0002, `MARKS_BY_EXCEPTION`); the box
+/// glyphs must not spread to any other boundary, which stays a band.
 ///
-/// The rules are `label3`, the structural tone: present enough to carry
-/// the shape, quiet enough that the cells stay the thing being read.
-///
-/// # The one case where the box does not close
-///
-/// A column can be shrunk to one cell but no further, so a table needs at
-/// least `3n + 1` cells for `n` columns. Below that — 15-odd columns on a
-/// narrow terminal — the assembled rows are clipped to the column with the
-/// system's `…`, and the right-hand edge of the box goes with them.
-///
-/// That is deliberate over the two alternatives. Closing the box anyway
-/// would draw a `┐` claiming an edge that is not where the table ends, and
-/// dropping the columns that do not fit would silently discard the
-/// developer's data. A clipped edge with a visible `…` says "there is more
-/// here than fits", which is the true statement. Pinned by
-/// `a_table_with_more_columns_than_cells_clips_rather_than_lying`.
+/// Below `4n + 1` cells for `n` columns (every column at one cell), rows are
+/// clipped with `…` and lose the right edge; never close the box early or
+/// drop columns.
 fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let columns = table.header.len();
 
-    // `label`, not weight 600: the design spends emphasis on the review
-    // title, a file path, a question and "Aldwin", and ADR 0002 gives the
-    // header its tone only.
+    // Header in `label`, not bold (ADR 0002): the design reserves weight 600
+    // for the review title, a file path, a question and "Aldwin".
     let header: Vec<Cell> = table
         .header
         .iter()
@@ -283,9 +230,8 @@ fn render_table(table: &Table, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
-/// One horizontal rule — `[left, junction, right]` picking which of the
-/// three it is. Every column's run is its content width plus the cell's own
-/// two pad cells, so a rule meets its neighbouring row's `│` exactly.
+/// One horizontal rule from `[left, junction, right]`. Each run must be
+/// `width + 2 * CELL_PAD` to meet `row_line`'s `│`.
 fn rule_line(corners: [char; 3], widths: &[usize], ctx: Ctx) -> Line<'static> {
     let [left, junction, right] = corners;
     let mut rule = String::from(left);
@@ -302,11 +248,9 @@ fn rule_line(corners: [char; 3], widths: &[usize], ctx: Ctx) -> Line<'static> {
     ))
 }
 
-/// Each column as wide as its widest *rendered* cell, then shrunk — widest
-/// column first — until the whole row fits the column it is being drawn in.
-/// Shrinking one cell at a time rather than scaling proportionally keeps a
-/// narrow column (`yes`/`no`, a count) intact while the prose column gives
-/// up the cells, which is nearly always the right trade.
+/// Each column as wide as its widest rendered cell, then the widest shrunk
+/// one cell at a time until the row fits `avail`. Not proportional: a
+/// narrow column (a count, `yes`/`no`) stays intact.
 fn column_widths(header: &[Cell], body: &[Vec<Cell>], avail: usize) -> Vec<usize> {
     let mut widths: Vec<usize> = header.iter().map(|cell| span_width(cell)).collect();
     for row in body {
@@ -315,21 +259,18 @@ fn column_widths(header: &[Cell], body: &[Vec<Cell>], avail: usize) -> Vec<usize
         }
     }
 
-    // Every column costs its content plus two pad cells, and there is one
-    // more rule than there are columns (`│ a │ b │`).
+    // Per column: content, two pads and one `│`; plus the closing `│`.
     let room = avail.saturating_sub(widths.len() * (2 * CELL_PAD + 1) + 1);
     let mut total: usize = widths.iter().sum();
     while total > room {
-        // `max_by_key` yields the *last* maximum, so tied columns give up
-        // cells right to left — the leftmost column is the one that names
-        // the row, and it is the last that should lose its text.
+        // `max_by_key` yields the last maximum, so ties shrink right to
+        // left and the leftmost column, which names the row, shrinks last.
         let Some((i, _)) = widths.iter().enumerate().max_by_key(|(_, w)| **w) else {
             break;
         };
         if widths[i] <= 1 {
-            // Every column is down to a single cell and it still does not
-            // fit; `row_line` truncates the assembled row rather than
-            // letting it overhang the body column.
+            // All columns at one cell and still too wide: `row_line` and
+            // `rule_line` clip the assembled row.
             break;
         }
         widths[i] -= 1;
@@ -338,14 +279,8 @@ fn column_widths(header: &[Cell], body: &[Vec<Cell>], avail: usize) -> Vec<usize
     widths
 }
 
-/// One table row: `│`, then each cell elided to its column and padded to
-/// that column's edge, then the closing `│`.
-///
-/// Every column is padded to its full width, the last one included — unlike
-/// a rule-less layout, where the trailing run would be nothing but spaces at
-/// the row's end. Here it holds the closing rule on the same column the rule
-/// rows put their corner, and a row one cell short of that would leave the
-/// box visibly unclosed.
+/// One table row, each cell elided and padded to its column. The last
+/// column is padded too, so the closing `│` lines up with the rule's corner.
 fn row_line(cells: &[Cell], widths: &[usize], aligns: &[Align], ctx: Ctx) -> Line<'static> {
     let rule = Style::default().fg(ctx.pal.label3);
     let pad = |n: usize| Span::raw(" ".repeat(n));
@@ -371,10 +306,9 @@ fn span_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(|s| s.content.width()).sum()
 }
 
-/// Renders one prose line (never a fenced-code line — those are already
-/// pulled out by `split_code_fences`). Styling is modifiers only
-/// (bold/italic/crossed-out — never underline, which is a stroke): blue
-/// means you, so the agent's prose never takes the accent.
+/// Renders one prose line (fences are already split out). Styling is
+/// modifiers only: never underline (a stroke), never the accent (blue is
+/// the developer's, not the agent's prose).
 pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
     let base = Style::default().fg(pal.label);
@@ -382,30 +316,23 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let indent = &line[..line.len() - trimmed_start.len()];
 
     if is_hr(trimmed_start) {
-        // A markdown thematic break is a separator, and separators are
-        // bands: one row of `tint`. A run of `─` is not in the design's
-        // glyph vocabulary, and that vocabulary is closed: "if a mark is
-        // needed and it is not in this list, do not draw one."
+        // A band, not a run of `─`: the glyph table is closed.
         return band_row(pal.tint, ctx);
     }
     if let Some(rest) = parse_heading(trimmed_start) {
-        // A heading is its own line of prose, nothing more. Not underlined
-        // — nothing in a window is stroked, and an underline is a stroke —
-        // and not weight 600, which the design spends on the review title,
-        // a file path, a question and "Aldwin" alone. `**bold**` inside a
-        // line is the model's own emphasis and keeps its weight.
+        // A heading is plain prose: no underline (a stroke), no weight 600
+        // (reserved as for table headers). Inline `**bold**` still applies.
         return Line::from(parse_inline(rest, base, ctx));
     }
-    // A quote is set in by the mark column's width and nothing else: `▎` is
-    // the developer's selection edge, and blue means you.
+    // A quote is only indented by `MARK_COL`: `▎` is reserved for the
+    // developer's selection.
     if let Some(rest) = trimmed_start.strip_prefix('>') {
         let rest = rest.strip_prefix(' ').unwrap_or(rest);
         let mut spans = vec![Span::raw(format!("{indent}{}", " ".repeat(MARK_COL)))];
         spans.extend(parse_inline(rest, base.add_modifier(Modifier::ITALIC), ctx));
         return Line::from(spans);
     }
-    // A list item's mark is `·`, the design's own small separator: the
-    // glyph table is closed and has no bullet.
+    // `·`: the closed glyph table has no bullet.
     if let Some(rest) = parse_bullet(trimmed_start) {
         let mut spans = vec![Span::styled(format!("{indent}· "), base)];
         spans.extend(parse_inline(rest, base, ctx));
@@ -419,17 +346,8 @@ pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     Line::from(parse_inline(line, base, ctx))
 }
 
-/// An `_` between two word characters is a literal underscore, never an
-/// emphasis delimiter.
-///
-/// CommonMark and GFM both disallow intraword `_` emphasis (and both allow it
-/// for `*`), and the reason is exactly the case that broke here:
-/// `ANTHROPIC_API_KEY` was rendering as `ANTHROPICAPIKEY` — italic `API`, both
-/// underscores eaten. In a harness whose transcript is full of `snake_case`
-/// identifiers, env-var names and file paths, silently deleting underscores is
-/// worse than never supporting `_italic_` at all. Found by the screenshot
-/// harness's `markdown` scene (2026-09-19), which is the first defect it
-/// caught that this crate's own tests do not.
+/// Whether the `_` at `rest[0]` sits between two alphanumerics: then it is a
+/// literal, as in CommonMark, so `ANTHROPIC_API_KEY` keeps its underscores.
 fn intraword(before: &str, rest: &str) -> bool {
     let previous = before.chars().last();
     let following = rest[1..].chars().next();
@@ -438,9 +356,7 @@ fn intraword(before: &str, rest: &str) -> bool {
 }
 
 /// Recursive-descent inline pass: `**bold**`, `*italic*`/`_italic_`,
-/// `` `code` ``, `~~strike~~`, `[text](url)`. Delimiters nest via recursion
-/// (e.g. `**bold *and italic***`) rather than a flat token stream, which
-/// keeps this a single small function instead of a tokenizer + AST.
+/// `` `code` ``, `~~strike~~`, `[text](url)`; nesting is by recursion.
 pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'static>> {
     fn flush(buf: &mut String, style: Style, spans: &mut Vec<Span<'static>>) {
         if !buf.is_empty() {
@@ -456,13 +372,8 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                // Quoted code on `--tint`, the ground a fenced block takes
-                // too, so both sizes of quoted code are visibly one thing.
-                // The ink stays `label`: the ground is what does the work,
-                // and a span that only changed its ink read as prose.
-                //
-                // Exactly the span's own cells: no padding cell either
-                // side, so nothing after it shifts off its column.
+                // On `--tint` like a fenced block; ink alone read as prose.
+                // No padding cells, so nothing after it shifts.
                 spans.push(Span::styled(
                     stripped[..end].to_string(),
                     Style::default().fg(ctx.pal.label).bg(ctx.pal.tint),
@@ -508,8 +419,7 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         } else if rest.starts_with('[') {
             if let Some((label, url, remainder)) = parse_link(rest) {
                 flush(&mut buf, base, &mut spans);
-                // The label as text, the address after it in `label3` — no
-                // underline, which would be a stroke.
+                // No underline: it is a stroke.
                 spans.push(Span::styled(label.to_string(), base));
                 if !url.is_empty() && url != label {
                     spans.push(Span::styled(
@@ -572,8 +482,7 @@ fn parse_ordered(line: &str) -> Option<(String, &str)> {
     Some((format!("{digits}{sep}"), rest))
 }
 
-/// A line of 3+ `-`, `*`, or `_` (ignoring interior spaces, so `- - -`
-/// counts) and nothing else — CommonMark's thematic break.
+/// CommonMark's thematic break: 3+ of one of `-`, `*`, `_`, spaces allowed.
 fn is_hr(line: &str) -> bool {
     let mut marks = line.chars().filter(|c| !c.is_whitespace());
     let Some(first) = marks.next().filter(|c| matches!(c, '-' | '*' | '_')) else {

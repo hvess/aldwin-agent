@@ -1,17 +1,6 @@
-//! The question panel and the command list — the design's `QuestionPanel`
-//! and `CommandRow`, both over the one [`crate::list::List`].
-//!
-//! A question: a blank row, the question in weight 600, one line of why in
-//! `label2`, a blank row, the numbered options, a blank row — all on
-//! `--panel`, in place of the field and inset by the margin as the field
-//! is. The current option sits on `--field` with the accent `›` in the mark
-//! column and a `label2` number; the other numbers are `label3`.
-//!
-//! The commands: the same panel, directly above the field — a blank row,
-//! the matching commands inset as the options are, a blank row. Each name
-//! fills the `--command-col` column with no slash, what is typed of it in
-//! `label` and the rest in `label2`, then its purpose. The current row sits
-//! on `--field` with the `›` and its purpose in `label`.
+//! The design's `QuestionPanel` and `CommandRow`, both over one
+//! [`crate::list::List`], on `--panel` with the current row on `--field`.
+//! The question panel replaces the field; the command list sits above it.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -29,31 +18,27 @@ use crate::app::CommandMenu;
 use crate::list::List;
 use crate::palette::Palette;
 
-/// Frame E's `QuestionPanel`: the panel is a band inset by `MARGIN_X`
-/// (`margin:0 3ch`), its question and why padded `PANEL_PAD` further in
-/// (`padding:0 3ch`, so they land on cell 6), and each option row inset
-/// `OPTION_INSET` inside the panel (`margin:0 1ch`) — its mark on cell 4,
-/// its number on cell 6, its answer on cell 9.
+/// Frame E's `QuestionPanel` insets: the question and its detail are padded
+/// `PANEL_PAD` inside the panel (`padding:0 3ch`), each option row inset
+/// `OPTION_INSET` (`margin:0 1ch`).
 ///
-/// Written here rather than generated: `tokens/layout.css` has no token for
-/// either — frame E states them as bare `ch` values. Baseline
-/// `question-panel-insets-are-untokenised` records the gap; when the design
-/// names them, these become `tokens.rs` constants like every other measure.
+/// Literals, not `tokens.rs`: `tokens/layout.css` has no token for them
+/// (baseline `question-panel-insets-are-untokenised`). Move them to tokens
+/// once the design names them.
 pub(super) const PANEL_PAD: usize = 3;
 pub(super) const OPTION_INSET: usize = 1;
 
-/// Cells the question and its why wrap to: the window less the panel's two
-/// margins and its two paddings.
+/// Cells the question and its detail wrap to.
 fn text_width(width: u16) -> usize {
     (width as usize)
         .saturating_sub(2 * (MARGIN_X + PANEL_PAD))
         .max(1)
 }
 
-/// Rows the panel takes at `width`: a blank row, the question and its
-/// detail wrapped, a blank row — and with `options`, each option and a
-/// blank row after them. Without, it is the question alone, as it stays
-/// above the field while it is answered in words.
+/// Rows the panel takes at `width`. `options` is `None` while the question
+/// is answered in words: the panel then shows the question alone.
+///
+/// Must match the rows `draw_panel` pushes.
 pub(super) fn panel_rows(question: &Question, options: Option<&List>, width: u16) -> u16 {
     let text_width = text_width(width);
     let heading = wrap_line(Line::from(question.question.clone()), text_width).len();
@@ -133,13 +118,8 @@ fn padded(mut line: Line<'static>, bg: Color) -> Line<'static> {
     line
 }
 
-/// `› 1  Yes, limit them by address` — the option row, built across the
-/// panel's width (`ctx.width`) and inset `OPTION_INSET` inside it. The
-/// current one is on `--field` with the accent `›` and a `label2` number;
-/// every other has an empty mark column, a `label3` number and `label2`
-/// text. A row with a detail (a provider's purpose, a session's date)
-/// carries it as a fact: `label2`, right-flush where the panel's text
-/// column ends.
+/// `› 1  Yes, limit them by address`, with `detail` (a provider's purpose, a
+/// session's date) right-flush where the panel's text column ends.
 fn option_row(
     i: usize,
     label: &str,
@@ -182,8 +162,8 @@ fn option_row(
     one_row(row, justified(left, fact, width).spans, ctx)
 }
 
-/// One row of `row`'s surface. Every caller elides its content to fit, so
-/// it never wraps; the blank fallback is for an empty build only.
+/// One row of `row`'s surface. Callers must elide content to fit: only the
+/// first wrapped row is kept.
 fn one_row(row: Row, spans: Vec<Span<'static>>, ctx: Ctx) -> Line<'static> {
     row.build(spans, ctx)
         .into_iter()
@@ -215,16 +195,14 @@ pub(super) fn draw_commands(frame: &mut Frame, area: Rect, menu: &CommandMenu, p
     frame.render_widget(Paragraph::new(Text::from(lines)).style(on_panel), inner);
 }
 
-/// Rows the command panel takes: a blank row, the rows, a blank row.
+/// Rows the command panel takes; must match `draw_commands`.
 pub(super) fn commands_rows(menu: &CommandMenu) -> u16 {
     menu.list.rows.len() as u16 + 2
 }
 
-/// `› changes     Everything changed since you started` — built across the
-/// panel's width and inset `OPTION_INSET` inside it, like an option. The
-/// name fills `--command-col`, `typed` of it in `label` and the rest in
-/// `label2`; the purpose follows, `label` on the current row and `label2`
-/// on the others, with the frame's empty `--mark-col` held at the end.
+/// A command row, inset like an option: the name without its `/` in
+/// `--command-col` (the `typed` prefix in `label`), then the purpose, with an
+/// empty `--mark-col` held at the end as in the frame.
 fn command_row(name: &str, purpose: &str, typed: &str, current: bool, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
     let bg = if current { pal.field } else { pal.panel };

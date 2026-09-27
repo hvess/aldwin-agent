@@ -1,7 +1,5 @@
-//! Frame-level facts, against `TestBackend`: why each thing is where it is.
-//! Every cell, colour and modifier of every scene is pinned separately by
-//! `tests/render_snapshot.rs`; these say what the design's rules are and
-//! that the frame follows them.
+//! The design's rules, checked on `TestBackend` frames. Every cell of every
+//! scene is pinned separately by `tests/render_snapshot.rs`.
 
 use aldwin_core::{
     ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnEndReason,
@@ -47,7 +45,7 @@ fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
-/// Where the caret is after a draw: the terminal's cursor, if shown.
+/// The terminal cursor's position after a draw, if shown.
 fn caret(app: &mut App, width: u16, height: u16) -> Option<(u16, u16)> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| super::draw(f, app)).unwrap();
@@ -72,8 +70,6 @@ fn col_of(buf: &Buffer, y: u16, needle: &str) -> Option<usize> {
         .map(|byte| row_text(buf, y)[..byte].chars().count())
 }
 
-/// The launch card: two blank rows, the mark at the body column, the facts
-/// centred beside it with `Aldwin` in weight 600.
 #[test]
 fn the_launch_card_leads_with_the_mark_and_the_four_facts() {
     let mut a = app();
@@ -112,7 +108,7 @@ fn the_launch_card_leads_with_the_mark_and_the_four_facts() {
         row_text(&buf, name + 3).contains("Model")
             && row_text(&buf, name + 3).contains("claude-sonnet-5")
     );
-    // The mark is half-block cells.
+    // The mark is half-block cells, not a glyph.
     assert_eq!(buf[(BODY_X as u16 + 6, 3)].symbol(), "▀");
 }
 
@@ -145,7 +141,7 @@ fn the_field_is_at_the_margin_with_the_prompt_in_the_mark_column() {
         pal.win,
         "the margin is the window ground"
     );
-    // The footer two rows below: Ready at the body column, Commands, Context at the right.
+    // The footer, two rows below.
     let footer = row_text(&buf, y + 2);
     assert_eq!(col_of(&buf, y + 2, "Ready"), Some(BODY_X));
     assert!(footer.contains("/  Commands"));
@@ -232,7 +228,7 @@ fn the_plan_marks_done_running_and_pending_in_their_three_tones() {
     );
 }
 
-/// Frames B, C and J: the disclosure's glyph is the row's own `label2`.
+/// Frames B, C and J.
 #[test]
 fn a_disclosure_glyph_is_in_the_rows_tone() {
     let mut a = app();
@@ -254,8 +250,7 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     assert_eq!(buf[(glyph, y)].fg, pal.label2);
 }
 
-/// Frame J: after a save the empty field offers `Send  ↩` right-flush in
-/// `label3`, one cell in from its edge; it turns blue once there is a
+/// Frame J: `Send  ↩` right-flush, one cell in, `label3` until there is a
 /// draft.
 #[test]
 fn after_a_save_the_field_offers_send() {
@@ -282,8 +277,7 @@ fn after_a_save_the_field_offers_send() {
     assert_eq!(buf[(right - 2, y)].fg, pal.accent, "ready once typed");
 }
 
-/// Frames B and C: Space still opens the work, but the footer names only
-/// `esc  Stop` — shut or open, working or not.
+/// Frames B and C: Space opens the work but is never named in the footer.
 #[test]
 fn no_footer_names_the_details_key() {
     let mut a = app();
@@ -319,8 +313,7 @@ fn no_footer_names_the_details_key() {
     );
 }
 
-/// Prose is `padding: 0 5ch` in every frame: it wraps `BODY_X` short of the
-/// right edge, as it starts `BODY_X` in from the left.
+/// Every frame's prose `padding: 0 5ch`.
 #[test]
 fn prose_wraps_as_far_from_the_right_edge_as_it_starts_from_the_left() {
     let mut a = app();
@@ -360,8 +353,7 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     });
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
-    // Frame E: the panel is inset by the margin like the field; its text is
-    // padded 3ch inside it; each option row is inset 1ch inside the panel.
+    // Frame E's insets: see `question::PANEL_PAD`.
     let right = buf.area.width - 1;
     let (panel_x, text_x, option_x) = (
         MARGIN_X as u16,
@@ -437,9 +429,7 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     );
 }
 
-/// Frame F: the commands on a `--panel` band sitting on the field, a blank
-/// row inside it above and below, each row inset a cell into it; the
-/// current one on `--field` with the `›`, its purpose in `label`.
+/// Frame F.
 #[test]
 fn the_command_menu_is_a_panel_on_the_field() {
     let mut a = app();
@@ -527,8 +517,7 @@ fn the_command_menu_is_a_panel_on_the_field() {
     );
 }
 
-/// Typing narrows the list and the current command completes the field
-/// in `label3`; the text turns blue once it spells a command.
+/// Also pins that the typed text turns accent once it spells a command.
 #[test]
 fn the_command_field_completes_the_current_command_in_grey() {
     let mut a = app();
@@ -569,7 +558,6 @@ fn the_command_field_completes_the_current_command_in_grey() {
     assert_eq!(buf[(BODY_X as u16 + 5, field)].fg, pal.accent);
 }
 
-/// The completion follows the current row, not only the top match.
 #[test]
 fn the_completion_follows_the_current_row() {
     let mut a = app();
@@ -585,8 +573,8 @@ fn the_completion_follows_the_current_row() {
     );
 }
 
-/// The caret stands at the left edge of the character after it: mid-text
-/// it is the cursor on that character's cell, which keeps its own paint.
+/// Mid-text the caret is the cursor on the next character's cell, which
+/// keeps its own paint.
 #[test]
 fn the_caret_stands_before_the_character_it_is_at() {
     let mut a = app();
@@ -602,8 +590,7 @@ fn the_caret_stands_before_the_character_it_is_at() {
     assert_eq!(buf[(BODY_X as u16 + 2, y)].fg, pal.label);
 }
 
-/// The caret blinks on `--caret-period`: the cursor is hidden for the
-/// other half.
+/// `--caret-period`.
 #[test]
 fn the_caret_blinks_by_hiding_the_cursor() {
     let mut a = app();
@@ -644,14 +631,13 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
     });
     let buf = render(&mut a, 110, 40);
     let pal = Theme::Dark.palette();
-    // Header.
     assert_eq!(col_of(&buf, 1, "Add rate limiting"), Some(BODY_X));
     assert!(buf[(BODY_X as u16, 1)].modifier.contains(Modifier::BOLD));
     assert!(row_text(&buf, 1)
         .trim_end()
         .ends_with("Nothing is saved until you approve"));
     assert_eq!(col_of(&buf, 2, "Each key"), Some(BODY_X));
-    // Tree on tint, 28 wide, from the left edge; the dots at the margin.
+    // Tree: `TREE_W` (28) on tint.
     assert_eq!(buf[(0, 4)].bg, pal.tint);
     assert_eq!(buf[(27, 4)].bg, pal.tint);
     assert_eq!(buf[(28, 4)].bg, pal.win);
@@ -674,7 +660,7 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
         buf[(col_of(&buf, added, "+").unwrap() as u16, added)].fg,
         pal.add
     );
-    // Diff pane: path in 600 with the stat, then rows with a 5-cell gutter.
+    // Diff pane at `TREE_W + PANE_GAP` (32); a 5-cell gutter.
     let path = find_row(&buf, "src/gateway/router.rs").unwrap();
     assert_eq!(col_of(&buf, path, "src/gateway/router.rs"), Some(28 + 4));
     assert!(row_text(&buf, path).contains("+1 −1"));
@@ -694,8 +680,7 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
         Some(32 + 3),
         "the line number right-aligned in 5"
     );
-    // The field carries no placeholder, and the approve is grey — and says
-    // in words what it waits for, so the grey is not the only cue.
+    // Not-ready approve: `label3`, and its words say what it waits for.
     let field = find_row(&buf, "Approve after reading 1 file  ⌃↩").unwrap();
     assert!(
         !row_text(&buf, field).contains("Ask"),
@@ -838,8 +823,6 @@ fn after_a_turn_that_saved_the_footer_is_the_context_bar_alone() {
     );
 }
 
-/// When the footer cannot hold everything, `/  Commands` gives way before
-/// the context bar loses its percentage.
 #[test]
 fn a_narrow_footer_drops_the_commands_before_the_context_bar() {
     let mut a = app();
@@ -854,8 +837,7 @@ fn a_narrow_footer_drops_the_commands_before_the_context_bar() {
     assert!(row_text(&buf, find_row(&buf, "Context").unwrap()).contains("/  Commands"));
 }
 
-/// `/resume`'s facts: `label2`, right-flush where the panel's text column
-/// ends, so the dates line up however long each title is.
+/// Dates must line up at the panel's text column whatever the title length.
 #[test]
 fn a_session_date_is_a_right_flush_fact() {
     let session = |id: &str, title: &str| crate::resume::SessionChoice {
@@ -888,8 +870,7 @@ fn a_session_date_is_a_right_flush_fact() {
     }
 }
 
-/// The pane the review records is where its rows are drawn: a click on a
-/// line's cell selects that line.
+/// The recorded `Pane` must match where rows are drawn (ADR 0010).
 #[test]
 fn a_click_on_a_drawn_diff_line_selects_that_line() {
     let mut a = app();
@@ -928,8 +909,7 @@ fn a_click_on_a_drawn_diff_line_selects_that_line() {
     );
 }
 
-/// The review's key list names `Space` only while the file has a fold to
-/// open — footers name only the keys that work right now.
+/// Footers name only keys that currently work.
 #[test]
 fn the_review_offers_space_only_while_there_is_a_fold() {
     let mut a = app();
@@ -979,8 +959,8 @@ fn one_file_review(a: &mut App, after: String) {
     });
 }
 
-/// Decision 3: the action's words change when it is ready, not only its
-/// colour — and a line typed in the field is counted as what `⌃↩` sends.
+/// The words change with readiness, not only the colour (HIG
+/// "Accessibility"); a typed draft counts as a comment.
 #[test]
 fn the_review_action_says_what_the_key_will_do() {
     let mut a = app();
@@ -1001,8 +981,8 @@ fn the_review_action_says_what_the_key_will_do() {
     );
 }
 
-/// Decision 4: a line wider than the pane goes on onto continuation rows
-/// with a blank gutter, on the row's own ground — none of it is cut off.
+/// Baseline `long-diff-lines-wrap`: nothing is cut off, and continuation
+/// rows keep the row's ground.
 #[test]
 fn a_long_diff_line_wraps_under_a_blank_gutter() {
     let mut a = app();
@@ -1037,7 +1017,6 @@ fn a_long_diff_line_wraps_under_a_blank_gutter() {
     assert!(find_row(&buf, "short").unwrap() > next);
 }
 
-/// A wrapped file is read only once its last row has been on screen whole.
 #[test]
 fn a_wrapped_file_is_read_only_when_its_last_row_is_seen() {
     let mut a = app();
@@ -1054,9 +1033,8 @@ fn a_wrapped_file_is_read_only_when_its_last_row_is_seen() {
     assert!(a.review().unwrap().all_read());
 }
 
-/// M4: after "Chat about this" the question stays above the field, the
-/// footer says the turn is waiting on you, and `esc` is named as the way
-/// back to the options.
+/// After "Chat about this": the footer shows `Waiting`, and `esc` returns
+/// to the options.
 #[test]
 fn answering_in_words_keeps_the_question_on_screen() {
     let mut a = app();
@@ -1086,7 +1064,6 @@ fn answering_in_words_keeps_the_question_on_screen() {
     assert!(!footer.contains("Working"), "{footer:?}");
 }
 
-/// The comment field names escape as every footer does, `esc`.
 #[test]
 fn the_comment_field_names_escape_as_the_footers_do() {
     let mut a = app();

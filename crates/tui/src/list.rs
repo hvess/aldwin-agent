@@ -1,13 +1,10 @@
-//! The one list control every question is asked with: numbered rows, `↑↓`
-//! to choose, `↩` or the number to pick, `esc` to close. The design draws a
-//! `QuestionPanel` and a `CommandRow` list; a provider or a session picker
-//! is the same control with different rows, so there is one of these and
-//! not four.
+//! The one list control every question and picker uses (the design's
+//! `QuestionPanel` and `CommandRow` list): `↑↓` to choose, `↩` or the
+//! number to pick, `esc` to close.
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-/// One row: what it says, and — for a command list — its purpose in the
-/// second column.
+/// One row; `detail` is the second column, empty except in a command list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRow {
     pub label: String,
@@ -49,9 +46,8 @@ impl List {
         Self { rows, selected: 0 }
     }
 
-    /// Opens with `selected` on the row that is current already — a
-    /// picker over the session's own model, say — so `↩` confirms rather
-    /// than moves.
+    /// Opens on the row already current, clamped to the rows, so `↩`
+    /// confirms it.
     pub fn opened_on(mut self, index: usize) -> Self {
         self.selected = index.min(self.rows.len().saturating_sub(1));
         self
@@ -70,7 +66,7 @@ impl List {
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                 return ListOutcome::Close
             }
-            // Press the number: the design's own instruction.
+            // `1`-`9` pick by position, as the design instructs.
             (KeyCode::Char(c), _) if c.is_ascii_digit() && c != '0' => {
                 let idx = (c as u8 - b'1') as usize;
                 if idx <= last {

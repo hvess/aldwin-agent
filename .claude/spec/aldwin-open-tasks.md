@@ -65,5 +65,4 @@ contradicts) and the entry says so before it goes.
    holds every comment to what an LLM reader needs; the crates were written
    before it. The rework lands one crate per commit, each through the review
    loop and changing comments only: login (landed with the skill), llm,
-   config, core, tools and cli are done; tui and review follow, in that
-   order. Entry 1 waits on it. Closing it is the last crate's commit.
+   config, core, tools, cli and tui are done; review follows. Entry 1 waits on it. Closing it is the last crate's commit.

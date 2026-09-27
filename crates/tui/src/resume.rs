@@ -1,21 +1,17 @@
-//! What bare `/resume` offers: the past sessions, as display halves handed
-//! in by aldwin-cli's bootstrap. aldwin-tui reads no files, which is why
-//! the transcript directory is not mentioned anywhere in this crate. The
-//! question itself is asked with the one list control (`App::open_session_question`),
-//! and answering it submits `/resume <id>` exactly as if it had been typed,
-//! so the interceptor stays the one place that knows what resuming does.
+//! The past sessions bare `/resume` offers, formatted by aldwin-cli; this
+//! crate reads no files. Picking one (`App::open_session_question`) submits
+//! `/resume <id>` as if typed, so the interceptor alone knows what resuming
+//! does.
 
-/// One past session, already rendered for display — this crate never sees
-/// a timestamp or a record.
+/// One past session, already formatted for display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionChoice {
     /// What `/resume <id>` is composed with.
     pub id: String,
-    /// First user message, one line — what the developer will recognise the
-    /// session by.
+    /// First user message, one line.
     pub title: String,
     /// When it started, already formatted (`2026-09-20 18:11`).
     pub when: String,
-    /// How many turns it ran.
+    /// Turns it ran.
     pub turns: usize,
 }

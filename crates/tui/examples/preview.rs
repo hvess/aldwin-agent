@@ -1,9 +1,7 @@
-//! Design-iteration harness — NOT part of the shipped app. Builds an `App`
-//! seeded with one of the snapshot scenes and draws it once to the real
-//! terminal, so the rendered output can be captured for visual review.
-//! Pass a scene name as argv[1] (`launch`, `working`, `question`,
-//! `commands`, `review`, `saved`) and `light` or `dark` as argv[2]. Exits
-//! on a keypress.
+//! Design-iteration harness, not shipped: draws one seeded scene once to
+//! the real terminal for visual review, and exits on a keypress.
+//! argv[1] is the scene (`launch`, `working`, `question`, `commands`,
+//! `review`, `saved`); argv[2] is `light` or `dark`.
 
 use std::io;
 

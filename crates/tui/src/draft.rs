@@ -1,21 +1,12 @@
-//! The composer's draft, laid out as visual rows.
+//! The multi-line draft and its layout as visual rows.
 //!
-//! The composer is a real multi-line editor, not a one-line field: Shift+
-//! Enter (and Ctrl+J) open a new line, and a bracketed paste drops an
-//! arbitrary block of text in whole. Both mean the draft's *source* lines
-//! and the rows it occupies on screen stop being the same thing — a pasted
-//! 200-column line is one source line and three screen rows, and a pasted
-//! 40-line file is more rows than the composer is ever allowed to take.
+//! [`Layout`] is the only source-to-screen mapping: `ui::chrome` draws from
+//! it, `App::handle_key` navigates by it, `ui::draw` sizes the composer
+//! from it. Never wrap the draft with `Paragraph`; it does not report its
+//! breaks, so the caret would drift from the text.
 //!
-//! [`Layout`] is the one place that mapping lives. `ui::chrome` draws from
-//! it, `App::handle_key` navigates by it, and `ui::draw` sizes the composer
-//! band from it — so the caret cannot land somewhere the text isn't, the
-//! way it did while the draft was wrapped by `Paragraph` (which reports
-//! nothing about where it broke) and the cursor was placed from the
-//! *source* line and column.
-//!
-//! Positions are **character** indices into the draft, matching
-//! [`Draft::cursor`]; columns are **display cells**, matching the screen.
+//! Positions are character indices, matching [`Draft::cursor`]; columns are
+//! display cells.
 
 use std::borrow::Cow;
 
@@ -36,19 +27,17 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    /// Wraps `text` to `width` display cells, breaking at the last space on
-    /// the row where there is one and mid-word where there isn't. A `\n`
-    /// always ends a row, and an empty draft is one empty row — the
-    /// composer is never zero rows tall.
+    /// Wraps `text` to `width` cells, at the row's last space or else
+    /// mid-word; `\n` always ends a row. Never zero rows: an empty draft is
+    /// one empty row.
     pub(crate) fn new(text: &str, width: usize) -> Self {
         let width = width.max(1);
         let chars: Vec<char> = text.chars().collect();
         let mut rows: Vec<Row> = Vec::new();
         let mut start = 0usize;
         let mut col = 0usize;
-        // Just past the last space on the current row — where a soft break
-        // goes, so the space stays with the row it ended rather than
-        // opening the next one.
+        // Just past the row's last space: a soft break keeps the space on
+        // the row it ends.
         let mut last_space: Option<usize> = None;
         let mut i = 0usize;
         while i < chars.len() {
@@ -68,9 +57,8 @@ impl Layout {
                 start = brk;
                 col = chars[start..i].iter().map(|c| c.width().unwrap_or(0)).sum();
                 last_space = None;
-                // Re-test this character against the row it just opened
-                // rather than assuming it fits — a break that carried text
-                // over can still leave it too wide.
+                // Re-test this character on the new row: carried-over text
+                // can still leave it too wide.
                 continue;
             }
             col += w;
@@ -100,10 +88,9 @@ impl Layout {
 
     /// Where `cursor` sits: `(row, display column)`.
     ///
-    /// A cursor exactly on a *soft* break belongs to the row it opens, not
-    /// the one it closed — that is the cell the next typed character will
-    /// occupy. On a *hard* break (a `\n`) it stays on the row it ends,
-    /// which is the end of that line.
+    /// On a soft break the cursor belongs to the row it opens, where the
+    /// next character lands; on a `\n` it stays at the end of the row it
+    /// closes.
     pub(crate) fn position(&self, cursor: usize) -> (usize, usize) {
         let cursor = cursor.min(self.chars.len());
         for (i, row) in self.rows.iter().enumerate() {
@@ -113,16 +100,14 @@ impl Layout {
                 return (i, self.width_of(row.start, cursor));
             }
         }
-        // Unreachable while `rows` is non-empty (it always is), but a
-        // clamped answer beats a panic in a draw path.
+        // Unreachable (`rows` is never empty); clamped, not a panic, on a
+        // draw path.
         (self.rows.len().saturating_sub(1), 0)
     }
 
-    /// The character index `delta` rows away from `cursor`, holding the
-    /// display column where the target row is wide enough. `None` when
-    /// there is no such row — which is how `App::handle_key` knows an
-    /// Up/Down press has run out of draft and should scroll the log
-    /// instead.
+    /// The character index `delta` rows from `cursor`, holding the column
+    /// where the row allows. `None` past the first or last row;
+    /// `App::handle_key` then scrolls the log instead.
     pub(crate) fn step_row(&self, cursor: usize, delta: isize) -> Option<usize> {
         let (row, col) = self.position(cursor);
         let target = row
@@ -131,14 +116,10 @@ impl Layout {
         Some(self.index_at(target, col))
     }
 
-    /// The character index at display column `col` of row `i`, clamped to
-    /// the last position that still reads as being *on* that row.
+    /// The character index at column `col` of row `i`, clamped to the row.
     ///
-    /// On a soft-wrapped row that is one short of its end: the index at the
-    /// end of such a row is the same index as the start of the next one,
-    /// and [`Self::position`] resolves it to the next row (which is where
-    /// the caret visibly is). Clamping to the end would make Up from a full
-    /// row appear not to move at all.
+    /// A soft-wrapped row clamps one short of its end: its end index is the
+    /// next row's start, which [`Self::position`] puts on the next row.
     fn index_at(&self, i: usize, col: usize) -> usize {
         let Some(row) = self.rows.get(i) else {
             return self.chars.len();
@@ -171,13 +152,11 @@ impl Layout {
     }
 }
 
-/// The half-open character range of the source line `cursor` is on — what
-/// Home and End move between, so both stay inside the line the caret is on
-/// rather than jumping to the ends of a whole pasted block.
+/// The half-open character range of the source line `cursor` is on; Home
+/// and End move within it.
 ///
-/// Walks the draft rather than collecting it: this runs on a keystroke, and
-/// a `Vec<char>` of a pasted file is four bytes per character of it for two
-/// answers that a single pass already has.
+/// Walks rather than collecting to `Vec<char>`: it runs per keystroke on
+/// possibly large pastes.
 pub(crate) fn source_line(text: &str, cursor: usize) -> (usize, usize) {
     let mut chars = text.chars();
     let mut start = 0usize;
@@ -188,8 +167,7 @@ pub(crate) fn source_line(text: &str, cursor: usize) -> (usize, usize) {
                 i += 1;
                 start = i;
             }
-            // A cursor past the end of the draft clamps to it, rather than
-            // reporting a line that isn't there.
+            // `None`: a cursor past the end clamps to it.
             Some(_) => i += 1,
             None => break,
         }
@@ -204,28 +182,10 @@ pub(crate) fn source_line(text: &str, cursor: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// Makes pasted text safe to hold in a draft.
-///
-/// A paste arrives as whatever was on the clipboard, and three kinds of
-/// character in it would otherwise break the composer rather than land in
-/// it:
-///
-/// * `\r\n` and a lone `\r` are line breaks from another platform's
-///   convention — normalized, or a Windows-clipboard paste ends every row
-///   with a stray control character.
-/// * a tab advances the *terminal's* cursor to its own next tab stop,
-///   which no cell-grid layout here can predict; it becomes four spaces, so
-///   the caret and the text agree about where they are. This is the one
-///   place the harness alters what the developer pasted, and it is
-///   deliberate — the alternative is a caret that drifts further from the
-///   text with every tab on the row.
-/// * every other control character (an ANSI escape's own `ESC` included) is
-///   dropped outright: nothing in a draft should be able to move the
-///   terminal's cursor or change its modes.
-///
-/// Borrowed back unchanged when none of that applies, which is the ordinary
-/// case — a paste is a whole clipboard, and rewriting one that needed no
-/// rewriting copies all of it to produce the same bytes.
+/// Makes pasted text safe to hold in a draft: `\r\n` and `\r` become `\n`;
+/// a tab becomes [`TAB`], since the terminal's tab stops would put the
+/// caret off the text; every other control character, `ESC` included, is
+/// dropped so a draft cannot drive the terminal. Borrowed when unchanged.
 pub(crate) fn sanitize(text: &str) -> Cow<'_, str> {
     if !text.chars().any(needs_rewriting) {
         return Cow::Borrowed(text);
@@ -248,28 +208,24 @@ pub(crate) fn sanitize(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Exactly the characters [`sanitize`] would not pass through untouched —
-/// one statement of the rule, so the borrowed fast path above cannot come
-/// to disagree with the rewrite below it.
+/// Exactly the characters [`sanitize`] rewrites; its fast path and rewrite
+/// both use this, so they cannot disagree.
 fn needs_rewriting(c: char) -> bool {
     c.is_control() && c != '\n'
 }
 
-/// What a tab becomes — in a paste, and wherever a tab would otherwise be
-/// drawn (a fence, a diff). Four, matching the code most of the transcript
-/// renders.
+/// What a tab becomes in a paste and wherever one would be drawn (a fence,
+/// a diff).
 pub(crate) const TAB: &str = "    ";
 
-/// `text` with each tab as [`TAB`]: a tab has no cell of its own, so left
-/// in place it deletes a Go or Makefile line's indentation.
+/// `text` with each tab as [`TAB`]; a raw tab has no cell and would drop a
+/// line's indentation.
 pub(crate) fn expand_tabs(text: &str) -> String {
     text.replace('\t', TAB)
 }
 
-/// Text being typed and the caret in it. The field's draft and a review
-/// comment's are both one of these, so every field edits the same way.
-///
-/// The caret is a **character** index, matching [`Layout`].
+/// Text being typed and its caret, a character index; the composer and a
+/// review comment both use it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Draft {
     text: String,
@@ -317,9 +273,8 @@ impl Draft {
         self.cursor += text.chars().count();
     }
 
-    /// The keys every field edits with: characters, `⌫`, `⌦`, `←` `→`, and
-    /// Home and End within the line the caret is on. `false` for any other
-    /// key, which the caller then has for itself.
+    /// Applies an editing key (characters without Ctrl, `⌫`, `⌦`, `←` `→`,
+    /// Home, End); `false` leaves any other key to the caller.
     pub(crate) fn edit(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match code {
             KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => self.insert(c),
@@ -401,8 +356,6 @@ mod tests {
         }
     }
 
-    /// The whole point of the type: the caret has to land where the text
-    /// actually is, on the row the wrapper actually broke.
     #[test]
     fn the_cursor_is_reported_on_the_wrapped_row_not_the_source_line() {
         let layout = Layout::new("hello there world", 11);
@@ -444,8 +397,7 @@ mod tests {
 
     #[test]
     fn stepping_moves_by_wrapped_row_not_by_source_line() {
-        // One source line, three rows: Down from the first must reach the
-        // second row, not fall through to the log.
+        // Down must reach the second row, not scroll the log.
         let layout = Layout::new("aaaa bbbb cccc", 5);
         assert_eq!(layout.row_count(), 3);
         assert!(layout.step_row(0, 1).is_some());
@@ -468,11 +420,7 @@ mod tests {
         );
     }
 
-    /// The ordinary paste — nothing to rewrite — must come back borrowed,
-    /// or every paste copies a whole clipboard to produce the same bytes.
-    /// Also pins the two halves of the rule against each other: the fast
-    /// path is only correct while it rejects exactly what the rewrite would
-    /// have touched.
+    /// Also pins the fast path to reject exactly what the rewrite changes.
     #[test]
     fn a_paste_that_needs_no_rewriting_is_not_copied() {
         assert!(matches!(
@@ -492,8 +440,6 @@ mod tests {
         }
     }
 
-    /// The one editor both fields use: typing, deleting either way, and
-    /// moving within the line, by character rather than by byte.
     #[test]
     fn a_draft_edits_by_character() {
         let mut d = Draft::default();

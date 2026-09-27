@@ -1,7 +1,6 @@
-//! The launch card: the brand mark beside four facts, on every launch and
-//! after `/clear`. `LaunchCard.jsx`: `padding: 0 var(--body-x)`, the mark,
-//! a `--body-x` gap, then `Aldwin  1.0` and the `Project`/`Branch`/`Model`
-//! rows with their labels in a `--fact-col` field. Two blank rows above it.
+//! The launch card, shown on launch and after `/clear`. Per `LaunchCard.jsx`:
+//! the mark at `--body-x`, a `--body-x` gap, then the name row and the
+//! `Project`/`Branch`/`Model` facts with labels in a `--fact-col` field.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -13,10 +12,10 @@ use super::grid::{column, BODY_X, FACT_COL};
 use crate::app::App;
 use crate::tokens::{MARK_CELL, MARK_COLS, MARK_ROWS};
 
-/// Rows the card's facts take: the name row and three facts.
+/// The name row and three facts.
 const FACT_ROWS: usize = 4;
 
-/// `Blank / Blank / LaunchCard` — the two rows above the card in the frame.
+/// The frame's `Blank / Blank / LaunchCard`: two blank rows above the card.
 const ROWS_ABOVE: usize = 2;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -24,13 +23,12 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-/// The card's rows, the mark's with the facts centred beside them.
+/// The card's rows: the mark, with the facts centred beside it.
 pub(super) fn lines(app: &App) -> Vec<Line<'static>> {
     let pal = app.theme.palette();
     let mark = pal.mark();
     let facts = facts(app);
-    // `align-items: center`: the four fact rows sit in the middle of the
-    // mark's rows.
+    // The frame's `align-items: center`.
     let offset = MARK_ROWS.saturating_sub(FACT_ROWS) / 2;
 
     let mut lines: Vec<Line<'static>> = (0..ROWS_ABOVE).map(|_| Line::default()).collect();
@@ -52,8 +50,7 @@ pub(super) fn lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-/// `Aldwin  0.4.0`, then the three facts — labels in `label2` in the
-/// `--fact-col` field, values in `label`.
+/// `Aldwin  <version>`, then the three facts.
 fn facts(app: &App) -> Vec<Vec<Span<'static>>> {
     let pal = app.theme.palette();
     let label = |s: &str| Span::styled(column(s, FACT_COL), Style::default().fg(pal.label2));

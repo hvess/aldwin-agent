@@ -1,20 +1,11 @@
-//! Full-fidelity render snapshots — the automated form of the
-//! "render it before trusting your reading of it" discipline in this
-//! project's `CLAUDE.md`.
+//! Every scene at three sizes in both themes, every cell's symbol, colours
+//! and modifiers, pinned in `tests/snapshots/render.snap`; plus
+//! design-conformance checks over the same scenes.
 //!
-//! Every scene below is drawn against `ratatui::backend::TestBackend` at
-//! three frame sizes in both themes, and the *entire* resulting buffer —
-//! every cell's symbol, foreground, background and modifiers — is
-//! serialized to `tests/snapshots/render.snap`. The unit tests in
-//! `ui/tests.rs` assert facts about individual rows; this asserts the whole
-//! frame, colors included, which is what makes a layout refactor provably
-//! output-preserving rather than merely test-passing.
+//! Build identity is pinned by [`fixed_identity`], so the snapshot does not
+//! depend on the build.
 //!
-//! Build identity — the release version, the commit, the project, the
-//! branch — is pinned per scene rather than inherited from the build (see
-//! [`fixed_identity`]), so the snapshot does not encode who generated it.
-//!
-//! Regenerate deliberately, after eyeballing the diff:
+//! Regenerate only after reading the diff:
 //!
 //! ```text
 //! UPDATE_SNAPSHOTS=1 cargo test -p aldwin-tui --test render_snapshot
@@ -36,14 +27,12 @@ use ratatui::Terminal;
 
 const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/render.snap");
 
-/// The three sizes the review loop uses — small for vertical pressure, a
-/// frame the size of the design's own (its body is 28 rows of 24px in an
-/// 880px window, roughly 104×32), and a maximized terminal whose job is to
-/// catch a layout that sprawls rather than one that clips.
+/// Small (vertical pressure), the design frame's own size (about 104×32),
+/// and maximized (catches sprawl rather than clipping).
 const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
-/// The ten frames of `Aldwin Agent TUI.dc.html`, by their letters, plus
-/// the states the design leaves to the product.
+/// Frames A–J of `Aldwin Agent TUI.dc.html`, then states the design leaves
+/// to the product.
 const SCENES: [&str; 19] = [
     "launch",              // A
     "working",             // B
@@ -66,11 +55,10 @@ const SCENES: [&str; 19] = [
     "resume",              // bare `/resume` over two past sessions
 ];
 
-/// The scenes that are the full-window review, whose tree runs from the
-/// frame's edge.
+/// Full-window review scenes; their tree runs from the frame's edge.
 const REVIEW_SCENES: [&str; 4] = ["review", "selecting", "commented", "wrapped"];
 
-/// The catalogue the questions offer. Pinned, like the identity.
+/// Pinned provider catalogue.
 fn catalogue() -> Vec<ProviderChoice> {
     vec![
         ProviderChoice {
@@ -103,8 +91,7 @@ fn catalogue() -> Vec<ProviderChoice> {
     ]
 }
 
-/// The `/` menu's rows, as aldwin-cli hands them in. Pinned, like the
-/// catalogue.
+/// Pinned `/` menu rows, as aldwin-cli hands them in.
 fn commands() -> Vec<CommandChoice> {
     [
         ("resume", "Pick up an earlier conversation"),
@@ -121,9 +108,8 @@ fn commands() -> Vec<CommandChoice> {
     .collect()
 }
 
-/// The past sessions bare `/resume` offers, newest first, as aldwin-cli
-/// hands them in. Pinned, like the catalogue — `when` is already formatted
-/// in the developer's own timezone, so it is a fact here, not a clock.
+/// Pinned past sessions for bare `/resume`, newest first; `when` arrives
+/// preformatted, so no clock is involved.
 fn sessions() -> Vec<SessionChoice> {
     [
         ("which providers are set up?", "2026-09-19 13:00", 1),
@@ -149,9 +135,8 @@ fn fixed_identity(mut app: App, provider: Option<&str>) -> App {
         .with_catalogue(catalogue(), provider.map(str::to_string))
 }
 
-/// The app `scene_name` is drawn from, put into that scene's state.
-/// `launch_unconfigured` is defined by what it is built without: no model
-/// and no provider, as aldwin-cli starts it when nothing is configured.
+/// The app in `scene_name`'s state. `launch_unconfigured` has no model and
+/// no provider, as aldwin-cli starts it when nothing is configured.
 fn app(scene_name: &str, theme: Theme) -> App {
     let (model, provider) = match scene_name {
         "launch_unconfigured" => ("", None),
@@ -196,9 +181,7 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
-/// Every cell the app paints carries a colour from the design system —
-/// `tokens.rs` is generated from `.claude/design/tokens/`, so this is the
-/// design checked against the frame, cell by cell.
+/// Every painted colour is a token generated from `.claude/design/tokens/`.
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {
@@ -221,9 +204,8 @@ fn every_cell_carries_a_colour_from_the_design_system() {
     }
 }
 
-/// Every non-ASCII glyph comes from the design's closed table, or from the
-/// one exception a recorded contradiction licenses (ADR 0002's table) —
-/// and that only in the scene that draws a table.
+/// Every non-ASCII glyph is in the closed table, or is an ADR 0002 table
+/// glyph in the `markdown` scene.
 #[test]
 fn every_glyph_comes_from_the_closed_table() {
     let (marks, by_exception) = aldwin_tui::design_glyphs();
@@ -248,8 +230,8 @@ fn every_glyph_comes_from_the_closed_table() {
     }
 }
 
-/// The one thing the transcript's text must never do is take the accent
-/// — blue means you — and the one thing a failure must never be is red.
+/// Accent blue is never on prose above the footer rows, and diff red and
+/// green never appear outside a diff (ADR 0009 §5).
 #[test]
 fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
     for theme in [Theme::Dark, Theme::Light] {
@@ -288,10 +270,8 @@ fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
     }
 }
 
-/// Nothing is drawn inside the 3-cell left margin, and nothing inside the
-/// 3-cell right margin — except the review, whose tree runs from the
-/// frame's edge and whose selected row's `▎` sits in the diff pane's first
-/// cell.
+/// Nothing is drawn in the 3-cell left or right margin; review scenes are
+/// exempt, their tree running from the frame's edge.
 #[test]
 fn every_conversation_scene_respects_the_three_cell_margins() {
     const MARGIN: usize = 3;
@@ -313,9 +293,7 @@ fn every_conversation_scene_respects_the_three_cell_margins() {
     }
 }
 
-/// Nothing is stroked: no box-drawing glyph outside a markdown table, no
-/// underline standing in for a border, and the window ground under the
-/// frame's first row.
+/// No box-drawing or edge glyph outside the `markdown` scene (ADR 0002).
 #[test]
 fn nothing_inside_a_frame_is_stroked() {
     for theme in [Theme::Dark, Theme::Light] {
@@ -336,10 +314,8 @@ fn nothing_inside_a_frame_is_stroked() {
     }
 }
 
-/// An underline is a stroke drawn as an attribute, and nothing inside a
-/// window is stroked — not a border, not a heading, not a link. Every
-/// scene, `markdown` included: its heading and its link are the cases an
-/// underline was once used for.
+/// An underline is a stroke, so no cell in any scene is underlined,
+/// `markdown`'s headings and links included.
 #[test]
 fn no_cell_is_underlined() {
     for theme in [Theme::Dark, Theme::Light] {
@@ -365,8 +341,8 @@ fn render(app: &mut App, width: u16, height: u16) -> Buffer {
     render_with_caret(app, width, height).0
 }
 
-/// The buffer, and the caret: the terminal's own cursor, which no cell
-/// carries, as `(x, y)` when it is shown.
+/// The buffer, and the terminal cursor as `(x, y)` when shown; no cell
+/// carries it.
 fn render_with_caret(app: &mut App, width: u16, height: u16) -> (Buffer, Option<(u16, u16)>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal.draw(|f| aldwin_tui::draw(f, app)).expect("draw");
@@ -534,9 +510,8 @@ fn scene(name: &str, app: &mut App) {
         "review" => open_review(app),
         "selecting" => {
             open_review(app);
-            // The first two added lines, 144–145, as a drag across them
-            // leaves them (the mouse itself is `Review::handle_mouse`'s
-            // unit tests; here only the selection it produces matters).
+            // Added lines 144–145, as a drag leaves them; the mouse itself
+            // is tested by `Review::handle_mouse`'s unit tests.
             if let Some(r) = app.review_for_tests() {
                 r.select(3, 4);
             }
@@ -602,10 +577,8 @@ fn scene(name: &str, app: &mut App) {
             });
         }
         "stopping" => {
-            // What the developer is left looking at: `esc` says it is
-            // stopping, and core ends the turn as cancelled at once
-            // (the developer's call, 2026-09-27 — the instant between the
-            // two is never on screen long enough to be seen).
+            // The settled state: core ends the turn as cancelled at once
+            // after `esc`, so the in-between frame is never seen.
             scene("running", app);
             press(app, KeyCode::Esc, KeyModifiers::NONE);
             app.apply_event(Event::TurnEnded {
@@ -623,9 +596,8 @@ fn scene(name: &str, app: &mut App) {
         }
         "launch_unconfigured" => {}
         "plan" => {
-            // The turn the plan scene's capture plays out, ended: the read
-            // folds to its summary, and the step the plan still called
-            // running goes back to pending with it.
+            // A finished turn: the work folds to its summary and the
+            // still-running step goes back to pending.
             echo(app);
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
             app.seed(LogEntry::Work {
@@ -679,8 +651,8 @@ fn first_difference(expected: &str, actual: &str) -> String {
     )
 }
 
-/// One line per row: each cell as `symbol|fg|bg|modifiers`, cells joined
-/// by tabs, so a diff points at a cell.
+/// One line per row, cells as `symbol|fg|bg|modifiers` joined by tabs, so
+/// a diff points at a cell.
 fn serialize(buffer: &Buffer) -> String {
     let mut out = String::new();
     for y in 0..buffer.area.height {

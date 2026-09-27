@@ -1,25 +1,9 @@
-//! The ratatui frontend: `App`'s state turned into a frame, once per
-//! redraw.
+//! The ratatui frontend: draws `App` as one frame per redraw. This module
+//! owns only the two screens' band layout; each submodule has one job.
 //!
-//! This module owns the two screens' *band layout* and nothing else.
-//! Everything it composes lives in a submodule with one job:
-//!
-//! | module | job |
-//! |--------|-----|
-//! | [`grid`] | the design system's cell grid, and the `Ctx` (`palette` + column width) every builder takes |
-//! | [`wrap`] | word-wrapping one logical line, before anything is inset or filled |
-//! | [`row`] | the single filled-row primitive every band is built from |
-//! | [`markdown`] | LLM-authored markdown: fences, block prefixes, tables, inline delimiters |
-//! | [`launch`] | the brand mark and the launch card |
-//! | [`transcript`] | the conversation log, one entry at a time |
-//! | [`chrome`] | the field, the comment field, the footer and its context bar |
-//! | [`question`] | the question panel and the command list — one list control |
-//! | [`review`] | the full-window review: tree, diff, and the field's review shape |
-//!
-//! The one discipline that spans all of them: a row is wrapped exactly
-//! once, by [`wrap`] or by [`row::Row`], *before* it is inset or filled —
-//! never afterwards by a `Paragraph`'s own `Wrap`. See aldwin-tui.md's
-//! Progress notes for the two bugs that discipline exists to prevent.
+//! A row is wrapped exactly once, by [`wrap`] or [`row::Row`], before it is
+//! inset or filled — never by a `Paragraph`'s own `Wrap` (aldwin-tui.md
+//! Progress notes record the two bugs this prevents).
 
 pub(crate) mod chrome;
 mod grid;
@@ -43,16 +27,15 @@ use crate::app::{App, Mode};
 
 pub(crate) use transcript::Transcript;
 
-/// `padding: 24px 0` on the body — one blank row at the top of the window
-/// and one at the bottom, the frame's own.
+/// The frame's body `padding: 24px 0`: one blank row top and bottom.
 const BODY_PAD_ROWS: u16 = 1;
 
-/// Draws one frame of `app`: the review full-window when one is open,
+/// Draws one frame of `app`: the full-window review when one is open,
 /// otherwise the conversation.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let pal = app.theme.palette();
     let area = frame.area();
-    // The window ground, drawn first and under everything else.
+    // The window ground: drawn first, under everything.
     frame.render_widget(Block::default().style(Style::default().bg(pal.win)), area);
 
     if matches!(app.mode, Mode::Review(_)) {
@@ -60,7 +43,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // The bottom band: what holds it decides its height, measured once.
+    // Measured once: its contents decide the bottom band's height.
     let bottom = chrome::Bottom::measure(app, area.width);
     let [_, body, bottom_area] = Layout::vertical([
         Constraint::Length(BODY_PAD_ROWS),
@@ -71,7 +54,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     app.render_width = body.width;
     if app.log.is_empty() {
-        // The launch card, two blank rows under the top padding.
         launch::draw(frame, body, app);
     } else {
         let visible = app.transcript_view(body.height as usize);

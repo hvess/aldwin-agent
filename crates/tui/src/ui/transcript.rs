@@ -1,5 +1,5 @@
-//! The conversation log: one `LogEntry` at a time turned into rows, and the
-//! cache that keeps them.
+//! The conversation log: each `LogEntry` rendered to screen rows, and the
+//! per-entry cache that keeps them.
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -21,12 +21,9 @@ use crate::draft::expand_tabs;
 use crate::log::{plural, summarise_work, LogEntry};
 use crate::palette::Theme;
 
-/// One entry's rows, at `ctx.width` (the body's width). Every line this
-/// returns is **already one screen row**: no caller wraps afterwards, so
-/// `lines.len()` *is* the row count. See [`Transcript`] for why.
-///
-/// `first` says this is the first entry in the log that rendered anything,
-/// which decides whether the block opens with a blank row.
+/// One entry's rows at `ctx.width`; each line must be exactly one screen
+/// row (see [`Transcript`]). `first` marks the first entry that rendered
+/// anything, which gets no leading blank row.
 fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
     let rendered = render_entry(entry, ctx);
     if rendered.is_empty() {
@@ -41,18 +38,16 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
-/// The transcript's screen rows, kept **one log entry at a time**.
+/// The transcript's screen rows, cached per log entry.
 ///
-/// **A row here is a row on screen.** Nothing downstream wraps, so
-/// [`Transcript::len`] is exactly the number of terminal rows the
-/// conversation occupies and `ScrollState::offset` indexes straight into it.
+/// A row here is a row on screen: nothing downstream wraps, so
+/// [`Transcript::len`] is the conversation's height and
+/// `ScrollState::offset` indexes straight into it.
 ///
-/// **A rebuild costs one entry, not the conversation.** A streaming reply
-/// appends to the *last* log entry once per token; caching the whole flat
-/// row list re-rendered everything per token — measured at 58% of a core at
-/// four turns. Each entry keeps its own rows beside a copy of the entry they
-/// were built from, and [`Transcript::sync`] re-renders only the entries
-/// whose value changed, compared with `==`.
+/// Per-entry, not one flat list: a streaming reply changes the last entry
+/// per token, and re-rendering everything cost 58% of a core at four turns.
+/// [`Transcript::sync`] re-renders only entries that differ by `==` from
+/// their cached copy.
 #[derive(Debug, Default)]
 pub(crate) struct Transcript {
     width: u16,
@@ -61,8 +56,7 @@ pub(crate) struct Transcript {
     /// `starts[i]` is the screen row `blocks[i]` begins on; one longer than
     /// `blocks`, so the last element is the total row count.
     starts: Vec<usize>,
-    /// How many blocks the last [`Transcript::sync`] actually rebuilt — the
-    /// incremental guarantee, countable.
+    /// Blocks the last [`Transcript::sync`] rebuilt; tests assert on it.
     rebuilt: usize,
 }
 
@@ -74,8 +68,8 @@ struct CachedBlock {
 }
 
 impl Transcript {
-    /// Brings the cache up to date with `app` at `width`, re-rendering only
-    /// what changed.
+    /// Brings the cache up to date with `app` at `width`. A width or theme
+    /// change drops the whole cache.
     pub(crate) fn sync(&mut self, app: &App, width: u16) {
         let theme = app.theme;
         if self.width != width || self.theme != Some(theme) {
@@ -123,13 +117,12 @@ impl Transcript {
         self.rebuilt
     }
 
-    /// Total screen rows — what `ScrollState` measures its offset against.
+    /// Total screen rows; `ScrollState` measures its offset against it.
     pub(crate) fn len(&self) -> usize {
         self.starts.last().copied().unwrap_or(0)
     }
 
-    /// The rows to draw for a viewport of `height` rows starting at
-    /// `offset`, or fewer at the end.
+    /// Up to `height` rows starting at row `offset`.
     pub(crate) fn viewport(&self, offset: usize, height: usize) -> Vec<Line<'static>> {
         let mut i = self
             .starts
@@ -151,9 +144,8 @@ impl Transcript {
     }
 }
 
-/// Renders the log band: the rows `super::draw` already sliced out of the
-/// [`Transcript`], from the top. No scrollbar — the design lists none, and
-/// the live end of the conversation is what is on screen unless you moved.
+/// Renders rows already sliced from the [`Transcript`], from the top. No
+/// scrollbar: the design has none.
 pub(super) fn draw_log(frame: &mut Frame, area: Rect, visible: Vec<Line<'static>>) {
     frame.render_widget(Paragraph::new(Text::from(visible)), area);
 }
@@ -161,9 +153,8 @@ pub(super) fn draw_log(frame: &mut Frame, area: Rect, visible: Vec<Line<'static>
 fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     match entry {
-        // `UserEcho`: the request on `--tint`, `margin: 0 3ch`, a `›` in the
-        // mark column in `label3` and the words in `label2` — it is what
-        // you said, not what is happening.
+        // `UserEcho`: `label3` and `label2`, not blue: it is past input, not
+        // the current prompt.
         LogEntry::UserMessage { text } => {
             let row = Row::band(pal.tint, pal.win);
             let mut lines = Vec::new();
@@ -183,13 +174,9 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             }
             lines
         }
-        // `Prose`: plain text at `--body-x` in `label`; markdown's fences
-        // and tables render, everything else is a sentence.
         LogEntry::AssistantText { text } => at_body(render_assistant_text(text, ctx.body())),
-        // `Disclosure`: the summary with `⌄` open or `›` closed, both in
-        // `label2`; open, the `DetailRow`s — verb in a `--detail-col` field,
-        // target, fact flush right. A detail row is `padding: 0 5ch` like
-        // prose, so its fact ends where prose does.
+        // `Disclosure` and its `DetailRow`s, on the prose column so a fact
+        // ends where prose does.
         LogEntry::Work { items, open } => {
             let width = ctx.body().width as usize;
             let summary = summarise_work(items);
@@ -221,9 +208,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             }
             at_body(lines)
         }
-        // `PlanStep`: the glyph in the mark column at the margin, the
-        // outcome at `--body-x`. `✓` accent over `label2`; `●` amber over
-        // `label`; `○` `label3` over `label2` (frame B).
+        // `PlanStep`, frame B.
         LogEntry::Plan { steps } => steps
             .iter()
             .map(|step| {
@@ -232,7 +217,8 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                     StepState::Running => ("●", pal.amber, pal.label),
                     StepState::Pending => ("○", pal.label3, pal.label2),
                 };
-                // A plan step is `padding: 0 3ch` (frame B), not prose.
+                // Frame B's `padding: 0 3ch`: the right edge is `MARGIN_X`,
+                // not prose's `BODY_X`.
                 let text = elide(
                     &step.text,
                     (ctx.width as usize).saturating_sub(BODY_X + MARGIN_X),
@@ -243,8 +229,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 )
             })
             .collect(),
-        // A settled question, as one `label2` line: the question, then
-        // ` · ` and what was answered. Unanswered, the panel is showing it.
+        // An unanswered question is drawn by the question panel instead.
         LogEntry::Question {
             question,
             answer: Some(answer),
@@ -257,9 +242,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             at_body(wrap_line(line, ctx.body().width as usize))
         }
         LogEntry::Question { answer: None, .. } => Vec::new(),
-        // What a review left behind. `✓ Saved 3 files · 1 comment
-        // resolved`: the `✓` in accent — it is yours — the count in `label`,
-        // the rest in `label2`.
+        // The `✓` is accent: the save was the developer's.
         LogEntry::Review { outcome } => match outcome {
             ReviewOutcome::Saved {
                 files,
@@ -302,8 +285,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             )),
             ctx.body().width as usize,
         )),
-        // A failure is a sentence in `label`; its detail one disclosure
-        // below in `label2` when open (ADR 0009 §5). No glyph, no hue.
+        // ADR 0009 §5: a failure is a sentence in `label`; no glyph, no hue.
         LogEntry::Failure {
             message,
             detail,
@@ -339,14 +321,12 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             }
             at_body(lines)
         }
-        // The blank row between turns: `block_rows` already puts one before
-        // every entry, so a break is a second one.
+        // A second blank row: `block_rows` already adds one before it.
         LogEntry::TurnBreak => vec![Line::default()],
     }
 }
 
-/// The agent's prose: markdown, at the body column. Fences render on
-/// `--tint` in `label2` under a `label3` caption; tables draw (ADR 0002).
+/// The agent's markdown prose, at the body column's width.
 fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     for segment in markdown::split_code_fences(text) {
@@ -358,9 +338,8 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
-/// A fenced code block: a caption row — the language in `label3`, the line
-/// count flush right — then the code on `--tint` in `label2`, one row a
-/// line, elided rather than wrapped so a line stays a line.
+/// A fenced code block: a caption row, then one row per code line, elided
+/// rather than wrapped so a line stays a line.
 fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let rows: Vec<&str> = code.lines().collect();

@@ -1,55 +1,16 @@
-//! Themeable colour palette for `ui/` — the Aldwin Design System
-//! (`claude.ai/design`, project `b9de8837-…`, imported 2026-09-23; see
-//! `.claude/design/IMPORT.md`) rather than hand-picked. Field names mirror
-//! the design's own tokens (`tokens/colors.css`) one-to-one, so a value
-//! here can be checked directly against that source instead of against
-//! another layer of local naming. Two fixed instances — `DARK` (`:root`)
-//! and `LIGHT` (`.tui-light`) — selected once at startup via
-//! `Theme::from_config` and carried explicitly from there. Deliberately
-//! *not* a global/`OnceLock`: this crate's `cargo test` runs many tests in
-//! parallel inside one process, and a shared mutable "current theme" would
-//! make one test's theme choice leak into another's.
+//! The colour palette for `ui/`, one field per token in the design's
+//! `tokens/colors.css` (`.claude/design/`). Colour rules: CLAUDE.md "Design
+//! System".
 //!
-//! # What the system is
+//! `DARK` (`:root`) and `LIGHT` (`.tui-light`) are chosen once by
+//! `Theme::from_config` and passed explicitly. Never a global or `OnceLock`:
+//! tests run in parallel in one process and a shared theme would leak.
 //!
-//! Neutrals at OKLCH hue 260 with chroma under 0.01, and **one accent, blue
-//! at hue 255: blue means you.** Your prompt, your selection, your comments,
-//! your next action, and nothing else. Amber means running. Green and red
-//! appear only in a diff. Three text tones. It replaced the lantern-gold
-//! system on 2026-09-23 — every value changed, and so did the argument:
-//! that system spent its one colour on "what is open"; this one spends it on
-//! *the developer*, and the running state gets a colour of its own.
+//! Bands are separated by ground tone only; the light theme inverts the
+//! ladder, so "raised" is a step in either direction.
 //!
-//! Four rules follow, each the design's own sentence:
-//!
-//! * **Blue is the developer's.** The `›` of the prompt and of the current
-//!   row, the `▎` of a selection, a `◆` comment, `✓` on a step the agent
-//!   finished for them, and the key glyph of the action that is ready. The
-//!   agent's own activity is never blue.
-//! * **Amber means running**, and nothing else is amber: the `●` of the
-//!   running plan step and of `Working…` in the footer.
-//! * **Green and red appear only in diffs** — a failure is a sentence in
-//!   `label`, not a red row (ADR 0009 §5).
-//! * **Three text tones.** `label` for what is current, `label2` for what
-//!   is said around it, `label3` for what is pending or structural — line
-//!   numbers, folders, an unread step.
-//!
-//! # Grounds, not borders
-//!
-//! Nothing inside a window is stroked. Bands are distinct grounds and a
-//! band's *tone* is the only thing separating it from its neighbour:
-//! [`Palette::win`] for the conversation, [`Palette::tint`] for the echoed
-//! prompt and the file tree, [`Palette::panel`] for a question,
-//! [`Palette::field`] for the input and the current row, [`Palette::select`]
-//! for the selection label. The light theme inverts the ladder — grounds
-//! step darker as they rise — so a "raised" band is a step in either
-//! direction, never a lighter one by assumption.
-//!
-//! There is deliberately no `chrome` or `dot` field: they paint the mock's
-//! macOS title bar, and a terminal's title bar is the terminal's. And no
-//! `syn` or `call`: the design reserves them and applies them nowhere, so
-//! the generator lists them as uncarried rather than hand code a hue it
-//! must not use.
+//! No `chrome`/`dot` (the mock's title bar) and no `syn`/`call` (reserved,
+//! unused by the design): the generator lists them as uncarried.
 
 use ratatui::style::Color;
 
@@ -57,65 +18,58 @@ use crate::tokens::{
     GAUGE_DARK, GAUGE_LIGHT, GAUGE_SEGMENTS, MARK_COLS, MARK_DARK, MARK_LIGHT, MARK_ROWS,
 };
 
-/// The two palettes, **generated** from `.claude/design/tokens/` into
-/// [`crate::tokens`] and re-exported here so every call site keeps reading
-/// `palette::DARK`. The review loop's stage 4 regenerates the file and
-/// fails if the result differs, so the app's palette and the imported
-/// design cannot disagree.
+/// The two palettes, generated into [`crate::tokens`]; review stage 4 fails
+/// on any drift from the design.
 pub(crate) use crate::tokens::{DARK, LIGHT};
 
-/// One themeable surface, matching `tokens/colors.css` one-to-one (see this
-/// module's doc comment).
+/// One theme's colours, one field per `tokens/colors.css` token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Palette {
-    /// Which half of the system this palette is — carried on the palette
-    /// itself so anything already holding one can ask, without a second
-    /// `Theme` threaded down beside it purely to answer the same question.
+    /// The theme this palette belongs to, so holders need no separate `Theme`.
     pub theme: Theme,
-    /// `--win` — the conversation ground, and the window's.
+    /// `--win`: the conversation and window ground.
     pub win: Color,
-    /// `--tint` — the echoed prompt, the review's file tree, an idle
-    /// selection. One step off the ground.
+    /// `--tint`: the echoed prompt, the review's file tree, an idle
+    /// selection; one step off the ground.
     pub tint: Color,
-    /// `--panel` — a question's band.
+    /// `--panel`: a question's band.
     pub panel: Color,
-    /// `--field` — the input field, and the current row of any list.
+    /// `--field`: the input field and any list's current row.
     pub field: Color,
-    /// `--select` — the band above the comment field naming what is
-    /// selected. The one ground that carries a hint of the accent.
+    /// `--select`: the band naming the selection above the comment field;
+    /// the only ground with a hint of the accent.
     pub select: Color,
-    /// `--track` — an empty context-bar segment.
+    /// `--track`: an empty context-bar segment.
     pub track: Color,
-    /// `--label` — primary text: prose, a running step, the current row.
+    /// `--label`: primary text (prose, a running step, the current row).
     pub label: Color,
-    /// `--label2` — secondary: the echoed prompt, a done step, a fact, a
-    /// key's verb, the footer.
+    /// `--label2`: secondary text (echoed prompt, done step, fact, key verb,
+    /// footer).
     pub label2: Color,
-    /// `--label3` — tertiary: line numbers, folders, a pending step, a fold,
-    /// an action that is not ready.
+    /// `--label3`: tertiary text (line numbers, folders, pending step, fold,
+    /// an action not ready).
     pub label3: Color,
-    /// `--accent` — blue means you: `›`, `▎`, `◆`, `✓`, and the ready
-    /// action's glyph.
+    /// `--accent`: blue, the developer's only: `›`, `▎`, `◆`, `✓`, and the
+    /// ready action's glyph.
     pub accent: Color,
-    /// `--fill` — the accent as a fill: the mark and the context bar. Never
+    /// `--fill`: the accent as a fill (the mark, the context bar); never
     /// text.
     pub fill: Color,
-    /// `--onfill` — ink on `fill`. Carried for completeness; no frame puts
-    /// text on a fill.
+    /// `--onfill`: ink on `fill`; unused by any frame.
     pub onfill: Color,
-    /// `--amber` — running, and nothing else.
+    /// `--amber`: running, and nothing else.
     pub amber: Color,
-    /// `--add` — a `+` sign, an added file's marker, a `+11` count.
+    /// `--add`: a `+` sign, an added file's marker, a `+11` count.
     pub add: Color,
-    /// `--addcode` — code on an added row.
+    /// `--addcode`: code on an added row.
     pub addcode: Color,
-    /// `--addrow` — an added row's ground.
+    /// `--addrow`: an added row's ground.
     pub addrow: Color,
-    /// `--del` — a `−` sign and a `−2` count.
+    /// `--del`: a `−` sign and a `−2` count.
     pub del: Color,
-    /// `--delcode` — code on a removed row.
+    /// `--delcode`: code on a removed row.
     pub delcode: Color,
-    /// `--delrow` — a removed row's ground.
+    /// `--delrow`: a removed row's ground.
     pub delrow: Color,
 }
 
@@ -129,8 +83,8 @@ impl Palette {
         }
     }
 
-    /// The context bar's ten segments for `filled` of them lit, left to
-    /// right — the filled run ramping to `fill` at its leading edge.
+    /// The context bar's segments, left to right, with `filled` lit (clamped
+    /// to `GAUGE_SEGMENTS`); the lit run ramps to `fill` at its leading edge.
     pub fn gauge(&self, filled: usize) -> &'static [Color; GAUGE_SEGMENTS] {
         let table = match self.theme {
             Theme::Dark => &GAUGE_DARK,
@@ -143,16 +97,16 @@ impl Palette {
 /// Which of the two fixed palettes a session renders with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
-    /// Light text on a dark ground — the default.
+    /// Light text on a dark ground; the default.
     #[default]
     Dark,
-    /// The ladder inverted: dark text on a light ground.
+    /// Dark text on a light ground, the ground ladder inverted.
     Light,
 }
 
 impl Theme {
-    /// `tui.yaml`'s `theme` value. Anything unrecognised — including
-    /// nothing at all — is dark, in exactly one place.
+    /// Parses `tui.yaml`'s `theme`; anything but `light` (case-insensitive,
+    /// trimmed), or none, is dark.
     pub fn from_config(value: Option<&str>) -> Self {
         match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
             Some("light") => Theme::Light,
@@ -179,10 +133,8 @@ mod tests {
         }
     }
 
-    /// The design's own sentence: "The ladder inverts: grounds step darker
-    /// as they rise." Dark's bands rise lighter from `win`; light's rise
-    /// darker. Pinned so a regenerated palette that lost the step would
-    /// fail here rather than merge two bands on screen.
+    /// Guards a regenerated palette against losing a step and merging two
+    /// bands on screen.
     #[test]
     fn the_ground_ladder_steps_one_way_in_dark_and_the_other_in_light() {
         for (pal, rising) in [(&DARK, true), (&LIGHT, false)] {
@@ -200,7 +152,6 @@ mod tests {
         }
     }
 
-    /// Three tones, in order, in both themes — the whole text hierarchy.
     #[test]
     fn the_three_text_tones_are_ordered() {
         assert!(luma(DARK.label) > luma(DARK.label2) && luma(DARK.label2) > luma(DARK.label3));

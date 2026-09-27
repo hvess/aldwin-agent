@@ -90,7 +90,7 @@ impl Judge {
     pub fn reads(self) -> &'static [&'static str] {
         match self {
             Judge::Code => &[],
-            Judge::Rust => &["*.rs", ".claude/skills/rust/", ".claude/skills/review/"],
+            Judge::Rust => &["*.rs", ".agents/skills/rust/", ".agents/skills/review/"],
             // All of the review crate: it captures the frames, and
             // `baseline.json` holds the settled contradictions.
             Judge::Frames => &[
@@ -98,7 +98,7 @@ impl Judge {
                 "crates/review/",
                 "docs/design/",
                 "docs/adr/",
-                ".claude/skills/review/",
+                ".agents/skills/review/",
             ],
         }
     }
@@ -530,12 +530,11 @@ impl RunState {
 /// Which judges the change calls for, in stage order, and the scenes stage 8
 /// is to look at — [`RunState::assess`]'s reading of the staged diff.
 fn assign(paths: &[String], changed: &BTreeSet<String>) -> ([Assignment; 3], Vec<String>) {
-    // The gate's hooks and settings count as code for the code judge.
+    // The gate's hooks count as code for the code judge.
     let code_changed = paths.iter().any(|p| {
         p.starts_with("crates/")
             || p.starts_with(".githooks/")
-            || p.starts_with(".claude/hooks/")
-            || ["Cargo.toml", "Cargo.lock", ".claude/settings.json"].contains(&p.as_str())
+            || ["Cargo.toml", "Cargo.lock"].contains(&p.as_str())
     });
     let rust_changed = paths.iter().any(|p| p.ends_with(".rs"));
     let scenes: Vec<String> = changed.iter().cloned().collect();
@@ -591,11 +590,7 @@ mod tests {
 
     #[test]
     fn a_change_to_the_gate_itself_calls_for_the_code_judge() {
-        for path in [
-            ".githooks/pre-commit",
-            ".claude/hooks/commit-guard.sh",
-            ".claude/settings.json",
-        ] {
+        for path in [".githooks/pre-commit", ".githooks/pre-merge-commit"] {
             let (assignments, _) = assign(&[path.to_string()], &BTreeSet::new());
             assert_eq!(required(&assignments), vec![Judge::Code], "{path}");
         }

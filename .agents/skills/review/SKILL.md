@@ -24,13 +24,12 @@ code against a design principle or look at a picture. One is the loop itself, an
 
 **An agent's commit cannot land without this.** `.githooks/pre-commit`
 runs stage 10 for every commit made by an agent — any process with `AGENT`
-set, which Claude Code's project settings and Aldwin both set, or with
-Claude Code's own `CLAUDECODE` — and a
-`PreToolUse` guard refuses the ways around it (`--no-verify`, `-n`, changing
-where hooks are read from, and the git commands that write commits without
-the hook). That is deliberate and it is not to be worked around: if the gate
+set, which Aldwin sets in every process it starts, or with Claude Code's own
+`CLAUDECODE`. That is deliberate and it is not to be worked around — no
+`--no-verify`, no `-n`, no changing where hooks are read from, and none of
+the git commands that write commits without the hook: if the gate
 refuses, the answer is to run this loop, never to find another way to
-commit. If a command you need is refused, ask the developer.
+commit.
 
 ## Before you start: the author's loop
 
@@ -49,7 +48,7 @@ Until then, repeat both of these on every change:
      above all: a flag or a magic value standing in for a variant, and one
      rule decided in two places.
    - **Grep every identifier and phrase the diff removes or renames**
-     across `crates/`, `docs/` *and* `.claude/` — ADRs, specs and their archive,
+     across `crates/`, `docs/`, `.agents/` *and* `AGENTS.md` — ADRs, specs and their archive,
      `AGENTS.md`, the system prompt, doc comments. Each hit is fixed or
      given a pointer (records skill).
    - **Test each changed behaviour at the layer that produces it**, not
@@ -118,9 +117,9 @@ that still exports it cannot have stage 5 rewrite the baseline it checks.
 
 `review` decides, from what the staged diff touches:
 
-- **stage 6, code** — any path under `crates/`, `.githooks/` or
-  `.claude/hooks/`, or `Cargo.toml` / `Cargo.lock` / `.claude/settings.json`
-  — the gate's own enforcement is judged like code;
+- **stage 6, code** — any path under `crates/` or `.githooks/`, or
+  `Cargo.toml` / `Cargo.lock` — the gate's own enforcement is judged like
+  code;
 - **stage 7, Rust** — any `.rs` file;
 - **stage 8, frames** — any scene whose section of `render.snap` changed.
   Every snapshot scene is also a capture scene (a test in `scene.rs` keeps
@@ -202,15 +201,13 @@ The shape all three return:
 > 1. `AGENTS.md`, the section **Key Constraints (non-negotiable)**.
 > 2. `docs/adr/*.md` — numbered decisions. A change that follows a later
 >    ADR where an earlier one disagrees is conformant.
-> 3. `.claude/skills/quality-gate/SKILL.md` — every section, and
->    `.claude/skills/comments/SKILL.md`, which its section on comments names.
+> 3. `.agents/skills/quality-gate/SKILL.md` — every section, and
+>    `.agents/skills/comments/SKILL.md`, which its section on comments names.
 > 4. The spec for each crate the diff touches: `docs/spec/aldwin-<crate>.md`,
 >    or `docs/spec/archive/` for an archived one. A spec step the change
->    completes should be noted in it. A change to `.githooks/`,
->    `.claude/hooks/` or `.claude/settings.json` is the review loop's own
->    enforcement: judge it against `docs/spec/aldwin-review.md`,
->    Decisions 15 and 16. Decision 16 says what the commit guard is for: a
->    spelling built to get past it is out of its scope, not a finding.
+>    completes should be noted in it. A change to `.githooks/` is the review
+>    loop's own enforcement: judge it against `docs/spec/aldwin-review.md`,
+>    Decisions 15 and 16.
 >
 > Read nothing else, and do not judge Rust idiom — a separate judge owns the
 > `rust` skill.
@@ -236,7 +233,7 @@ The shape all three return:
 > file under `crates/` for context. **Judge only the lines the diff adds or
 > changes.**
 >
-> **What you judge against:** `.claude/skills/rust/SKILL.md`, and nothing
+> **What you judge against:** `.agents/skills/rust/SKILL.md`, and nothing
 > else. Its Good and Avoid examples are this codebase's own code; follow the
 > rule they illustrate, not their exact text.
 >
@@ -403,6 +400,6 @@ longer checklist.
   not a gate: a bad frame is something the judge will say out loud.
 - **The judges are not reproducible, and no prompt fixes that.** Treat the
   findings as the output.
-- **The guard binds Claude Code only.** An Aldwin session's commits meet
-  the gate, but nothing refuses its `--no-verify`; the developer's own
-  commits are not gated.
+- **The gate is a git hook, and a hook can be skipped.** Nothing in the
+  repository refuses an agent's `--no-verify`; the rule against it is this
+  skill's. The developer's own commits are not gated.

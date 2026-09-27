@@ -9,11 +9,11 @@ Progress.
 (`aldwin-review`) that runs the five deterministic stages, decides which
 judges a change needs, writes their verdicts and keeps the pass record; the
 `review` skill that drives the loop and owns the three judges; and the hooks
-that make an agent's commit depend on it (`.githooks/`, `.claude/hooks/`,
-`.claude/settings.json`). Excludes what the stages themselves test (that is
+that make an agent's commit depend on it (`.githooks/`). Excludes what the
+stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27 (the author checks first)
+**Last Updated:** 2026-09-27 (no agent-specific configuration in the repository)
 
 ## Why
 
@@ -43,7 +43,7 @@ rubric it was graded against.
 | 3 test | does the suite pass | `cargo test --workspace` | yes |
 | 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 6 code judge | does the diff hold to `quality-gate` (with the `comments` skill it names), the Key Constraints and the ADRs | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks and settings changed | no |
+| 6 code judge | does the diff hold to `quality-gate` (with the `comments` skill it names), the Key Constraints and the ADRs | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks (`.githooks/`) changed | no |
 | 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
 | 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
 | 9 iterate | — | any failure: fix, run again from stage 1, fresh judges for what changed; at most five passes | — |
@@ -198,7 +198,15 @@ moves any scene's snapshot has frames for stage 8 to judge.
     same tree. A change with no judge left to run — docs only, or every
     judge carried — is recorded by `review` itself once stages 1–5 pass.
 
-16. **An agent's commit is gated; the developer's is not.** An agent is
+16. *Since 2026-09-27 (the developer's call, ahead of open-sourcing) the
+    repository ships no agent-specific configuration: Claude Code's
+    project settings, the `SessionStart` hook and the `PreToolUse` guard
+    described below live on the developer's machine only, untracked, and
+    the guard's test left with them. What the repository enforces is
+    `.githooks/` alone, turned on by pointing git's hooks setting at it
+    (`AGENTS.md`). The rest of this Decision describes that local setup as
+    it stands on the developer's machine.*
+    **An agent's commit is gated; the developer's is not.** An agent is
     anything that sets `AGENT` (or Claude Code's own `CLAUDECODE`, below):
     Claude Code through the project settings'
     `env`, Aldwin in every process it starts (`sandbox::command`), and
@@ -275,7 +283,7 @@ moves any scene's snapshot has frames for stage 8 to judge.
     command and `judge` has nowhere to write on a tree that fails a stage.
     The skill's author's loop comes first: `review --stages-only` and the
     author's pass (quality-gate, a grep of what the diff removes across
-    `crates/` and `.claude/`, a test at the producing layer) are repeated
+    `crates/`, `docs/`, `.agents/` and `AGENTS.md`, a test at the producing layer) are repeated
     until clean, and only then is the tree staged for the judges. A
     finding is fixed with its siblings, not alone.
 
@@ -314,10 +322,12 @@ moves any scene's snapshot has frames for stage 8 to judge.
   compositor belongs after them, feeding stage 8.
 - **Treating the gate as tamper-proof.** It makes skipping the loop a
   deliberate act, never an oversight; no list of refusals here is claimed
-  complete (Decision 16). An agent that edits the settings
-  through a shell, or deletes `.githooks/`, gets past it; the permission
-  denials make that harder, not impossible.
-- **Expecting the guard to tell data from commands.** It reads flags from the
+  complete (Decision 16). An agent that deletes `.githooks/`, or points
+  git's hooks setting away from it, gets past it; in the repository nothing
+  refuses that, and on the developer's machine the local guard and
+  permission denials (Decision 16's note) make it harder, not impossible.
+- **Expecting the guard to tell data from commands.** This concerns the
+  guard on the developer's machine (Decision 16's note). It reads flags from the
   command's words, so a commit *message* that mentions `-n` passes — but it
   still refuses a Bash command that merely *mentions* the hooks setting,
   the record directory or `alias.`, or that names `AGENT` (the gate's
@@ -342,7 +352,7 @@ a removed identifier still named in `.claude/` — are the next change.
 
 ## Progress (2026-09-27, comments)
 
-The code judge's third source now includes `.claude/skills/comments/SKILL.md`,
+The code judge's third source now includes `.agents/skills/comments/SKILL.md`,
 which quality-gate's comment rule names: every comment is judged as written
 for an LLM reader. The rework it drove landed one crate per commit, all
 eight by 2026-09-27. What it found in the code, where a comment and its
@@ -409,7 +419,8 @@ stopping at "the code is written".
   The first rewrite missed that last part and let `bash -c 'git commit -n'`
   through; the code judge caught it. `--no-verify`'s abbreviations are
   refused too, since git accepts them. `crates/review/tests/commit_guard.rs`
-  pins both directions.
+  pinned both directions, until it left the repository with the guard
+  (Decision 16's note, 2026-09-27).
 - **The two scene lists agree** (the same day). Seven snapshot scenes had no
   capture script and three capture scenes had no snapshot, so a change that
   moved only those was never judged against the design. The three got
@@ -596,7 +607,7 @@ plural pronoun for a count of one, on every 80×24 frame. It now reads
 
 ## References
 
-- .claude/skills/review/SKILL.md — the loop, and the three judges' prompts.
+- .agents/skills/review/SKILL.md — the loop, and the three judges' prompts.
 - crates/review/src/tokens.rs — stage 4, and the roles it does not carry.
 - crates/tui/tests/render_snapshot.rs — stage 5's baseline.
 - crates/review/baseline.json — the design's own contradictions.

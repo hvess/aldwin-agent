@@ -112,7 +112,7 @@ handles every case.
   the `expect` message states that invariant.
 - No dead code, commented-out code, or `TODO` without an entry in
   `docs/spec/aldwin-open-tasks.md`.
-- Comments follow `.claude/skills/comments/SKILL.md`: only what the code
+- Comments follow `.agents/skills/comments/SKILL.md`: only what the code
   cannot say — a reason, an invariant, a warning, a hidden dependency, a
   pointer — lean, and written for an LLM reader.
 
@@ -145,14 +145,14 @@ handles every case.
    simplified did besides the bug — an error it reported, a fallback, a
    note it cleared — and keep it, or say in the commit why it goes.
 4. **Change the fact everywhere.** Grep the old behaviour's wording across
-   `crates/`, `docs/` and `.claude/`: the system prompt, tool descriptions, doc
+   `crates/`, `docs/`, `.agents/` and `AGENTS.md`: the system prompt, tool descriptions, doc
    comments, specs and ADRs that state it (records skill).
 
 ## 9. Records
 
 The ledger, the specs, the ADRs and `baseline.json` change in the same
 commit as the code they describe, and a decision against fixing something
-is the developer's call. `.claude/skills/records/SKILL.md` says how.
+is the developer's call. `.agents/skills/records/SKILL.md` says how.
 
 ## Running the gate
 

@@ -1,5 +1,5 @@
 //! The review loop: `docs/spec/aldwin-review.md` defines its ten stages,
-//! `.claude/skills/review/SKILL.md` drives it.
+//! `.agents/skills/review/SKILL.md` drives it.
 //!
 //! This crate runs the deterministic stages 1–5, decides which judges
 //! (stages 6–8, subagents owned by the skill) a change needs, writes their

@@ -30,7 +30,7 @@ of the change that left it so. Keep them in the same commit as the code.
   entry is history: add a pointer to the newer rule (`two to four since
   2026-09-27: see Decisions`) rather than rewriting it.
 - **A changed fact is changed everywhere it is stated.** Grep the old
-  wording across `crates/`, `docs/` and `.claude/` — specs, ADRs, the system prompt,
+  wording across `crates/`, `docs/`, `.agents/` and `AGENTS.md` — specs, ADRs, the system prompt,
   tool descriptions, doc comments — and fix each one, or give it a pointer.
 
 ## Leaving the ledger

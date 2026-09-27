@@ -38,7 +38,7 @@ contradicts) and the entry says so before it goes.
 4. **Two author's-pass checks are still judgement.** The review skill's
    author's loop (aldwin-review.md Decision 18) asks for an example on
    every public function a diff adds, and for every identifier the diff
-   removes or renames to be gone from `crates/`, `docs/` and `.claude/`. Both are
+   removes or renames to be gone from `crates/`, `docs/`, `.agents/` and `AGENTS.md`. Both are
    mechanical, and judges raised each more than once on 2026-09-27; a
    finding a judge produces twice belongs in a deterministic stage (review
    skill, "When a judge is wrong"). Closing it means two stage-2 checks in

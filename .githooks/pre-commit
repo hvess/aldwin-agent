@@ -1,11 +1,11 @@
 #!/bin/sh
-# Stage 10 of the review loop (.claude/skills/review/SKILL.md): an agent's
+# Stage 10 of the review loop (.agents/skills/review/SKILL.md): an agent's
 # commit lands only with a passing review of exactly the tree it commits.
 #
-# An agent is anything that sets AGENT: Claude Code through the project's
-# settings, Aldwin in every process it starts. CLAUDECODE, which Claude Code
-# sets whatever its settings, counts too, so a session started without the
-# project's settings is still an agent. The developer's own commit is not
+# An agent is anything that sets AGENT: Aldwin in every process it starts,
+# and any other agent told to in AGENTS.md. CLAUDECODE, which Claude Code
+# sets whatever its settings, counts too.
+# The developer's own commit is not
 # gated. `gate` reads the index git is about to commit — GIT_INDEX_FILE
 # included, so `git commit -a` is checked against what it really commits.
 [ -n "$AGENT$CLAUDECODE" ] || exit 0

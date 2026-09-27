@@ -257,7 +257,7 @@ Design notes live in `docs/spec/`, and the decisions behind them in
 it's usually written down there.
 
 Working on it with an agent? Point it at `AGENTS.md`. Every agent commit
-goes through the review loop in `.claude/skills/review/`, and the
+goes through the review loop in `.agents/skills/review/`, and the
 pre-commit hook enforces it.
 
 ## License

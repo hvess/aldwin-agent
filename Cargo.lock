@@ -91,7 +91,6 @@ dependencies = [
  "aldwin-config",
  "aldwin-core",
  "aldwin-llm",
- "assert_cmd",
  "clap",
  "flate2",
  "libc",

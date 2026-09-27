@@ -21,14 +21,11 @@ ADR 0011 deleted its crate. Four stay active: tools, tui, review and login. When
 
 `aldwin-review.md` is the feedback loop every agent commit runs — ten
 stages: five deterministic, three blind subagent judges (code, Rust,
-frames), the iteration, and a gate. `.claude/skills/review/SKILL.md` drives
-it (`/review` in Claude Code); run it before every commit. **An agent's
-commit cannot land without it**: `.githooks/pre-commit` refuses any tree
-without a passing review when `AGENT` (or Claude Code's `CLAUDECODE`) is set.
-Claude Code turns the hooks on at session start and adds a `PreToolUse` guard
-against the ways around them; with any other agent, point git's
-`core.hooksPath` at `.githooks` once and set `AGENT` in its environment. If
-the gate
+frames), the iteration, and a gate. `.agents/skills/review/SKILL.md` drives
+it; run it before every commit. **An agent's commit cannot land without
+it**: `.githooks/pre-commit` refuses any tree without a passing review when
+`AGENT` (or Claude Code's `CLAUDECODE`) is set. Point git's `core.hooksPath`
+at `.githooks` once, and set `AGENT` in your agent's environment. If the gate
 refuses, run the loop — never look for another way to commit. Read the
 spec's Progress entries before changing how any stage works: they record
 what the loop replaced and why, and the failure it replaced is easy to
@@ -39,11 +36,15 @@ undone work, each entry citing its evidence.
 
 ## Skills
 
-`.claude/skills/*/SKILL.md` are plain Markdown, whatever agent you are: read
+`.agents/skills/*/SKILL.md` are plain Markdown, whatever agent you are: read
 the one whose description matches the task before starting it — `rust` and
 `quality-gate` for any Rust change, `comments` for any comment, `ux` for
 anything the developer sees, `records` for the specs, ADRs and ledger,
 `review` before committing, `design-sync` before re-syncing the design.
+
+This repository ships no agent-specific configuration. Claude Code reads
+neither this file nor `.agents/skills/`: give it a local `.claude/CLAUDE.md`
+holding `@../AGENTS.md`, and link `.claude/skills` to `../.agents/skills`.
 
 ## Design System
 

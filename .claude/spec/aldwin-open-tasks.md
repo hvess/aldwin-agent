@@ -65,11 +65,7 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - Tests that cannot fail: `a_single_root_adds_no_reachability_section`
-     (looks for text the code never prints),
-     `a_session_from_a_future_schema_is_skipped_rather_than_failing_the_listing`
-     (never writes the file), `a_broken_transcript_reports_once_and_then_stays_quiet`
-     and `a_listing_is_newest_first_and_carries_a_readable_date` (neither
-     checks what its name says), `an_unfinished_session_is_not_listed`
-     (the current session is excluded anyway). The narrow-table rule in
-     `crates/tui/src/ui/markdown.rs` `render_table` has no test at all.
+   - `crates/tui/src/ui/grid.rs` `truncate_spans`: a cut that lands on a
+     span boundary adds no `…`, so a table narrower than `4n + 1` cells
+     (`markdown.rs` `render_table`) drops its right columns silently, its
+     rows ending in a space. The narrow-table rule has no test.

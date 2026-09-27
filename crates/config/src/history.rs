@@ -751,7 +751,11 @@ mod tests {
             version: HISTORY_VERSION + 1,
             ..header()
         };
-        HistoryStore::create(dir.path(), &SessionId("0000000040-1".into()), &future).unwrap();
+        let store =
+            HistoryStore::create(dir.path(), &SessionId("0000000040-1".into()), &future).unwrap();
+        for record in turn(1, "unreadable") {
+            store.append(&record).unwrap();
+        }
 
         let sessions = list(dir.path());
         assert_eq!(sessions.len(), 1, "the unreadable one is skipped");

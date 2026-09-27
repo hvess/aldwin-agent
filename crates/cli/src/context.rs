@@ -168,7 +168,7 @@ mod tests {
             &[PathBuf::from("/some/project")],
             &[],
         );
-        assert!(!out.contains("Also reachable"));
+        assert!(!out.contains("Also in the workspace"));
     }
 
     #[test]

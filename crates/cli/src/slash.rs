@@ -1260,13 +1260,24 @@ mod tests {
         );
     }
 
-    /// Regression: a launch-and-quit left a picker row that was refused
+    /// Regression: a session with no finished turn was listed, then refused
     /// when picked.
     #[tokio::test]
     async fn an_unfinished_session_is_not_listed() {
+        use aldwin_core::{LogRecord, TurnId};
+
         let (_dir, history, _id, _events, _rx) = recorded_history("said something");
-        // `recorded_history` left an empty current session, as a
-        // launch-and-quit does.
+        // A past session whose only turn never finished.
+        for record in [
+            LogRecord::TurnStarted { turn_id: TurnId(2) },
+            LogRecord::UserMessage {
+                turn_id: TurnId(2),
+                text: "cut off".into(),
+            },
+        ] {
+            history.append(&record);
+        }
+        history.cleared();
         let sessions = history.resumable();
         assert_eq!(
             sessions.len(),

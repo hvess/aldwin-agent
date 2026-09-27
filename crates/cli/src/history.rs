@@ -327,27 +327,31 @@ mod tests {
         );
     }
 
-    /// A sink with no store accepts records and says nothing.
     #[test]
     fn a_broken_transcript_reports_once_and_then_stays_quiet() {
         let dir = tempdir().unwrap();
-        let (history, mut rx) = history(dir.path());
+        let store = dir.path().join("history");
+        let (history, mut rx) = history(&store);
 
-        // Drop the store underneath the sink.
-        {
-            let mut guard = history.store.lock().unwrap();
-            let store = guard.take().expect("a store");
-            drop(store);
-            // The reopen fails, leaving no store.
-            *guard = HistoryStore::reopen(&dir.path().join("gone"), &SessionId("nope".into())).ok();
-        }
-        for record in turn(1, "hello") {
+        std::fs::remove_dir_all(&store).unwrap();
+        for record in turn(1, "unrecorded") {
             history.append(&record);
         }
         assert!(
-            rx.try_recv().is_err(),
-            "a store that could not even be reopened is simply off"
+            matches!(rx.try_recv(), Ok(Event::Notice { message }) if message.contains("history write failed"))
         );
+
+        // A second failing store under the same transcript: only the sink's
+        // own flag can keep it quiet.
+        let second =
+            HistoryStore::create(&store, &history.current(), &header(Path::new("/p"), "m"))
+                .unwrap();
+        std::fs::remove_dir_all(&store).unwrap();
+        *history.store.lock().unwrap() = Some(second);
+        for record in turn(2, "unrecorded") {
+            history.append(&record);
+        }
+        assert!(rx.try_recv().is_err(), "said once, not per failure");
     }
 
     /// Regression guard: the resumed conversation must not be written into
@@ -396,16 +400,38 @@ mod tests {
     #[test]
     fn a_listing_is_newest_first_and_carries_a_readable_date() {
         let dir = tempdir().unwrap();
-        let (history, _rx) = history(dir.path());
-        for record in turn(1, "only session") {
-            history.append(&record);
+        for (id, started_at, text) in [
+            ("0000000010-1", 1_700_000_000, "older"),
+            ("0000000020-1", 1_700_086_400, "newer"),
+        ] {
+            let store = HistoryStore::create(
+                dir.path(),
+                &SessionId(id.into()),
+                &SessionHeader {
+                    started_at,
+                    ..header(Path::new("/p"), "m")
+                },
+            )
+            .unwrap();
+            for record in turn(1, text) {
+                store.append(&record).unwrap();
+            }
         }
+
         let sessions = session_choices(dir.path());
+        let titles: Vec<&str> = sessions.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["newer", "older"]);
         assert_eq!(
             sessions[0].when.len(),
             16,
             "`YYYY-MM-DD HH:MM`: {}",
             sessions[0].when
+        );
+        assert!(
+            sessions[0].when > sessions[1].when,
+            "a day apart: {} vs {}",
+            sessions[0].when,
+            sessions[1].when
         );
     }
 }

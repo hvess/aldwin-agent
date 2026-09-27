@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-/// A tool for thought.
+/// You decide what gets written.
 ///
 /// Zero-arg binary — every runtime setting lives in `.aldwin/` (project)
 /// and `~/.aldwin/` (global) config files, not flags.

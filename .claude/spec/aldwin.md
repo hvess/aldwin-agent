@@ -13,7 +13,9 @@ A coding agent harness where the developer is first-class and the LLM is an assi
 
 ## Tagline
 
-A tool for thought.
+You decide what gets written. (The developer's call, 2026-09-27: the ethos is
+reviewing the code yourself, so you keep your understanding of it and your say
+in how it is shaped. It replaces "A tool for thought.")
 
 ## Mascot
 

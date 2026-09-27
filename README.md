@@ -1,13 +1,14 @@
 # Aldwin
 
-*A tool for thought.*
+*You decide what gets written.*
 
-Aldwin is a coding agent for your terminal, built for when you want to
-understand the change, not just have it.
+Aldwin is a coding agent for your terminal, for developers who want more of
+a say in how the code in their project is shaped.
 
-It talks the work through with you, reads and runs whatever it needs, and
-never writes a file behind your back. Every edit it wants to make waits in a
-review, and nothing lands on disk until you've read it and said yes.
+It reads your code and runs commands freely, all scoped to your workspace.
+What it never does is write on its own. Every edit waits in a review, and
+nothing lands until you've read it and approved it. You keep control of what
+gets written, and you keep your understanding of the code along the way.
 
 ![Aldwin working through a plan](assets/plan.png)
 
@@ -16,26 +17,27 @@ review, and nothing lands on disk until you've read it and said yes.
 
 ## Why use it
 
-Most agents are built to get through as much work as possible. That's
-great until you're holding a diff you don't really understand, in a codebase
-you're responsible for.
+Most agents are built to take work off your hands. That's great right up
+until the codebase you're responsible for is full of code you never actually
+read. Every change you wave through is a little less of the code you
+understand, and a little less of it shaped the way you'd have shaped it.
 
-Aldwin makes the opposite trade:
+Aldwin keeps you in every change:
 
-- **Conversation first.** It doesn't jump straight to editing. It tells you
-  what it's looking at, shows its plan as a few plain steps, and asks when
-  there's a real decision to make. When you've agreed on a plan, it carries
-  out the whole thing.
-- **Every edit is reviewed, always.** Edits from a turn are collected into
-  one changeset and shown to you in a full-window review. You can comment on
-  any line and send it back, or approve it. You can't turn this off, and
-  there's no auto-approve mode to forget about.
-- **It shows its work.** What it read and ran is one line away, down to the
-  exact paths and commands.
+- **You review every edit, always.** Edits from a turn are collected into
+  one changeset and shown to you in a full-window review. You can't turn
+  this off, and there's no auto-approve mode to forget about.
+- **You shape it before it lands.** Comment on any line and send it back.
+  The agent reworks it and stages it again, and nothing goes in until it's
+  the way you want it.
+- **Reading and running don't get in your way.** The agent reads and runs
+  whatever it needs without asking, inside your workspace. The only thing
+  you're asked about is what actually changes your code.
+- **It shows its work.** Its plan is a few plain steps, and what it read and
+  ran is one line away, down to the exact paths and commands.
 
-If you mostly want an agent to churn through tickets unattended, this isn't
-it. If you want to finish a session knowing your code better than when you
-started, it is.
+If you want an agent to churn through tickets unattended, this isn't it. If
+you want a say in every line that lands in your project, it is.
 
 ## Is it safe to point at my repo?
 

@@ -45,7 +45,7 @@ pub struct SessionSummary {
     /// Unix epoch seconds, from the header.
     pub started_at: u64,
     /// The first user message's first non-blank line, at most 72 chars plus
-    /// `…`; `(untitled)` when there is none.
+    /// `…`; `(untitled)` when it has none.
     pub title: String,
     /// Completed turns only: [`load`] drops a turn with no `TurnEnded`, and
     /// this must count what a resume restores.
@@ -359,27 +359,23 @@ fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
     Some(SessionSummary {
         id,
         started_at: header.started_at,
-        // Unreachable from the app, but a damaged transcript can lack one.
-        title: title.unwrap_or_else(|| "(untitled)".into()),
+        // A blank first message, or none: only a damaged transcript has either.
+        title: title.flatten().unwrap_or_else(|| "(untitled)".into()),
         turns,
     })
 }
 
-/// The first non-blank line of the first user message, cut to `TITLE_MAX`
-/// chars. Never summarise it with the model: that would spend the
-/// developer's tokens.
-fn derive_title(text: &str) -> String {
-    let first = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    if first.chars().count() <= TITLE_MAX {
+/// A message's first non-blank line, cut to `TITLE_MAX` chars; `None` when
+/// every line is blank. Never summarise it with the model: that would spend
+/// the developer's tokens.
+fn derive_title(text: &str) -> Option<String> {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Some(if first.chars().count() <= TITLE_MAX {
         first.to_string()
     } else {
         let head: String = first.chars().take(TITLE_MAX).collect();
         format!("{head}…")
-    }
+    })
 }
 
 #[cfg(test)]
@@ -635,6 +631,22 @@ mod tests {
         assert_eq!(sessions[0].title, "newer question", "newest first");
         assert_eq!(sessions[1].title, "older question");
         assert_eq!(sessions[0].turns, 1);
+    }
+
+    /// Regression: a first message of blank lines titled the session "".
+    #[test]
+    fn a_blank_first_message_is_untitled_never_an_empty_title() {
+        let dir = tempdir().unwrap();
+        let store =
+            HistoryStore::create(dir.path(), &SessionId("0000000030-1".into()), &header()).unwrap();
+        for record in turn(1, "\n  \n")
+            .into_iter()
+            .chain(turn(2, "add rate limiting"))
+        {
+            store.append(&record).unwrap();
+        }
+
+        assert_eq!(list(dir.path())[0].title, "(untitled)");
     }
 
     #[test]

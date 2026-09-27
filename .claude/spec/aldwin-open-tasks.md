@@ -65,8 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/config/src/history.rs` `SessionSummary::title`: a first
-     message of blank lines gives an empty title, not `(untitled)`.
    - `crates/tools/src/tools/ask.rs`: a yes and a no are asked for in the
      tool's description, never checked; only "Chat about this" is enforced.
    - `crates/review`: `Assignment::record` accepts a verdict over a carried

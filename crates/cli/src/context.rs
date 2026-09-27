@@ -1,22 +1,12 @@
 use std::path::{Path, PathBuf};
 
-/// Builds the opaque additional-context string handed to aldwin-core: the
-/// absolute cwd path, then the full text of each context file in the order
-/// given. The caller (`bootstrap::context_files`) decides which files those
-/// are — the two conventional names at the project root, whichever exist;
-/// this function just formats whatever list it's handed.
+/// The additional-context string handed to aldwin-core: the cwd, any extra
+/// workspace roots, the platform facts, then the full text of each file in
+/// `approved`, in order. `bootstrap::context_files` chooses the files.
 ///
-/// Also carries the platform facts and the workspace roots.
-///
-/// The platform half is there because the agent otherwise learns it by
-/// failing: an observed session wrote a bash 4 associative array on a macOS
-/// bash 3.2, watched it fail, rewrote it, and only checked `bash --version`
-/// four turns later — then shipped a script using GNU `sed -i` syntax that
-/// would not run on the machine it was written on. None of that is a
-/// judgement call; it is three facts that are free to state up front.
-///
-/// The roots half is there because "outside the project root" was a refusal
-/// the model could not act on without knowing what the root was.
+/// The roots are named so the model can act on an "outside the workspace"
+/// refusal; the platform facts (bash version, sed flavour) spare it learning
+/// them by failing.
 pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     let mut sections = vec![format!("Working directory: {}", cwd.display())];
 
@@ -35,8 +25,7 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     sections.push(platform_facts(roots));
 
     for path in approved {
-        // A file that went away between the caller finding it and this read
-        // is skipped rather than treated as an error.
+        // A file removed since the caller found it is skipped, not an error.
         if let Ok(contents) = std::fs::read_to_string(path) {
             sections.push(format!("--- {} ---\n{}", path.display(), contents));
         }
@@ -45,18 +34,16 @@ pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf]) -> String {
     sections.join("\n\n")
 }
 
-/// Facts about this machine that a shell script has to be right about.
-/// Detected, never assumed — a wrong fact here is worse than none.
+/// Facts a shell script must get right on this machine. Detected, never
+/// assumed: a wrong fact is worse than none.
 fn platform_facts(roots: &[PathBuf]) -> String {
     let mut facts = vec![format!("Platform: {}", std::env::consts::OS)];
 
     if let Some(version) = program_version("bash", &["--version"], roots) {
         facts.push(format!("bash: {version}"));
     }
-    // The distinction that actually bites: GNU `sed -i` takes no argument,
-    // BSD `sed -i` requires one. Asked of the `sed` on PATH, not inferred
-    // from the OS — a Mac with gnu-sed installed is GNU. GNU answers
-    // `--version`; BSD sed has no such flag and fails.
+    // GNU `sed -i` takes no argument, BSD's requires one. Ask the `sed` on
+    // PATH, not the OS: a Mac can have GNU sed. BSD sed fails `--version`.
     match program_version("sed", &["--version"], roots) {
         Some(version) if version.contains("GNU") => {
             facts.push("sed: GNU (in-place edit is `sed -i`)".to_string())
@@ -76,9 +63,8 @@ fn which(program: &str) -> bool {
         .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
-/// First line of `<program> <args>`, or `None` if it cannot be run or fails. Best
-/// effort: a missing program is a fact we simply do not state. Run in the
-/// sandbox, as every process Aldwin starts is (ADR 0011).
+/// First line of `<program> <args>`, or `None` if it cannot be run or fails.
+/// Must run in the sandbox, as every process Aldwin starts does (ADR 0011).
 fn program_version(program: &str, args: &[&str], roots: &[PathBuf]) -> Option<String> {
     let output = aldwin_tools::sandbox::std_command(program, args, roots)
         .ok()?
@@ -121,23 +107,19 @@ mod tests {
         assert_eq!(seen.as_deref(), Some("aldwin"));
     }
 
-    /// The facts are stated so the agent does not have to learn them by
-    /// failing — a bash 3.2 associative array, a GNU `sed -i` on BSD.
     #[test]
     fn states_the_platform_facts_a_shell_script_has_to_be_right_about() {
         let out = build(Path::new("/some/project"), &[], &[]);
         assert!(out.contains(std::env::consts::OS));
         assert!(out.contains("sed:"));
-        // Which flavour depends on the `sed` on PATH, not on the OS — that is
-        // the point — so assert only that a detected one is described usably.
+        // The flavour depends on the `sed` on PATH, so only its wording is
+        // asserted.
         assert!(
             out.contains("sed -i"),
             "the fact must say how to edit in place: {out}"
         );
     }
 
-    /// A second root is named, because "outside the project root" was a
-    /// refusal the model could not act on without knowing the root.
     #[test]
     fn names_every_reachable_root_when_more_than_one_is_declared() {
         let out = build(

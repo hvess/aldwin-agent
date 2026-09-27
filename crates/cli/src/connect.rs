@@ -1,10 +1,7 @@
-//! How a provider is reached, decided when its client is built (ADR
-//! 0012): a connected account first, the API key second, and when the
-//! provider offers an account and neither is there, one sentence that the
-//! session answers every request with until one is. Also where a stored
-//! connection becomes a session and a finished login becomes a record:
-//! aldwin-config keeps the tokens and knows nothing of sessions,
-//! aldwin-login runs the session and knows nothing of files.
+//! How a provider is reached (ADR 0012): a connected account, then the API
+//! key, then a sentence every request answers with. Also the bridge between
+//! aldwin-config (stores tokens, knows no sessions) and aldwin-login (runs
+//! sessions, knows no files).
 
 use std::sync::Arc;
 
@@ -18,16 +15,15 @@ use tokio::sync::mpsc;
 pub(crate) enum Reach {
     /// The provider is reached this way.
     Through(Auth),
-    /// The provider offers an account, none is connected, and the key is
-    /// not exported: the sentence every request answers with.
+    /// No account connected and no key exported: the sentence every request
+    /// answers with.
     Neither(String),
 }
 
-/// A provider that offers an account is reached through it when one is
-/// connected, else through `api_key_env` when it is set, else not at all
-/// — said, not refused, so the model can still be chosen and the sentence
-/// names both ways to fix it. A provider that offers no account is reached
-/// through its key as it always was, and a missing key fails the build.
+/// With `account`: the connection, else `api_key_env` if set, else
+/// [`Reach::Neither`] (said, not refused, so the model can still be chosen).
+/// Without: always `api_key_env`; a missing key fails later, where the
+/// client is built.
 pub(crate) fn reach(
     api_key_env: &str,
     account: Option<Account>,
@@ -68,13 +64,10 @@ fn credentials(record: ConnectionRecord) -> Credentials {
     }
 }
 
-/// The session on `account`'s stored connection. Every refresh that
-/// rotates the token is written back through `config`, and a revocation
-/// removes the entry, so the next client built on the provider falls back
-/// to its key. An entry that is no longer there — the developer deleted it
-/// and reloaded — is not written back. A write that fails is said once,
-/// since the next start would otherwise use a token the server has already
-/// retired.
+/// The session on `account`'s stored connection. A rotated token is written
+/// back through `config`; a revocation removes the entry, so the next client
+/// falls back to the key. An entry the developer deleted is not recreated.
+/// A failed write is said once: the next start would use a retired token.
 fn session(
     account: Account,
     stored: ConnectionRecord,
@@ -132,8 +125,7 @@ mod tests {
         assert_eq!(credentials(record(&original)), original);
     }
 
-    /// A variable no test exports, so the order can be watched from the
-    /// "neither" end without touching the process environment.
+    /// Never exported, so the "neither" case needs no environment change.
     const ABSENT: &str = "ALDWIN_CONNECT_TEST_KEY_NEVER_SET";
 
     #[tokio::test]
@@ -172,8 +164,7 @@ mod tests {
             .contains_key("authorization"));
     }
 
-    /// No account on offer: the key, as it always was, whether or not it
-    /// is exported — a missing one fails where the client is built.
+    /// The key is chosen even when unexported; the client build fails later.
     #[test]
     fn a_provider_without_an_account_is_reached_through_its_key() {
         let (_project, _global, config) = config();

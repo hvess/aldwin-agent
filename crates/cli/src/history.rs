@@ -1,18 +1,10 @@
-//! The session's transcript, as the rest of aldwin-cli has to see it.
+//! The session's transcript sink (`.claude/spec/archive/aldwin-history.md`).
 //!
-//! Two things live here that aldwin-config deliberately does not carry:
-//!
-//! 1. **The `RecordSink` impl.** A failed write has to reach the developer,
-//!    and the only vehicle for that is the session's `Event` channel — which
-//!    aldwin-config, having no tokio dependency, cannot hold.
-//! 2. **The swap.** `/clear` seals the current transcript and opens a fresh
-//!    one; `/resume` moves the writer onto the transcript it loaded. Both
-//!    happen when core acts on the command and tells its sink
-//!    (`RecordSink::cleared`, `RecordSink::resumed`) — never on the way
-//!    past, since core refuses either one while a turn runs. The agent holds
-//!    this sink for the life of the process, so the file underneath it is
-//!    what changes — the same shape as `ClientHandle`, which is how `/model`
-//!    swaps a client the agent already owns.
+//! The `RecordSink` impl lives here, not in aldwin-config, because a failed
+//! write is reported on the session's tokio `Event` channel, which
+//! aldwin-config cannot hold. The agent holds the sink for the process's
+//! life; `/clear` and `/resume` swap the file underneath it, only when core
+//! calls `RecordSink::cleared` / `RecordSink::resumed` (never mid-turn).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,24 +23,21 @@ pub struct History {
     /// The project root, for each new transcript's header.
     cwd: PathBuf,
     model: String,
-    /// Which transcript is being written *now* — the session the developer
-    /// is sitting in, or the one they resumed onto. Excluded from every
-    /// listing and refused by `/resume`: a session cannot be resumed into
-    /// itself, and offering it as a row is offering a no-op.
+    /// The transcript being written now. Excluded from every listing and
+    /// refused by `/resume`: a session cannot resume into itself.
     current: Mutex<SessionId>,
     store: Mutex<Option<HistoryStore>>,
     events: mpsc::Sender<Event>,
-    /// Whether this transcript's failure has been said — see `report`.
+    /// Whether this transcript's failure has been reported; see `report`.
     reported: AtomicBool,
-    /// A turn is being written — see `turn_in_flight`.
+    /// A turn is being written; see `turn_in_flight`.
     in_turn: AtomicBool,
 }
 
 impl History {
-    /// Open this session's transcript. `Err` when the history directory
-    /// cannot be written: the session then runs without one, having said
-    /// so once. History must never be able to stop a session starting, let
-    /// alone fail a turn.
+    /// Opens this session's transcript. `Err` when the history directory
+    /// cannot be written; the caller must then run without history and say
+    /// so once. History must never stop a session starting or fail a turn.
     pub fn open(
         dir: PathBuf,
         cwd: &Path,
@@ -69,14 +58,10 @@ impl History {
         }))
     }
 
-    /// Says `message` once per transcript. A disk that is full at record 200
-    /// is still full at record 201, and the developer does not need to be
-    /// told four hundred times that history is not being kept.
+    /// Says `message` once per transcript.
     ///
-    /// `try_send` rather than an await: this runs on whichever task committed
-    /// the record, and a full event channel must not become back-pressure on
-    /// the conversation. A dropped notice is the right trade — the
-    /// alternative is a turn that stalls on reporting that history is broken.
+    /// `try_send`, not an await: a full event channel must not stall the
+    /// turn that committed the record; dropping the notice is acceptable.
     fn report(&self, message: String) {
         if !self.reported.swap(true, Ordering::Relaxed) {
             let _ = self.events.try_send(Event::Notice { message });
@@ -88,14 +73,12 @@ impl History {
         self.current.lock().expect("history lock poisoned").clone()
     }
 
-    /// Is this the session already being written? `/resume` refuses it, and
-    /// the picker never lists it.
+    /// Whether `id` is the transcript being written.
     pub fn is_current(&self, id: &SessionId) -> bool {
         *self.current.lock().expect("history lock poisoned") == *id
     }
 
-    /// The past sessions of this project — every transcript but the one this
-    /// session is writing.
+    /// Every transcript in the directory but the current one.
     pub fn resumable(&self) -> Vec<SessionChoice> {
         let current = self.current();
         session_choices(&self.dir)
@@ -108,19 +91,16 @@ impl History {
         &self.dir
     }
 
-    /// A submission is on its way to core. Set here as well as by the
-    /// `TurnStarted` record, because `/clear` typed straight after a message
-    /// is intercepted before core has logged anything.
+    /// Marks a submission sent to core. Needed besides the `TurnStarted`
+    /// record: a `/clear` typed straight after is intercepted before core
+    /// logs anything.
     pub fn turn_submitted(&self) {
         self.in_turn.store(true, Ordering::Relaxed);
     }
 
-    /// Is a turn still being written? The interceptor's early answer to a
-    /// `/clear` or `/resume` while one runs: it says so at once, rather than
-    /// reading a transcript that core would then refuse to take. Core's own
-    /// refusal is what keeps the writer where it is (`RecordSink::cleared`
-    /// and `resumed` are called only when core acts); this flag is only the
-    /// earlier word.
+    /// Whether a turn is still being written. Lets the interceptor refuse
+    /// `/clear` or `/resume` early; core's own refusal is what actually keeps
+    /// the writer in place.
     pub fn turn_in_flight(&self) -> bool {
         self.in_turn.load(Ordering::Relaxed)
     }
@@ -142,22 +122,16 @@ impl RecordSink for History {
         }
     }
 
-    /// `/clear` — seal this transcript and begin a new one.
-    ///
-    /// Sealing is implicit: nothing is written to close the old file. The
-    /// developer clears to manage the model's context, not to shred the
-    /// record, so the old transcript stays exactly as it is and remains
-    /// resumable.
+    /// `/clear`: starts a new transcript. The old file is left as is (nothing
+    /// is written to seal it) and stays resumable.
     fn cleared(&self) {
         let id = SessionId::mint();
         let opened = match HistoryStore::create(&self.dir, &id, &header(&self.cwd, &self.model)) {
             Ok(store) => {
-                // A new file is a new chance to fail, and to be told about it.
+                // A new file gets its own one failure report.
                 self.reported.store(false, Ordering::Relaxed);
                 Some(store)
             }
-            // The old transcript is sealed either way; what is lost is the
-            // recording from here on, and the developer is owed that once.
             Err(e) => {
                 self.report(format!("history is off from here; the cleared conversation is kept, but no new transcript could be opened: {e}"));
                 None
@@ -167,16 +141,15 @@ impl RecordSink for History {
         *self.current.lock().expect("history lock poisoned") = id;
     }
 
-    /// `/resume` — continue writing into the transcript that was just
-    /// loaded, rather than forking a second file for the same conversation.
+    /// `/resume`: continues writing into the loaded transcript, never a
+    /// second file for the same conversation.
     fn resumed(&self, session: &SessionId) {
         let reopened = HistoryStore::reopen(&self.dir, session);
         self.reported.store(false, Ordering::Relaxed);
         let store = match reopened {
             Ok(store) => Some(store),
-            // The conversation is resumed either way; what cannot happen is
-            // writing its continuation into the file it came from — and
-            // writing it into the one before would mix two conversations.
+            // Never fall back to the previous file: it would mix two
+            // conversations.
             Err(e) => {
                 self.report(format!(
                     "history is off from here; session {session} could not be reopened: {e}"
@@ -189,14 +162,11 @@ impl RecordSink for History {
     }
 }
 
-/// Every session in a history directory, rendered for the picker.
+/// Every session in a history directory, formatted for the picker
+/// (aldwin-tui takes display strings only).
 ///
-/// aldwin-tui takes display halves and nothing else — no paths, no
-/// timestamps — so the formatting happens here, the same division the model
-/// catalogue already follows.
-///
-/// Callers inside a running session want [`History::resumable`] instead:
-/// this one includes the transcript currently being written.
+/// Includes the current transcript; inside a session use
+/// [`History::resumable`].
 pub fn session_choices(dir: &Path) -> Vec<SessionChoice> {
     aldwin_config::list_sessions(dir)
         .into_iter()
@@ -213,19 +183,17 @@ fn choice(summary: SessionSummary) -> SessionChoice {
     }
 }
 
-/// `2026-09-20 18:11`, in the developer's own timezone — they are reading
-/// back their own afternoon, not a log shipped from elsewhere.
+/// `2026-09-20 18:11`, in local time.
 fn format_when(epoch_secs: u64) -> String {
     use chrono::{Local, TimeZone};
     // `try_from`, not `as`: a damaged header past `i64::MAX` would wrap to a
-    // plausible-looking date before 1970 rather than to "unknown".
+    // plausible pre-1970 date rather than "unknown".
     match i64::try_from(epoch_secs)
         .ok()
         .and_then(|secs| Local.timestamp_opt(secs, 0).single())
     {
         Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
-        // Unrepresentable, which means the header was damaged. The row is
-        // still worth showing: its title is what the developer picks by.
+        // A damaged header; the row is still listed by its title.
         None => "unknown".to_string(),
     }
 }
@@ -287,8 +255,7 @@ mod tests {
         assert_eq!(sessions[0].turns, 1);
     }
 
-    /// Step 6: `/clear` seals rather than deletes — the old conversation is
-    /// still there to resume, and the new one is a separate file.
+    /// aldwin-history.md step 6.
     #[test]
     fn clearing_seals_the_old_transcript_and_opens_a_new_one() {
         let dir = tempdir().unwrap();
@@ -316,8 +283,7 @@ mod tests {
         assert!(titles.contains(&"after the clear"));
     }
 
-    /// The fork-free Decision: a resumed conversation keeps writing into the
-    /// file it came from.
+    /// aldwin-history.md's fork-free Decision.
     #[test]
     fn resuming_continues_the_same_file() {
         let dir = tempdir().unwrap();
@@ -347,8 +313,6 @@ mod tests {
         );
     }
 
-    /// History must never be able to fail a turn: a store that cannot be
-    /// opened costs a message, not a session.
     #[test]
     fn an_unwritable_directory_disables_history_rather_than_failing() {
         let dir = tempdir().unwrap();
@@ -363,19 +327,18 @@ mod tests {
         );
     }
 
-    /// A sink whose file has gone away keeps accepting records — silently,
-    /// after saying so once.
+    /// A sink with no store accepts records and says nothing.
     #[test]
     fn a_broken_transcript_reports_once_and_then_stays_quiet() {
         let dir = tempdir().unwrap();
         let (history, mut rx) = history(dir.path());
 
-        // Close the file underneath the sink, the way a failed write does.
+        // Drop the store underneath the sink.
         {
             let mut guard = history.store.lock().unwrap();
             let store = guard.take().expect("a store");
             drop(store);
-            // Reopen onto a path that cannot be written, so `append` fails.
+            // The reopen fails, leaving no store.
             *guard = HistoryStore::reopen(&dir.path().join("gone"), &SessionId("nope".into())).ok();
         }
         for record in turn(1, "hello") {
@@ -387,8 +350,8 @@ mod tests {
         );
     }
 
-    /// A resume whose transcript cannot be reopened stops recording rather
-    /// than writing the resumed conversation into the file before it.
+    /// Regression guard: the resumed conversation must not be written into
+    /// the previous file.
     #[test]
     fn a_resume_that_cannot_reopen_its_transcript_says_so_and_records_nothing() {
         let dir = tempdir().unwrap();
@@ -409,8 +372,7 @@ mod tests {
         );
     }
 
-    /// `/clear` with nowhere to open the next transcript used to switch
-    /// history off without a word.
+    /// Regression: this switched history off silently.
     #[test]
     fn a_clear_that_cannot_open_a_new_transcript_says_so_once() {
         let dir = tempdir().unwrap();

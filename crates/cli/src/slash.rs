@@ -11,40 +11,31 @@ use crate::history::History;
 
 /// What `intercept` decided to do with one incoming command.
 enum Intercepted {
-    /// Not a slash command (or not a `Submit` at all) — forward unchanged.
+    /// Not a slash command, or not a `Submit`: forward unchanged.
     Forward(Command),
-    /// A known slash command ran (or an unknown one was rejected); nothing
-    /// reaches the core.
+    /// A slash command ran or was rejected; nothing reaches core.
     Handled,
-    /// `/exit` — `run_interceptor` stops entirely rather than
-    /// looping again, per aldwin-cli.md's Decisions: "CLI owns the
-    /// dispatch table so slash commands can trigger ... process
-    /// operations that the core has no visibility into." Ending the
-    /// interceptor task drops both its `forward` (core command) and
-    /// `events` sender clones; the core's own command channel then closes
-    /// too (dropping its `events` sender in turn), so the TUI's event
-    /// channel closes once both are gone and it exits the same way it
-    /// already does on `None` from `events.recv()` — no new `Event`
-    /// variant needed, and no core changes at all.
+    /// `/exit`: `run_interceptor` returns (aldwin-cli.md's Decisions). That
+    /// drops its `forward` and `events` senders, core's command channel
+    /// closes and core drops its `events` sender, and the TUI exits on the
+    /// closed event channel. No `Event` variant exists for quitting.
     Quit,
 }
 
-/// One slash command, as the developer sees it: the name typed after the
-/// `/`, what follows it when it takes an argument, and what it does.
+/// One slash command: its name after the `/`, its argument text (empty if
+/// none), and its summary.
 pub(crate) struct SlashCommand {
     name: &'static str,
     argument: &'static str,
     summary: &'static str,
-    /// Offered by the `/` menu. The rest are typed, and `/help` names them
-    /// so they are not secret.
+    /// Offered by the `/` menu; `/help` lists every command.
     in_menu: bool,
 }
 
-/// Every command `intercept` answers — the one table the `/` menu and
-/// `/help` are both drawn from. The menu offers the developer's seven, in
-/// this order (`crates/review/baseline.json`,
-/// `frame-command-list-is-not-the-products`). `/quit` and `/exit` are one
-/// command under two names, and the menu offers both.
+/// Every command `intercept` answers; the `/` menu and `/help` both draw
+/// from it. Menu entries and order: `crates/review/baseline.json`,
+/// `frame-command-list-is-not-the-products`. `/quit` and `/exit` are one
+/// command.
 const COMMANDS: [SlashCommand; 9] = [
     SlashCommand {
         name: "resume",
@@ -114,7 +105,7 @@ pub(crate) fn menu() -> Vec<aldwin_tui::CommandChoice> {
         .collect()
 }
 
-/// What `/help` says: every command, the menu's first.
+/// What `/help` says: every command, in `COMMANDS` order.
 fn help_text() -> String {
     let commands: Vec<String> = COMMANDS
         .iter()
@@ -123,72 +114,53 @@ fn help_text() -> String {
     format!("The commands are {}.", commands.join(" · "))
 }
 
-/// What `/clear` and `/resume` say while a turn runs — see
-/// `History::turn_in_flight`. `esc` because it is the key the footer offers
-/// for stopping.
+/// What `/clear` and `/resume` say while a turn runs
+/// (`History::turn_in_flight`). `esc` is the footer's stop key.
 const TURN_IN_FLIGHT: &str = "A turn is running. Stop it with esc first, then try again.";
 
-/// How to resume, quoted by the branches that cannot act — same "never
-/// make them go and find /help" rule as `MODEL_USAGE`.
+/// How to resume, quoted by every branch that cannot act.
 const RESUME_USAGE: &str = "Type /resume on its own to pick a conversation from a list.";
 
 /// How to change the model, quoted by every branch that rejects an
-/// argument so the developer never has to go and find `/help`.
+/// argument.
 const MODEL_USAGE: &str = "Change it with /model provider/model.";
 
-/// Valid `/theme` argument values — kept as the single source of truth for
-/// both the accept-check and the error message's own listing, so the two
-/// can't drift apart.
+/// Valid `/theme` arguments.
 const VALID_THEMES: [&str; 2] = ["dark", "light"];
 
-/// How `/model` moves a *running* session onto another model.
+/// How `/model` moves a running session onto another model, by rebuilding
+/// the client inside the agent's (`bootstrap::ClientHandle`).
 ///
-/// `Agent<C, D>` takes its client by value for the life of the process, and
-/// core is generic over `C: LlmClient` — it has no notion of a provider, let
-/// alone of one being replaced. So the client the agent was handed is a
-/// holder that can be rebuilt behind the trait, and this is the one thing
-/// the interceptor needs to know about it (see `bootstrap::ClientHandle`).
-///
-/// Rebuilding can fail the same way startup can — the new provider's
-/// `api_key_env` may not be exported — which is why this returns a result
-/// rather than swapping blind. A failed swap leaves the session on the
-/// client it already had.
+/// A failed rebuild (e.g. `api_key_env` not exported) must leave the
+/// current client in place.
 pub trait ModelSwitch: Send + Sync {
-    /// `config` is the provider settings in force — the file being written
-    /// over any layer below it (`ProviderConfig::over`).
+    /// Rebuilds the client on `config`, the provider settings in force (the
+    /// written file over the layer below, `ProviderConfig::over`).
     fn switch(
         &self,
         config: &aldwin_config::ProviderConfig,
     ) -> Result<(), aldwin_llm::LlmClientInitError>;
 }
 
-/// The running session, as `/model` has to see it: what it is on right now,
-/// and how to move it.
-///
-/// The two belong together because they change together: a successful swap
-/// is precisely what makes `model` stale, so whatever performs the swap has
-/// to be holding the field it invalidates.
+/// The running session's model and the means to change it, held together
+/// because a swap invalidates `model`.
 pub struct Session {
-    /// `provider/model`, as [`qualified`] renders it — what the next turn
-    /// will actually run on.
+    /// `provider/model`, as [`qualified`] renders it: what the next turn
+    /// runs on.
     model: String,
-    /// Shared with the `/connect` that is waiting, so an account connected
-    /// mid-session moves the session onto itself.
+    /// Also used when a `/connect` completes, to move the session onto the
+    /// account.
     switch: Arc<dyn ModelSwitch>,
-    /// Run after a successful `/reload-config`, for state that does not share
-    /// the `Config` handle and so does not see the reload on its own — today,
-    /// the workspace roots (ADR 0007). Returns a line for the developer, or
-    /// `None` when there is nothing to say.
+    /// Run after a successful `/reload-config` for state outside `Config`
+    /// (the workspace roots, ADR 0007). Returns a notice, or `None`.
     after_reload: Option<AfterReload>,
-    /// The `/connect` still waiting for the account to approve, if one is.
-    /// A new `/connect` replaces it: two waits on two codes would race to
-    /// write one entry. Aborted when the session ends, since a wait holds
-    /// a sender of the TUI's event channel and the TUI leaves only once
-    /// every sender is gone.
+    /// The `/connect` waiting for approval. A new `/connect` aborts it (two
+    /// waits would race to write one entry). Must be aborted on drop: it
+    /// holds an event sender, and the TUI exits only once all are gone.
     connecting: Option<JoinHandle<()>>,
-    /// Where a `/connect` says its account was approved and stored. The
-    /// interceptor, not the wait, decides whether the session moves onto
-    /// it: only the interceptor knows what the session is running now.
+    /// A `/connect` sends its stored account here. The interceptor, not the
+    /// wait, decides whether to move the session, since only it knows the
+    /// current model.
     connected_tx: mpsc::Sender<Account>,
     connected_rx: Option<mpsc::Receiver<Account>>,
 }
@@ -222,12 +194,10 @@ impl Session {
     }
 }
 
-/// Intercepts `/`-prefixed `Submit` input before it would otherwise reach
-/// the core, per aldwin-cli.md: core has no slash-command semantics, and a
-/// `/` command reaches it only as the `Command` it translates to (`/clear`
-/// as `ClearHistory`, `/resume` as `Resume`). Runs synchronously in
-/// the interceptor's own recv loop (`run_interceptor`), before any forward
-/// send — not a post-send hook, per the spec's explicit Pitfall.
+/// Handles `/`-prefixed `Submit` input before core sees it (aldwin-cli.md);
+/// core gets only translated commands (`/clear` as `ClearHistory`, `/resume`
+/// as `Resume`). Must run in `run_interceptor`'s loop before the forward
+/// send, never as a post-send hook (the spec's Pitfall).
 async fn intercept(
     command: Command,
     config: &Config,
@@ -245,8 +215,8 @@ async fn intercept(
         return Intercepted::Forward(command);
     };
 
-    // The command name, and whatever follows it. Only the commands that take
-    // an argument match `Some`, so `/help me` is as unknown as `/nope`.
+    // Only commands that take an argument match `Some`, so `/help me` is as
+    // unknown as `/nope`.
     let rest = rest.trim();
     let (name, arg) = match rest.split_once(char::is_whitespace) {
         Some((name, arg)) => (name, Some(arg.trim())),
@@ -265,16 +235,10 @@ async fn intercept(
             handle_reload_config(config, session, events).await;
             Intercepted::Handled
         }
-        // Unlike /help and /reload-config, this one core needs to act on
-        // (wipe ConversationLog) — so it's translated and forwarded rather
-        // than handled locally; core acknowledges with Event::HistoryCleared
-        // once done, which is what actually tells the TUI to wipe its own
-        // rendered log (see aldwin_tui::App::apply_event).
-        //
-        // The transcript is sealed when core acts, not here: core tells its
-        // sink (`History`), and refuses the command while a turn runs.
-        // "Forget everything" is about the model's context, and the record
-        // of what was said stays on disk and stays resumable.
+        // Forwarded: core wipes its `ConversationLog`, moves its sink
+        // (`History`) to a new transcript, and answers with
+        // `Event::HistoryCleared`, on which the TUI wipes its own log
+        // (`aldwin_tui::App::apply_event`). Core refuses it mid-turn.
         ("clear", None) => {
             if history.is_some_and(|h| h.turn_in_flight()) {
                 let _ = events
@@ -288,9 +252,7 @@ async fn intercept(
         }
         // `/quit` and `/exit` are one command; the menu offers both.
         ("exit", None) | ("quit", None) => Intercepted::Quit,
-        // Bare `/model` reports where the developer stands; an argument
-        // changes it. Bare `/theme` switches, since that is what picking it
-        // from the menu asks for.
+        // Bare `/theme` toggles, as picking it from the menu asks.
         ("theme", arg) => {
             handle_theme(arg, config, events).await;
             Intercepted::Handled
@@ -299,16 +261,14 @@ async fn intercept(
             handle_model(arg, config, session, events).await;
             Intercepted::Handled
         }
-        // Bare `/connect` normally never reaches here: aldwin-tui opens the
-        // list of connections and answers with `/connect <provider>`.
+        // Bare `/connect` is normally caught by aldwin-tui, which opens the
+        // list and answers with `/connect <provider>`.
         ("connect", arg) => {
             handle_connect(arg, config, session, events).await;
             Intercepted::Handled
         }
-        // Bare `/resume` normally never reaches here: aldwin-tui reads it
-        // first and opens the picker, which answers by submitting
-        // `/resume <id>`. What arrives is the bare form on a session with no
-        // list to show — so `handle_resume` says why.
+        // Bare `/resume` is normally caught by aldwin-tui's picker, which
+        // submits `/resume <id>`; it arrives here only with no list to show.
         ("resume", arg) => match handle_resume(arg, history, events).await {
             Some(command) => Intercepted::Forward(command),
             None => Intercepted::Handled,
@@ -324,20 +284,12 @@ async fn intercept(
     }
 }
 
-/// `/resume [id]` — load a past transcript into the running session.
+/// `/resume [id]`: the `Command::Resume` to forward, or `None` after a
+/// notice.
 ///
-/// Returns the command core needs rather than sending it, because the caller
-/// is the one holding `forward`; everything else here is reporting.
-///
-/// The records are read here, because a read that fails must change
-/// nothing. Core is handed them with the session's id; when it takes them it
-/// moves its sink (`History`) onto that transcript, so the continued
-/// conversation lands in the file it came from rather than forking a new
-/// one, and its acknowledgement (`Event::HistoryLoaded`) is what the TUI
-/// redraws from.
-///
-/// What is deliberately *not* restored: anything staged. A resumed session
-/// starts with an empty changeset; the review it left open is gone.
+/// Records are read here so a failed read changes nothing. Core, on taking
+/// them, moves its sink (`History`) onto that transcript and answers with
+/// `Event::HistoryLoaded`. Staged changes are deliberately not restored.
 async fn handle_resume(
     arg: Option<&str>,
     history: Option<&Arc<History>>,
@@ -374,9 +326,6 @@ async fn handle_resume(
     }
 
     let id = SessionId(arg.to_string());
-    // A session cannot be resumed into itself: the records would be replaced
-    // by the ones already in the log, and the writer would be pointed at the
-    // file it is already writing.
     if history.is_current(&id) {
         let _ = events
             .send(Event::Notice {
@@ -398,9 +347,8 @@ async fn handle_resume(
         }
     };
 
-    // An empty load is not a failure: it is a transcript whose first turn
-    // never finished (see `aldwin_config::load`). Resuming it would replace
-    // the session with nothing, which is `/clear` wearing a disguise.
+    // An empty load is a transcript whose first turn never finished
+    // (`aldwin_config::load`); resuming it would amount to `/clear`.
     if records.is_empty() {
         let _ = events
             .send(Event::Notice {
@@ -410,28 +358,20 @@ async fn handle_resume(
         return None;
     }
 
-    // Core says "Resumed" when it acts on this: a turn can still be running
-    // when it arrives, and then nothing is resumed.
+    // Core confirms when it acts; if a turn is running by then, it refuses.
     Some(Command::Resume {
         session: id,
         records,
     })
 }
 
-/// `/theme [light|dark]` — bare, the other theme from the one in effect;
-/// with an argument, that one. Unlike `/clear`, this never needs core at all —
-/// it's a config write (`Config::set_tui`, persisting the choice so it
-/// survives the developer's next launch, not just this session) plus an
-/// `Event::ThemeChanged` sent directly into the same channel the TUI reads
-/// from (see that event's own doc comment in aldwin-core for why the
-/// interceptor can reach the TUI this way without core's involvement).
-/// `App::theme` is read fresh by `ui::draw` on every frame, so the change
-/// is visible on the very next redraw — no restart needed.
+/// `/theme [light|dark]`: bare, toggles the theme in effect. Persists via
+/// `Config::set_tui` and sends `Event::ThemeChanged` straight to the TUI,
+/// bypassing core (see that event's doc in aldwin-core).
 async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<Event>) {
     let normalized = match arg {
         Some(arg) => arg.to_ascii_lowercase(),
-        // Read the way startup reads it, so the switch is from what is on
-        // screen.
+        // Read as startup reads it, so the toggle is from what is on screen.
         None => match aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref()) {
             aldwin_tui::Theme::Light => "dark".into(),
             aldwin_tui::Theme::Dark => "light".into(),
@@ -469,16 +409,12 @@ async fn handle_theme(arg: Option<&str>, config: &Config, events: &mpsc::Sender<
     }
 }
 
-/// `/connect <provider>` — connect the account a catalogue row offers, so
-/// a model on that provider runs on the developer's subscription instead
-/// of a key (ADR 0012).
+/// `/connect <provider>`: connects the account a catalogue row offers (ADR
+/// 0012).
 ///
-/// The whole sign-in runs as its own task — asking for the code, showing
-/// it as a notice, and waiting as long as the code lasts — so the
-/// interceptor stays free for `/quit` from the first moment. The task
-/// stores the account and says so on `connected_tx`; the interceptor then
-/// moves the session onto it if the session is on that provider
-/// ([`moved_onto`]).
+/// The sign-in runs as its own task so the interceptor stays free for
+/// `/quit`. The task stores the account and sends it on `connected_tx`; the
+/// interceptor then decides via [`moved_onto`].
 async fn handle_connect(
     arg: Option<&str>,
     config: &Config,
@@ -551,8 +487,7 @@ async fn handle_connect(
     }));
 }
 
-/// `12 minutes`, `1 minute` — a code's lifetime, rounded up so one with
-/// seconds left never reads as none.
+/// `12 minutes`, `1 minute`: a code's lifetime, rounded up, at least 1.
 fn minutes(lifetime: std::time::Duration) -> String {
     match lifetime.as_secs().div_ceil(60).max(1) {
         1 => "1 minute".into(),
@@ -560,12 +495,10 @@ fn minutes(lifetime: std::time::Duration) -> String {
     }
 }
 
-/// An account was approved and stored. The session moves onto it only
-/// when the session is running that provider's model as `provider.yaml`
-/// states it — the check `/model` makes before it swaps — so an edit
-/// picked up by `/reload-config` and not yet acted on, or a `/model` that
-/// ran during the wait, is never overridden behind the developer's back.
-/// What the developer reads about it.
+/// The notice for an approved, stored account. The session moves onto it
+/// only if it runs that provider's model exactly as `provider.yaml` states
+/// it, so a pending `/reload-config` edit or a `/model` during the wait is
+/// never overridden.
 fn moved_onto(account: Account, config: &Config, session: &Session) -> String {
     let name = account.name();
     let on_it = config.effective_provider().filter(|p| {
@@ -586,79 +519,40 @@ fn moved_onto(account: Account, config: &Config, session: &Session) -> String {
     }
 }
 
-/// `/model [provider/]model` — the one way a session gets or changes its
-/// model. It picks both halves of "where the model runs, and which one",
-/// which is why it is one command rather than two: a model id is meaningless
-/// without the provider whose catalogue it comes from, and picking a provider
-/// with no model would leave `provider.yaml` incomplete.
+/// `/model [provider/]model`: sets provider and model together.
 ///
-/// **Argument grammar.** The argument is split on its *first* `/` only.
+/// The argument splits on its first `/` only:
 ///
-/// * A provider's name, alone or with a trailing `/` — that provider. On its
-///   default model, unless it is already the configured provider, in which
-///   case the model you are on is kept: naming where you already are is not
-///   a request to be moved.
-/// * `provider/model` — both halves at once. Everything after the first
-///   slash is the model, so a model id that itself contains slashes is
-///   reachable as `openrouter/qwen/qwen3-coder`.
-/// * Anything else — a model id on the provider already configured.
+/// * A catalogue provider name, bare or with a trailing `/`: that provider on
+///   its default model, or on the current model if already configured.
+/// * `provider/model`: both; the model may contain slashes
+///   (`openrouter/qwen/qwen3-coder`).
+/// * A slashed argument whose head is not a provider: rejected, since it is
+///   what a mistyped provider looks like (`gogle/gemini-2.5-pro`).
+/// * Anything else: a model id on the configured provider.
 ///
-/// A name the catalogue knows is a provider in *either* form, which is the
-/// rule the first cut got wrong: it validated the slashed form and read the
-/// bare form as a model id, so `/model openai` wrote `model: openai` onto
-/// whatever provider was set and reported success.
+/// A bare provider name must never be read as a model id. Only the
+/// provider half is validated; any model id is accepted, as `provider.yaml`
+/// does.
 ///
-/// A slashed argument whose first segment is *not* a provider is rejected
-/// rather than read as a model id containing a slash. Both readings are
-/// available, and the rejected one is what a mistyped provider name looks
-/// like: `/model gogle/gemini-2.5-pro` would otherwise quietly write
-/// `gogle/gemini-2.5-pro` as a model on whatever provider was already set.
+/// Bare `/model` is normally caught by aldwin-tui's picker; it arrives here
+/// only with no catalogue to show, and reports the current model.
 ///
-/// The provider half is validated against the catalogue — it decides an
-/// endpoint, a wire dialect and a key variable, none of which can be guessed
-/// from a name. The model half is not: a provider's real catalogue is a
-/// network call away and changes without us, so `provider.yaml` takes any
-/// model id and so does this. `aldwin_llm::PROVIDERS`' model lists are
-/// suggestions, and the notice says so by listing them as "known".
-///
-/// **The bare form opens a list.** aldwin-tui reads `/model` with no
-/// argument before it reaches here and opens the picker, which answers by
-/// submitting `/model <provider>/<model>` — this function still does every
-/// write, and still decides which scope it lands in. What reaches the branch
-/// below is the bare form on a session with no catalogue to show, which
-/// reports where the developer stands instead.
-///
-/// **It takes effect now.** The client is rebuilt on the new provider
-/// *before* anything is written, and the session moves onto it — the same
-/// way `/theme` really does apply on the next redraw. Two things follow from
-/// that order. A provider whose `api_key_env` is not exported fails here
-/// rather than at the developer's next start, and nothing is persisted when
-/// it does: a `provider.yaml` that cannot boot is not an improvement on
-/// being told no. The exception is a provider that offers an account (ADR
-/// 0012): with neither the account connected nor the key exported, the
-/// model is still chosen and saved, and the first message is answered with
-/// the sentence naming both fixes — `connect::reach` decides that. And the
-/// notice names what the *next turn* will run on, which is now the same
-/// thing the top bar and status line show — they read `Event::ModelChanged`,
-/// sent below.
+/// The client is rebuilt before anything is written, so a provider that
+/// cannot be built (unexported `api_key_env`) persists nothing. A provider
+/// offering an account builds even with neither account nor key (ADR 0012,
+/// `connect::reach`). Sends `Event::ModelChanged` on success.
 async fn handle_model(
     arg: Option<&str>,
     config: &Config,
     session: &mut Session,
     events: &mpsc::Sender<Event>,
 ) {
-    // Whichever scope actually supplies the setting is the one that gets
-    // written: writing global while a project `provider.yaml` shadows it
-    // would report a change the next start would ignore.
-    //
-    // The global layer is kept even when the project one shadows it, because
-    // the settings the new client is built from overlay the two —
-    // `base_url` and `extended_thinking_budget` fall back to global (see
-    // `ProviderConfig::over`), so building from the project file alone would
-    // hand the session a client the next start would not reproduce.
-    // Nothing configured is a state the session can be in now (ADR 0009
-    // §6): the answer then lands in the global file, since there is no
-    // other default for every other directory to inherit.
+    // Write the scope that supplies the setting: a global write under a
+    // project `provider.yaml` would be ignored at the next start. `global`
+    // is kept regardless: the client is built from the overlay
+    // (`ProviderConfig::over`), as startup builds it. With nothing
+    // configured (ADR 0009 §6) the global file is written.
     let global = config.global_provider().ok();
     let (scope, current) = match config.project_provider() {
         Some(project) => (aldwin_config::Scope::Project, Some(project)),
@@ -678,19 +572,15 @@ async fn handle_model(
         return;
     };
 
-    // Split on the first `/` only, and a bare provider name means the same
-    // as `provider/` — see this function's own doc comment for both rules.
+    // Grammar: see this function's doc.
     let (head, tail) = arg
         .split_once('/')
         .map_or((arg, ""), |(head, tail)| (head, tail.trim()));
     let next = match named_provider(head) {
         Some(p) => {
-            // A leading `/` cannot reach here (`head` would be empty and name
-            // nothing); a trailing one, or none at all, is an empty model
-            // half. Naming the provider you are already on is then not a
-            // request to be moved off the model you are using — without this
-            // `/model anthropic` on `anthropic/claude-opus-5` would quietly
-            // drop you back to the catalogue's default.
+            // An empty model half on the configured provider keeps the
+            // current model; otherwise `/model anthropic` on
+            // `anthropic/claude-opus-5` would reset to the default.
             let model = match tail {
                 "" if known.map(|c| c.id) == Some(p.id) => {
                     current.as_ref().map(|c| c.model.as_str())
@@ -725,34 +615,26 @@ async fn handle_model(
 
     let now = qualified(&next, identify(&next));
 
-    // "Already on" has to be true of the *session*, not only of the file.
-    // The two can disagree — a hand-edited `provider.yaml` picked up by
-    // `/reload-config` moves what is on disk without touching the client the
-    // session holds — and reporting no change while the session runs
-    // something else is exactly the "says the model is already selected when
-    // it isn't" this command was fixed for once already. When they disagree
-    // this falls through and swaps, which is what the developer asked for.
+    // "Already on" must hold for the session, not only the file: a
+    // `/reload-config` can change the file without touching the client. When
+    // they disagree, fall through and swap.
     if current.as_ref() == Some(&next) && now == session.model {
-        // Never a dead end. Naming the provider you are already on is the
-        // most likely way to reach this branch, and it is what a developer
-        // types when they are reaching for a list of models — so the notice
-        // says where the list is rather than stopping at "already on".
+        // Points at the list: this is usually reached by naming the current
+        // provider while looking for models.
         let message = format!("You are already on {now}. /model on its own opens the list.");
         let _ = events.send(Event::Notice { message }).await;
         return;
     }
 
-    // What the session would actually run on, overlaid the same way startup
-    // overlays it (`Config::effective_provider`) — the file just chosen over
-    // the layer below it.
+    // Overlaid as startup does (`Config::effective_provider`).
     let below = match scope {
         aldwin_config::Scope::Project => global.as_ref(),
         aldwin_config::Scope::Global => None,
     };
     let resolved = next.clone().over(below);
 
-    // Before the write, not after: a provider the session cannot actually
-    // reach must not be left on disk for the next start to fail on.
+    // Before the write: a provider that cannot be built must not be left on
+    // disk for the next start to fail on.
     if let Err(e) = session.switch.switch(&resolved) {
         let message = format!(
             "Could not switch to {now}: {e}. You are still on {}, and nothing was saved.",
@@ -768,8 +650,7 @@ async fn handle_model(
     };
     let message = match config.set_provider(scope, next.clone()) {
         Ok(()) => format!("Now on {now}, saved to {where_}."),
-        // The swap already happened, so the session really is on the new
-        // model — it is only the next start that will not be.
+        // The swap already happened; only the next start is affected.
         Err(e) => format!(
             "Now on {now}, but it could not be saved to {where_}: {e}. The next start will use {}.",
             current
@@ -779,9 +660,9 @@ async fn handle_model(
     };
     let _ = events.send(Event::Notice { message }).await;
     session.model = now;
-    // The bare model id, not the qualified name: it is what the session
-    // started with in `StatusInfo::model_name`, and the picker matches the
-    // provider half against catalogue ids separately.
+    // The bare model id, not the qualified name: it matches
+    // `StatusInfo::model_name` at startup, and the picker matches the
+    // provider separately.
     let identified = identify(&next);
     let context_window = identified
         .and_then(|p| p.models.iter().find(|m| m.id == next.model))
@@ -796,41 +677,24 @@ async fn handle_model(
 
 /// The catalogue row `name` names, case-insensitively.
 ///
-/// Only the *provider* half is folded: catalogue ids are lowercase by
-/// construction (a test pins it) and `/theme` already accepts `LIGHT`, so
-/// rejecting `/model Anthropic` would be the odd one out. Model ids are left
-/// exactly as typed — they are opaque strings a host compares byte for byte,
-/// and some really are mixed-case.
+/// Catalogue ids are lowercase (a test pins it). Never fold model ids: hosts
+/// compare them byte for byte, and some are mixed-case.
 fn named_provider(name: &str) -> Option<&'static aldwin_llm::Provider> {
     aldwin_llm::provider(&name.trim().to_ascii_lowercase())
 }
 
-/// The `provider.yaml` that naming catalogue row `provider` writes — by the
-/// provider question and by `/model` alike: everything but the model comes
-/// straight off the row, and the model is that provider's own default when
-/// none was given.
+/// The `provider.yaml` for catalogue row `provider` (used by `/model` and
+/// the provider question): fields from the row, the model defaulting to the
+/// row's default. `api_key_env` is a variable name; `provider.yaml` holds no
+/// key. Account-vs-key is decided at client build (ADR 0012).
 ///
-/// `provider.yaml` deliberately has no field a plaintext key could go in
-/// (see `ProviderConfig`), so this writes the key variable's *name* and the
-/// developer exports the key themselves. Whether the provider is then
-/// reached through that key or through a connected account is not written
-/// here at all: it is decided when the client is built (ADR 0012).
+/// From `current` instead of the row:
 ///
-/// `current` is whatever already supplies the setting, when anything does.
-/// Two fields come from it rather than from the catalogue row:
+/// * the thinking budget, always (a developer preference);
+/// * `api_key_env`, only when `provider` is already the configured one, so a
+///   custom variable name (`ANTHROPIC_KEY_WORK`) survives a model change.
 ///
-/// * the thinking budget, always — a developer's preference, not the
-///   host's, so it survives a move between providers;
-/// * the key variable, but only when `provider` is the one already
-///   configured. A developer who exports their Anthropic key as
-///   `ANTHROPIC_KEY_WORK` has said so in `provider.yaml`, and changing the
-///   *model* on that provider is not a request to be moved back onto the
-///   catalogue's default variable name — which would break their next
-///   start. Naming a different provider is a different endpoint with a
-///   different key, so there the catalogue's variable is the right one.
-///
-/// Carrying both is also what makes an unchanged answer compare equal to
-/// what is on disk, so confirming the current row writes nothing at all.
+/// This also makes re-confirming the current row compare equal to disk.
 pub(crate) fn catalogue_provider_config(
     provider: &aldwin_llm::Provider,
     model: Option<&str>,
@@ -852,17 +716,15 @@ pub(crate) fn catalogue_provider_config(
     }
 }
 
-/// The catalogue row a `provider.yaml` points at — see
-/// [`aldwin_llm::identify`].
+/// The catalogue row a `provider.yaml` points at ([`aldwin_llm::identify`]).
 pub(crate) fn identify(
     config: &aldwin_config::ProviderConfig,
 ) -> Option<&'static aldwin_llm::Provider> {
     aldwin_llm::identify(config.provider, config.base_url.as_deref())
 }
 
-/// `provider/model` when the endpoint is one the catalogue knows, and the
-/// bare model id when the developer has pointed `provider.yaml` at an
-/// endpoint of their own — naming a provider there would be a guess.
+/// `provider/model` for a catalogue endpoint; the bare model id for any
+/// other, where naming a provider would be a guess.
 pub(crate) fn qualified(
     config: &aldwin_config::ProviderConfig,
     known: Option<&aldwin_llm::Provider>,
@@ -873,8 +735,8 @@ pub(crate) fn qualified(
     }
 }
 
-/// What the bare `/model` reports: where the developer stands, what else
-/// that provider offers, and every provider there is.
+/// What bare `/model` reports: the current model, the provider's other
+/// models (or the endpoint), and every provider.
 fn describe(
     current: &aldwin_config::ProviderConfig,
     known: Option<&aldwin_llm::Provider>,
@@ -891,9 +753,8 @@ fn describe(
             out.push_str(&format!(" Other {} models: {}.", p.id, others.join(", ")));
         }
     } else {
-        // An endpoint the catalogue has never seen — say so rather than
-        // silently reporting a bare model id as though it were the whole
-        // answer.
+        // An unknown endpoint is named, since the bare model id alone is
+        // ambiguous.
         out.push_str(&format!(
             " It runs at {}.",
             current
@@ -918,8 +779,8 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
                     message: "Settings reloaded.".into(),
                 })
                 .await;
-            // The permissions header promises an edit to the file is picked
-            // up here. `roots:` was the one key for which that was not true.
+            // The permissions.yaml header promises its edits are picked up
+            // here; `roots:` needs this hook for that.
             if let Some(message) = session.after_reload.as_ref().and_then(|hook| hook()) {
                 let _ = events.send(Event::Notice { message }).await;
             }
@@ -941,10 +802,10 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
     }
 }
 
-/// Background task: pumps every command the TUI sends through `intercept`,
-/// forwarding what survives to the core. Ends (and so drops `forward`,
-/// closing the core's command channel) once `incoming` closes — which
-/// happens when the TUI's own `run()` returns and drops its sender.
+/// Background task: passes every TUI command through `intercept` and
+/// forwards the rest to core; also acts on completed `/connect`s. Ends when
+/// `incoming` closes (the TUI returned), on `/quit`, or when core's channel
+/// closes.
 pub async fn run_interceptor(
     mut incoming: mpsc::Receiver<Command>,
     forward: mpsc::Sender<Command>,
@@ -977,9 +838,8 @@ pub async fn run_interceptor(
             }
         }
     }
-    // `forward` and `events` drop here, and `session` with them — which
-    // aborts a `/connect` still waiting — see `Intercepted::Quit`'s doc
-    // comment for why that's enough to shut the whole session down.
+    // Dropping `forward`, `events` and `session` (which aborts a waiting
+    // `/connect`) shuts the session down; see `Intercepted::Quit`.
 }
 
 #[cfg(test)]
@@ -990,17 +850,15 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    /// What the process booted on — where every test's session starts.
+    /// The model every test's session starts on.
     const SESSION_MODEL: &str = "anthropic/claude-sonnet-5";
 
-    /// A `ModelSwitch` that records what it was asked to build rather than
-    /// building it: no key variable to export, no HTTP client, and the
-    /// resolved configs available to assert on afterwards.
+    /// A `ModelSwitch` that records the configs it is given instead of
+    /// building a client.
     #[derive(Clone, Default)]
     struct FakeSwitch {
         seen: Arc<Mutex<Vec<aldwin_config::ProviderConfig>>>,
-        /// Set to stand in for the one failure a real swap has: a provider
-        /// whose `api_key_env` — this variable — is not exported.
+        /// Fails every switch as if this `api_key_env` were not exported.
         fails_with: Option<&'static str>,
     }
 
@@ -1021,8 +879,7 @@ mod tests {
         Session::new(SESSION_MODEL.into(), Arc::new(FakeSwitch::default()))
     }
 
-    /// A session whose switch records, and the record itself — for the tests
-    /// that care about what the client was actually rebuilt on.
+    /// A session and the configs its switch was given.
     fn recording_session() -> (Session, Arc<Mutex<Vec<aldwin_config::ProviderConfig>>>) {
         let switch = FakeSwitch::default();
         let seen = switch.seen.clone();
@@ -1036,12 +893,8 @@ mod tests {
         (project, global, config)
     }
 
-    // ── `/resume` ─────────────────────────────────────────────────────────
-
-    /// A history with one finished turn already recorded, plus both ends of
-    /// the channel its notices arrive on — the sender is the one the history
-    /// reports failures on, so a test reads notices from both paths in one
-    /// place.
+    /// A history with one finished turn in a past session, and both ends of
+    /// the channel it reports on, so a test reads all notices from one place.
     fn recorded_history(
         text: &str,
     ) -> (
@@ -1080,11 +933,9 @@ mod tests {
         ] {
             aldwin_core::RecordSink::append(history.as_ref(), &record);
         }
-        // The session under test is a *new* one, as a fresh launch would be:
-        // the recorded turn is now a past session to resume.
+        // A new current session, as at launch; the recorded one is past.
         history.cleared();
-        // The recorded one, not whichever is newest — `cleared`
-        // just made a newer, empty one.
+        // Not the newest: `cleared` just made an empty one.
         let id = SessionId(
             history
                 .resumable()
@@ -1125,10 +976,8 @@ mod tests {
         );
     }
 
-    /// The fork-free Decision: the writer moves onto the resumed transcript,
-    /// so the continued conversation lands in the file it came from. It
-    /// moves when core takes the records and tells its sink — the
-    /// interceptor only hands them over, since core may yet refuse them.
+    /// aldwin-history.md's fork-free Decision. The writer moves only when
+    /// core calls `resumed`, since core may still refuse.
     #[tokio::test]
     async fn resuming_moves_the_writer_onto_the_resumed_transcript() {
         use aldwin_core::{LogRecord, TurnEndReason, TurnId};
@@ -1191,9 +1040,8 @@ mod tests {
         );
     }
 
-    /// A transcript whose first turn never finished loads as nothing, and
-    /// resuming it would be `/clear` wearing a disguise. The picker no longer
-    /// offers such a session at all, so this is the typed-id path.
+    /// A transcript with no finished turn loads as nothing; resuming it
+    /// would amount to `/clear`. Reached only by a typed id.
     #[tokio::test]
     async fn resuming_a_session_with_no_finished_turn_reports_rather_than_wiping() {
         use aldwin_core::{LogRecord, TurnId};
@@ -1201,9 +1049,8 @@ mod tests {
         let (_project, _global, cfg) = config();
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(8);
-        // Another process's transcript, as a crash leaves it. Its id is taken
-        // from the handle: an unfinished session is not listed, which is the
-        // point of `an_unfinished_session_is_not_listed` below.
+        // A crashed process's transcript. Its id comes from the handle, since
+        // unfinished sessions are not listed.
         let crashed = History::open(
             dir.path().to_path_buf(),
             Path::new("/p"),
@@ -1265,8 +1112,6 @@ mod tests {
         );
     }
 
-    /// History off entirely — the session runs, and `/resume` says why it
-    /// cannot help rather than failing.
     #[tokio::test]
     async fn resume_without_a_transcript_reports_that_history_is_off() {
         let (_project, _global, cfg) = config();
@@ -1285,8 +1130,8 @@ mod tests {
         );
     }
 
-    /// Step 6: `/clear` reaches core to wipe the in-memory log, and the
-    /// transcript is sealed when core does — through its sink, not here.
+    /// aldwin-history.md step 6: the writer moves only when core calls
+    /// `cleared`.
     #[tokio::test]
     async fn clear_reaches_core_and_leaves_the_sealing_to_it() {
         let (_project, _global, cfg) = config();
@@ -1321,8 +1166,8 @@ mod tests {
         );
     }
 
-    /// Core discards both mid-turn, so a writer moved on the way past would
-    /// send the rest of the running conversation into another session's file.
+    /// Core discards both mid-turn; a writer moved anyway would send the
+    /// running turn into another session's file.
     #[tokio::test]
     async fn clear_and_resume_leave_the_writer_alone_while_a_turn_runs() {
         let (_project, _global, cfg) = config();
@@ -1383,7 +1228,7 @@ mod tests {
         );
     }
 
-    /// The picker never offers it, but a typed id can still name it.
+    /// Only reachable by a typed id; the picker never offers it.
     #[tokio::test]
     async fn resuming_the_session_you_are_in_is_refused() {
         let (_project, _global, cfg) = config();
@@ -1405,7 +1250,6 @@ mod tests {
         );
     }
 
-    /// The session being written is not a row in its own list.
     #[tokio::test]
     async fn the_current_session_is_not_offered_as_resumable() {
         let (_dir, history, _id, _events, _rx) = recorded_history("first");
@@ -1416,14 +1260,13 @@ mod tests {
         );
     }
 
-    /// The end-to-end shape of the bug this fixed: launching and quitting
-    /// without saying anything left a row in the picker that, when picked,
-    /// was refused.
+    /// Regression: a launch-and-quit left a picker row that was refused
+    /// when picked.
     #[tokio::test]
     async fn an_unfinished_session_is_not_listed() {
         let (_dir, history, _id, _events, _rx) = recorded_history("said something");
-        // `recorded_history` sealed and opened a fresh session that has said
-        // nothing — exactly the state a launch-and-quit leaves.
+        // `recorded_history` left an empty current session, as a
+        // launch-and-quit does.
         let sessions = history.resumable();
         assert_eq!(
             sessions.len(),
@@ -1567,7 +1410,8 @@ mod tests {
         );
     }
 
-    /// `/quit` and `/exit` are one command; `/exit` has its own test below.
+    /// `/exit` also stops the interceptor; that is pinned by
+    /// `slash_exit_stops_the_interceptor_and_drops_its_senders`.
     #[tokio::test]
     async fn quit_and_exit_both_leave() {
         let (_project, _global, cfg) = config();
@@ -1605,8 +1449,7 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
-        // Hand-corrupt the project's permissions.yaml so reload_all() fails
-        // on that one layer.
+        // A malformed project permissions.yaml fails that one layer.
         std::fs::create_dir(project.path().join(".aldwin")).unwrap();
         let bad_path = project.path().join(".aldwin").join("permissions.yaml");
         std::fs::write(&bad_path, "not: [valid, yaml: at all").unwrap();
@@ -1705,8 +1548,7 @@ mod tests {
         }
     }
 
-    /// Any whitespace separates a command from its argument, not only a
-    /// space — a pasted tab used to make `/theme` an unknown command.
+    /// Regression: a pasted tab made `/theme` an unknown command.
     #[tokio::test]
     async fn a_tab_separates_a_command_from_its_argument() {
         let (_project, _global, cfg) = config();
@@ -1791,8 +1633,7 @@ mod tests {
         );
     }
 
-    /// Every `/model` test needs a provider already on disk — the session
-    /// this command runs in cannot exist without one.
+    /// Writes catalogue provider `id` on its default model into `scope`.
     fn with_provider(config: &Config, scope: aldwin_config::Scope, id: &str) {
         let p = aldwin_llm::provider(id).expect("a catalogue provider");
         config
@@ -1810,9 +1651,7 @@ mod tests {
             .unwrap();
     }
 
-    /// The next `Notice`, stepping over the `ModelChanged` a successful swap
-    /// leaves behind — the tests that care about that event assert on it
-    /// directly, and the rest are reading the message.
+    /// The next `Notice`, skipping any `ModelChanged`.
     async fn notice(rx: &mut mpsc::Receiver<Event>) -> String {
         loop {
             match rx.recv().await {
@@ -1856,8 +1695,6 @@ mod tests {
         );
     }
 
-    /// A bare model id keeps the provider — the common case, and the one
-    /// where a provider name would be noise.
     #[tokio::test]
     async fn a_bare_model_id_changes_the_model_and_leaves_the_provider_alone() {
         let (_project, _global, cfg) = config();
@@ -1885,9 +1722,6 @@ mod tests {
         );
     }
 
-    /// The change is what the session runs on from here — the client is
-    /// rebuilt on it, and the bars are told so they stop naming the model
-    /// the process happened to boot with.
     #[tokio::test]
     async fn changing_the_model_moves_the_running_session_onto_it() {
         let (_project, _global, cfg) = config();
@@ -1945,10 +1779,6 @@ mod tests {
         }
     }
 
-    /// The one failure a swap has is the one startup has: the new provider's
-    /// key variable is not exported. Nothing is written when it happens — a
-    /// `provider.yaml` the next start cannot boot on is not an improvement
-    /// on being told no.
     #[tokio::test]
     async fn a_client_that_cannot_be_built_leaves_the_session_and_the_file_alone() {
         let (_project, _global, cfg) = config();
@@ -1990,9 +1820,6 @@ mod tests {
         );
     }
 
-    /// The developer's own model answer is what gets written — the
-    /// provider's catalogue default is the fallback for the case the model
-    /// step could not be asked at all, not the normal path.
     #[test]
     fn a_provider_row_writes_the_model_that_was_chosen() {
         let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
@@ -2007,8 +1834,8 @@ mod tests {
         assert_eq!(unasked.model, anthropic.default_model());
     }
 
-    /// Confirming the lists on the rows they opened on is not a change, and
-    /// must not leave a project file behind restating the global one.
+    /// Re-confirming the current row must not write a project file
+    /// restating the global one.
     #[test]
     fn an_unchanged_answer_compares_equal_to_what_is_already_configured() {
         let google = aldwin_llm::provider("google").expect("a catalogue provider");
@@ -2031,10 +1858,6 @@ mod tests {
         );
     }
 
-    /// A key variable the developer chose is part of how they reach their
-    /// provider, not part of which model they picked — changing the model
-    /// on that provider must not quietly restore the catalogue's default
-    /// variable name and break their next start.
     #[test]
     fn a_chosen_key_variable_survives_a_model_change_on_the_same_provider() {
         let anthropic = aldwin_llm::provider("anthropic").expect("a catalogue provider");
@@ -2051,17 +1874,14 @@ mod tests {
         );
         assert_eq!(same_provider.model, "claude-opus-5");
 
-        // A different provider is a different endpoint with a different
-        // key, so there the catalogue's variable is the right one.
+        // A different provider takes the catalogue's variable.
         let google = aldwin_llm::provider("google").expect("a catalogue provider");
         let moved = catalogue_provider_config(google, Some("gemini-2.5-flash"), Some(&current));
         assert_eq!(moved.api_key_env, google.api_key_env);
     }
 
-    /// The picker answers with `provider/model`, so the qualified form on the
-    /// provider already configured is the common path — and it must keep the
-    /// developer's own key variable exactly as the provider question does, not restore
-    /// the catalogue's and fail the swap on a variable that is not exported.
+    /// The picker's `provider/model` answer is the common path, so it must
+    /// keep a custom key variable too.
     #[tokio::test]
     async fn a_chosen_key_variable_survives_a_qualified_model_change_on_the_same_provider() {
         let (_project, _global, cfg) = config();
@@ -2097,8 +1917,6 @@ mod tests {
         assert_eq!(saved.model, "claude-opus-5");
     }
 
-    /// `provider/model` moves both halves — endpoint and key variable
-    /// included, which is the whole reason the provider half is validated.
     #[tokio::test]
     async fn a_qualified_argument_moves_the_endpoint_and_the_key_variable_too() {
         let (_project, _global, cfg) = config();
@@ -2133,8 +1951,6 @@ mod tests {
         );
     }
 
-    /// A provider named with no model takes that provider's default, so the
-    /// file is never left half-written.
     #[tokio::test]
     async fn a_provider_with_no_model_takes_that_providers_default() {
         let (_project, _global, cfg) = config();
@@ -2158,8 +1974,6 @@ mod tests {
         );
     }
 
-    /// Everything past the *first* slash is the model, so a model id that
-    /// contains slashes is reachable by naming its provider.
     #[tokio::test]
     async fn only_the_first_slash_splits_so_a_slashed_model_id_survives() {
         let (_project, _global, cfg) = config();
@@ -2182,11 +1996,8 @@ mod tests {
         assert_eq!(saved.api_key_env, "DEEPSEEK_API_KEY");
     }
 
-    /// A bare provider name means that provider on its default model —
-    /// the same as `provider/`. The first cut read it as a *model* id and
-    /// wrote `model: openai` onto whatever provider was already set,
-    /// reporting success; the next start then failed at the host with a
-    /// model it had never heard of.
+    /// Regression: `/model openai` wrote `model: openai` onto the current
+    /// provider.
     #[tokio::test]
     async fn a_bare_provider_name_switches_provider_rather_than_becoming_a_model_id() {
         let (_project, _global, cfg) = config();
@@ -2216,16 +2027,14 @@ mod tests {
         );
     }
 
-    /// Naming the provider you are already on keeps the model you are on.
-    /// Taking the catalogue default instead would make `/model anthropic`
-    /// a silent downgrade from `claude-opus-5`.
+    /// Otherwise `/model anthropic` would silently reset `claude-opus-5` to
+    /// the default.
     #[tokio::test]
     async fn naming_the_current_provider_keeps_the_current_model() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
-        // One session across both calls: the first moves it onto
-        // `claude-opus-5`, and "already on" is now a statement about the
-        // session as much as about the file.
+        // One session across both calls: "already on" checks the session
+        // too.
         let mut session = session();
         let (tx, mut rx) = mpsc::channel(8);
         intercept(
@@ -2258,7 +2067,6 @@ mod tests {
         assert_eq!(cfg.global_provider().unwrap().model, "claude-opus-5");
     }
 
-    /// `/model openai` and `/model openai/` are the same instruction.
     #[tokio::test]
     async fn a_bare_provider_and_a_trailing_slash_mean_the_same_thing() {
         let (_project, _global, cfg) = config();
@@ -2293,8 +2101,6 @@ mod tests {
         assert_eq!(cfg.global_provider().unwrap(), bare);
     }
 
-    /// The provider half folds case, like `/theme` does; the model half is
-    /// left exactly as typed, because a host compares it byte for byte.
     #[tokio::test]
     async fn the_provider_half_is_case_insensitive_and_the_model_half_is_not() {
         let (_project, _global, cfg) = config();
@@ -2323,8 +2129,6 @@ mod tests {
         );
     }
 
-    /// A mistyped provider is rejected rather than written as part of a
-    /// model id on whatever provider happened to be set.
     #[tokio::test]
     async fn a_slashed_argument_with_an_unknown_provider_is_rejected_not_written() {
         let (_project, _global, cfg) = config();
@@ -2354,8 +2158,6 @@ mod tests {
         );
     }
 
-    /// Writing global while a project `provider.yaml` shadows it would
-    /// report a change the next start ignores.
     #[tokio::test]
     async fn the_scope_written_is_the_one_that_actually_supplies_the_setting() {
         let (_project, _global, cfg) = config();
@@ -2386,8 +2188,6 @@ mod tests {
         );
     }
 
-    /// Setting what is already set says so instead of reporting a change
-    /// and telling the developer to restart for it.
     #[tokio::test]
     async fn setting_the_current_model_reports_no_change_and_writes_nothing() {
         let (_project, _global, cfg) = config();
@@ -2415,16 +2215,13 @@ mod tests {
         );
     }
 
-    /// The file and the session can disagree — `/reload-config` picks up a
-    /// hand-edited `provider.yaml` without rebuilding the client the session
-    /// holds. Asking for what the file already says must then still move the
-    /// session, or the developer is told "already on" a model they are
-    /// demonstrably not running.
+    /// `/reload-config` can change the file without rebuilding the client;
+    /// "already on" must then not be reported.
     #[tokio::test]
     async fn what_the_file_already_says_is_still_a_swap_when_the_session_is_elsewhere() {
         let (_project, _global, cfg) = config();
         with_provider(&cfg, aldwin_config::Scope::Global, "anthropic");
-        // The session booted on a different model from the one on disk.
+        // The session runs a different model from the one on disk.
         let (mut session, seen) = recording_session();
         session.model = "anthropic/claude-opus-5".into();
         let (tx, mut rx) = mpsc::channel(8);
@@ -2457,10 +2254,6 @@ mod tests {
         assert_eq!(session.model, "anthropic/claude-sonnet-5");
     }
 
-    /// Two `/model` calls in one session: the second moves off what the
-    /// first one set, not off what the process booted with. The session
-    /// model is state that each swap advances — a fixed startup string was
-    /// only ever right while the session could not change model at all.
     #[tokio::test]
     async fn each_swap_advances_what_the_session_is_running() {
         let (_project, _global, cfg) = config();
@@ -2502,8 +2295,7 @@ mod tests {
             ["claude-opus-5", "lumo-max"]
         );
 
-        // And a third that cannot be built names the *second* as where the
-        // session still is.
+        // A failed third names the second as current.
         let switch = FakeSwitch {
             fails_with: Some("NO_KEY"),
             ..Default::default()
@@ -2523,8 +2315,6 @@ mod tests {
         assert!(message.contains("still on lumo/lumo-max"), "{message}");
     }
 
-    /// A hand-written endpoint is not a catalogue provider, and must not be
-    /// reported as one.
     #[tokio::test]
     async fn an_endpoint_the_catalogue_does_not_know_is_reported_as_itself() {
         let (_project, _global, cfg) = config();
@@ -2564,9 +2354,7 @@ mod tests {
         );
     }
 
-    /// ADR 0009 §6: a session can start with nothing configured, and `/model
-    /// provider/model` is how it gets a model — written globally, since
-    /// there is no other default for every other directory to inherit.
+    /// ADR 0009 §6.
     #[tokio::test]
     async fn with_nothing_configured_a_qualified_model_configures_the_global_file() {
         let (_project, _global, cfg) = config();
@@ -2642,11 +2430,8 @@ mod tests {
         handle.await.unwrap();
     }
 
-    /// `/exit` must stop `run_interceptor` outright — not just skip
-    /// forwarding this one command — dropping both its `forward` and
-    /// `events` sender clones so the core's command channel closes (and,
-    /// once the core drains, its own `events` sender), which is what
-    /// eventually closes the TUI's event channel and lets it exit.
+    /// The TUI exits only once every event sender is gone; see
+    /// `Intercepted::Quit`.
     #[tokio::test]
     async fn slash_exit_stops_the_interceptor_and_drops_its_senders() {
         let (_project, _global, cfg) = config();
@@ -2670,7 +2455,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The interceptor task ends on its own — no need to drop tui_tx.
+        // Ends without `tui_tx` being dropped.
         handle.await.unwrap();
         assert!(
             forward_rx.recv().await.is_none(),
@@ -2682,10 +2467,6 @@ mod tests {
         );
     }
 
-    // ── `/connect` ────────────────────────────────────────────────────────
-
-    /// The two answers `/connect` gives without reaching any server: which
-    /// accounts there are, and that the one named is not among them.
     #[tokio::test]
     async fn connect_without_a_provider_or_with_one_that_offers_none_says_which_do() {
         let (_project, _global, cfg) = config();
@@ -2719,10 +2500,6 @@ mod tests {
         }
     }
 
-    /// An approved account moves the session onto it only when the session
-    /// is running that provider's model as the file states it. On another
-    /// provider, or with the file edited but not yet acted on, it is
-    /// stored and said, and the session is left alone.
     #[test]
     fn an_approved_account_moves_the_session_only_when_it_runs_that_provider() {
         let (_project, _global, cfg) = config();
@@ -2734,8 +2511,7 @@ mod tests {
             "Connected to x.ai. A model on xai now runs on your account."
         );
 
-        // The file says xai, as a hand edit and /reload-config leave it;
-        // the session still runs claude, so nothing moves.
+        // The file says xai (a pending hand edit); the session runs claude.
         with_provider(&cfg, aldwin_config::Scope::Global, "xai");
         assert_eq!(
             moved_onto(Account::Xai, &cfg, &session),
@@ -2762,9 +2538,7 @@ mod tests {
         assert_eq!(minutes(Duration::from_secs(30)), "1 minute");
     }
 
-    /// Ending the session aborts a `/connect` still waiting: the wait holds
-    /// a sender of the TUI's event channel, and the TUI leaves only once
-    /// every sender has gone.
+    /// The wait holds an event sender; the TUI exits only once all are gone.
     #[tokio::test]
     async fn ending_the_session_aborts_a_connect_still_waiting() {
         let mut session = session();

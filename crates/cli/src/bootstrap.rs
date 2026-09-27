@@ -17,16 +17,10 @@ use crate::error::{ShimError, StartupError};
 use crate::history::History;
 use crate::slash;
 
-/// Whichever client the provider settings in force select, built the same
-/// way at startup and on every `/model` after it — so a model swapped into a
-/// running session is reached exactly as one chosen at launch would be.
-///
-/// The one place a `provider.yaml`'s settings become aldwin-llm's: that
-/// crate knows nothing of files, scopes or overlays. How the provider is
-/// reached is decided here too (ADR 0012, `connect::reach`): a connected
-/// account first, the key second, and — on a provider that offers an
-/// account — a client that only says so when there is neither. `notices`
-/// is where a session says a rotated token could not be written back.
+/// The client `provider` selects. The only place `provider.yaml` settings
+/// become aldwin-llm's; used at startup and by every `/model`, so both reach
+/// a provider the same way (ADR 0012, `connect::reach`). `notices` receives
+/// a rotated token that could not be saved.
 fn build_client(
     provider: &aldwin_config::ProviderConfig,
     config: &Config,
@@ -52,12 +46,9 @@ fn build_client(
     })
 }
 
-/// The client a session runs on when it cannot reach a model yet: no
-/// provider configured (ADR 0009 §6: there is no first-run screen, so the
-/// launch card opens with `Model  not set` and the first message asks), or
-/// a provider whose account is not connected and whose key is not set
-/// (ADR 0012). Any request through it answers with the one thing that is
-/// true.
+/// The client when no model can be reached yet: none configured (ADR 0009
+/// §6, no first run) or neither account nor key (ADR 0012). Every request
+/// fails with the sentence it holds.
 struct Said(String);
 
 impl LlmClient for Said {
@@ -74,17 +65,12 @@ impl LlmClient for Said {
 
 const NO_MODEL: &str = "No model is configured yet. Pick one with /model.";
 
-/// The session's client, behind a swap.
+/// The session's client, swappable in place.
 ///
-/// `Agent<C, D>` takes its client by value and owns it for the life of the
-/// process, so `/model` cannot hand it a new one — but it can replace what
-/// is *inside* the one it already has. That is this: the agent is handed the
-/// handle, `/model` rebuilds the client in it, and core stays generic over
-/// `C: LlmClient` without learning that providers exist (see
-/// `slash::ModelSwitch`). A trait object, so both provider clients fit and
-/// a test can put one of its own in there and stream through it. It
-/// carries the `Config` and the notice channel because a rebuild reads a
-/// connected account and needs somewhere to say a refresh could not be saved.
+/// `Agent<C, D>` owns its client for the process's life, so `/model`
+/// replaces the client inside this handle instead (`slash::ModelSwitch`);
+/// core never learns of providers. `config` and `notices` serve a rebuild's
+/// connected account.
 #[derive(Clone)]
 struct ClientHandle {
     client: Arc<std::sync::RwLock<Arc<dyn LlmClient>>>,
@@ -111,9 +97,8 @@ impl LlmClient for ClientHandle {
         &'a self,
         request: LlmRequest<'a>,
     ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
-        // Resolved once, when the request starts, and held by the stream
-        // for as long as it runs: a swap landing mid-turn cannot pull the
-        // client out from under a request already in flight.
+        // Resolved once per request: a swap must not reach a request in
+        // flight.
         let client = self.client.read().expect("client lock poisoned").clone();
         Box::pin(async_stream::stream! {
             let mut inner = client.stream(request);
@@ -125,9 +110,8 @@ impl LlmClient for ClientHandle {
 }
 
 impl slash::ModelSwitch for ClientHandle {
-    /// Builds first and stores second, so a client that cannot be
-    /// constructed — the new provider's `api_key_env` is not exported —
-    /// leaves the session on the one it has.
+    /// Builds before storing, so a failed build (e.g. `api_key_env` not
+    /// exported) leaves the current client in place.
     fn switch(&self, config: &aldwin_config::ProviderConfig) -> Result<(), LlmClientInitError> {
         self.store(build_client(config, &self.config, &self.notices)?);
         Ok(())
@@ -136,12 +120,9 @@ impl slash::ModelSwitch for ClientHandle {
 
 const CHANNEL_CAPACITY: usize = 64;
 
-/// The display halves of the whole catalogue, in catalogue order — what
-/// the `/model` question, the first message's two questions and the
-/// `/connect` list draw from. aldwin-tui is handed ids, purposes, context
-/// sizes and the subscription an account needs, and nothing else: it
-/// renders the list, it does not know what an endpoint or a key variable
-/// is, and it does not depend on this crate or on aldwin-llm to find out.
+/// The catalogue's display fields, in catalogue order, for `/model`, the
+/// first message's questions and `/connect`. aldwin-tui gets display fields
+/// only; it depends on neither this crate nor aldwin-llm.
 fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
     aldwin_llm::PROVIDERS
         .iter()
@@ -162,9 +143,8 @@ fn catalogue_choices() -> Vec<aldwin_tui::ProviderChoice> {
         .collect()
 }
 
-/// The checked-out branch of the checkout `dir` is in, read from
-/// `.git/HEAD` rather than by running git: the launch card's `Branch`
-/// fact. A detached head is its commit, short.
+/// The launch card's `Branch`: the nearest ancestor's `.git/HEAD`, read
+/// without running git. A detached head is its first 8 hex digits.
 fn git_branch(dir: &Path) -> Option<String> {
     dir.ancestors().find_map(|dir| {
         let head = std::fs::read_to_string(dir.join(".git").join("HEAD")).ok()?;
@@ -176,10 +156,8 @@ fn git_branch(dir: &Path) -> Option<String> {
     })
 }
 
-/// The context files the session carries — `CLAUDE.md` and `AGENTS.md`
-/// at the project root, whichever exist. Reading them is a read, and reads
-/// need no permission (ADR 0009 §6); the old stdin prompt for each one is
-/// gone with the rest of the asking.
+/// `CLAUDE.md` and `AGENTS.md` at the project root, whichever exist. Read
+/// without asking (ADR 0009 §6).
 fn context_files(cwd: &Path) -> Vec<PathBuf> {
     ["CLAUDE.md", "AGENTS.md"]
         .iter()
@@ -188,29 +166,19 @@ fn context_files(cwd: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The startup sequence from aldwin-cli.md, in order:
-/// 1. init_global_if_empty — refuse to start on PartiallyPresent.
-/// 2. Load all config layers (`Config::open` — refuses to start on any
-///    parse failure, schema error, unknown major, or missing env var).
-/// 3. Build the additional-context string.
-/// 4. Instantiate the client (or the unconfigured stand-in), the
-///    workspace, the staging area and the dispatcher.
-/// 5. Create the agent loop.
-/// 6. Launch the TUI.
-/// 7. Block on TUI exit; drop channels; wait for the agent to drain.
+/// Runs a session to completion (the startup sequence of aldwin-cli.md):
+/// config, client, workspace and dispatcher, agent, TUI, then waits for the
+/// tasks. No first-run screen (ADR 0009 §6).
 ///
-/// There is no first-run screen: every launch opens straight to the field
-/// under the launch card (ADR 0009 §6).
+/// `git_shim` is why the git shim is not installed, if it is not (ADR
+/// 0013); the session starts anyway and says so once.
 ///
 /// # Errors
 ///
-/// Returns [`StartupError`] when the working directory cannot be read, a
-/// config layer fails to load, `~/.aldwin` is only partly present, the
-/// configured client cannot be built, the terminal fails, or the agent or
-/// interceptor task panicked.
-///
-/// `git_shim` is why the git shim could not be installed, if it could not
-/// (ADR 0013): the session starts anyway, and says so once.
+/// [`StartupError`] when the working directory cannot be read, a config
+/// layer fails to load, `~/.aldwin` is only partly present, the configured
+/// client cannot be built, the terminal fails, or the agent or interceptor
+/// task panicked.
 pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     let cwd = std::env::current_dir().map_err(StartupError::Cwd)?;
 
@@ -222,18 +190,17 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         }
     }
 
-    // `theme` is global-only — resolved once, before anything draws.
+    // `theme` is global-only, resolved once before anything draws.
     let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
 
-    // TUI -> interceptor -> core, so slash commands never reach Submit;
-    // core -> TUI directly for events (no interception needed there).
+    // Commands: TUI -> interceptor -> core, so slash commands never reach
+    // Submit. Events: core -> TUI directly.
     let (tui_cmd_tx, tui_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (agent_cmd_tx, agent_cmd_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    // What the session boots on. Nothing configured is not an error any
-    // more: the launch card says `Model  not set` and the first message
-    // asks, and `/model` moves the session onto the answer.
+    // No provider configured is not an error: the session starts on `Said`
+    // and `/model` moves it onto a real client.
     let effective_provider = config.effective_provider();
     let handle = |client| ClientHandle::new(client, config.clone(), event_tx.clone());
     let (client, model_name, session_model) = match &effective_provider {
@@ -249,9 +216,8 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         ),
     };
 
-    // The workspace: the project root, plus whatever `.aldwin/permissions.yaml`
-    // declares (ADR 0007) — the one boundary (ADR 0011). Project scope only,
-    // and stated rather than inferred.
+    // The workspace, the only boundary (ADR 0007, ADR 0011): the project
+    // root plus the project-scope `.aldwin/permissions.yaml` roots.
     let workspace = Workspace::new(cwd.clone());
     let reach_notice = apply_roots(&config, &cwd, &workspace);
     let additional_context = context::build(&cwd, &workspace.roots(), &context_files(&cwd));
@@ -263,10 +229,8 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         merged_mcp_servers(&config),
         workspace.clone(),
     ));
-    // Best-effort per server/tool — one broken server must not prevent the
-    // session from starting, or stop any other server's tools registering.
-    // Each failure is said, because a server the developer configured and
-    // cannot use is something they will otherwise go looking for.
+    // Best effort per server and tool: a broken server must not stop the
+    // session or other servers. Each failure is said.
     for failure in register_mcp_tools(mcp_bridge, &mut registry).await {
         let message = match failure.tool {
             Some(tool) => format!(
@@ -282,9 +246,8 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     }
     let dispatcher = Dispatcher::new(registry, staging).with_notices(event_tx.clone());
 
-    // This session's transcript. `None` when the history directory cannot be
-    // written — the session then runs without one, having said so once.
-    // History must never be able to stop a session starting.
+    // `None` when the history directory cannot be written; said once.
+    // History must never stop a session starting.
     let history = match History::open(
         config.history_dir(),
         &cwd,
@@ -315,10 +278,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
             .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
     };
 
-    // Said once, at the top of the session: a workspace wider than the
-    // project, a `permissions.yaml` still carrying keys from an earlier
-    // model, a system where nothing Aldwin starts can be confined, and
-    // commits that will not name Aldwin.
+    // Said once at session start (ADR 0011 §3, ADR 0013).
     let notices = [
         reach_notice,
         stale_keys_notice(&config),
@@ -363,16 +323,14 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     finished("agent", agent)
 }
 
-/// How a session task ended, once the terminal is the developer's again. A
-/// task that panicked is an error the process exits on, said after the
-/// TUI has restored the screen — not a quiet exit 0 over a session that
-/// had stopped answering.
+/// A panicked session task as an error, so the process does not exit 0.
+/// Called after the TUI has restored the terminal.
 fn finished(task: &'static str, joined: Result<(), JoinError>) -> Result<(), StartupError> {
     joined.map_err(|source| StartupError::TaskFailed { task, source })
 }
 
 /// A project-scope server entry replaces a global one of the same name
-/// entirely (see aldwin-config's annotated mcp.yaml).
+/// entirely (aldwin-config's annotated mcp.yaml).
 fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut by_name: BTreeMap<String, McpServer> = config
         .global_mcp()
@@ -386,9 +344,8 @@ fn merged_mcp_servers(config: &Config) -> Vec<McpServer> {
     by_name.into_values().collect()
 }
 
-/// `allow:`, `default:` and `deny:` in a `permissions.yaml` do nothing now
-/// (ADR 0011); a file that still says something through one is said out
-/// loud once rather than silently honoured or silently ignored.
+/// `allow:`, `default:` and `deny:` in a `permissions.yaml` are ignored
+/// (ADR 0011); a file still using one is reported once.
 fn stale_keys_notice(config: &Config) -> Option<String> {
     let stale = config.stale_permissions();
     if stale.is_empty() {
@@ -401,28 +358,23 @@ fn stale_keys_notice(config: &Config) -> Option<String> {
     ))
 }
 
-/// Where processes cannot be confined, everything Aldwin starts runs
-/// unconfined — and the developer hears that once, here, never silently
-/// (ADR 0011).
+/// Where the sandbox is unavailable, everything Aldwin starts runs
+/// unconfined; this must be said once, never silently (ADR 0011 §3).
 fn unconfined_notice(reason: Option<&str>) -> Option<String> {
     reason
         .map(|reason| format!("Commands can write outside the workspace on this system: {reason}."))
 }
 
-/// Where the git shim could not be installed, a commit made from anything
-/// Aldwin starts goes out without the co-author trailer (ADR 0013) — said
-/// once, here, like the sandbox's absence.
+/// Without the git shim, commits lack the co-author trailer (ADR 0013);
+/// said once.
 fn unshimmed_notice(reason: &ShimError) -> String {
     format!("Commits made in this session will not name Aldwin as a co-author: {reason}.")
 }
 
-/// Points `workspace` at the roots the project's `permissions.yaml` declares
-/// now, and returns what the developer should be told about it: the roots in
-/// force beyond the project, and any that were written down but do not exist.
-/// `None` when there is nothing beyond the project root and nothing dropped.
-///
-/// Called at startup and again after `/reload-config`. A relative root
-/// resolves against the project root.
+/// Sets `workspace`'s extra roots from the project's `permissions.yaml`
+/// (relative to `cwd`) and returns the notice: roots beyond the project and
+/// declared roots that do not exist, or `None` if neither. Called at startup
+/// and after `/reload-config`.
 fn apply_roots(config: &Config, cwd: &Path, workspace: &Workspace) -> Option<String> {
     let declared: Vec<PathBuf> = config
         .project_permissions()
@@ -516,8 +468,7 @@ mod tests {
         }
     }
 
-    /// A handle over `client`, on a fresh config and a channel nobody
-    /// reads — what the tests here need of the composition root.
+    /// A handle over `client`, with a fresh config and an unread channel.
     fn handle(client: Arc<dyn LlmClient>) -> (ClientHandle, tempfile::TempDir, tempfile::TempDir) {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
@@ -567,8 +518,7 @@ mod tests {
         assert_eq!(text, "first");
     }
 
-    /// ADR 0009 §6: a session with nothing configured starts, and says the
-    /// one true thing when asked to answer.
+    /// ADR 0009 §6.
     #[tokio::test]
     async fn an_unconfigured_session_answers_with_how_to_configure_it() {
         let (handle, _project, _global) = handle(Arc::new(Said(NO_MODEL.into())));
@@ -609,9 +559,6 @@ mod tests {
             .expect("a client that builds replaces the one in place");
     }
 
-    /// A provider that offers an account: with neither the account
-    /// connected nor the key exported, the swap still lands — on a client
-    /// that answers every request with the sentence.
     #[tokio::test]
     async fn a_swap_onto_a_provider_with_neither_account_nor_key_lands_on_the_sentence() {
         std::env::remove_var("XAI_API_KEY");
@@ -643,12 +590,9 @@ mod tests {
             }
             other => panic!("expected the sentence, got {other:?}"),
         }
-        // The account-then-key order itself is `connect::reach`'s, and its
-        // own test walks all three steps.
+        // The full account-then-key order is tested in `connect`.
     }
 
-    /// Every catalogue row reaches the TUI with its models and their context
-    /// sizes — the question would otherwise open on an empty second list.
     #[test]
     fn every_catalogue_row_carries_its_models_to_the_frontend() {
         let choices = catalogue_choices();
@@ -667,8 +611,7 @@ mod tests {
         }
     }
 
-    /// A panicking agent task used to be awaited with `let _ =`, and the
-    /// process exited 0 over a session that had stopped answering.
+    /// Regression: a panicked agent task exited 0.
     #[tokio::test]
     async fn a_task_that_panicked_is_an_error_not_a_clean_exit() {
         let panicked = tokio::spawn(async { panic!("the agent fell over") }).await;

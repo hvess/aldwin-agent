@@ -1,5 +1,5 @@
-//! The git shim against real git (ADR 0013): the test-built binary, reached
-//! through a symlink named `git`, commits in a scratch repository.
+//! The git shim against real git (ADR 0013), through a `git` symlink to the
+//! test-built binary, in a scratch repository.
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
@@ -30,8 +30,7 @@ impl Scratch {
         self.shim.path().join("git")
     }
 
-    /// `git args` through the shim, with the shim first on `PATH` as a
-    /// session puts it.
+    /// `git args` through the shim, first on `PATH` as in a session.
     fn git(&self, args: &[&str]) -> Assert {
         let path = std::env::join_paths(
             std::iter::once(self.shim.path().to_path_buf())
@@ -50,9 +49,8 @@ impl Scratch {
     }
 }
 
-/// A git that depends on nothing of the machine it runs on: a fixed
-/// identity, no global or system config, and none of the variables a hook
-/// running these tests would have set.
+/// Git independent of the machine: fixed identity, no global or system
+/// config, and none of the variables a git hook running the tests sets.
 fn isolated(mut cmd: Command, dir: &Path) -> Command {
     cmd.current_dir(dir)
         .env("GIT_AUTHOR_NAME", "Developer")
@@ -79,9 +77,8 @@ fn a_commit_through_the_shim_names_aldwin_once() {
     );
 }
 
-/// Git aborts a commit with an empty message; with the trailer added it
-/// would commit one whose whole message is the trailer. Through the shim it
-/// still aborts, and nothing is committed.
+/// Regression guard: with the trailer added, git would commit the trailer
+/// alone instead of aborting.
 #[test]
 fn an_empty_message_still_aborts_the_commit() {
     let scratch = Scratch::new();

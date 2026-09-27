@@ -1,5 +1,5 @@
-//! The `aldwin` binary as a developer runs it: the paths that end before
-//! the TUI takes the terminal, so they can be run without one.
+//! The `aldwin` binary on the paths that end before the TUI takes the
+//! terminal.
 
 use assert_cmd::Command;
 
@@ -21,8 +21,6 @@ fn an_argument_is_refused() {
     aldwin().arg("--resume").assert().failure();
 }
 
-/// A file that does not parse stops the start, names itself, and exits
-/// non-zero — before anything draws.
 #[test]
 fn a_malformed_config_file_refuses_to_start_and_names_the_file() {
     let home = tempfile::tempdir().unwrap();

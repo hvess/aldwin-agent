@@ -1,11 +1,8 @@
-//! The git shim from inside the sandbox (ADR 0011, ADR 0013): a commit made
-//! by `run` — the real tool, confined as a session confines it — names
-//! Aldwin. Reads are open, so the shim's directory and the real git are
-//! reachable from inside it.
+//! The git shim inside the sandbox (ADR 0011, ADR 0013): a commit by the
+//! confined `run` tool names Aldwin.
 //!
-//! One test in its own binary on purpose: it sets this process's `PATH` and
-//! git's variables, as `main` does, and nothing else here can be reading
-//! the environment while it does.
+//! Keep this the only test in its binary: it sets `PATH` and git's
+//! variables, which is unsound while another test reads the environment.
 #![cfg(unix)]
 
 use std::sync::Arc;

@@ -1,16 +1,12 @@
-//! Aldwin as `git`: every commit Aldwin makes in a developer's project names
-//! it as a co-author (ADR 0013).
+//! Aldwin as `git`, so every commit from a process Aldwin starts names it
+//! as co-author (ADR 0013).
 //!
-//! At startup the binary puts a symlink to itself, named `git`, in a
-//! directory of its own, and puts that directory first on its own `PATH` —
-//! so every process it starts, `run`'s shell, the language server and each
-//! MCP server, finds it before the real one. Started under that name, the
-//! binary is the shim: it finds the real `git` further down `PATH` and
-//! replaces itself with it, adding the trailer to a `git commit` and passing
-//! everything else through untouched.
+//! `install` puts a `git` symlink to this binary first on the process's
+//! `PATH`; started as `git`, the binary `exec`s the real git further down
+//! `PATH`, adding the trailer to `git commit` only.
 //!
-//! Unix only, as the sandbox is: `exec` is what lets the shim leave no
-//! process of its own behind, and a symlink is how it gets its name.
+//! Unix only: `exec` leaves no shim process behind, and the symlink gives
+//! it its name.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -23,13 +19,12 @@ use tempfile::TempDir;
 
 use crate::ShimError;
 
-/// What a commit made through the shim carries.
+/// The trailer a commit made through the shim carries (ADR 0013).
 const TRAILER: &str = "Co-Authored-By: Aldwin <noreply@aldwin.codes>";
 
-/// Git's global options that take the next word as their value. Every other
-/// word before the subcommand that starts with `-` is a bare flag or an
-/// `--option=value`. `--exec-path` is not here: bare, it prints the path
-/// rather than reading one.
+/// Git's global options that take the next word as their value; any other
+/// `-` word before the subcommand is a bare flag or `--option=value`.
+/// `--exec-path` is absent: bare, it prints the path rather than taking one.
 const VALUED_OPTIONS: [&str; 8] = [
     "-C",
     "-c",
@@ -41,8 +36,8 @@ const VALUED_OPTIONS: [&str; 8] = [
     "--attr-source",
 ];
 
-/// The shim's directory, installed at the front of this process's `PATH`.
-/// Dropping it removes the directory — best effort, on a clean exit.
+/// The shim's directory, first on this process's `PATH`. Dropping it
+/// removes the directory, best effort.
 #[derive(Debug)]
 pub struct GitShim {
     dir: TempDir,
@@ -51,10 +46,9 @@ pub struct GitShim {
 impl GitShim {
     /// A private directory (`0700`) holding `git`, a symlink to `exe`.
     fn new(exe: &Path) -> io::Result<Self> {
-        // Owner-only, so another user cannot decide what `git` is here. A
-        // confined `run` can still replace it — temp is on the sandbox's
-        // incidental list (ADR 0011) — but whatever it points at runs
-        // confined too.
+        // Owner-only, so another user cannot choose what `git` is. A confined
+        // `run` can still replace it (temp is on the sandbox's incidental
+        // list, ADR 0011), but its replacement also runs confined.
         let dir = tempfile::Builder::new()
             .prefix("aldwin-")
             .permissions(std::fs::Permissions::from_mode(0o700))
@@ -71,19 +65,17 @@ impl GitShim {
     }
 }
 
-/// Puts the shim first on this process's `PATH`, so everything it goes on
-/// to start reaches `git` through it.
+/// Puts the shim first on this process's `PATH`, so every process started
+/// afterwards reaches `git` through it.
 ///
-/// Call it before any thread starts: it sets `PATH`, and changing the
-/// environment is only sound while nothing else can be reading it.
+/// Must be called before any thread starts: it sets `PATH`.
 ///
 /// # Errors
 ///
-/// [`ShimError::Install`] when the directory or the symlink cannot be
-/// made, the binary cannot find itself, or the directory's path cannot sit
-/// in `PATH`; [`ShimError::GitTooOld`] when the git on `PATH` is older
-/// than 2.32, which has no `commit --trailer` — shimmed, every commit there
-/// would fail. The caller carries on without the shim, and says so.
+/// [`ShimError::Install`] when the directory, symlink, current executable,
+/// working directory or new `PATH` fails, or the git version probe cannot
+/// run; [`ShimError::GitTooOld`] when the git on `PATH` is older than 2.32
+/// (no `commit --trailer`).
 ///
 /// # Examples
 ///
@@ -96,11 +88,11 @@ impl GitShim {
 /// ```
 pub fn install() -> Result<GitShim, ShimError> {
     let exe = std::env::current_exe()?;
-    // No git at all is not a reason to stay out of the way: the shim then
-    // says there is none, as the shell would have.
+    // With no git at all the shim still installs, and reports the missing
+    // git as the shell would.
     if let Some(git) = real_git(&std::env::var_os("PATH").unwrap_or_default(), &exe) {
-        // Confined, as every process Aldwin starts is (ADR 0011); the
-        // workspace is not read yet, so the working directory stands for it.
+        // Must run confined (ADR 0011); the workspace is not read yet, so the
+        // working directory stands for it.
         let roots = [std::env::current_dir()?];
         let version =
             aldwin_tools::sandbox::std_command(&git.to_string_lossy(), &["--version"], &roots)
@@ -116,9 +108,8 @@ pub fn install() -> Result<GitShim, ShimError> {
     Ok(shim)
 }
 
-/// When this process was started as `git` — through the shim — runs the
-/// real git in its place, and returns only if that could not be done, with
-/// the status to exit with. `None` when this process is Aldwin.
+/// Started as `git`, replaces this process with the real git, returning
+/// only the exit status of a failure to do so. `None` when started as Aldwin.
 ///
 /// # Examples
 ///
@@ -138,8 +129,7 @@ pub fn intercept() -> Option<ExitCode> {
 }
 
 /// Replaces this process with the real git. Returns only on failure: 127
-/// when there is no git to run, as a shell says of a missing command, and
-/// 126 when there is one and it would not start.
+/// (as a shell) when there is no git, 126 when it would not start.
 fn exec_real_git(args: Vec<OsString>) -> ExitCode {
     let shim = match std::env::current_exe().and_then(|exe| exe.canonicalize()) {
         Ok(shim) => shim,
@@ -158,11 +148,10 @@ fn exec_real_git(args: Vec<OsString>) -> ExitCode {
     ExitCode::from(126)
 }
 
-/// The first `git` on `path` that is an executable file and not a build of
-/// Aldwin. Any build, not only `shim` itself: a session started inside
-/// another session's `run`, from a different build, puts a second shim on
-/// `PATH`, and two shims that each skipped only themselves would hand a
-/// commit back and forth forever.
+/// The first `git` on `path` that resolves to an executable file whose name
+/// differs from `shim`'s. Matching by name skips every Aldwin build, not only
+/// `shim`: a nested session from another build adds a second shim, and two
+/// shims that skipped only themselves would loop forever.
 fn real_git(path: &OsStr, shim: &Path) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter_map(|dir| dir.join("git").canonicalize().ok())
@@ -174,10 +163,8 @@ fn real_git(path: &OsStr, shim: &Path) -> Option<PathBuf> {
         })
 }
 
-/// Whether `git --version`'s answer names a git with `commit --trailer`
-/// (2.32 or later). An answer that cannot be read is taken as new enough: a
-/// git that prints something unexpected is far likelier a newer one than one
-/// from before 2021.
+/// Whether `git --version`'s answer names 2.32 or later (`commit
+/// --trailer`). An unparseable answer counts as new enough.
 fn takes_trailers(version: &str) -> bool {
     let mut numbers = version
         .split_whitespace()
@@ -191,9 +178,8 @@ fn takes_trailers(version: &str) -> bool {
     }
 }
 
-/// `args` — git's, without its own name — with the trailer inserted right
-/// after the subcommand when that subcommand is `commit`, and unchanged
-/// otherwise.
+/// `args` (without argv0) with the trailer inserted right after a `commit`
+/// subcommand; unchanged otherwise.
 fn with_trailer(mut args: Vec<OsString>) -> Vec<OsString> {
     let mut at = 0;
     while let Some(arg) = args.get(at).and_then(|a| a.to_str()) {
@@ -211,18 +197,17 @@ fn with_trailer(mut args: Vec<OsString>) -> Vec<OsString> {
     args
 }
 
-/// Whether a `commit`'s arguments give its message explicitly and every part
-/// of it is empty — `-m ""`, `--message=`. Git aborts such a commit, and
-/// with a trailer it would not: the trailer alone would become the message
-/// (the developer's call, 2026-09-27, is to keep git's abort). A message
-/// typed into an editor cannot be seen from here.
+/// Whether a `commit`'s arguments give a message and every part is empty
+/// (`-m ""`, `--message=`). Git aborts such a commit; with a trailer it would
+/// commit the trailer alone, so none is added
+/// (`an_explicitly_empty_message_gets_no_trailer_so_git_still_aborts`). An
+/// editor-typed message cannot be seen here.
 fn empty_message(args: &[OsString]) -> bool {
-    // `commit`'s short flags that take a value, and those whose value is
-    // optional and so only ever the rest of the cluster.
+    // `commit`'s short flags with a required value, and with an optional
+    // one (only ever the rest of the cluster).
     const VALUED: &str = "mFCct";
     const OPTIONAL: &str = "Su";
-    // A loop rather than a chain: a message can be the word after its flag,
-    // which the loop takes with `words.next()`.
+    // Loop, not iterator chain: a flag may consume the next word.
     let (mut given, mut all_empty) = (false, true);
     let mut words = args.iter().map(|a| a.to_string_lossy());
     while let Some(word) = words.next() {
@@ -233,9 +218,8 @@ fn empty_message(args: &[OsString]) -> bool {
         } else if word == "--message" {
             Some(words.next().unwrap_or_default().into_owned())
         } else if let Some(flags) = word.strip_prefix('-').filter(|f| !f.starts_with('-')) {
-            // A short cluster: its first flag that takes a value takes the
-            // rest of the cluster — or, for a required value, the next word
-            // when it ends the cluster. Only `m`'s value is a message.
+            // The cluster's first valued flag takes the rest of it, or, if
+            // required and last, the next word. Only `m`'s value is a message.
             flags
                 .char_indices()
                 .find(|&(_, flag)| VALUED.contains(flag) || OPTIONAL.contains(flag))
@@ -263,8 +247,6 @@ fn empty_message(args: &[OsString]) -> bool {
 mod tests {
     use super::*;
 
-    /// Shimmed, a git before 2.32 would fail every commit on
-    /// `--trailer`; `install` stays out of the way of one instead.
     #[test]
     fn only_a_git_with_commit_trailers_is_shimmed() {
         assert!(takes_trailers("git version 2.55.0\n"));
@@ -277,8 +259,6 @@ mod tests {
         assert!(takes_trailers("something else entirely"));
     }
 
-    /// With a trailer git would commit an empty message instead of aborting,
-    /// leaving the trailer as the whole message.
     #[test]
     fn an_explicitly_empty_message_gets_no_trailer_so_git_still_aborts() {
         for args in [

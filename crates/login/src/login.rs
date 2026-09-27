@@ -107,8 +107,9 @@ impl Login {
     ///
     /// [`LoginError::Denied`] when the developer refuses the sign-in,
     /// [`LoginError::Expired`] when the code runs out first, and
-    /// [`LoginError::Failed`] when the server answers outside the protocol
-    /// or grants no refresh token.
+    /// [`LoginError::Failed`] when the server refuses with an error RFC 8628
+    /// does not name, grants a body that does not parse, or grants no
+    /// refresh token.
     pub async fn wait(self) -> Result<Credentials, LoginError> {
         // `None` on overflow; the server's `expired_token` is then the deadline.
         let deadline = Instant::now().checked_add(self.expires_in);
@@ -343,6 +344,47 @@ mod tests {
             started.elapsed(),
             Duration::from_secs(3 * 5),
             "one interval before each poll, the failed ones included"
+        );
+    }
+
+    /// Regression: a 429, or a proxy's HTML 403, ended the login.
+    #[tokio::test(start_paused = true)]
+    async fn a_busy_or_proxied_server_is_waited_out_not_given_up_on() {
+        let server = test_server::spawn(vec![
+            device_grant(true),
+            Canned::Status(429, "too many requests".into()),
+            Canned::Status(403, "<html>blocked</html>".into()),
+            granted(),
+        ]);
+        let (login, _) = Login::start_at(authority(&server), None).await.unwrap();
+        let started = Instant::now();
+
+        let credentials = login.wait().await.unwrap();
+
+        assert_eq!(credentials.access_token, "at-1");
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(5 + 10 + 10),
+            "the 429 widened the interval as `slow_down` does"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_rfc_8628_does_not_name_fails_the_wait() {
+        let server = test_server::spawn(vec![
+            device_grant(true),
+            Canned::Status(
+                400,
+                r#"{"error":"invalid_client","error_description":"unknown client"}"#.into(),
+            ),
+        ]);
+        let (login, _) = Login::start_at(authority(&server), None).await.unwrap();
+
+        let err = login.wait().await.unwrap_err();
+
+        assert!(
+            matches!(&err, LoginError::Failed(message) if message.contains("unknown client")),
+            "{err:?}"
         );
     }
 

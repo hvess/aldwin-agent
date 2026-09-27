@@ -65,9 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/login/src/oauth.rs` `poll`: a 4xx that is not an RFC 8628
-     answer (a 429, a proxy's HTML 403) is an `Err` and ends the login,
-     where a server's trouble is waited out.
    - `crates/cli/src/bootstrap.rs` `git_branch` reads `<dir>/.git/HEAD`; in
      a git worktree `.git` is a file, so it names an outer checkout's
      branch.

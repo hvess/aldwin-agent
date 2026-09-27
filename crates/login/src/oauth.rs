@@ -1,8 +1,9 @@
 //! The device authorization grant (RFC 8628) and refresh grant (RFC 6749
 //! §6). The only module that knows grant types, wire fields and error codes.
 //!
-//! `Err(String)` is a failure the caller can only report (unreachable, or an
-//! answer outside the protocol); every answer the protocol names is `Ok`.
+//! `Err(String)` is a failure the caller can only report; every answer the
+//! protocol names is `Ok`, and so is trouble `poll` can wait out
+//! (`Poll::Unavailable`).
 
 use std::time::Duration;
 
@@ -64,14 +65,16 @@ pub(crate) enum Poll {
     Granted(TokenGrant),
     /// `authorization_pending`: ask again after the interval.
     Pending,
-    /// `slow_down`: the caller widens the interval (`login::SLOW_DOWN`).
+    /// `slow_down`, or a 429: the caller widens the interval
+    /// (`login::SLOW_DOWN`).
     SlowDown,
     /// `access_denied`: the developer refused in the browser.
     Denied,
     /// `expired_token`.
     Expired,
-    /// Transport failure or 5xx. Says nothing about the login: ask again,
-    /// never end the wait on it.
+    /// Transport failure, a 5xx, or any other status whose body is no RFC
+    /// 8628 refusal (a proxy's or bot-check's page, a redirect). Says
+    /// nothing about the login: ask again, never end the wait on it.
     Unavailable,
 }
 
@@ -148,12 +151,16 @@ pub(crate) async fn poll(
     if status.is_server_error() {
         return Ok(Poll::Unavailable);
     }
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return Ok(Poll::SlowDown);
+    }
     match refusal(&body).map(|r| r.error).as_deref() {
         Some("authorization_pending") => Ok(Poll::Pending),
         Some("slow_down") => Ok(Poll::SlowDown),
         Some("access_denied") => Ok(Poll::Denied),
         Some("expired_token") => Ok(Poll::Expired),
-        _ => Err(describe(status, &body)),
+        Some(_) => Err(describe(status, &body)),
+        None => Ok(Poll::Unavailable),
     }
 }
 

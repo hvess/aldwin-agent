@@ -5,7 +5,7 @@ Connecting a provider's account, so a subscription can stand in for an API key.
 **Status:** active — built and wired end to end; the live run and the review scenes are open
 **Scope:** aldwin-login crate, and the four wiring steps below that reach it. Excludes any second account (see *What a second account adds*).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-26 — revised to `/connect`; see Progress
+**Last Updated:** 2026-09-27 — a busy or proxied server no longer ends the wait; see Progress
 
 ## Why
 
@@ -194,6 +194,14 @@ reachable, and each fix landed with the test that would have caught it.
 Considered and left: the retry row names the provider rather than x.ai's
 account server when a refresh fails; `persist` writes the file on a
 runtime thread, as every config write does.
+
+**2026-09-27 — a busy or proxied server no longer ends the wait.** The
+first audit's rule, that only an answer the protocol names ends the login,
+held for 5xx and dropped connections but not for a 4xx: a 429, or a
+proxy's HTML 403, failed the wait. A 429 now widens the interval as
+`slow_down` does; any other status whose body is no RFC 8628 refusal (a
+proxy's page, a redirect) is waited out.
+A refusal the RFC does not name (`invalid_client`) still fails it.
 
 ## What a second account adds
 

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::judges::{Assignment, Judge, Standing};
-use crate::stages::{Outcome, Stage};
+use crate::stages::Outcome;
 use crate::{Error, Result};
 
 /// Where a judge's section goes: an HTML comment, so filling it is a string
@@ -79,10 +79,8 @@ pub struct Run<'a> {
 
 impl Run<'_> {
     /// Whether the report leaves `judge` a placeholder: it is pending (called
-    /// for, not carried) and its inputs are sound (Decision 17). The code and
-    /// Rust judges need only stage 1 and clippy; the frames judge needs all of
-    /// stages 1 to 5 and captured frames, or it reports a drifted palette's
-    /// consequence as a cause.
+    /// for, not carried) and stages 1 to 5 all passed (Decision 18); the
+    /// frames judge also needs captured frames.
     ///
     /// # Examples
     ///
@@ -91,7 +89,7 @@ impl Run<'_> {
     /// use aldwin_review::report::Run;
     /// use aldwin_review::stages::{Outcome, Stage};
     /// let ok = |stage| Outcome { stage, passed: true, detail: String::new() };
-    /// let outcomes = [ok(Stage::Toolchain), ok(Stage::Clippy)];
+    /// let outcomes = [ok(Stage::Toolchain), ok(Stage::Clippy), ok(Stage::Test)];
     /// let assignments = [Assignment::new(Judge::Code, true, "a crate changed")];
     /// let run = Run {
     ///     commit: "abc1234",
@@ -103,20 +101,18 @@ impl Run<'_> {
     /// };
     /// assert!(run.reaches(Judge::Code));
     /// assert!(!run.reaches(Judge::Frames));
+    ///
+    /// let failed = [ok(Stage::Toolchain), ok(Stage::Clippy), Outcome { passed: false, ..ok(Stage::Test) }];
+    /// assert!(!Run { outcomes: &failed, ..run }.reaches(Judge::Code));
     /// ```
     pub fn reaches(&self, judge: Judge) -> bool {
         let pending = self
             .assignments
             .iter()
             .any(|a| a.judge() == judge && a.standing() == Standing::Pending);
-        let passed = |stage| self.outcomes.iter().any(|o| o.stage == stage && o.passed);
-        let sound = match judge {
-            Judge::Code | Judge::Rust => passed(Stage::Toolchain) && passed(Stage::Clippy),
-            Judge::Frames => {
-                self.outcomes.iter().all(|o| o.passed) && self.frames.is_some() && self.captured > 0
-            }
-        };
-        pending && sound
+        let clean = self.outcomes.iter().all(|o| o.passed);
+        let captured = self.frames.is_some() && self.captured > 0;
+        pending && clean && (judge != Judge::Frames || captured)
     }
 }
 
@@ -225,9 +221,9 @@ fn render(run: &Run) -> String {
             ));
         } else {
             out.push_str(
-                "<p class=\"note\">Not reached. The code and Rust judges need the \
-                 workspace to build; the frames judge needs stages 1&ndash;5 clean and \
-                 frames captured. Fix and run the loop again.</p>",
+                "<p class=\"note\">Not reached. No judge runs until stages 1&ndash;5 \
+                 pass, and the frames judge also needs frames captured. Fix it with \
+                 <code>review --stages-only</code>, then run the loop again.</p>",
             );
         }
     }
@@ -466,6 +462,7 @@ mod tests {
     use super::*;
     use crate::git::Fingerprint;
     use crate::judges::RunState;
+    use crate::stages::Stage;
     use std::collections::BTreeSet;
 
     #[test]
@@ -585,15 +582,15 @@ test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
         assert!(fill(&page, Judge::Frames, &judged(vec![])).is_none());
     }
 
-    /// Decision 17: a judge waits only for what it reads.
+    /// Decision 18: no judge runs until stages 1 to 5 pass.
     #[test]
-    fn a_failing_test_holds_back_only_the_frames_judge() {
+    fn a_failing_test_holds_back_every_judge() {
         let failed = built(false);
         let all = assignments(&Judge::ALL);
         let page = render(&run(&failed, &all, Some(Path::new("frames")), 72));
-        assert!(fill(&page, Judge::Code, &judged(vec![])).is_some());
-        assert!(fill(&page, Judge::Rust, &judged(vec![])).is_some());
-        assert!(fill(&page, Judge::Frames, &judged(vec![])).is_none());
+        for judge in Judge::ALL {
+            assert!(fill(&page, judge, &judged(vec![])).is_none(), "{judge:?}");
+        }
     }
 
     /// A carried pass is named in the report, not asked for again.

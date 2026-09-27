@@ -322,8 +322,8 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Re
             "stage {stage} has findings; fix them and run the loop again from stage 1"
         )));
     }
-    // Placeholders, not pending judges: a frames judge held back by a failed
-    // stage is pending but has nowhere to be written.
+    // Placeholders, not pending judges: a frames judge with no frames
+    // captured is pending but has nowhere to be written.
     let open: Vec<String> = report::awaiting(&report)?
         .into_iter()
         .map(|j| format!("{} ({})", j.stage(), j.title()))
@@ -331,13 +331,6 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Re
     if !open.is_empty() {
         println!("still to write: stage {}", open.join(", stage "));
         return Ok(());
-    }
-    if !state.stages_passed() {
-        return Err(Error::Review(
-            "every judge that could run has, and a deterministic stage failed; fix it with \
-             the judges' findings and run the loop again"
-                .into(),
-        ));
     }
     if state.has_findings() {
         return Err(Error::Review(
@@ -615,22 +608,17 @@ fn hand_to_judges(
         .any(|a| a.standing() == Standing::Pending && !reached.contains(&a.judge()));
     // Must stay an error (Decision 12): a zero exit reads as completion. A
     // pass comes only from `judge`, or from above when no judge is left.
-    Err(Error::Review(
-        if !state.stages_passed() && reached.is_empty() {
-            "a deterministic stage failed; fix it and run the loop again".into()
-        } else if !state.stages_passed() {
-            format!(
-                "a deterministic stage failed; {} judge(s) can still run on this tree — fix \
-             their findings with it",
-                reached.len()
-            )
-        } else if unreached {
-            println!("Stage 8 needs frames: run the review again without --no-capture.");
-            "review incomplete: frames not captured".into()
-        } else {
-            format!("review incomplete: {} judge(s) to run", reached.len())
-        },
-    ))
+    Err(Error::Review(if !state.stages_passed() {
+        // `reaches` left no judge (Decision 18); this only says why.
+        "a deterministic stage failed, so no judge runs; fix it with `review \
+         --stages-only` until stages 1–5 pass, then run the loop again"
+            .into()
+    } else if unreached {
+        println!("Stage 8 needs frames: run the review again without --no-capture.");
+        "review incomplete: frames not captured".into()
+    } else {
+        format!("review incomplete: {} judge(s) to run", reached.len())
+    }))
 }
 
 /// The runs before `current` whose state loads, by directory name, newest

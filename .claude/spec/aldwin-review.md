@@ -13,7 +13,7 @@ that make an agent's commit depend on it (`.githooks/`, `.claude/hooks/`,
 `.claude/settings.json`). Excludes what the stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27 (rounds, not readings)
+**Last Updated:** 2026-09-27 (the author checks first)
 
 ## Why
 
@@ -55,9 +55,8 @@ after them, only for stage 8's scenes, and its non-determinism is harmless
 there because a bad frame is something the judge says out loud.
 
 Which judges run is read off the staged diff, never chosen, and the report
-states each one's reason. The code and Rust judges need only the workspace
-to build (stage 1 and clippy); the frames judge needs all of 1–5 and the
-captured frames. A judge whose inputs are unchanged since it passed keeps
+states each one's reason. No judge runs until stages 1–5 pass (Decision
+18); the frames judge also needs the captured frames. A judge whose inputs are unchanged since it passed keeps
 that pass (Decision 17). Every snapshot scene is also a capture scene —
 `scene.rs` has a test that fails if the two lists drift — so a change that
 moves any scene's snapshot has frames for stage 8 to judge.
@@ -265,9 +264,20 @@ moves any scene's snapshot has frames for stage 8 to judge.
       need the workspace to build; a failing fmt, test, token or frame
       check no longer holds them back, and their findings are fixed in the
       same round. The frames judge still waits for a clean 1–5.
+      (Superseded by Decision 18: every judge waits for a clean 1–5.)
     This makes a run depend on earlier runs in `target/review-frames/`, not
     only on the staged tree: a carried verdict is as sound as the
     fingerprint that keys it, and the pass record is still of the tree.
+
+18. **No judge runs until stages 1–5 pass, and the author checks before
+    the judges do.** The developer's call, 2026-09-27. `Run::reaches`
+    leaves a placeholder only on a clean 1–5, so `review` prints no judge
+    command and `judge` has nowhere to write on a tree that fails a stage.
+    The skill's author's loop comes first: `review --stages-only` and the
+    author's pass (quality-gate, a grep of what the diff removes across
+    `crates/` and `.claude/`, a test at the producing layer) are repeated
+    until clean, and only then is the tree staged for the judges. A
+    finding is fixed with its siblings, not alone.
 
 ## Pitfalls
 
@@ -285,8 +295,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
   become the thing it was built to prevent.
 - **Running a judge on what it cannot read soundly.** A judge looking at
   frames drawn with a drifted palette, or at code that does not build,
-  reports a consequence as a cause — which is why each judge waits on the
-  stages its inputs depend on, and on no others (Decision 17).
+  reports a consequence as a cause — one reason no judge runs until stages
+  1–5 pass (Decision 18; Decision 17 had each wait only on its own inputs).
 - **Inferring stage 8's scenes from the code diff.** A change to a shared
   helper touches screens its code diff never names; the snapshot diff is
   what names them.
@@ -315,6 +325,21 @@ moves any scene's snapshot has frames for stage 8 to judge.
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
 
+## Progress (2026-09-27, the author checks first)
+
+A small change — a failed turn's typed kind, open-tasks 1 — used all five
+iterations, and stages 1–5 passed in every one. Each round's findings were
+things the skills already state and the author had not checked: a public
+function without an example, a magic `attempts: 0` beside a new field, one
+rule decided in two places, a stale sentence in a spec and then in an ADR,
+a behaviour untested where it was produced. The judges were doing the
+author's search one layer at a time. Decision 18 reverses Decision 17's
+third rule — the code and Rust judges no longer run on a failing tree —
+and puts the author's loop in front of the judges
+(`a_failing_test_holds_back_every_judge`). Checks that would move more of
+the author's pass into stage 2 — an example on every new public function,
+a removed identifier still named in `.claude/` — are the next change.
+
 ## Progress (2026-09-27, comments)
 
 The code judge's third source now includes `.claude/skills/comments/SKILL.md`,
@@ -333,7 +358,8 @@ Decision 17 is the answer: passes carry on unchanged inputs, the code judge
 has two readers, and the code and Rust judges no longer wait on failures
 they do not read. Tests pin each rule (`a_pass_carries_only_onto_the_same_inputs`,
 `a_fingerprint_moves_only_with_what_it_covers`,
-`a_failing_test_holds_back_only_the_frames_judge`,
+`a_failing_test_holds_back_only_the_frames_judge` — since Decision 18
+`a_failing_test_holds_back_every_judge` —,
 `a_carried_judge_has_nowhere_to_be_written`,
 `a_code_verdict_takes_both_readers_and_keeps_every_finding`).
 

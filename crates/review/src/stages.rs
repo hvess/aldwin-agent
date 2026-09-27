@@ -18,8 +18,7 @@ pub enum Stage {
     Toolchain,
     /// Stage 2's formatting half.
     Fmt,
-    /// Stage 2's clippy half: the one that shows the workspace builds, which
-    /// the code and Rust judges wait on (Decision 17).
+    /// Stage 2's clippy half: the one that shows the workspace builds.
     Clippy,
     /// Stage 3: the suite.
     Test,

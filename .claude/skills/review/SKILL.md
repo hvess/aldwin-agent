@@ -32,7 +32,33 @@ the hook). That is deliberate and it is not to be worked around: if the gate
 refuses, the answer is to run this loop, never to find another way to
 commit. If a command you need is refused, ask the developer.
 
-## Before you start
+## Before you start: the author's loop
+
+**The judges confirm; they do not search.** A judge finding is a defect the
+author could have found, and each one costs a full round — so the loop is
+promoted to the judges only when the author's own checks come back clean.
+Until then, repeat both of these on every change:
+
+1. **The deterministic stages**, without staging:
+   `cargo run --release -p aldwin-review -- review --stages-only`. It must
+   print `stages 1–5 clean` — and `review` refuses to start any judge on a
+   tree that fails one (spec Decision 18), so there is no promoting past it.
+2. **The author's pass** — the checks the stages cannot make, each stated
+   in a skill the judges read:
+   - **Walk quality-gate** against `git diff`, every section; §3 and §4
+     above all: a flag or a magic value standing in for a variant, and one
+     rule decided in two places.
+   - **Grep every identifier and phrase the diff removes or renames**
+     across `crates/` *and* `.claude/` — ADRs, specs and their archive,
+     `CLAUDE.md`, the system prompt, doc comments. Each hit is fixed or
+     given a pointer (records skill).
+   - **Test each changed behaviour at the layer that produces it**, not
+     only where it is shown, and the edge values of any mapping it adds.
+   - **An example on every public function the diff adds** (rust skill).
+   - **The records skill's "Checking before `/review`"**: the ledger, the
+     touched specs' dates and Progress, every citation of a closed entry.
+
+Only then stage and run the loop below.
 
 **Stage exactly what the commit is, and nothing else.** A review reads the
 working tree and records the staged one, so `review` refuses to run while
@@ -40,7 +66,7 @@ they differ — untracked files included. Put anything that is not part of
 this commit aside first (`git stash push --keep-index --include-untracked`
 is one way).
 
-Nothing else is asked of you. There is no goal and no focus to write: which
+There is no goal and no focus to write for the review itself: which
 judges this change needs is read off the staged diff, and which frames stage
 8 looks at off which scenes' snapshot it changes. Nothing the author writes
 is an input to its own review.
@@ -75,19 +101,15 @@ of it `cargo test`. Capture is *not* a stage: it runs after them, only when
 the frames judge is pending (called for and not carried), only for the
 changed scenes.
 
-**A judge waits for the stages its inputs depend on, and no others.** A
-judge reading code that does not build, or frames drawn with a drifted
-palette, reports a consequence as a cause. So the code and Rust judges run
-once the workspace builds (stage 1 and clippy), even when fmt, a test, the
-tokens or the frames failed — fix their findings in the same round — and the
-frames judge runs only on a clean 1–5 with frames captured. The report
-enforces it: it leaves a judge a placeholder only when its inputs are sound,
-so `judge` refuses to write anywhere else. A pass is recorded only when all
-of 1–5 passed and every judge passed or was carried.
+**No judge runs until stages 1–5 pass** (spec Decision 18). A failed stage
+ends the run there: `review` prints no judge command, the report leaves no
+placeholder, and `judge` refuses to write one. The frames judge also needs
+frames captured. A pass is recorded only when all of 1–5 passed and every
+judge passed or was carried.
 
 `--stages-only` runs stages 1–5 and stops, without requiring the tree to be
-staged. It is the check to run while you are still working. It records
-nothing, and it is not a review.
+staged. It is the author's loop's first check. It records nothing, and it
+is not a review.
 
 `UPDATE_SNAPSHOTS` is removed from every `cargo` the loop runs, so a shell
 that still exports it cannot have stage 5 rewrite the baseline it checks.
@@ -119,7 +141,7 @@ iteration: one that remembers its last verdict anchors on it, and one that
 knows what you changed is biased toward seeing the change work.
 
 **A judge `review` did not print a command for is carried, held back by a
-stage its inputs depend on, or not needed.**
+failed stage, or not needed.**
 When a judge's inputs (`Judge::reads`) are identical to a run in which it
 passed, `review` keeps that pass and names the run in the report; do not
 spawn it. Only a pass carries — a finding is always read again.
@@ -321,9 +343,16 @@ exactly when a manual step gets skipped.
 
 ## 9. Iterate
 
-Any failure — a stage, or a judge's finding — means: fix it, stage the fix,
-and run the whole loop again from stage 1, with fresh judges for whatever
-the fix touched. The record is keyed by tree, so a fix always needs a new
+Any failure — a stage, or a judge's finding — means: fix it, go back
+through the author's loop until it is clean, stage the fix, and run the
+whole loop again from stage 1, with fresh judges for whatever the fix
+touched.
+
+**Fix the class, not the instance.** A finding is one sighting. Before
+rerunning, find its siblings: grep the stale wording everywhere it could
+be stated, look for the same shape in the rest of the diff, and test the
+neighbouring values. A fix that closes only the line the judge named
+leaves the next round to find the one beside it. The record is keyed by tree, so a fix always needs a new
 run; within it, a judge whose own inputs the fix did not touch keeps its
 pass (spec Decision 17).
 

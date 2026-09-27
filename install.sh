@@ -8,7 +8,7 @@
 # `allowed_signers` committed at the release's tag — not one served next to
 # the signature. Nothing is installed unless both checks pass.
 #
-# ALDWIN_VERSION      a tag such as v0.4.0 (default: the latest release)
+# ALDWIN_VERSION      a tag such as v0.5.0 (default: the latest release)
 # ALDWIN_INSTALL_DIR  where `aldwin` goes (default: ~/.local/bin)
 # ALDWIN_REPO         the GitHub repository releases come from, for a fork
 set -eu
@@ -70,16 +70,9 @@ done
 curl -fsSL -o allowed_signers "https://raw.githubusercontent.com/$repo/$version/allowed_signers" \
     || fail "couldn't download allowed_signers at $version."
 
-# Releases before the rename were signed as mjolnir, with the same key.
-verified=
-for name in aldwin mjolnir; do
-    if ssh-keygen -Y verify -f allowed_signers -I "release@$name" -n "$name-release" \
-        -s SHA256SUMS.sig < SHA256SUMS >/dev/null 2>&1; then
-        verified=1
-        break
-    fi
-done
-[ -n "$verified" ] || fail "SHA256SUMS doesn't carry a valid release signature, so nothing was installed."
+ssh-keygen -Y verify -f allowed_signers -I release@aldwin -n aldwin-release \
+    -s SHA256SUMS.sig < SHA256SUMS >/dev/null 2>&1 \
+    || fail "SHA256SUMS doesn't carry a valid release signature, so nothing was installed."
 
 grep " $archive\$" SHA256SUMS > expected || fail "SHA256SUMS doesn't list $archive."
 sha256 -c expected >/dev/null 2>&1 || fail "$archive doesn't match its checksum, so nothing was installed."

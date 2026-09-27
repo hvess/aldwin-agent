@@ -207,13 +207,7 @@ cmd_package() {
 # The namespace is what stops a signature made for one purpose being replayed
 # as another; ssh-keygen requires it on both sides and refuses a mismatch.
 #
-# Renamed with the project (Mjolnir -> Aldwin, 2026-09-21). The key did not
-# change, only the labels, so `allowed_signers` carries both principals and a
-# release published before the rename still verifies — with the old pair
-# passed explicitly, since these constants only ever describe a new one:
-#
-#     ssh-keygen -Y verify -f allowed_signers -I release@mjolnir \
-#       -n mjolnir-release -s SHA256SUMS.sig < SHA256SUMS
+# Which releases these constants verify is `allowed_signers`' to say.
 readonly SIG_NAMESPACE="aldwin-release"
 readonly SIG_PRINCIPAL="release@aldwin"
 

@@ -192,9 +192,9 @@ pub struct PlanStep {
     pub state: StepState,
 }
 
-/// A question from the `ask` tool. The design requires a yes, a no and
-/// "Chat about this" among the options; the tool enforces the last, the
-/// prompt asks for the others.
+/// A question from the `ask` tool: its options offer a positive, a negative
+/// and "Chat about this". The tool appends the last and requires two others;
+/// which is positive the prompt asks for (aldwin-tools.md Decisions).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     /// One line of question.

@@ -333,7 +333,8 @@ offer-as-write — is gone. What replaced it:
   lock may refuse. `ToolDescriptor::edit_class` is gone with the gate.
 - **`plan`** validates one to seven steps of `{text, state}` and announces
   them with `DispatchContext::plan_updated`. **`ask`** validates a question
-  with one to four answers, appends *Chat about this* if absent, and
+  with one to four answers (two to four since 2026-09-27: see Decisions), appends
+  *Chat about this* if absent, and
   returns the chosen option's text or what was typed. Neither runs
   anything.
 - **`diff.rs` is gone**; the TUI computes the review's diff from the
@@ -400,6 +401,8 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 - **MCP name collisions namespace under `<server>:<name>`; built-ins win unprefixed.** — Built-ins are the stable surface; remote tools must not silently shadow them. Prefixing is explicit and survives server churn.
 
 - **Tool errors are structured and fed back to the model; transport errors do not retry here.** — Tool-level failure is signal for the model. Transient retry policy belongs to aldwin-llm for upstream calls, not to the tool layer.
+
+- **A question offers at least a positive, a negative and a chat option.** — The developer's call, 2026-09-27: the design's "a yes, a no, and Chat about this" is a guideline, not literal words. `ask` refuses fewer than two answers of the model's own and appends *Chat about this*; which answer is the positive and which the negative is not readable from the text, so the tool's description asks the model for one of each.
 
 - **Each tool owns its cancellation; the dispatcher only promises to release the slot.** — Shell needs SIGKILL on the process group; pure-Rust tools want await-point abort; MCP wants the response future dropped. A single cancellation primitive at the dispatcher would have to lie about at least one of these.
 

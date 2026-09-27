@@ -1,6 +1,5 @@
-//! `ask`: one question, one line of why, a short list of answers (ADR 0009
-//! §2). "Chat about this" is appended when missing: it is the developer's
-//! way out of a wrongly framed question, never the model's to omit.
+//! `ask`: one question, one line of why, and answers that offer a positive,
+//! a negative and "Chat about this" (ADR 0009 §7; aldwin-tools.md Decisions).
 
 use aldwin_core::{DispatchContext, Question};
 use async_trait::async_trait;
@@ -28,17 +27,17 @@ impl AskTool {
             descriptor: ToolDescriptor {
                 name:         "ask".into(),
                 description:  "Ask the developer one question they have to answer before you can go on. One line \
-                               of question, one line of why it matters, and two to four short answers that \
-                               include a yes and a no. \"Chat about this\" is always offered as well; if they \
-                               take it, the result is what they typed. Ask only when the answer changes what \
-                               you do and you cannot settle it yourself."
+                               of question, one line of why it matters, and two to four short answers: at \
+                               least one that goes ahead and one that does not. \"Chat about this\" is always \
+                               offered as well; if they take it, the result is what they typed. Ask only when \
+                               the answer changes what you do and you cannot settle it yourself."
                     .into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "question": { "type": "string" },
                         "detail":   { "type": "string", "description": "One line on why the answer matters." },
-                        "options":  { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 4 },
+                        "options":  { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 4 },
                     },
                     "required": ["question", "options"],
                 }),
@@ -80,8 +79,15 @@ fn parse(input: &Value) -> Result<Question, ToolError> {
                 .ok_or_else(|| invalid("every option is a non-empty string"))
         })
         .collect::<Result<_, _>>()?;
-    if options.is_empty() {
-        return Err(invalid("give at least one answer"));
+    if options
+        .iter()
+        .filter(|o| !Question::is_chat_about_this(o))
+        .count()
+        < 2
+    {
+        return Err(invalid(
+            "give at least two answers of your own: one that goes ahead and one that does not",
+        ));
     }
     if !options.iter().any(|o| Question::is_chat_about_this(o)) {
         options.push(Question::CHAT_ABOUT_THIS.into());
@@ -160,7 +166,11 @@ mod tests {
     async fn what_the_developer_typed_comes_back_verbatim() {
         let tool = AskTool::new();
         let (ctx, mut events, pending) = dispatch_context();
-        let call = tool.call("c1", json!({"question": "Q?", "options": ["Yes"]}), &ctx);
+        let call = tool.call(
+            "c1",
+            json!({"question": "Q?", "options": ["Yes", "No"]}),
+            &ctx,
+        );
         let answer = async {
             let Some(Event::QuestionAsked { call_id, .. }) = events.recv().await else {
                 panic!()
@@ -184,6 +194,8 @@ mod tests {
         for input in [
             json!({}),
             json!({"question": "Q?", "options": []}),
+            json!({"question": "Q?", "options": ["Yes"]}),
+            json!({"question": "Q?", "options": ["Yes", "Chat about this"]}),
             json!({"question": "", "options": ["a"]}),
             json!({"question": "Q?", "options": ["a", "b", "c", "d", "e"]}),
         ] {

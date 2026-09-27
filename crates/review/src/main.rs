@@ -127,15 +127,21 @@ fn workspace_root() -> PathBuf {
 /// carry from (Decision 17).
 const KEPT_RUNS: usize = 3;
 
-/// A fresh `run-<seconds>` directory, after pruning to the last
-/// [`KEPT_RUNS`].
-fn frames_dir(root: &Path) -> Result<PathBuf> {
+/// A fresh `<kind>-<seconds>` directory, after pruning that kind to the last
+/// [`KEPT_RUNS`]. `run` is a review's; `measure` and `capture` write `probe`,
+/// so a probe never prunes, or shares, a run whose pass could carry.
+fn frames_dir(root: &Path, kind: &str) -> Result<PathBuf> {
     let parent = root.join("target/review-frames");
     std::fs::create_dir_all(&parent)?;
+    let prefix = format!("{kind}-");
     let mut existing: Vec<PathBuf> = std::fs::read_dir(&parent)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_dir())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
+        })
         .collect();
     existing.sort();
     for old in existing
@@ -145,7 +151,7 @@ fn frames_dir(root: &Path) -> Result<PathBuf> {
         let _ = std::fs::remove_dir_all(old);
     }
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-    let dir = parent.join(format!("run-{}", now.as_secs()));
+    let dir = parent.join(format!("{prefix}{}", now.as_secs()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -353,7 +359,7 @@ fn write_verdict(root: &Path, run: &Path, stage: u8, findings: &[PathBuf]) -> Re
 /// `measure`: measures foot's cell and checks it against the baseline, or
 /// records it there.
 fn measure(root: &Path, base: Baseline, record: bool) -> Result<()> {
-    let dir = frames_dir(root)?;
+    let dir = frames_dir(root, "probe")?;
     let comp = Compositor::start(&dir)?;
     let cell = measure_cell(&comp, &base.font)?;
     println!("measured cell {}×{} for {}", cell.w, cell.h, base.font);
@@ -399,7 +405,7 @@ fn capture_frames(root: &Path, base: &Baseline, args: &CaptureArgs) -> Result<()
             std::fs::create_dir_all(path)?;
             path.clone()
         }
-        None => frames_dir(root)?,
+        None => frames_dir(root, "probe")?,
     };
     // See `build_app`: never spawn a binary not just built.
     let binary = build_app(root)?;
@@ -466,7 +472,7 @@ fn review(root: &Path, base: &Baseline, args: &ReviewArgs) -> Result<()> {
                 .map(|(_, f)| f.clone())
         },
     );
-    let dir = frames_dir(root)?;
+    let dir = frames_dir(root, "run")?;
     for (name, earlier) in earlier_runs(&dir) {
         state.carry_from(&earlier, &name);
     }
@@ -683,5 +689,35 @@ fn print_judge_inputs(dir: &Path, reached: &[Judge], scenes: &[String]) {
             judge.stage(),
             files.join(" ")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: a `measure` or `capture` counted toward the kept runs and
+    /// pruned a review run whose pass could carry.
+    #[test]
+    fn a_probe_never_prunes_a_review_run() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("target/review-frames");
+        for name in [
+            "run-1", "run-2", "run-3", "probe-4", "probe-5", "probe-6", "probe-7",
+        ] {
+            std::fs::create_dir_all(parent.join(name)).unwrap();
+        }
+
+        let probe = frames_dir(root.path(), "probe").unwrap();
+
+        for run in ["run-1", "run-2", "run-3"] {
+            assert!(parent.join(run).is_dir(), "{run} was pruned");
+        }
+        assert!(!parent.join("probe-4").exists(), "the oldest probe goes");
+        assert!(probe
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("probe-"));
     }
 }

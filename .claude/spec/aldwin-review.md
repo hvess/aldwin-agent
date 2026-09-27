@@ -271,6 +271,14 @@ moves any scene's snapshot has frames for stage 8 to judge.
 
 ## Pitfalls
 
+- **Clearing `GIT_DIR` or `GIT_INDEX_FILE` from the crate's git.** Inside
+  the pre-commit hook they name the repository (a worktree's own included)
+  and the index the commit records, `git commit -a`'s temporary one
+  included, so `git::staged_tree` and `gate::write_record` must inherit
+  them. The cost: the gate's tests, which run them on a throwaway
+  repository, would read the hook's if `cargo test` ran inside a hook. The
+  loop runs tests from `review`, never from a hook; the fixture's own git
+  clears both.
 - **Letting the contradictions list grow.** It is nine entries, each
   accounted for in Progress below. A previous version of this idea reached
   fourteen and then needed its own admission rule, at which point it had

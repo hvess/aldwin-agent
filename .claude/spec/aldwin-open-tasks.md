@@ -65,11 +65,6 @@ contradicts) and the entry says so before it goes.
    every comment against its code (`aldwin-review.md`, Progress
    2026-09-27, comments) turned up these; each is its own change, with a
    test.
-   - `crates/review`: `Assignment::record` accepts a verdict over a carried
-     pass; `measure`, and `capture` without `--out`, make run directories
-     that count toward `KEPT_RUNS`; `git::staged_tree` and `write_record`
-     inherit `GIT_DIR` and `GIT_INDEX_FILE`, which the gate tests would
-     honour inside a hook.
    - Tests that cannot fail: `a_single_root_adds_no_reachability_section`
      (looks for text the code never prints),
      `a_session_from_a_future_schema_is_skipped_rather_than_failing_the_listing`

@@ -30,7 +30,8 @@ unicode-width = "0.2"    # same crate the TUI measures with, so a wide glyph
                          # occupies the same number of cells in both
 
 [dev-dependencies]
-# A throwaway git repository for the gate's tests.
+# Throwaway directories: a git repository for the gate's tests, run
+# directories for the binary's.
 tempfile = { workspace = true }
 # The commit guard's tests run the hook script as a command.
 assert_cmd = { workspace = true }

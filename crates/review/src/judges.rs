@@ -121,6 +121,10 @@ impl Judge {
     }
 }
 
+/// What a carried pass appends to its reason, and what a verdict read in
+/// its place removes.
+const CARRIED: &str = "; passed in ";
+
 /// Where one judge stands in a run. One enum, not a "required" flag beside
 /// an optional verdict, so a verdict cannot attach to an uncalled judge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +242,8 @@ impl Assignment {
     }
 
     /// Records the judge's verdict: passed with no findings, failed with any.
+    /// It replaces a carried pass: a reading in this run outranks one in an
+    /// earlier run, and a finding must never hide behind the older pass.
     ///
     /// # Errors
     ///
@@ -259,6 +265,11 @@ impl Assignment {
                 self.judge.stage()
             )));
         }
+        if self.standing == Standing::Carried {
+            if let Some(at) = self.reason.rfind(CARRIED) {
+                self.reason.truncate(at);
+            }
+        }
         self.standing = if passed {
             Standing::Passed
         } else {
@@ -276,7 +287,7 @@ impl Assignment {
             self.judge == earlier.judge && self.inputs.is_some() && self.inputs == earlier.inputs;
         if same && self.standing == Standing::Pending && earlier.standing == Standing::Passed {
             self.standing = Standing::Carried;
-            self.reason = format!("{}; passed in {run} on the same inputs", self.reason);
+            self.reason = format!("{}{CARRIED}{run} on the same inputs", self.reason);
         }
     }
 }
@@ -670,6 +681,18 @@ mod tests {
         );
         assert_eq!(same.assignments()[1].standing(), Standing::Carried);
         assert!(same.assignments()[1].reason().contains("run-1"));
+
+        let mut reread = same.clone();
+        reread.record(Judge::Rust, false).unwrap();
+        assert_eq!(
+            reread.assignments()[1].standing(),
+            Standing::Failed,
+            "a verdict read now replaces the carried pass"
+        );
+        assert!(
+            !reread.assignments()[1].reason().contains("run-1"),
+            "and its reason no longer names the run it came from"
+        );
 
         // Carried on again, it would name run-2, where nothing was read.
         let mut next = assess(Some("rust"));

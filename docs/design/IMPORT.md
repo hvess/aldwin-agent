@@ -26,6 +26,10 @@ What the frame changed:
 The generator reads `--code` from the frame (`frame_roles`) until
 `colors.css` declares it.
 
+No frame draws a fenced code block. The app draws its lines in `--code` on
+`tint` as well, since a fenced block is code (the developer's call,
+2026-09-29); only what is backticked in a table or prose takes the ink.
+
 ## Re-sync — 2026-09-29, the working line
 
 `Aldwin Agent TUI.dc.html` was fetched from the discussion project and

@@ -6,15 +6,6 @@
 use thiserror::Error;
 
 /// Everything a stage, a capture or the gate can fail with.
-///
-/// # Examples
-///
-/// ```
-/// use aldwin_review::{scene, Error};
-/// let unknown = scene::script("nowhere").unwrap_err();
-/// assert!(matches!(unknown, Error::Scene(_)));
-/// assert!(unknown.to_string().contains("unknown scene"));
-/// ```
 #[derive(Debug, Error)]
 pub enum Error {
     /// A file could not be read or written, or a process spawned.

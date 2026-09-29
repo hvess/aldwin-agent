@@ -77,15 +77,6 @@ pub(crate) fn command(
 /// # Errors
 ///
 /// When the system can confine processes and building the confinement fails.
-///
-/// # Examples
-///
-/// ```no_run
-/// let cwd = std::env::current_dir()?;
-/// let output = aldwin_tools::sandbox::std_command("git", &["--version"], &[cwd])?
-///     .output()?;
-/// # Ok::<(), std::io::Error>(())
-/// ```
 // `program` is text, not a path: the macOS backend writes it into the
 // `sandbox-exec` argument line (`command_line`).
 pub fn std_command(

@@ -32,13 +32,6 @@ impl Judge {
     pub const ALL: [Judge; 3] = [Judge::Code, Judge::Rust, Judge::Frames];
 
     /// The stage this judge is.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// assert_eq!(Judge::Rust.stage(), 7);
-    /// ```
     pub fn stage(self) -> u8 {
         match self {
             Judge::Code => 6,
@@ -48,26 +41,11 @@ impl Judge {
     }
 
     /// The judge for a stage number, if that stage is a judge.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// assert_eq!(Judge::from_stage(8), Some(Judge::Frames));
-    /// assert_eq!(Judge::from_stage(5), None);
-    /// ```
     pub fn from_stage(stage: u8) -> Option<Judge> {
         Judge::ALL.into_iter().find(|j| j.stage() == stage)
     }
 
     /// The judge's name as the report heads its section.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// assert_eq!(Judge::Code.title(), "code judge");
-    /// ```
     pub fn title(self) -> &'static str {
         match self {
             Judge::Code => "code judge",
@@ -79,14 +57,6 @@ impl Judge {
     /// The part of the staged diff this judge reads, as pathspecs; empty is
     /// the whole diff. Must include its sources and its prompt (the review
     /// skill), so a change to what it judges by voids a carried pass.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// assert!(Judge::Code.reads().is_empty());
-    /// assert!(Judge::Rust.reads().contains(&"*.rs"));
-    /// ```
     pub fn reads(self) -> &'static [&'static str] {
         match self {
             Judge::Code => &[],
@@ -105,14 +75,6 @@ impl Judge {
 
     /// How many subagents read for this judge in one pass, their findings
     /// merged into one verdict. Two for the code judge (Decision 17).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// assert_eq!(Judge::Code.readers(), 2);
-    /// assert_eq!(Judge::Frames.readers(), 1);
-    /// ```
     pub fn readers(self) -> usize {
         match self {
             Judge::Code => 2,
@@ -145,14 +107,6 @@ pub enum Standing {
 
 impl Standing {
     /// Whether the change calls for this judge at all.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Standing;
-    /// assert!(Standing::Pending.required());
-    /// assert!(!Standing::NotRequired.required());
-    /// ```
     pub fn required(self) -> bool {
         self != Standing::NotRequired
     }
@@ -181,14 +135,6 @@ pub struct Assignment {
 
 impl Assignment {
     /// A judge the change calls for, still pending, or one it does not.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge, Standing};
-    /// let rust = Assignment::new(Judge::Rust, false, "no Rust source changed");
-    /// assert_eq!(rust.standing(), Standing::NotRequired);
-    /// ```
     pub fn new(judge: Judge, required: bool, reason: impl Into<String>) -> Self {
         Assignment {
             judge,
@@ -203,40 +149,16 @@ impl Assignment {
     }
 
     /// Which judge this is.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge};
-    /// let code = Assignment::new(Judge::Code, true, "a crate changed");
-    /// assert_eq!(code.judge(), Judge::Code);
-    /// ```
     pub fn judge(&self) -> Judge {
         self.judge
     }
 
     /// Where the judge stands.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge, Standing};
-    /// let code = Assignment::new(Judge::Code, true, "a crate changed");
-    /// assert_eq!(code.standing(), Standing::Pending);
-    /// ```
     pub fn standing(&self) -> Standing {
         self.standing
     }
 
     /// The sentence that says why the judge runs or why it does not.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge};
-    /// let code = Assignment::new(Judge::Code, true, "a crate changed");
-    /// assert_eq!(code.reason(), "a crate changed");
-    /// ```
     pub fn reason(&self) -> &str {
         &self.reason
     }
@@ -248,16 +170,6 @@ impl Assignment {
     /// # Errors
     ///
     /// [`Error::Review`] when the change never called for this judge.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge, Standing};
-    /// let mut code = Assignment::new(Judge::Code, true, "a crate changed");
-    /// code.record(true)?;
-    /// assert_eq!(code.standing(), Standing::Passed);
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn record(&mut self, passed: bool) -> Result<()> {
         if !self.standing.required() {
             return Err(Error::Review(format!(
@@ -312,18 +224,6 @@ impl RunState {
     /// snapshot's `changed` scenes and fingerprinted by `inputs`; and the
     /// scenes stage 8 looks at. Every snapshot scene is a capture scene (a
     /// test in `scene.rs`), so the changed scenes are the ones to capture.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::RunState;
-    /// let paths = vec!["crates/tui/src/app.rs".to_string()];
-    /// let changed = BTreeSet::from(["launch".to_string()]);
-    /// let (state, scenes) = RunState::assess("4b825dc", true, &paths, &changed, |_| None);
-    /// assert!(state.assignments().iter().all(|a| a.standing().required()));
-    /// assert_eq!(scenes, ["launch"]);
-    /// ```
     pub fn assess(
         tree: impl Into<String>,
         stages_passed: bool,
@@ -344,44 +244,16 @@ impl RunState {
     }
 
     /// The staged tree this run reviewed, from `git write-tree`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::RunState;
-    /// let (state, _) = RunState::assess("4b825dc", true, &[], &BTreeSet::new(), |_| None);
-    /// assert_eq!(state.tree(), "4b825dc");
-    /// ```
     pub fn tree(&self) -> &str {
         &self.tree
     }
 
     /// Whether stages 1 to 5 all passed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::RunState;
-    /// let (state, _) = RunState::assess("t", false, &[], &BTreeSet::new(), |_| None);
-    /// assert!(!state.stages_passed());
-    /// ```
     pub fn stages_passed(&self) -> bool {
         self.stages_passed
     }
 
     /// The three judges, in stage order, and where each one stands.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::{Judge, RunState};
-    /// let (state, _) = RunState::assess("t", true, &[], &BTreeSet::new(), |_| None);
-    /// let judges: Vec<Judge> = state.assignments().iter().map(|a| a.judge()).collect();
-    /// assert_eq!(judges, Judge::ALL);
-    /// ```
     pub fn assignments(&self) -> &[Assignment] {
         &self.assignments
     }
@@ -392,19 +264,6 @@ impl RunState {
     ///
     /// [`Error::Review`] when the change never called for `judge`, or the
     /// run holds no assignment for it (only a hand-edited `run.json`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::{Judge, RunState};
-    /// let paths = vec!["Cargo.toml".to_string()];
-    /// let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
-    /// assert!(!state.passed());
-    /// state.record(Judge::Code, true)?;
-    /// assert!(state.passed());
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn record(&mut self, judge: Judge, passed: bool) -> Result<()> {
         self.assignments
             .iter_mut()
@@ -420,20 +279,6 @@ impl RunState {
 
     /// Carries each pending judge's pass from `earlier`, the run named
     /// `run`, where that judge read the same fingerprinted inputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::{Judge, RunState, Standing};
-    /// let paths = vec!["crates/core/src/lib.rs".to_string()];
-    /// let (mut earlier, _) = RunState::assess("t1", true, &paths, &BTreeSet::new(), |_| None);
-    /// earlier.record(Judge::Rust, true)?;
-    /// let (mut now, _) = RunState::assess("t2", true, &paths, &BTreeSet::new(), |_| None);
-    /// now.carry_from(&earlier, "run-1");
-    /// assert_eq!(now.assignments()[1].standing(), Standing::Pending);
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn carry_from(&mut self, earlier: &RunState, run: &str) {
         for (now, then) in self.assignments.iter_mut().zip(&earlier.assignments) {
             now.carry(then, run);
@@ -445,16 +290,6 @@ impl RunState {
     /// # Errors
     ///
     /// When `dir` holds no `run.json`, or it does not parse.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::path::Path;
-    /// use aldwin_review::judges::RunState;
-    /// let state = RunState::load(Path::new("target/review-frames/run-1790488849"))?;
-    /// println!("reviewed tree {}", state.tree());
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn load(dir: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(dir.join(Self::FILE))?;
         Ok(serde_json::from_str(&text)?)
@@ -465,18 +300,6 @@ impl RunState {
     /// # Errors
     ///
     /// When the file cannot be written.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::RunState;
-    /// let dir = tempfile::tempdir()?;
-    /// let (state, _) = RunState::assess("4b825dc", true, &[], &BTreeSet::new(), |_| None);
-    /// state.save(dir.path())?;
-    /// assert_eq!(RunState::load(dir.path())?.tree(), "4b825dc");
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn save(&self, dir: &Path) -> Result<()> {
         let text = serde_json::to_string_pretty(self)?;
         std::fs::write(dir.join(Self::FILE), text)?;
@@ -485,19 +308,6 @@ impl RunState {
 
     /// Whether any judge written in this run has findings, whatever the last
     /// verdict was.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::{Judge, RunState};
-    /// let paths = vec!["crates/core/src/lib.rs".to_string()];
-    /// let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
-    /// state.record(Judge::Code, false)?;
-    /// state.record(Judge::Rust, true)?;
-    /// assert!(state.has_findings());
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn has_findings(&self) -> bool {
         self.assignments
             .iter()
@@ -506,16 +316,6 @@ impl RunState {
 
     /// Whether every deterministic stage passed and every judge the change
     /// called for passed or was carried.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::BTreeSet;
-    /// use aldwin_review::judges::RunState;
-    /// let docs = vec!["docs/spec/aldwin-review.md".to_string()];
-    /// let (docs_only, _) = RunState::assess("t", true, &docs, &BTreeSet::new(), |_| None);
-    /// assert!(docs_only.passed());
-    /// ```
     pub fn passed(&self) -> bool {
         self.stages_passed
             && self.assignments.iter().all(|a| {
@@ -569,6 +369,11 @@ fn assign(paths: &[String], changed: &BTreeSet<String>) -> ([Assignment; 3], Vec
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use serde_json::{from_str, to_value, Value};
+    use tempfile::tempdir;
+
     use super::*;
     use crate::git::SNAPSHOT;
 
@@ -634,19 +439,37 @@ mod tests {
         assert!(!failed_stages.passed());
     }
 
+    #[test]
+    fn a_stage_number_names_its_judge_and_only_a_judges() {
+        for judge in Judge::ALL {
+            assert_eq!(Judge::from_stage(judge.stage()), Some(judge));
+        }
+        assert_eq!(Judge::from_stage(5), None);
+    }
+
+    #[test]
+    fn a_saved_run_loads_back() {
+        let dir = tempdir().unwrap();
+        let paths = ["crates/core/src/lib.rs".to_string()];
+        let (mut state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
+        state.record(Judge::Code, true).unwrap();
+        state.save(dir.path()).unwrap();
+        let loaded = RunState::load(dir.path()).unwrap();
+        assert_eq!(to_value(&loaded).unwrap(), to_value(&state).unwrap());
+    }
+
     /// Regression: a hand-edited run missing a judge passed without it.
     #[test]
     fn a_run_missing_a_judge_does_not_load() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let paths = ["crates/core/src/lib.rs".to_string()];
         let (state, _) = RunState::assess("t", true, &paths, &BTreeSet::new(), |_| None);
         state.save(dir.path()).unwrap();
 
         let file = dir.path().join(RunState::FILE);
-        let mut json: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let mut json: Value = from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         json["assignments"].as_array_mut().unwrap().pop();
-        std::fs::write(&file, json.to_string()).unwrap();
+        fs::write(&file, json.to_string()).unwrap();
 
         assert!(matches!(RunState::load(dir.path()), Err(Error::Json(_))));
     }

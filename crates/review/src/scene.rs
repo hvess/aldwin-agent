@@ -474,6 +474,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{script, CATALOGUE, CTRL_ENTER};
+    use crate::Error;
 
     /// A scene on one list only could never reach the stage 8 judge.
     #[test]
@@ -486,6 +487,14 @@ mod tests {
         let pinned: BTreeSet<&str> = snapshot.lines().filter_map(crate::git::scene_of).collect();
         let captured: BTreeSet<&str> = CATALOGUE.iter().copied().collect();
         assert_eq!(captured, pinned);
+    }
+
+    #[test]
+    fn a_scene_outside_the_catalogue_is_refused_by_name() {
+        let Err(Error::Scene(message)) = script("nowhere") else {
+            panic!("an unknown scene must be refused");
+        };
+        assert!(message.contains("\"nowhere\""), "{message}");
     }
 
     #[test]

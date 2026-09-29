@@ -213,10 +213,8 @@ cargo run -p aldwin-review -- tokens --write
 ### Documentation
 
 - Use `///` for public API documentation
-- Include examples in the doc comments of public functions a change adds.
-  A doc written for an existing item — to satisfy `missing_docs`, or to add
-  an `# Errors` section — does not need one (the developer's scoping,
-  2026-09-27)
+- No `# Examples` sections: the code is the example, and a behaviour worth
+  pinning is a unit test (the developer's call, 2026-09-29)
 - Document panics and errors
 
 ### Testing

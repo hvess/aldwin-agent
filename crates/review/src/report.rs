@@ -81,30 +81,6 @@ impl Run<'_> {
     /// Whether the report leaves `judge` a placeholder: it is pending (called
     /// for, not carried) and stages 1 to 5 all passed (Decision 18); the
     /// frames judge also needs captured frames.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::{Assignment, Judge};
-    /// use aldwin_review::report::Run;
-    /// use aldwin_review::stages::{Outcome, Stage};
-    /// let ok = |stage| Outcome { stage, passed: true, detail: String::new() };
-    /// let outcomes = [ok(Stage::Toolchain), ok(Stage::Clippy), ok(Stage::Test)];
-    /// let assignments = [Assignment::new(Judge::Code, true, "a crate changed")];
-    /// let run = Run {
-    ///     commit: "abc1234",
-    ///     tree: "t",
-    ///     outcomes: &outcomes,
-    ///     assignments: &assignments,
-    ///     frames: None,
-    ///     captured: 0,
-    /// };
-    /// assert!(run.reaches(Judge::Code));
-    /// assert!(!run.reaches(Judge::Frames));
-    ///
-    /// let failed = [ok(Stage::Toolchain), ok(Stage::Clippy), Outcome { passed: false, ..ok(Stage::Test) }];
-    /// assert!(!Run { outcomes: &failed, ..run }.reaches(Judge::Code));
-    /// ```
     pub fn reaches(&self, judge: Judge) -> bool {
         let pending = self
             .assignments
@@ -279,17 +255,6 @@ impl Verdict {
     ///
     /// [`Error::Review`] unless there is exactly one verdict per reader
     /// ([`Judge::readers`]).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::judges::Judge;
-    /// use aldwin_review::report::Verdict;
-    /// let clean = || serde_json::from_str::<Verdict>(r#"{"iteration": 1, "findings": []}"#).unwrap();
-    /// assert!(Verdict::of(Judge::Code, vec![clean(), clean()])?.passes());
-    /// assert!(Verdict::of(Judge::Code, vec![clean()]).is_err());
-    /// # Ok::<(), aldwin_review::Error>(())
-    /// ```
     pub fn of(judge: Judge, readers: Vec<Verdict>) -> Result<Verdict> {
         if readers.len() != judge.readers() {
             return Err(Error::Review(format!(
@@ -313,14 +278,6 @@ impl Verdict {
 
     /// A judge passes only with no findings (Decision 6): a minor fails it as
     /// a major does; severity orders the fixing, not the verdict.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::report::Verdict;
-    /// let verdict: Verdict = serde_json::from_str(r#"{"iteration": 1, "findings": []}"#).unwrap();
-    /// assert!(verdict.passes());
-    /// ```
     pub fn passes(&self) -> bool {
         self.findings.is_empty()
     }
@@ -343,17 +300,6 @@ fn severity(f: &Finding) -> &'static str {
 ///
 /// When the report cannot be read or written, or has no placeholder for
 /// `judge` — it was already written, or the run did not reach it.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// use aldwin_review::judges::Judge;
-/// use aldwin_review::report::{self, Verdict};
-/// let verdict: Verdict = serde_json::from_str(&std::fs::read_to_string("code.json")?)?;
-/// let passed = report::write_verdict(Path::new("run/review.html"), Judge::Code, &verdict)?;
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn write_verdict(report: &Path, judge: Judge, verdict: &Verdict) -> Result<bool> {
     let text = std::fs::read_to_string(report)?;
     let filled = fill(&text, judge, verdict).ok_or_else(|| {
@@ -372,15 +318,6 @@ pub fn write_verdict(report: &Path, judge: Judge, verdict: &Verdict) -> Result<b
 /// # Errors
 ///
 /// When the report cannot be read.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let open = aldwin_review::report::awaiting(Path::new("target/review-frames/run-1/review.html"))?;
-/// println!("{} judge(s) left to write", open.len());
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn awaiting(report: &Path) -> Result<Vec<Judge>> {
     let text = std::fs::read_to_string(report)?;
     Ok(Judge::ALL

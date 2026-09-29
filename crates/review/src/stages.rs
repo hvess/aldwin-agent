@@ -30,13 +30,6 @@ pub enum Stage {
 
 impl Stage {
     /// The stage's number and name, as the report's first column shows it.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_review::stages::Stage;
-    /// assert_eq!(Stage::Clippy.label(), "2 lint · clippy");
-    /// ```
     pub fn label(self) -> &'static str {
         match self {
             Stage::Toolchain => "1 toolchain",
@@ -236,16 +229,6 @@ fn snapshot_scenes(text: &str) -> usize {
 ///
 /// When the design cannot be read at all. A drifted file is a failed
 /// [`Outcome`], not an error.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let base = aldwin_review::Baseline::load()?;
-/// let outcomes = aldwin_review::stages::tokens(Path::new("."), &base)?;
-/// assert!(outcomes.iter().all(|o| o.passed));
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn tokens(root: &Path, base: &Baseline) -> Result<Vec<Outcome>> {
     Ok(vec![
         match tokens::check(root, &tokens::design_dir(), base)? {

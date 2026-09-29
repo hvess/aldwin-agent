@@ -68,15 +68,6 @@ pub(crate) fn common_dir(root: &Path) -> Result<PathBuf> {
 /// # Errors
 ///
 /// When there is no `HEAD` yet, as before the first commit.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let on = aldwin_review::git::head(Path::new("."))?;
-/// println!("reviewing on top of {on}");
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn head(root: &Path) -> Result<String> {
     Ok(git(root, &["rev-parse", "--short", "HEAD"])?
         .trim()
@@ -92,15 +83,6 @@ pub fn head(root: &Path) -> Result<String> {
 /// # Errors
 ///
 /// When git cannot write the tree, as in a merge with unresolved paths.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let tree = aldwin_review::git::staged_tree(Path::new("."))?;
-/// println!("the next commit records tree {tree}");
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn staged_tree(root: &Path) -> Result<String> {
     Ok(git(root, &["write-tree"])?.trim().to_string())
 }
@@ -113,15 +95,6 @@ pub fn staged_tree(root: &Path) -> Result<String> {
 /// # Errors
 ///
 /// When `git status` cannot run.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let unstaged = aldwin_review::git::unstaged(Path::new("."))?;
-/// assert!(unstaged.is_empty(), "stage what the commit is first: {unstaged:?}");
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn unstaged(root: &Path) -> Result<Vec<String>> {
     Ok(
         git(root, &["status", "--porcelain=v1", "--untracked-files=all"])?
@@ -137,15 +110,6 @@ pub fn unstaged(root: &Path) -> Result<Vec<String>> {
 /// # Errors
 ///
 /// When `git diff` cannot run.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let paths = aldwin_review::git::staged_paths(Path::new("."))?;
-/// let rust_changed = paths.iter().any(|p| p.ends_with(".rs"));
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn staged_paths(root: &Path) -> Result<Vec<String>> {
     Ok(git(root, &["diff", "--cached", "--name-only"])?
         .lines()
@@ -158,14 +122,6 @@ pub fn staged_paths(root: &Path) -> Result<Vec<String>> {
 /// # Errors
 ///
 /// When `git diff` cannot run.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// std::fs::write("change.diff", aldwin_review::git::staged_diff(Path::new("."))?)?;
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn staged_diff(root: &Path) -> Result<String> {
     git(root, &["diff", "--cached"])
 }
@@ -189,15 +145,6 @@ impl Fingerprint {
 /// # Errors
 ///
 /// When `git diff` or `git hash-object` cannot run.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// let rust = aldwin_review::git::fingerprint(Path::new("."), &["*.rs"])?;
-/// println!("the Rust this change stages hashes to {rust:?}");
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn fingerprint(root: &Path, pathspecs: &[&str]) -> Result<Fingerprint> {
     let args: Vec<&str> = ["diff", "--cached", "--"]
         .into_iter()
@@ -215,16 +162,6 @@ pub fn fingerprint(root: &Path, pathspecs: &[&str]) -> Result<Fingerprint> {
 /// # Errors
 ///
 /// When the staged snapshot cannot be read.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// for scene in aldwin_review::git::changed_scenes(Path::new("."))? {
-///     println!("{scene} moved");
-/// }
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn changed_scenes(root: &Path) -> Result<BTreeSet<String>> {
     // No snapshot at `HEAD` means every scene is new.
     let before = git(root, &["show", &format!("HEAD:{SNAPSHOT}")]).unwrap_or_default();

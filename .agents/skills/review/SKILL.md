@@ -53,7 +53,6 @@ Until then, repeat both of these on every change:
      given a pointer (records skill).
    - **Test each changed behaviour at the layer that produces it**, not
      only where it is shown, and the edge values of any mapping it adds.
-   - **An example on every public function the diff adds** (rust skill).
    - **The records skill's "Checking before `/review`"**: the ledger, the
      touched specs' dates and Progress, every citation of a closed entry.
 
@@ -250,8 +249,7 @@ The shape all three return:
 > - `thiserror` for error types;
 > - imports grouped per crate with braces, and imports rather than
 >   qualified paths in signatures;
-> - examples in the doc comments of public functions the change *adds* (a
->   doc the change writes for an existing item does not need one);
+> - no `# Examples` sections in doc comments;
 > - "Avoid Overengineering": only what the task required, no extra layers;
 > - "A bug fix lands with the test that would have caught it".
 >

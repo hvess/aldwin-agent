@@ -30,16 +30,6 @@ const STOP: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reaso
 /// # Panics
 ///
 /// Only if `serde_json` fails to encode a `String`, which it cannot.
-///
-/// # Examples
-///
-/// ```
-/// use aldwin_review::fake::{self, Canned};
-/// let Canned::Sse(body) = fake::thought_then_text("Weighing it up.", "Done.") else {
-///     unreachable!()
-/// };
-/// assert!(body.find("reasoning").unwrap() < body.find("Done.").unwrap());
-/// ```
 pub fn thought_then_text(reasoning: &str, reply: &str) -> Canned {
     Canned::Sse(field_deltas("reasoning", reasoning) + &deltas(reply) + STOP)
 }
@@ -47,13 +37,6 @@ pub fn thought_then_text(reasoning: &str, reply: &str) -> Canned {
 /// Streams `reply`, then keeps the stream open and silent, so the app is
 /// captured mid-turn. The only way a scene holds a running turn; the client's
 /// `IDLE_TIMEOUT` (60 s) outlasts any capture.
-///
-/// # Examples
-///
-/// ```
-/// use aldwin_review::fake::{self, Canned};
-/// assert!(matches!(fake::held("Running the tests."), Canned::SseThenStall(_)));
-/// ```
 pub fn held(reply: &str) -> Canned {
     Canned::SseThenStall(deltas(reply))
 }
@@ -111,18 +94,6 @@ pub fn tool_calls(calls: &[(&str, &str, Value)]) -> Canned {
 ///
 /// Only if `serde_json` fails to encode a `serde_json::Value` or a `String`,
 /// which it cannot.
-///
-/// # Examples
-///
-/// ```
-/// use aldwin_review::fake::{self, Canned};
-/// let reply = fake::said_then_calls(
-///     "Reading the router.",
-///     &[("call-read", "read", serde_json::json!({ "path": "src/router.rs" }))],
-/// );
-/// let Canned::Sse(body) = reply else { unreachable!() };
-/// assert!(body.find("Reading").unwrap() < body.find("call-read").unwrap());
-/// ```
 pub fn said_then_calls(text: &str, calls: &[(&str, &str, Value)]) -> Canned {
     let encoded = calls
         .iter()
@@ -149,4 +120,36 @@ pub fn said_then_calls(text: &str, calls: &[(&str, &str, Value)]) -> Canned {
 /// is written per run.
 pub fn endpoint(server: &FakeServer) -> String {
     server.url("/v1/chat/completions")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn body(reply: Canned) -> String {
+        match reply {
+            Canned::Sse(body) | Canned::SseThenStall(body) => body,
+            other => panic!("not a stream: {other:?}"),
+        }
+    }
+
+    /// The app reads a reply in stream order, so each part must come in the
+    /// order a provider sends it.
+    #[test]
+    fn a_reply_streams_its_parts_in_order() {
+        let thought = body(thought_then_text("Weighing it up.", "Done."));
+        assert!(thought.find("\"reasoning\"").unwrap() < thought.find("Done.").unwrap());
+        assert!(thought.ends_with("data: [DONE]\n\n"));
+
+        let calls = body(said_then_calls(
+            "Reading the router.",
+            &[("call-read", "read", json!({ "path": "src/router.rs" }))],
+        ));
+        assert!(calls.find("Reading").unwrap() < calls.find("call-read").unwrap());
+
+        let stalled = held("Running the tests.");
+        assert!(matches!(stalled, Canned::SseThenStall(ref b) if !b.contains("[DONE]")));
+    }
 }

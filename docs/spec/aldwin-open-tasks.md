@@ -24,15 +24,16 @@ contradicts) and the entry says so before it goes.
 
 ## Review
 
-4. **Two author's-pass checks are still judgement.** The review skill's
-   author's loop (aldwin-review.md Decision 18) asks for an example on
-   every public function a diff adds, and for every identifier the diff
-   removes or renames to be gone from `crates/`, `docs/`, `.agents/` and `AGENTS.md`. Both are
-   mechanical, and judges raised each more than once on 2026-09-27; a
-   finding a judge produces twice belongs in a deterministic stage (review
-   skill, "When a judge is wrong"). Closing it means two stage-2 checks in
-   `crates/review/src/stages.rs` over the staged diff. The developer's
-   call, 2026-09-27: its own change, after Decision 18.
+4. **An author's-pass check is still judgement.** The review skill's
+   author's loop (aldwin-review.md Decision 18) asks for every identifier
+   the diff removes or renames to be gone from `crates/`, `docs/`,
+   `.agents/` and `AGENTS.md`. It is mechanical, and judges raised it more
+   than once on 2026-09-27; a finding a judge produces twice belongs in a
+   deterministic stage (review skill, "When a judge is wrong"). Closing it
+   means a stage-2 check in `crates/review/src/stages.rs` over the staged
+   diff. The developer's call, 2026-09-27: its own change, after Decision
+   18. Its twin, an example on every new public function, went with the
+   rule on 2026-09-29 (aldwin-review.md Progress 2026-09-29).
 
 6. **Frame capture runs only on Linux.** Capture drives foot under sway,
    neither of which runs on macOS, so `Pty::open` refuses there

@@ -179,8 +179,9 @@ moves any scene's snapshot has frames for stage 8 to judge.
     machine can check it.** What a lint can check is a workspace lint and
     fails stage 2: public-API docs, `# Errors` and `# Panics` sections,
     `Debug` on public types. What it cannot — iterator chains over loops,
-    `map_err` only where `From` cannot convert, grouped imports, doc
-    examples, a fix with its test — is stage 7's, and a finding stage 7
+    `map_err` only where `From` cannot convert, grouped imports, no doc
+    examples (since 2026-09-29; before, an example on each new public
+    function), a fix with its test — is stage 7's, and a finding stage 7
     makes twice graduates to a lint or a test. Enabling the lints cost 608
     fixes, made in the commit that enabled them.
 
@@ -335,6 +336,16 @@ moves any scene's snapshot has frames for stage 8 to judge.
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
 
+## Progress (2026-09-29, no doc examples)
+
+The developer's call: no `# Examples` sections — the code is the example,
+and a behaviour worth pinning is a unit test. The rule leaves the `rust`,
+`comments` and `review` skills (the author's pass and stage 7's prompt),
+and every example in `crates/` goes; where one pinned behaviour no other
+test had, a unit test keeps it (a stage's label text is not behaviour). Of the two stage-2 checks the 2026-09-27
+entry below names as next, only the removed-identifier check remains
+(open-tasks 4).
+
 ## Progress (2026-09-29, the working line)
 
 The frame re-synced with a working line that moves at 10 frames a second
@@ -388,7 +399,8 @@ third rule — the code and Rust judges no longer run on a failing tree —
 and puts the author's loop in front of the judges
 (`a_failing_test_holds_back_every_judge`). Checks that would move more of
 the author's pass into stage 2 — an example on every new public function,
-a removed identifier still named in `.claude/` — are the next change.
+a removed identifier still named in `.claude/` — are the next change (the
+first dropped 2026-09-29 with the rule itself: see that day's entry).
 
 ## Progress (2026-09-27, comments)
 
@@ -440,7 +452,7 @@ stopping at "the code is written".
   judges' findings were the sources disagreeing, and the developer settled
   both rather than spend the remaining passes on them:
   - *"Include examples in doc comments"* is scoped to public functions a
-    change adds. Unscoped, the lint backlog's ~70 new docs on existing items
+    change adds (the rule itself dropped 2026-09-29). Unscoped, the lint backlog's ~70 new docs on existing items
     each needed one, against the same skill's "keep changes minimal".
   - *quality-gate §6 over §7*: `aldwin-review` reported every failure as an
     `io::Error` with a sentence, and §7's "same error shape as the crate"

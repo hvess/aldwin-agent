@@ -86,16 +86,6 @@ pub struct Failure {
 
 impl Failure {
     /// A failure of no more specific kind.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_core::{Failure, FailureKind};
-    ///
-    /// let failure = Failure::other("command channel closed");
-    /// assert_eq!(failure.kind, FailureKind::Other);
-    /// assert_eq!(failure.message, "command channel closed");
-    /// ```
     pub fn other(message: impl Into<String>) -> Self {
         Self {
             kind: FailureKind::Other,

@@ -265,23 +265,6 @@ pub struct Review {
 impl Review {
     /// Opens on the first file, nothing selected or read; `None` for a
     /// changeset with no files.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use aldwin_core::{ChangedFile, Changeset};
-    /// use aldwin_tui::Review;
-    ///
-    /// assert!(Review::open("review-1".into(), Changeset::default()).is_none());
-    ///
-    /// let edit = ChangedFile {
-    ///     path: "src/lib.rs".into(),
-    ///     before: Some("fn a() {}\n".into()),
-    ///     after: "fn b() {}\n".into(),
-    /// };
-    /// let review = Review::open("review-2".into(), Changeset { files: vec![edit] }).unwrap();
-    /// assert_eq!(review.file().path, "src/lib.rs");
-    /// ```
     pub fn open(review_id: String, changeset: Changeset) -> Option<Self> {
         if changeset.files.is_empty() {
             return None;

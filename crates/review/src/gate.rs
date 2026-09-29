@@ -31,18 +31,6 @@ fn record_path(root: &Path, tree: &str) -> Result<PathBuf> {
 /// When the run has not passed, when the index has moved since it ran (the
 /// record must never cover an unreviewed tree), or when the record cannot be
 /// written.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// use aldwin_review::gate;
-/// use aldwin_review::judges::RunState;
-/// let state = RunState::load(Path::new("target/review-frames/run-1790488849"))?;
-/// let record = gate::write_record(Path::new("."), &state)?;
-/// println!("recorded in {}", record.display());
-/// # Ok::<(), aldwin_review::Error>(())
-/// ```
 pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
     if !state.passed() {
         return Err(Error::NotPassed);
@@ -73,16 +61,6 @@ pub fn write_record(root: &Path, state: &RunState) -> Result<PathBuf> {
 /// [`Error::RecordFailed`] when the one recorded did not pass, and the I/O or
 /// JSON error itself when a record exists but cannot be read or parsed, so a
 /// damaged record is never reported as missing.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// match aldwin_review::gate::check(Path::new(".")) {
-///     Ok(record) => println!("reviewed: {}", record.display()),
-///     Err(refusal) => eprintln!("{refusal}"),
-/// }
-/// ```
 pub fn check(root: &Path) -> Result<PathBuf> {
     let tree = staged_tree(root)?;
     let path = record_path(root, &tree)?;

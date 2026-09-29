@@ -76,16 +76,6 @@ impl GitShim {
 /// working directory or new `PATH` fails, or the git version probe cannot
 /// run; [`ShimError::GitTooOld`] when the git on `PATH` is older than 2.32
 /// (no `commit --trailer`).
-///
-/// # Examples
-///
-/// ```no_run
-/// // First thing in `main`, before the runtime starts a thread.
-/// let git_shim = aldwin_cli::git_shim::install();
-/// if let Err(e) = &git_shim {
-///     eprintln!("commits will not name Aldwin: {e}");
-/// }
-/// ```
 pub fn install() -> Result<GitShim, ShimError> {
     let exe = std::env::current_exe()?;
     // With no git at all the shim still installs, and reports the missing
@@ -110,17 +100,6 @@ pub fn install() -> Result<GitShim, ShimError> {
 
 /// Started as `git`, replaces this process with the real git, returning
 /// only the exit status of a failure to do so. `None` when started as Aldwin.
-///
-/// # Examples
-///
-/// ```no_run
-/// fn main() -> std::process::ExitCode {
-///     if let Some(status) = aldwin_cli::git_shim::intercept() {
-///         return status;
-///     }
-///     std::process::ExitCode::SUCCESS
-/// }
-/// ```
 pub fn intercept() -> Option<ExitCode> {
     let mut args = std::env::args_os();
     let argv0 = args.next()?;

@@ -86,8 +86,7 @@ The workspace lints require docs on public items (`missing_docs`) and
   shortest true one.
 - **`# Errors` / `# Panics`:** the conditions, as a short list or one
   sentence. Not why they are errors.
-- **`# Examples`:** as the `rust` skill requires (public functions a change
-  adds), and minimal — the smallest call that shows use.
+- **No `# Examples`:** the code is the example (`rust` skill).
 - **Module doc (`//!`):** one or two lines — the module's single
   responsibility, and the one invariant or pointer a reader must know before
   editing it.

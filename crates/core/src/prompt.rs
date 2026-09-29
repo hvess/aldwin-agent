@@ -2,10 +2,10 @@
 /// `compose`.
 ///
 /// Must agree with ADR 0008 (intent, not grammar), ADR 0009 (staged edits,
-/// one review per turn, `plan` and `ask`), ADR 0011 (`run` has no class; the
-/// incidental write list), ADR 0014 (an MCP tool cannot write the
-/// workspace) and ADR 0016 (rules with reasons; short, exact answers); the
-/// tests below pin each.
+/// one changeset under review, `plan` and `ask`), ADR 0011 (`run` has no
+/// class; the incidental write list), ADR 0014 (an MCP tool cannot write
+/// the workspace) and ADR 0016 (rules with reasons; short, exact answers);
+/// the tests below pin each.
 const BASE: &str = include_str!("prompt.md");
 
 /// Composes the system prompt sent on every LLM call.

@@ -34,7 +34,7 @@ impl EditTool {
                     "type": "object",
                     "properties": {
                         "path":   { "type": "string" },
-                        "before": { "type": "string", "description": "Exact text to replace; empty to create the file." },
+                        "before": { "type": "string", "description": "Exact text to replace; empty to create a new file or fill an empty one." },
                         "after":  { "type": "string" },
                     },
                     "required": ["path", "before", "after"],

@@ -3,7 +3,8 @@
 **Status:** accepted, 2026-09-29
 **Supersedes:** ADR 0008's Consequences, "Each clause here traces to an
 observed failure rather than to a worry, which is the bar for adding
-another." ADR 0008's decisions §1–§7 stand.
+another." ADR 0008's decisions §1–§5 and §7 stand;
+§6 went with the run class (ADR 0009, ADR 0011).
 **Amends:** `aldwin-core`'s `prompt::BASE`, now `crates/core/src/prompt.md`;
 the `records` and `review` skills (the code judge's fifth source)
 **Affects:** `aldwin-core`, `aldwin-tools` (tool descriptions),

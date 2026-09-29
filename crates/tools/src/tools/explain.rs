@@ -35,9 +35,10 @@ pub struct ExplainTool {
     workspace: Workspace,
     staging: Arc<Staging>,
     clients: tokio::sync::Mutex<HashMap<&'static str, LspClient>>,
-    /// Every file sent to a server. Kept after an approve or discard, so the
-    /// next call resends disk rather than leaving the staged text.
-    shown: tokio::sync::Mutex<BTreeSet<PathBuf>>,
+    /// The files servers hold open. One no longer staged or asked about is
+    /// closed by the next call, so its server reads it from disk, where an
+    /// approve or discard left it.
+    open: tokio::sync::Mutex<BTreeSet<PathBuf>>,
 }
 
 impl ExplainTool {
@@ -72,55 +73,53 @@ impl ExplainTool {
             workspace,
             staging,
             clients: tokio::sync::Mutex::new(HashMap::new()),
-            shown: tokio::sync::Mutex::new(BTreeSet::new()),
+            open: tokio::sync::Mutex::new(BTreeSet::new()),
         }
     }
 
-    /// For `language_id`: the files a server should hold with their text as
-    /// the agent sees it (staged, shown before, `queried`), and the shown
-    /// files now gone, which are forgotten here. Errors only if `queried`
-    /// cannot be read.
+    /// For `language_id`: the files a server should hold open, with their
+    /// text as the agent sees it — every staged file and `queried` — and the
+    /// ones it held open before and should not now. Closed, a file is read
+    /// from disk by the server, so only these few are ever sent: a session's
+    /// other lookups cost nothing here. Errors only if `queried` cannot be
+    /// read.
     async fn view(
         &self,
         language_id: &str,
         queried: Option<&Path>,
     ) -> Result<(Vec<(PathBuf, String)>, Vec<PathBuf>), ToolError> {
-        let mut shown = self.shown.lock().await;
-        shown.extend(
-            self.staging
-                .changeset()
-                .files
-                .into_iter()
-                .filter_map(|f| self.workspace.resolve(&f.path).ok()),
-        );
-        shown.extend(queried.map(Path::to_path_buf));
+        let in_language =
+            |path: &Path| lsp::language_for_path(path).map(|s| s.language_id) == Some(language_id);
+        let wanted: BTreeSet<PathBuf> = self
+            .staging
+            .paths()
+            .into_iter()
+            .chain(queried.map(Path::to_path_buf))
+            .filter(|path| in_language(path))
+            .collect();
         // A loop, not a chain: each file is read with an `.await`.
-        let (mut view, mut gone) = (Vec::new(), Vec::new());
-        for path in shown.iter() {
-            if lsp::language_for_path(path).map(|s| s.language_id) != Some(language_id) {
-                continue;
-            }
-            let text = match self.staging.current(path) {
+        let mut view = Vec::new();
+        for path in wanted {
+            let text = match self.staging.current(&path) {
                 Some(staged) => staged,
-                None => match tokio::fs::read_to_string(path).await {
+                None => match tokio::fs::read_to_string(&path).await {
                     Ok(text) => text,
                     Err(source) if Some(path.as_path()) == queried => {
-                        return Err(ToolError::Io {
-                            path: path.clone(),
-                            source,
-                        })
+                        return Err(ToolError::Io { path, source })
                     }
-                    Err(_) => {
-                        gone.push(path.clone());
-                        continue;
-                    }
+                    Err(_) => continue,
                 },
             };
-            view.push((path.clone(), text));
+            view.push((path, text));
         }
-        for path in &gone {
-            shown.remove(path);
-        }
+        let mut open = self.open.lock().await;
+        let gone: Vec<PathBuf> = open
+            .iter()
+            .filter(|path| in_language(path) && !view.iter().any(|(held, _)| held == *path))
+            .cloned()
+            .collect();
+        open.retain(|path| !gone.contains(path));
+        open.extend(view.iter().map(|(path, _)| path.clone()));
         Ok((view, gone))
     }
 
@@ -407,14 +406,17 @@ mod tests {
         let (view, _) = tool.view("rust", None).await.unwrap();
         assert!(view.contains(&(lib.clone(), "fn new() {}\n".to_string())));
 
-        // After a discard: disk is resent, and a file only the edit made is
-        // reported gone exactly once.
+        // After a discard, both edited files are closed, once, so the server
+        // reads the disk; only the file asked about is sent.
         staging.discard();
         let (view, gone) = tool.view("rust", Some(&other)).await.unwrap();
-        assert!(view.contains(&(lib, "fn old() {}\n".to_string())));
-        assert_eq!(gone, [made]);
+        assert_eq!(view, [(other.clone(), "fn other() {}\n".to_string())]);
+        assert_eq!(gone, [lib, made]);
         let (_, gone) = tool.view("rust", Some(&other)).await.unwrap();
         assert!(gone.is_empty());
+        // A file only asked about is closed once another is asked about.
+        let (_, gone) = tool.view("rust", None).await.unwrap();
+        assert_eq!(gone, [other]);
     }
 
     #[tokio::test]

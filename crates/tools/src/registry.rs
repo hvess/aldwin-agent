@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -37,7 +37,9 @@ pub trait Tool: Send + Sync {
 /// Tools by name, behind core's `ToolDispatcher` impl.
 #[derive(Default)]
 pub struct Registry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    /// By name, so the definitions reach the model in one order every run:
+    /// they head the request, and a provider caches that prefix.
+    tools: BTreeMap<String, Arc<dyn Tool>>,
 }
 
 /// Lists the tools by name: a `dyn Tool` has no `Debug` of its own.
@@ -146,5 +148,15 @@ mod tests {
         let defs = registry.definitions();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "read");
+    }
+
+    #[test]
+    fn definitions_come_in_name_order_whatever_the_registration_order() {
+        let mut registry = Registry::new();
+        for name in ["run", "edit", "read", "ask", "plan"] {
+            registry.register(stub(name)).unwrap();
+        }
+        let names: Vec<String> = registry.definitions().into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["ask", "edit", "plan", "read", "run"]);
     }
 }

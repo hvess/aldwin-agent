@@ -71,6 +71,11 @@ impl Staging {
         self.lock().files.is_empty()
     }
 
+    /// The resolved path of every staged file, in path order.
+    pub(crate) fn paths(&self) -> Vec<PathBuf> {
+        self.lock().files.keys().cloned().collect()
+    }
+
     /// The staged content of `resolved`, if any edit has touched it.
     pub fn current(&self, resolved: &Path) -> Option<String> {
         self.lock().files.get(resolved).map(|s| s.after.clone())
@@ -89,8 +94,9 @@ impl Staging {
         rel: &str,
         change: impl FnOnce(Option<&str>) -> Result<String, ToolError>,
     ) -> Result<(), ToolError> {
-        // Read disk before locking: a `std::sync::Mutex` must not be held
-        // across an await. It is used only when nothing is staged yet.
+        // Read disk before locking, even for a staged file: a `std::sync::Mutex`
+        // must not be held across an await, and an approve may unstage the
+        // file in between. It is used only when nothing is staged.
         let on_disk = match tokio::fs::read_to_string(&resolved).await {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -102,19 +108,27 @@ impl Staging {
             }
         };
         let mut inner = self.lock();
-        let (before, current) = match inner.files.get(&resolved) {
-            Some(staged) => (staged.before.clone(), Some(staged.after.clone())),
-            None => (on_disk.clone(), on_disk),
+        let current = match inner.files.get(&resolved) {
+            Some(staged) => Some(staged.after.as_str()),
+            None => on_disk.as_deref(),
         };
-        let after = change(current.as_deref())?;
-        inner.files.insert(
-            resolved,
-            Staged {
-                rel: rel.to_string(),
-                before,
-                after,
-            },
-        );
+        let after = change(current)?;
+        match inner.files.get_mut(&resolved) {
+            Some(staged) => {
+                staged.rel = rel.to_string();
+                staged.after = after;
+            }
+            None => {
+                inner.files.insert(
+                    resolved,
+                    Staged {
+                        rel: rel.to_string(),
+                        before: on_disk,
+                        after,
+                    },
+                );
+            }
+        }
         Ok(())
     }
 

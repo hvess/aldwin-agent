@@ -7,6 +7,20 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, what `explain` keeps open):** `view` read every file
+the session had ever shown a server from disk on each call, and compared
+each, so a call cost O(every file looked up so far). A server now holds open
+only the staged files in its language and the one asked about; any other it
+held is closed on the next call, so it reads that file from disk itself —
+which is also how an approved or discarded edit goes back to disk. Staged
+paths come from `Staging::paths` rather than a copy of the changeset.
+`Staging::edit` no longer clones a staged file's two texts per edit. Tool
+definitions reach the model in name order (`Registry` is a `BTreeMap`),
+the same every run, where a `HashMap`'s order changed with each process and
+with it the request's cached prefix. Tests:
+`the_server_is_shown_staged_edits_over_the_disk`,
+`definitions_come_in_name_order_whatever_the_registration_order`.
+
 **Progress (2026-09-29, output the conversation keeps):** Everything a tool
 returns stays in the conversation and is sent again every step, so no tool
 returns more than `OUTPUT_CAP_BYTES` (50 KB, `output::capped`, shared with
@@ -91,8 +105,8 @@ rejected.
 
 - **`explain` shows the language server staged edits.**
   `ExplainTool::new` takes the `Staging`; before each request `view` syncs
-  every staged file in the server's language, every file shown before, and
-  the one asked about, each as `read` would serve it — staged text over the
+  every staged file in the server's language, every file shown before (since
+  2026-09-29, closed instead: see that Progress), and the one asked about, each as `read` would serve it — staged text over the
   disk. A symbol search asks about no file and is synced the same way; a
   file only a discarded edit made is closed on the server
   (`LspClient::close_document`). A file shown before goes back to its disk text once its edit is

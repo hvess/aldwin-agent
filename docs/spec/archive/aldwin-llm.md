@@ -5,16 +5,34 @@ V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, 
 **Status:** archived — implemented, tested, audited
 **Scope:** aldwin-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-06
+**Last Updated:** 2026-09-29
 
 **Completed:** 2026-08-29 — `be6cd75`. Known, accepted (not a spec
 deviation): `build_request` clones the full conversation history per turn,
 O(n²) over a long session — real cost, unmeasured against actual usage,
-documented in `wire.rs`'s own doc comment rather than fixed. Not yet
+documented in `wire.rs`'s own doc comment rather than fixed (fixed
+2026-09-29: see that post-archive fix). Not yet
 exercised against the live Anthropic API in this environment (no API key
 available here) — unit- and integration-tested against a real local HTTP
 server instead; a live run is still worth doing before fully trusting the
 retry/SSE paths against the real API's exact behavior.
+
+**Post-archive fix (2026-09-29, the complexity audit):** The request no
+longer copies the conversation: `build_request` in `wire.rs` and
+`wire_openai.rs` builds wire types that borrow from the `LlmRequest` and
+serialises them in place (the known, accepted clone above is gone). On the
+OpenAI wire two things are still owned: text blocks several of which must be
+joined, and each tool call's `arguments`, which that wire takes as a JSON
+string and so is written out every step.
+`eventsource-stream` is replaced by `sse::SseDecoder`, which looks for a
+line end only in bytes it has not scanned, where the crate re-parsed its
+buffer from the start on every chunk while a line was incomplete —
+quadratic in one long `data:` line, which a provider sending a whole tool
+call in one event produces. The idle timeout still runs from the last
+event, an empty one included, not the last chunk, so a keepalive comment
+does not reset it; a lone `\r` still ends a line and a leading byte-order
+mark is still dropped, as the crate did.
+Tests: `sse::tests`, `several_text_blocks_join_into_one_content_and_one_is_only_borrowed`.
 
 **Post-archive fix (2026-09-01, extended thinking rejected by a real
 Anthropic key):** The live run flagged above surfaced exactly the gap it
@@ -156,7 +174,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 ## Design
 
 - **HTTP:** Single shared reqwest::Client per session, rustls, HTTP/2 enabled, default pool.
-- **SSE:** eventsource-stream over reqwest::Response::bytes_stream().
+- **SSE:** eventsource-stream over reqwest::Response::bytes_stream() (since 2026-09-29, `sse::SseDecoder`: see that post-archive fix).
 - **Wire Isolation:** All Anthropic wire types in a private `wire` module. Only AnthropicClient, ProviderConfig, and LlmError are pub.
 - **Event Normalisation:** text_delta → TextDelta. Thinking blocks → ThinkingStart on content_block_start, ThinkingEnd on content_block_stop, delta content dropped at the parse site. Tool blocks → buffer input_json_delta chunks, emit one ToolUseRequested with the assembled object on content_block_stop. message_stop → StepEnded with stop reason, structured error if any, and Usage (input, output, cache create, cache read) folded from message_start + message_delta.
 - **Cache Placement:** Two cache_control `{ type: ephemeral }` breakpoints per V0 request — final tool definition (covers static system + tools prefix) and final content block of the last completed turn. Anthropic permits four; V0 uses two.
@@ -179,7 +197,7 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 
 - **Single shared reqwest::Client per session (rustls, HTTP/2).** — reqwest::Client is cheap to clone but expensive to construct; per-call forfeits TLS resumption and HTTP/2 reuse.
 
-- **SSE via eventsource-stream over reqwest::Response::bytes_stream().** — One HTTP path. eventsource-client owns its own lifecycle and would duplicate stacks.
+- **SSE via eventsource-stream over reqwest::Response::bytes_stream().** (Replaced 2026-09-29 by `sse::SseDecoder`, still over `bytes_stream`.) — One HTTP path. eventsource-client owns its own lifecycle and would duplicate stacks.
 
 - **Thinking content dropped at the parse site; only markers cross the boundary.** — Core spec mandate. Parse-site drop means no buffering, no accidental re-emission.
 
@@ -233,6 +251,6 @@ Writing the Anthropic client by hand is what makes caching, streaming, and retry
 - https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching — cache_control placement.
 - https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking — thinking blocks, adaptive thinking, effort (current models no longer accept `budget_tokens` — see the 2026-09-01 post-archive fix above).
 - https://docs.rs/reqwest/ — reqwest.
-- https://docs.rs/eventsource-stream/ — SSE parser.
+- https://docs.rs/eventsource-stream/ — SSE parser, until 2026-09-29 (`sse::SseDecoder` since).
 - https://qwenlm.github.io/blog/qwen3-coder/ — Qwen3-Coder tool-call format (V0.5).
 - https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/ — full-jitter backoff.

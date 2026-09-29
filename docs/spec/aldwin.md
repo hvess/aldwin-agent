@@ -67,7 +67,7 @@ in how it is shaped. It replaces "A tool for thought.")
 
 - **V0 supports Anthropic only; V0.5 adds an OpenAI-compatible adapter.** — Single-provider V0 lets the agent loop exploit Claude-specific features — caching breakpoints, extended thinking, real tool-use semantics — rather than degrading to a lowest-common-denominator abstraction. V0.5's OpenAI-compat adapter buys Qwen, Together, Fireworks, OpenRouter, vLLM, Ollama.
 
-- **Write a thin Anthropic client over reqwest + eventsource-stream.** — No official Anthropic Rust SDK. Community crates (anthropic-sdk, misanthropic, clust) lag behind. The Messages API surface is small; direct control over caching, retry, and streaming beats fighting an SDK abstraction.
+- **Write a thin Anthropic client over reqwest + eventsource-stream.** (Its own SSE decoder since 2026-09-29: archive/aldwin-llm.md.) — No official Anthropic Rust SDK. Community crates (anthropic-sdk, misanthropic, clust) lag behind. The Messages API surface is small; direct control over caching, retry, and streaming beats fighting an SDK abstraction.
 
 - **Minimal LlmClient trait boundary from day one, even with a single provider.** — Prevents Anthropic wire types leaking into the agent loop. Discipline is "design for the second case, build only the first" — do not pre-build the capability-aware abstraction until V0.5's second adapter validates it.
 

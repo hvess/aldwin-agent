@@ -19,15 +19,15 @@ const MAX_TOKENS_HEADROOM: u32 = 4096;
 // ── Request ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct WireRequest {
-    pub model: String,
-    pub system: String,
+pub struct WireRequest<'a> {
+    pub model: &'a str,
+    pub system: &'a str,
     pub max_tokens: u32,
     pub stream: bool,
     pub thinking: WireThinking,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<WireTool>,
-    pub messages: Vec<WireMessage>,
+    pub tools: Vec<WireTool<'a>>,
+    pub messages: Vec<WireMessage<'a>>,
 }
 
 /// Always adaptive: Claude 4.6+ models reject the older `{"type": "enabled",
@@ -46,10 +46,10 @@ impl WireThinking {
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireTool {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
+pub struct WireTool<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub input_schema: &'a serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<WireCacheControl>,
 }
@@ -67,16 +67,16 @@ impl WireCacheControl {
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireMessage {
+pub struct WireMessage<'a> {
     pub role: &'static str,
-    pub content: Vec<WireContentBlock>,
+    pub content: Vec<WireContentBlock<'a>>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum WireContentBlock {
+pub enum WireContentBlock<'a> {
     Text {
-        text: String,
+        text: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
@@ -84,33 +84,33 @@ pub enum WireContentBlock {
     /// or omit `signature`: a turn calling a tool after thinking is rejected
     /// without it.
     Thinking {
-        thinking: String,
-        signature: String,
+        thinking: &'a str,
+        signature: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
     RedactedThinking {
-        data: String,
+        data: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
     ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
+        id: &'a str,
+        name: &'a str,
+        input: &'a serde_json::Value,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
     ToolResult {
-        tool_use_id: String,
-        content: String,
+        tool_use_id: &'a str,
+        content: &'a str,
         is_error: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<WireCacheControl>,
     },
 }
 
-impl WireContentBlock {
+impl WireContentBlock<'_> {
     /// Whether the provider accepts a cache breakpoint on this block.
     fn cacheable(&self) -> bool {
         !matches!(
@@ -135,16 +135,16 @@ impl WireContentBlock {
 /// last tool (system and tools) and the last cacheable block at or before
 /// `request.cache_breakpoint` (the conversation).
 ///
-/// Deep-clones every message per step; a borrowing `Serialize` is possible
-/// but the cost is unmeasured.
-pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
+/// Borrows every string from `request`: the conversation is sent whole each
+/// step and can be megabytes, so it is serialised in place, never copied.
+pub fn build_request<'a>(config: &'a ProviderConfig, request: &LlmRequest<'a>) -> WireRequest<'a> {
     let mut tools: Vec<WireTool> = request
         .tools
         .iter()
         .map(|t| WireTool {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            input_schema: t.input_schema.clone(),
+            name: &t.name,
+            description: &t.description,
+            input_schema: &t.input_schema,
             cache_control: None,
         })
         .collect();
@@ -173,8 +173,8 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
 
     let budget = config.thinking_budget();
     WireRequest {
-        model: config.model.clone(),
-        system: request.system.to_string(),
+        model: &config.model,
+        system: request.system,
         // Saturating: the budget comes unchecked from provider.yaml.
         max_tokens: budget.saturating_add(MAX_TOKENS_HEADROOM),
         stream: true,
@@ -192,7 +192,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
 /// - **Thinking only** (no text or tool block in the message): the message
 ///   maps to empty and `build_request` removes it; two user messages in a
 ///   row are accepted.
-fn map_message(m: &Message) -> WireMessage {
+fn map_message(m: &Message) -> WireMessage<'_> {
     let said_or_did_something = m.content.iter().any(|b| {
         matches!(
             b,
@@ -224,30 +224,30 @@ fn role_str(role: &Role) -> &'static str {
     }
 }
 
-fn map_content_block(b: &ContentBlock) -> WireContentBlock {
+fn map_content_block(b: &ContentBlock) -> WireContentBlock<'_> {
     match b {
         ContentBlock::Text { text } => WireContentBlock::Text {
-            text: text.clone(),
+            text,
             cache_control: None,
         },
         ContentBlock::Thinking { text, signature } => WireContentBlock::Thinking {
-            thinking: text.clone(),
-            signature: signature.clone(),
+            thinking: text,
+            signature,
             cache_control: None,
         },
         ContentBlock::RedactedThinking { data } => WireContentBlock::RedactedThinking {
-            data: data.clone(),
+            data,
             cache_control: None,
         },
         ContentBlock::ToolUse(call) => WireContentBlock::ToolUse {
-            id: call.id.clone(),
-            name: call.name.clone(),
-            input: call.input.clone(),
+            id: &call.id,
+            name: &call.name,
+            input: &call.input,
             cache_control: None,
         },
         ContentBlock::ToolResult(result) => WireContentBlock::ToolResult {
-            tool_use_id: result.call_id.clone(),
-            content: result.content.clone(),
+            tool_use_id: &result.call_id,
+            content: &result.content,
             is_error: result.is_error,
             cache_control: None,
         },
@@ -669,7 +669,8 @@ mod tests {
             messages: &messages,
             cache_breakpoint: None,
         };
-        let wire = build_request(&anthropic(), &request);
+        let config = anthropic();
+        let wire = build_request(&config, &request);
         let json = serde_json::to_value(&wire).unwrap();
         let block = &json["messages"][0]["content"][0];
         assert_eq!(block["type"], "thinking");
@@ -837,7 +838,8 @@ mod tests {
             messages: &messages,
             cache_breakpoint: Some(1),
         };
-        let wire = build_request(&anthropic(), &request);
+        let config = anthropic();
+        let wire = build_request(&config, &request);
 
         assert_eq!(
             wire.messages.len(),
@@ -879,7 +881,8 @@ mod tests {
             messages: &messages,
             cache_breakpoint: Some(0),
         };
-        let wire = build_request(&anthropic(), &request);
+        let config = anthropic();
+        let wire = build_request(&config, &request);
 
         assert_eq!(wire.messages[0].content.len(), 1);
         assert!(matches!(
@@ -926,7 +929,8 @@ mod tests {
             cache_breakpoint: Some(1),
         };
 
-        let wire = build_request(&anthropic(), &request);
+        let config = anthropic();
+        let wire = build_request(&config, &request);
         assert!(wire.tools[0].cache_control.is_none());
         assert!(wire.tools[1].cache_control.is_some());
         let last_block = wire.messages[1].content.last().unwrap();

@@ -8,6 +8,7 @@
 
 use aldwin_core::{ContentBlock, LlmRequest, Message, Role, StopReason, ToolCall, UsageStats};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::config::ProviderConfig;
@@ -15,51 +16,53 @@ use crate::config::ProviderConfig;
 // ── Request ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct WireRequest {
-    pub model: String,
-    pub messages: Vec<WireMessage>,
+pub struct WireRequest<'a> {
+    pub model: &'a str,
+    pub messages: Vec<WireMessage<'a>>,
     pub max_tokens: u32,
     pub stream: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<WireTool>,
+    pub tools: Vec<WireTool<'a>>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireTool {
+pub struct WireTool<'a> {
     #[serde(rename = "type")]
     pub kind: &'static str,
-    pub function: WireFunctionDef,
+    pub function: WireFunctionDef<'a>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireFunctionDef {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
+pub struct WireFunctionDef<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub parameters: &'a serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Default)]
-pub struct WireMessage {
+pub struct WireMessage<'a> {
     pub role: &'static str,
+    /// Borrowed from one text block; owned only when several are joined.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<WireToolCall>>,
+    pub tool_calls: Option<Vec<WireToolCall<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+    pub tool_call_id: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireToolCall {
-    pub id: String,
+pub struct WireToolCall<'a> {
+    pub id: &'a str,
     #[serde(rename = "type")]
     pub kind: &'static str,
-    pub function: WireFunctionCall,
+    pub function: WireFunctionCall<'a>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct WireFunctionCall {
-    pub name: String,
+pub struct WireFunctionCall<'a> {
+    pub name: &'a str,
+    /// The wire takes the input as a JSON string, so it is written out.
     pub arguments: String,
 }
 
@@ -67,23 +70,23 @@ pub struct WireFunctionCall {
 /// `request.cache_breakpoint` is unused. `max_tokens` is the thinking budget
 /// with no headroom: here it means max output tokens, as aldwin-config
 /// documents.
-pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireRequest {
+pub fn build_request<'a>(config: &'a ProviderConfig, request: &LlmRequest<'a>) -> WireRequest<'a> {
     let tools = request
         .tools
         .iter()
         .map(|t| WireTool {
             kind: "function",
             function: WireFunctionDef {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                parameters: t.input_schema.clone(),
+                name: &t.name,
+                description: &t.description,
+                parameters: &t.input_schema,
             },
         })
         .collect();
 
     let mut messages = vec![WireMessage {
         role: "system",
-        content: Some(request.system.to_string()),
+        content: Some(Cow::Borrowed(request.system)),
         ..Default::default()
     }];
     for m in request.messages {
@@ -91,7 +94,7 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
     }
 
     WireRequest {
-        model: config.model.clone(),
+        model: &config.model,
         messages,
         max_tokens: config.thinking_budget(),
         stream: true,
@@ -104,34 +107,35 @@ pub fn build_request(config: &ProviderConfig, request: &LlmRequest<'_>) -> WireR
 /// `m.role`, and each `ToolResult` becomes its own `role:"tool"` message.
 /// aldwin-core's `agent.rs` keeps results and uses in separate messages, so
 /// the mixed case is handled but rare.
-fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
+fn map_message_into<'a>(m: &'a Message, out: &mut Vec<WireMessage<'a>>) {
     let role = role_str(&m.role);
-    let mut text = String::new();
-    let mut tool_calls: Vec<WireToolCall> = Vec::new();
+    let mut text: Option<Cow<'a, str>> = None;
+    let mut tool_calls: Vec<WireToolCall<'a>> = Vec::new();
 
-    let flush =
-        |text: &mut String, tool_calls: &mut Vec<WireToolCall>, out: &mut Vec<WireMessage>| {
-            if !text.is_empty() || !tool_calls.is_empty() {
-                out.push(WireMessage {
-                    role,
-                    content: if text.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(text))
-                    },
-                    tool_calls: if tool_calls.is_empty() {
-                        None
-                    } else {
-                        Some(std::mem::take(tool_calls))
-                    },
-                    tool_call_id: None,
-                });
-            }
-        };
+    let flush = |text: &mut Option<Cow<'a, str>>,
+                 tool_calls: &mut Vec<WireToolCall<'a>>,
+                 out: &mut Vec<WireMessage<'a>>| {
+        let text = text.take().filter(|t| !t.is_empty());
+        if text.is_some() || !tool_calls.is_empty() {
+            out.push(WireMessage {
+                role,
+                content: text,
+                tool_calls: if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(tool_calls))
+                },
+                tool_call_id: None,
+            });
+        }
+    };
 
     for block in &m.content {
         match block {
-            ContentBlock::Text { text: t } => text.push_str(t),
+            ContentBlock::Text { text: t } => match &mut text {
+                Some(joined) => joined.to_mut().push_str(t),
+                None => text = Some(Cow::Borrowed(t)),
+            },
             // Never sent: `reasoning` is response-only, and echoing it is a
             // 400. Core's history still keeps it (ADR 0006).
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
@@ -140,9 +144,9 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
                 flush(&mut text, &mut tool_calls, out);
                 out.push(WireMessage {
                     role: "tool",
-                    content: Some(result.content.clone()),
+                    content: Some(Cow::Borrowed(&result.content)),
                     tool_calls: None,
-                    tool_call_id: Some(result.call_id.clone()),
+                    tool_call_id: Some(&result.call_id),
                 });
             }
         }
@@ -150,12 +154,12 @@ fn map_message_into(m: &Message, out: &mut Vec<WireMessage>) {
     flush(&mut text, &mut tool_calls, out);
 }
 
-fn map_tool_call(call: &ToolCall) -> WireToolCall {
+fn map_tool_call(call: &ToolCall) -> WireToolCall<'_> {
     WireToolCall {
-        id: call.id.clone(),
+        id: &call.id,
         kind: "function",
         function: WireFunctionCall {
-            name: call.name.clone(),
+            name: &call.name,
             arguments: call.input.to_string(),
         },
     }
@@ -418,6 +422,7 @@ impl Assembler {
 mod tests {
     use super::*;
     use crate::config::Auth;
+    use aldwin_config::ProviderKind;
     use aldwin_core::{ContentBlock, LlmEvent, Role, ToolDefinition, ToolResult};
     use serde_json::json;
 
@@ -754,7 +759,7 @@ mod tests {
         let wire = build_request(&config, &request);
         assert_eq!(wire.messages[0].role, "system");
         assert_eq!(wire.messages[1].role, "tool");
-        assert_eq!(wire.messages[1].tool_call_id.as_deref(), Some("t1"));
+        assert_eq!(wire.messages[1].tool_call_id, Some("t1"));
         assert_eq!(wire.messages[1].content.as_deref(), Some("ok"));
     }
 
@@ -796,6 +801,40 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "c1");
         assert_eq!(tool_calls[0].function.name, "read");
+    }
+
+    #[test]
+    fn several_text_blocks_join_into_one_content_and_one_is_only_borrowed() {
+        let config = ProviderConfig {
+            kind: ProviderKind::OpenaiCompatible,
+            model: "m".into(),
+            auth: Auth::ApiKeyEnv("X".into()),
+            base_url: Some("https://x".into()),
+            extended_thinking_budget: Some(4096),
+        };
+        let text = |t: &str| ContentBlock::Text { text: t.into() };
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![text("one, "), text("two")],
+            },
+            Message {
+                role: Role::User,
+                content: vec![text("alone")],
+            },
+        ];
+        let request = LlmRequest {
+            system: "sys",
+            tools: &[],
+            messages: &messages,
+            cache_breakpoint: None,
+        };
+        let wire = build_request(&config, &request);
+        assert_eq!(wire.messages[1].content.as_deref(), Some("one, two"));
+        assert!(matches!(
+            wire.messages[2].content,
+            Some(Cow::Borrowed("alone"))
+        ));
     }
 
     #[test]

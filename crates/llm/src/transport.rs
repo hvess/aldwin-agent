@@ -9,13 +9,14 @@ use aldwin_core::{LlmError, LlmEvent, RetryInfo};
 use aldwin_login::{Session, SessionError};
 use async_stream::try_stream;
 use async_trait::async_trait;
-use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
 use reqwest::header::HeaderMap;
 use serde::Serialize;
+use tokio::time::{timeout_at, Instant};
 
 use crate::client::LlmClientInitError;
 use crate::retry::{self, backoff, is_retryable_status, should_retry, terminal_error};
+use crate::sse::SseDecoder;
 
 /// One provider's reading of its stream: a fresh value per attempt, fed each
 /// SSE `data:` payload in order.
@@ -195,20 +196,36 @@ impl Transport {
                     continue;
                 }
 
-                let mut sse = resp.bytes_stream().eventsource();
+                let mut body = resp.bytes_stream();
+                let mut sse = SseDecoder::default();
                 let mut dialect = D::default();
                 let mut emitted_any = false;
+                // From the last event, not the last chunk: a keepalive
+                // comment is no activity.
+                let mut idle_until = Instant::now() + self.idle_timeout;
 
                 loop {
-                    let read = match tokio::time::timeout(self.idle_timeout, sse.next()).await {
-                        Err(_elapsed) => Err(format!(
-                            "idle timeout: no SSE activity for {:?}",
-                            self.idle_timeout
-                        )),
-                        Ok(None) => Err(format!("stream closed before {}", D::STEP_END)),
-                        Ok(Some(Err(e))) => Err(format!("SSE framing error: {e}")),
-                        Ok(Some(Ok(raw))) if raw.data.is_empty() => continue,
-                        Ok(Some(Ok(raw))) => dialect.read(&raw.data),
+                    let read = match sse.next_event() {
+                        Some(Ok(data)) => {
+                            idle_until = Instant::now() + self.idle_timeout;
+                            if data.is_empty() {
+                                continue;
+                            }
+                            dialect.read(&data)
+                        }
+                        Some(Err(e)) => Err(format!("SSE framing error: {e}")),
+                        None => match timeout_at(idle_until, body.next()).await {
+                            Err(_elapsed) => Err(format!(
+                                "idle timeout: no SSE activity for {:?}",
+                                self.idle_timeout
+                            )),
+                            Ok(None) => Err(format!("stream closed before {}", D::STEP_END)),
+                            Ok(Some(Err(e))) => Err(format!("SSE framing error: {e}")),
+                            Ok(Some(Ok(chunk))) => {
+                                sse.push(&chunk);
+                                continue;
+                            }
+                        },
                     };
 
                     match read {

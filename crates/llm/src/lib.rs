@@ -7,6 +7,7 @@ mod client;
 mod client_openai;
 mod config;
 mod retry;
+mod sse;
 mod transport;
 mod wire;
 mod wire_openai;

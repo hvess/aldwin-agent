@@ -12,6 +12,16 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, the review's diff):** The review diffed a file with
+an LCS table, O(n · m) time and space on the UI thread, and past 2^20 cells
+gave up: two one-line edits far apart in a long file showed every line
+between them removed and added, all of it to be read before approve. It is
+now Myers' diff from the `similar` crate (the developer's call, 2026-09-29:
+a dependency over a hand-written diff), O((n + m) · d) for d changed lines,
+with a 200 ms budget past which the diff stays correct but less minimal
+(`DIFF_BUDGET`). `two_edits_far_apart_in_a_long_file_are_two_changed_lines`
+pins it on a 20,000-line file.
+
 **Progress (2026-09-29, a frame costs what changed):** The complexity audit
 (big-o and data-structures skills) found five paths doing work
 proportional to the whole conversation or file per frame or per key; each

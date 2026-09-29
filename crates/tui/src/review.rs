@@ -5,9 +5,11 @@
 //! No drawing here: `ui::review` reads this and `App` drives it.
 
 use std::borrow::Cow;
+use std::time::{Duration, Instant};
 
 use aldwin_core::{Changeset, Question, ReviewComment, ReviewDecision};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use similar::{capture_diff_slices_deadline, Algorithm, Change, ChangeTag};
 
 use crate::draft::Draft;
 use crate::list::{List, ListOutcome, ListRow};
@@ -780,7 +782,7 @@ impl Review {
 }
 
 /// A file's diff, folded. The common prefix and suffix are trimmed before
-/// the LCS, so its cost scales with the change, not the file.
+/// the diff, which costs O((n + m) · d) for d changed lines ([`line_diff`]).
 fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     let before_lines: Vec<&str> = before.map(|b| b.lines().collect()).unwrap_or_default();
     let after_lines: Vec<&str> = after.lines().collect();
@@ -812,9 +814,10 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     let mut added_lines = 0;
     let mut removed_lines = 0;
     let mut pending_dels: Vec<String> = Vec::new();
-    for op in lcs_diff(mid_a, mid_b) {
-        match op {
-            Op::Same(text) => {
+    for change in line_diff(mid_a, mid_b) {
+        let text = change.value();
+        match change.tag() {
+            ChangeTag::Equal => {
                 for d in pending_dels.drain(..) {
                     unfolded.push(DiffRow::Del {
                         after: line,
@@ -827,11 +830,11 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
                 });
                 line += 1;
             }
-            Op::Del(text) => {
+            ChangeTag::Delete => {
                 removed_lines += 1;
                 pending_dels.push(text.to_string());
             }
-            Op::Add(text) => {
+            ChangeTag::Insert => {
                 for d in pending_dels.drain(..) {
                     unfolded.push(DiffRow::Del {
                         after: line,
@@ -904,60 +907,19 @@ fn fold_runs(rows: &[DiffRow]) -> Vec<(usize, usize)> {
     folds
 }
 
-enum Op<'a> {
-    Same(&'a str),
-    Del(&'a str),
-    Add(&'a str),
-}
+/// How long one file's diff may look for the fewest changed lines: the
+/// review opens on the UI thread. Past it the diff is still correct, with
+/// more lines marked changed than needed.
+const DIFF_BUDGET: Duration = Duration::from_millis(200);
 
-/// Above this many cells no LCS table is built (it runs on the UI thread);
-/// the diff is all old lines out, then all new lines in.
-const LCS_CELLS: usize = 1 << 20;
-
-fn lcs_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Op<'a>> {
-    let (n, m) = (a.len(), b.len());
-    if (n + 1).saturating_mul(m + 1) > LCS_CELLS {
-        return a
-            .iter()
-            .copied()
-            .map(Op::Del)
-            .chain(b.iter().copied().map(Op::Add))
-            .collect();
-    }
-    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if a[i] == b[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
-    let mut ops = Vec::new();
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if a[i] == b[j] {
-            ops.push(Op::Same(a[i]));
-            i += 1;
-            j += 1;
-        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-            ops.push(Op::Del(a[i]));
-            i += 1;
-        } else {
-            ops.push(Op::Add(b[j]));
-            j += 1;
-        }
-    }
-    while i < n {
-        ops.push(Op::Del(a[i]));
-        i += 1;
-    }
-    while j < m {
-        ops.push(Op::Add(b[j]));
-        j += 1;
-    }
-    ops
+/// Myers' diff of two files' lines: O((n + m) · d) time and O(n + m) space
+/// for d changed lines, so a small edit to a large file stays cheap.
+fn line_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Change<&'a str>> {
+    let deadline = Instant::now() + DIFF_BUDGET;
+    capture_diff_slices_deadline(Algorithm::Myers, a, b, Some(deadline))
+        .iter()
+        .flat_map(|op| op.iter_changes(a, b))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1680,8 +1642,25 @@ mod tests {
         assert_eq!(r.file().row_count(), r.file().unfolded.len());
     }
 
+    /// Regression: past a 2^20-cell table the diff gave up and showed every
+    /// line between the first and last change as removed and added.
     #[test]
-    fn a_rewrite_too_large_to_match_is_its_old_lines_out_and_new_ones_in() {
+    fn two_edits_far_apart_in_a_long_file_are_two_changed_lines() {
+        let before = numbered(20_000);
+        let after = before
+            .replace("line 10\n", "line ten\n")
+            .replace("line 19990\n", "line 19,990\n");
+        let r = review_of(Some(&before), &after);
+        assert_eq!((r.file().added_lines, r.file().removed_lines), (2, 2));
+        assert!(
+            r.file().row_count() < 30,
+            "the unchanged lines fold: {} rows",
+            r.file().row_count()
+        );
+    }
+
+    #[test]
+    fn a_rewrite_is_its_old_lines_out_and_new_ones_in() {
         let before = numbered(1100);
         let after: String = (1..=1100).map(|i| format!("row {i}\n")).collect();
         let r = review_of(Some(&before), &after);

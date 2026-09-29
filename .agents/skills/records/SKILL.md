@@ -1,6 +1,6 @@
 ---
 name: records
-description: How to keep Aldwin's records true while changing the code — the open-tasks ledger, the specs, the ADRs, and the design contradictions in baseline.json. Says when each must change in the same commit, how an entry leaves the ledger, what needs the developer's call, and how to check that nothing still points at what moved. Use whenever a change completes, discovers, or decides work, and whenever editing anything under docs/spec/, docs/adr/ or crates/review/baseline.json.
+description: How to keep Aldwin's records true while changing the code — the open-tasks ledger, the specs, the ADRs, the design contradictions in baseline.json, and the system prompt and tool descriptions the model acts on. Says when each must change in the same commit, how an entry leaves the ledger, what needs the developer's call, and how to check that nothing still points at what moved. Use whenever a change completes, discovers, or decides work, and whenever editing anything under docs/spec/, docs/adr/, crates/review/baseline.json or crates/core/src/prompt.md.
 ---
 
 # Records
@@ -17,6 +17,7 @@ of the change that left it so. Keep them in the same commit as the code.
 | `docs/spec/aldwin-<crate>.md` | A crate's design, Decisions, Pitfalls, dated Progress | A change completes a step, changes a stated rule, or settles a question the spec covers |
 | `docs/adr/NNNN-*.md` | One decision that alters a constraint or a persisted format | A new decision (a new ADR), or a factual slip in an existing one |
 | `crates/review/baseline.json` `contradictions` | The design disagreeing with itself or with Apple's HIG, and which half the app follows | The design is re-synced or a contradiction is found in it |
+| `crates/core/src/prompt.md` and each tool's `description` | Everything the model knows about how Aldwin works and how to work in it | Any change to what a tool takes or returns, when the review opens, what a command may write, the session context, or a behaviour the model must act on; and any failure a session shows the model making |
 
 ## In the same commit
 
@@ -32,6 +33,28 @@ of the change that left it so. Keep them in the same commit as the code.
 - **A changed fact is changed everywhere it is stated.** Grep the old
   wording across `crates/`, `docs/`, `.agents/` and `AGENTS.md` — specs, ADRs, the system prompt,
   tool descriptions, doc comments — and fix each one, or give it a pointer.
+
+## The system prompt
+
+The model acts on what `crates/core/src/prompt.md` and the tool
+descriptions tell it, and on nothing else. A prompt that describes the
+code as it was makes the model fail in ways no test catches — it once said
+"stage the edits again" after a review's comments, when the edits are
+still staged. So after every feature or fix, before `/review`:
+
+1. **Does the prompt still describe the code?** Grep it and the touched
+   tools' descriptions for each behaviour the change altered.
+2. **Does the model need to know something new?** A new tool, argument,
+   limit, result shape, or failure it must act on goes in, where the model
+   will look for it, with its reason.
+3. **Did the work show the model failing?** A transcript where the model
+   misread a result, routed around a rule or asked what it could have read
+   is evidence: fix the prompt in the same change, with a test in
+   `prompt.rs` that pins the new rule if it is one a later edit could lose.
+
+Keep it strong: every rule carries its reason, a hard judgment gets a
+worked example (Good, Not, Why), and a new rule replaces the sentence it
+overrides rather than contradicting it from a later section.
 
 ## Leaving the ledger
 
@@ -68,4 +91,6 @@ An item leaves by being done or by being decided against. Before it goes:
 2. Every path, test name, ADR section, Decision number and ledger entry the
    diff writes resolves: grep it.
 3. Every closed item's citations are gone or updated.
-4. Every "decided against" or "intended" carries the developer's answer.
+4. The system prompt and the touched tools' descriptions still describe
+   the code, and teach what the change added ("The system prompt", above).
+5. Every "decided against" or "intended" carries the developer's answer.

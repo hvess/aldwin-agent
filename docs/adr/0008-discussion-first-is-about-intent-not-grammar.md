@@ -1,6 +1,7 @@
 # ADR 0008 — Discussion-first is about intent, not grammar
 
-**Status:** accepted, 2026-09-21
+**Status:** accepted, 2026-09-21. Superseded in part by 0016 (the bar
+for adding a prompt clause, in Consequences).
 **Amends:** the "Discussion-first" non-negotiable in `AGENTS.md`;
 `aldwin-core`'s `prompt::BASE`
 **Affects:** `aldwin-core`

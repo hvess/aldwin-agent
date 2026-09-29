@@ -34,6 +34,14 @@ rebuild by accident.
 `aldwin-open-tasks.md` is a ledger rather than a spec: known, understood,
 undone work, each entry citing its evidence.
 
+**The system prompt is checked after every feature and every fix.**
+`crates/core/src/prompt.md` and the tool descriptions are all the model
+knows about how Aldwin works: when a change alters what a tool takes or
+returns, when the review opens, or anything else the model acts on, the
+prompt changes in the same commit, and it must stay strong — each rule with
+its reason, hard judgments with a worked example. The `records` skill says
+how; the review's code judge holds the change to it.
+
 ## Skills
 
 `.agents/skills/*/SKILL.md` are plain Markdown, whatever agent you are: read
@@ -167,7 +175,8 @@ a decision they cover.
   since 0011 the whole rule; only its containment of `run`'s arguments is
   superseded. `roots:` in `permissions.yaml` is the one way to widen the
   workspace.
-- **0008 — Discussion-first is about intent, not grammar.** Unchanged.
+- **0008 — Discussion-first is about intent, not grammar.** Unchanged,
+  except its bar for adding a prompt clause: 0016.
 - **0009 — The review is the only gate.** *§1–§3 superseded by 0011.* Reads
   and runs need no grant and never ask. An edit is staged, every edit of a
   turn is one changeset, and the review opens at the first moment the
@@ -214,6 +223,12 @@ a decision they cover.
   to the reasoning, unabridged. Core times the block and saves its seconds
   in the transcript record, an optional field; an older transcript's
   thoughts read `Thought`.
+- **0016 — The system prompt is kept strong, and checked after every
+  change.** A clause may teach, not only patch a seen failure; each rule
+  carries its reason and hard judgments a worked example. Replies are
+  short, direct and exact. `prompt.md` and the tool descriptions change in
+  the same commit as the behaviour they describe, and the code judge holds
+  a change to them.
 
 ## Key Constraints (non-negotiable)
 

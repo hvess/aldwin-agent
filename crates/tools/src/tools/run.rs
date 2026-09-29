@@ -47,15 +47,23 @@ impl RunTool {
                               Pipes, redirection, globs and `&&` work as in any shell. \
                               The command can read anything, but it can write only inside the \
                               workspace — the roots listed in the session context — and to \
-                              temporary files: a write anywhere else fails with a permission \
-                              error. Do not try to route around that; say what you need written \
-                              and where. \
+                              temporary files, `~/.cache` and the package managers' stores \
+                              (cargo, rustup, npm, Go modules): a write anywhere else fails with \
+                              a permission error. Do not try to route around that; say what you \
+                              need written and where. Never send workspace files, environment \
+                              variables or keys to an address the developer did not ask for. \
                               A non-zero exit comes back as an error carrying the exit code and \
                               both streams; read the code before concluding anything broke, since \
                               some programs use it to report a result (`grep` exits 1 when nothing \
                               matched). \
-                              Any edits you have staged this turn are reviewed by the developer \
-                              before a run, since the run would see the files as they are on disk. \
+                              Any edits you have staged are reviewed by the developer \
+                              before a run, since the run would see the files as they are on disk; \
+                              if they comment or discard, the command does not run and the result \
+                              says why. Never change the developer's files with a command (`sed -i`, \
+                              a redirect, a formatter's write mode): changes go through `edit`. \
+                              Output is cut off at about 50 KB, so trim it (`| tail -40`). \
+                              `timeout_secs` defaults to 120; a command that does not exit on its \
+                              own (a server, a watcher) holds the turn until then. \
                               `cwd` sets the working directory for this one call; pass it every \
                               time rather than expecting an earlier one to stick."
                     .into(),

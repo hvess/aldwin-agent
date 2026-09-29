@@ -29,7 +29,8 @@ impl PlanTool {
                 description:  "Show the developer the plan, as outcomes in plain words — \"Count requests per key\", \
                                never a command or a file name. Call it with the whole list before starting a change \
                                that takes more than one step, and again as each step starts (`running`) and \
-                               finishes (`done`). Two or three steps is usual."
+                               finishes (`done`). Two or three steps is usual. The plan is drawn on screen; do \
+                               not list its steps again in your reply."
                     .into(),
                 input_schema: json!({
                     "type": "object",

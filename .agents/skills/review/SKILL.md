@@ -207,6 +207,9 @@ The shape all three return:
 >    completes should be noted in it. A change to `.githooks/` is the review
 >    loop's own enforcement: judge it against `docs/spec/aldwin-review.md`,
 >    Decisions 15 and 16.
+> 5. The model's instructions: `crates/core/src/prompt.md` and the
+>    `description` of each tool the diff touches. The model knows only what
+>    they say, so they must describe what the code now does.
 >
 > Read nothing else, and do not judge Rust idiom — a separate judge owns the
 > `rust` skill.
@@ -215,6 +218,11 @@ The shape all three return:
 > - **minor** — the change breaks source 4, or leaves a spec or the
 >   open-tasks ledger (`docs/spec/aldwin-open-tasks.md`) stale where it
 >   completed or discovered work.
+> - **major** — source 5 now states something the changed code no longer
+>   does (a tool's input, its result, when the review opens, what a
+>   command may write). **minor** — source 5 is silent on a behaviour the
+>   change gives the model and that it must know to use well: a new tool,
+>   argument, result shape, limit or failure it has to act on.
 >
 > **Your entire output is one fenced `json` block and nothing else**, in the
 > shape above. At most six findings, each one you can demonstrate with a

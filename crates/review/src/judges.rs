@@ -18,8 +18,8 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Judge {
-    /// Stage 6: the diff against `quality-gate`, the Key Constraints and the
-    /// ADRs.
+    /// Stage 6: the diff against `quality-gate`, the Key Constraints, the
+    /// ADRs, and the system prompt and tool descriptions it must keep true.
     Code,
     /// Stage 7: the diff against the `rust` skill's rules that no lint checks.
     Rust,

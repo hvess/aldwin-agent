@@ -23,9 +23,10 @@ impl EditTool {
             descriptor: ToolDescriptor {
                 name:         "edit".into(),
                 description:  "Stage a change to a file: replace one exact occurrence of `before` with `after`. \
-                               Nothing is written to disk — every edit staged in a turn is shown to the developer \
-                               as one review, and they approve it, discard it, or leave comments on lines. \
-                               To create a new file, give an empty `before`. \
+                               Nothing is written to disk — everything staged is shown to the developer as one \
+                               review, and they approve it, discard it, or leave comments on lines; after comments \
+                               it stays staged, so build on it rather than staging it again. \
+                               To create a new file, or fill an empty one, give an empty `before`. \
                                Stage every edit a change needs, then run what checks it; the review opens \
                                before the run. Read the file first so `before` matches exactly."
                     .into(),
@@ -70,6 +71,14 @@ fn edit_args(input: &Value) -> Result<EditArgs, ToolError> {
     })
 }
 
+/// The 1-based line each occurrence of `before` starts on. `before` must not
+/// be empty: it would match between every character.
+fn match_lines(text: &str, before: &str) -> Vec<usize> {
+    text.match_indices(before)
+        .map(|(at, _)| text[..at].matches('\n').count() + 1)
+        .collect()
+}
+
 #[async_trait]
 impl Tool for EditTool {
     fn descriptor(&self) -> &ToolDescriptor {
@@ -97,16 +106,22 @@ impl Tool for EditTool {
                         "no such file (give an empty `before` to create it)",
                     ),
                 }),
+                // An empty file has nothing to see, so it is filled like a
+                // missing one; any other would be replaced unseen.
+                Some("") if args.before.is_empty() => Ok(args.after.clone()),
+                Some(_) if args.before.is_empty() => Err(ToolError::InvalidInput {
+                    tool: "edit".into(),
+                    message: format!(
+                        "{rel} already has content, and an empty `before` only fills a new or empty file. \
+                         Read it and give the text to replace"
+                    ),
+                }),
                 Some(current) => {
-                    let count = if args.before.is_empty() {
-                        0
-                    } else {
-                        current.matches(args.before.as_str()).count()
-                    };
-                    if count != 1 {
+                    let lines = match_lines(current, &args.before);
+                    if lines.len() != 1 {
                         return Err(ToolError::AmbiguousMatch {
                             path: path.clone(),
-                            count,
+                            lines,
                         });
                     }
                     Ok(current.replacen(&args.before, &args.after, 1))
@@ -193,7 +208,8 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, ToolError::AmbiguousMatch { count: 0, .. }));
+        assert!(matches!(&err, ToolError::AmbiguousMatch { lines, .. } if lines.is_empty()));
+        assert!(err.to_string().contains("Read the file again"));
         let err = tool
             .call(
                 "c1",
@@ -202,7 +218,8 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, ToolError::AmbiguousMatch { count: 2, .. }));
+        assert!(matches!(&err, ToolError::AmbiguousMatch { lines, .. } if *lines == [1, 2]));
+        assert!(err.to_string().contains("starting on lines 1, 2"));
         assert!(staging.is_empty(), "a failed edit stages nothing");
     }
 
@@ -233,6 +250,46 @@ mod tests {
         assert_eq!(cs.files[0].before, None);
         assert_eq!(cs.files[0].after, "fn x() {}\n");
         assert!(!dir.path().join("new.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn an_empty_before_against_a_file_with_content_is_refused() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("f.rs"), "x\n").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
+
+        let err = tool
+            .call(
+                "c1",
+                json!({"path": "f.rs", "before": "", "after": "y"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput { .. }));
+        assert!(
+            err.to_string().contains("f.rs already has content"),
+            "{err}"
+        );
+        assert!(staging.is_empty(), "nothing is staged over the file");
+    }
+
+    #[tokio::test]
+    async fn an_empty_before_fills_an_empty_file() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("f.rs"), "").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, _e, _p) = dispatch_context();
+
+        tool.call(
+            "c1",
+            json!({"path": "f.rs", "before": "", "after": "fn x() {}\n"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(staging.changeset().files[0].after, "fn x() {}\n");
     }
 
     #[tokio::test]

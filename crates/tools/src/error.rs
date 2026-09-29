@@ -50,13 +50,14 @@ pub enum ToolError {
         roots: String,
     },
 
-    /// An edit's text to replace did not occur exactly once in the file.
-    #[error("{path}: expected exactly one occurrence of the given text, found {count}")]
+    /// An edit's text to replace did not occur exactly once in the file. The
+    /// message must say how to make the next call succeed.
+    #[error("{path}: {}", ambiguous_match_fix(.lines))]
     AmbiguousMatch {
         /// The file being edited.
         path: PathBuf,
-        /// How many times the text occurred: zero or more than one.
-        count: usize,
+        /// The 1-based line each occurrence starts on: none, or more than one.
+        lines: Vec<usize>,
     },
 
     /// The command ran and exited non-zero; not a tool failure. It is a
@@ -113,4 +114,23 @@ pub enum ToolError {
         /// The text the tool returned with its error.
         message: String,
     },
+}
+
+/// What an edit's `before` did wrong, and the fix for the next call.
+fn ambiguous_match_fix(lines: &[usize]) -> String {
+    match lines {
+        [] => "the text to replace does not occur in the file. Read the file again and copy \
+               `before` from what it holds now, whitespace and indentation included; a file \
+               with staged edits reads back with them applied"
+            .to_string(),
+        _ => {
+            let at: Vec<String> = lines.iter().map(usize::to_string).collect();
+            format!(
+                "the text to replace occurs {} times, starting on lines {}. Add the lines \
+                 around the one you mean to `before` so it occurs once",
+                lines.len(),
+                at.join(", ")
+            )
+        }
+    }
 }

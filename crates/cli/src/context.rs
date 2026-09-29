@@ -2,20 +2,31 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use chrono::NaiveDate;
 use serde::Deserialize;
 
-/// The additional-context string handed to aldwin-core: the cwd, any extra
-/// workspace roots, the platform facts, the full text of each file in
-/// `approved`, in order, then the workspace's skills by name and
-/// description. `bootstrap::context_files` chooses the files and `skills`
-/// finds the skills.
+/// The additional-context string handed to aldwin-core: the cwd, the date
+/// the session started, any extra workspace roots, the platform facts, the
+/// full text of each file in `approved`, in order, then the workspace's
+/// skills by name and description. `bootstrap::context_files` chooses the
+/// files and `skills` finds the skills.
 ///
-/// The roots are named so the model can act on an "outside the workspace"
-/// refusal; the platform facts (bash version, sed flavour) spare it learning
+/// The date is stated because the model's own sense of "now" is its training
+/// cutoff. The roots are named so the model can act on an "outside the
+/// workspace" refusal; the platform facts (bash version, sed flavour) spare it learning
 /// them by failing. A skill is listed, not read: the model reads the one a
 /// task calls for.
-pub fn build(cwd: &Path, roots: &[PathBuf], approved: &[PathBuf], skills: &[Skill]) -> String {
-    let mut sections = vec![format!("Working directory: {}", cwd.display())];
+pub fn build(
+    cwd: &Path,
+    today: NaiveDate,
+    roots: &[PathBuf],
+    approved: &[PathBuf],
+    skills: &[Skill],
+) -> String {
+    let mut sections = vec![
+        format!("Working directory: {}", cwd.display()),
+        format!("Today's date: {}", today.format("%Y-%m-%d")),
+    ];
 
     if roots.len() > 1 {
         let extra: Vec<String> = roots
@@ -190,10 +201,15 @@ fn probe(program: &str, args: &[&str], roots: &[PathBuf]) -> Option<Output> {
 mod tests {
     use super::*;
 
+    fn day() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 9, 29).expect("a real date")
+    }
+
     #[test]
     fn leads_with_the_cwd_and_carries_no_file_text_when_none_are_approved() {
-        let out = build(Path::new("/some/project"), &[], &[], &[]);
+        let out = build(Path::new("/some/project"), day(), &[], &[], &[]);
         assert!(out.starts_with("Working directory: /some/project"));
+        assert!(out.contains("Today's date: 2026-09-29"));
         assert!(out.contains("Platform:"));
         assert!(!out.contains("---"), "no approved file sections");
     }
@@ -230,7 +246,7 @@ mod tests {
 
     #[test]
     fn states_the_platform_facts_a_shell_script_has_to_be_right_about() {
-        let out = build(Path::new("/some/project"), &[], &[], &[]);
+        let out = build(Path::new("/some/project"), day(), &[], &[], &[]);
         assert!(out.contains(std::env::consts::OS));
         assert!(out.contains("sed:"));
         // The flavour depends on the `sed` on PATH, so only its wording is
@@ -245,6 +261,7 @@ mod tests {
     fn names_every_reachable_root_when_more_than_one_is_declared() {
         let out = build(
             Path::new("/some/project"),
+            day(),
             &[
                 PathBuf::from("/some/project"),
                 PathBuf::from("/other/checkout"),
@@ -260,6 +277,7 @@ mod tests {
     fn a_single_root_adds_no_reachability_section() {
         let out = build(
             Path::new("/some/project"),
+            day(),
             &[PathBuf::from("/some/project")],
             &[],
             &[],
@@ -273,7 +291,13 @@ mod tests {
         let claude_md = dir.path().join("CLAUDE.md");
         std::fs::write(&claude_md, "# Project notes\nBe careful.").unwrap();
 
-        let out = build(dir.path(), &[], std::slice::from_ref(&claude_md), &[]);
+        let out = build(
+            dir.path(),
+            day(),
+            &[],
+            std::slice::from_ref(&claude_md),
+            &[],
+        );
         assert!(out.contains("Working directory:"));
         assert!(out.contains(&claude_md.display().to_string()));
         assert!(out.contains("Be careful."));
@@ -332,11 +356,11 @@ mod tests {
             "no front matter, no description and no file are not skills"
         );
 
-        let out = build(dir.path(), &[], &[], &found);
+        let out = build(dir.path(), day(), &[], &[], &found);
         assert!(out.contains("Skills in this workspace"));
         assert!(out.contains("- ux (.agents/skills/ux/SKILL.md): The usability bar."));
         assert!(
-            !build(dir.path(), &[], &[], &[]).contains("Skills"),
+            !build(dir.path(), day(), &[], &[], &[]).contains("Skills"),
             "no section without skills"
         );
     }
@@ -399,7 +423,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("gone.md");
 
-        let out = build(dir.path(), &[], &[missing], &[]); // must not panic
+        let out = build(dir.path(), day(), &[], &[missing], &[]); // must not panic
         assert!(out.starts_with(&format!("Working directory: {}", dir.path().display())));
         assert!(!out.contains("gone.md"));
     }

@@ -30,7 +30,11 @@ impl AskTool {
                                of question, one line of why it matters, and two to four short answers: at \
                                least one that goes ahead and one that does not. \"Chat about this\" is always \
                                offered as well; if they take it, the result is what they typed. Ask only when \
-                               the answer changes what you do and you cannot settle it yourself."
+                               the answer changes what you do and you cannot settle it yourself — check the \
+                               conversation and the code first. Not for \"A or B?\" from the developer (give \
+                               your recommendation), not for an opinion or a review (answer in prose), and \
+                               not when their request already names its constraints (proceed and state your \
+                               assumption). The question is drawn on screen; do not repeat it in your reply."
                     .into(),
                 input_schema: json!({
                     "type": "object",

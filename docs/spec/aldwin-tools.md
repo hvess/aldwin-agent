@@ -5,7 +5,39 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 **Status:** active.
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, staging, the sandbox, MCP bridge. Excludes agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-09-29
+
+**Progress (2026-09-29):** An edit whose `before` does not occur exactly
+once says how to make the next call succeed: `ToolError::AmbiguousMatch`
+carries the line each occurrence starts on (`lines`, replacing `count`),
+and its message tells the model to read the file again when there is none,
+or to widen `before` when there are several (`zero_or_many_matches_is_a_structured_error`).
+`edit` was not made to refuse a file the model has not read: an exact,
+unique `before` already means an edit cannot overwrite what the model has
+not seen. The descriptions changed with the system prompt: `run` names the
+whole incidental write list (ADR 0011 §1) and says never to send the
+workspace, the environment or keys to an address the developer did not
+ask for; `ask` says when not to ask; `plan` and `ask` say their component is
+drawn, so the reply does not repeat it.
+
+**Progress (2026-09-29, the prompt's second pass):** `explain` takes
+1-based positions, as it returns them and as `grep -n` prints them: it took
+0-based ones while returning 1-based, so a location it returned, passed
+back, landed one line off (`position_field`;
+`a_zero_position_is_invalid_input_since_positions_are_1_based`, and the
+ignored `real_rust_analyzer_resolves_a_definition` now asks with 1-based
+input). Its description says when to prefer it to a search. `run`'s
+description says a commented or discarded review means the command did not
+run, that the developer's files change only through `edit`, the 50 KB
+output cap and the 120-second default timeout. An empty `before` fills a
+new or empty file (`an_empty_before_fills_an_empty_file`); against a file
+with content it is refused as input naming the file
+(`an_empty_before_against_a_file_with_content_is_refused`), rather than
+reported as text not found, and `match_lines` no longer special-cases it.
+`explain`'s description says `character` counts UTF-16 units, the LSP
+default, since the client negotiates no position encoding. `read`
+and the edit error say a file "with staged edits" reads back with them, not
+one edited "this turn": a commented changeset stays staged into the next.
 
 **Progress (2026-09-27, ADR 0014 — an MCP server cannot write the
 workspace):** Was open-tasks 2. `McpBridge` starts each server through

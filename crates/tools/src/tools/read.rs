@@ -9,7 +9,7 @@ use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
 
-/// Reads a file: the staged version if this turn edited it, else disk.
+/// Reads a file: the staged version if it has staged edits, else disk.
 pub struct ReadTool {
     descriptor: ToolDescriptor,
     workspace: Workspace,
@@ -22,7 +22,7 @@ impl ReadTool {
             descriptor: ToolDescriptor {
                 name:         "read".into(),
                 description:  "Read a UTF-8 text file, given a path relative to the project root. \
-                               A file you have staged an edit to this turn reads back with the edit applied."
+                               A file with staged edits reads back with them applied, until the review writes or discards them."
                     .into(),
                 input_schema: json!({
                     "type": "object",

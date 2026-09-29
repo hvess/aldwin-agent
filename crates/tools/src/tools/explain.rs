@@ -45,15 +45,23 @@ impl ExplainTool {
             descriptor: ToolDescriptor {
                 name: "explain".into(),
                 description: "LSP-backed code intelligence: definition, references, hover, implementations, workspace_symbols. \
-                               Returns structured location/signature data as JSON, not prose."
+                               Returns structured location/signature data as JSON, not prose. Positions, in and out, \
+                               are 1-based: `line` is the line number as `grep -n` prints it, and `character` counts \
+                               from 1 at the start of the line (in UTF-16 units, so an emoji counts as two), \
+                               landing on any character inside the identifier. A position it returns can be passed \
+                               straight back. Prefer it to a text search when the question is about one symbol — \
+                               where it is defined, who calls it, what implements it — since it resolves imports, \
+                               re-exports and same-named items that a search confuses. A `run` of `grep` is the \
+                               tool for text, comments and non-code files, though while edits are staged it \
+                               opens the review first."
                     .into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "op":        { "type": "string", "enum": ["definition", "references", "hover", "implementations", "workspace_symbols"] },
                         "path":      { "type": "string" },
-                        "line":      { "type": "integer", "minimum": 0 },
-                        "character": { "type": "integer", "minimum": 0 },
+                        "line":      { "type": "integer", "minimum": 1 },
+                        "character": { "type": "integer", "minimum": 1 },
                         "query":     { "type": "string" },
                     },
                     "required": ["op"],
@@ -167,6 +175,14 @@ fn required_u64(input: &Value, field: &'static str) -> Result<u64, ToolError> {
         .ok_or_else(|| invalid(format!("missing {field:?} integer field")))
 }
 
+/// A 1-based `line` or `character` from the input, as the 0-based value LSP
+/// takes. 1-based to match the locations this tool returns.
+fn position_field(input: &Value, field: &'static str) -> Result<u64, ToolError> {
+    required_u64(input, field)?
+        .checked_sub(1)
+        .ok_or_else(|| invalid(format!("{field:?} is 1-based; 0 is not a position")))
+}
+
 #[async_trait]
 impl Tool for ExplainTool {
     fn descriptor(&self) -> &ToolDescriptor {
@@ -198,8 +214,8 @@ impl Tool for ExplainTool {
         }
 
         let path_str = required_str(&input, "path")?;
-        let line = required_u64(&input, "line")?;
-        let character = required_u64(&input, "character")?;
+        let line = position_field(&input, "line")?;
+        let character = position_field(&input, "character")?;
         let path = self.workspace.resolve(path_str)?;
         let server = lsp::language_for_path(&path).ok_or_else(|| {
             invalid(format!(
@@ -350,6 +366,7 @@ fn extract_hover_text(contents: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::dispatch_context;
 
     fn explain_in(workspace: Workspace) -> ExplainTool {
         let staging = Arc::new(Staging::new(workspace.clone()));
@@ -472,7 +489,7 @@ mod tests {
     async fn missing_op_is_invalid_input() {
         let tool = explain_in(Workspace::new("."));
         let err = tool
-            .call("c1", json!({}), &crate::test_support::dispatch_context().0)
+            .call("c1", json!({}), &dispatch_context().0)
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
@@ -484,8 +501,8 @@ mod tests {
         let err = tool
             .call(
                 "c1",
-                json!({"op": "definition", "line": 0, "character": 0}),
-                &crate::test_support::dispatch_context().0,
+                json!({"op": "definition", "line": 1, "character": 1}),
+                &dispatch_context().0,
             )
             .await
             .unwrap_err();
@@ -498,12 +515,35 @@ mod tests {
         let err = tool
             .call(
                 "c1",
-                json!({"op": "definition", "path": "README.md", "line": 0, "character": 0}),
-                &crate::test_support::dispatch_context().0,
+                json!({"op": "definition", "path": "README.md", "line": 1, "character": 1}),
+                &dispatch_context().0,
             )
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput { .. }));
+    }
+
+    /// Regression: input was taken as 0-based while output was 1-based, so a
+    /// returned location passed back landed one line off.
+    #[test]
+    fn a_1_based_position_is_sent_to_the_server_0_based() {
+        let input = json!({"line": 1, "character": 26});
+        assert_eq!(position_field(&input, "line").unwrap(), 0);
+        assert_eq!(position_field(&input, "character").unwrap(), 25);
+    }
+
+    #[tokio::test]
+    async fn a_zero_position_is_invalid_input_since_positions_are_1_based() {
+        let tool = explain_in(Workspace::new("."));
+        let err = tool
+            .call(
+                "c1",
+                json!({"op": "definition", "path": "src/lib.rs", "line": 0, "character": 1}),
+                &dispatch_context().0,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("1-based"), "{err}");
     }
 
     /// Against real rust-analyzer. Ignored: indexing takes seconds. Run with
@@ -532,8 +572,8 @@ mod tests {
             let out = tool
                 .call(
                     "c1",
-                    json!({"op": "definition", "path": "src/lib.rs", "line": 1, "character": 25}),
-                    &crate::test_support::dispatch_context().0,
+                    json!({"op": "definition", "path": "src/lib.rs", "line": 2, "character": 26}),
+                    &dispatch_context().0,
                 )
                 .await
                 .unwrap();

@@ -234,6 +234,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     let roots = workspace.roots();
     let additional_context = context::build(
         &cwd,
+        chrono::Local::now().date_naive(),
         &roots,
         &context_files(&cwd),
         &context::skills(&cwd, &roots),

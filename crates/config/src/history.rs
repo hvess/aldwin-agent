@@ -4,9 +4,12 @@
 //! One session is one append-only JSONL file,
 //! `~/.aldwin/history/<project-slug>/<session-id>.jsonl`: a [`SessionHeader`]
 //! line, then one `LogRecord` per line. Do not use `fsio`'s atomic write
-//! here: it would rewrite the whole file per record. A killed process costs
-//! only its partial last line; [`load`] skips bad lines and unfinished turns.
+//! here: it would rewrite the whole file per record. Beside them,
+//! `index.json` caches how far [`list`] has read each one. A killed process
+//! costs only its partial last line; [`load`] skips bad lines and unfinished
+//! turns.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -15,7 +18,7 @@ use std::sync::Mutex;
 use aldwin_core::{LogRecord, SessionId};
 use serde::{Deserialize, Serialize};
 
-use crate::error::ConfigError;
+use crate::{error::ConfigError, fsio};
 
 /// The transcript schema version; bump on an incompatible change. [`list`]
 /// skips a file with any other version rather than failing.
@@ -222,25 +225,191 @@ fn lines(file: File) -> impl Iterator<Item = Vec<u8>> {
 /// Every resumable session in `dir`, newest first.
 ///
 /// Invariant: listed if and only if [`load`] returns a completed turn; keep
-/// `summarise` and `load` agreeing on `TurnEnded`. Unreadable or unknown
-/// files are skipped; a missing `dir` is an empty list.
+/// `Scan::read_line` and `load` agreeing on `TurnEnded`. Unreadable or
+/// unknown files are skipped; a missing `dir` is an empty list.
+///
+/// Each transcript is read only past where the last listing stopped
+/// (`index.json`): the listing runs at every startup, and the history
+/// grows for as long as the project is worked on.
 pub fn list(dir: &Path) -> Vec<SessionSummary> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
+    let before = read_index(dir);
 
-    let mut sessions: Vec<SessionSummary> = entries
+    let scans: BTreeMap<SessionId, (Scan, Scan)> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
         .filter_map(|e| {
             let id = SessionId(e.path().file_stem()?.to_str()?.to_string());
-            summarise(&e.path(), id)
+            let prior = before.sessions.get(&id).cloned().unwrap_or_default();
+            Some((id, scan(&e.path(), prior).ok()?))
         })
         .collect();
 
+    let mut sessions: Vec<SessionSummary> = scans
+        .iter()
+        .filter_map(|(id, (_, shown))| shown.summary(id.clone()))
+        .collect();
     // By `started_at`, not `SessionId`: it is the field the row shows.
     sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
+
+    let after = Index {
+        version: INDEX_VERSION,
+        history_version: HISTORY_VERSION,
+        sessions: scans
+            .into_iter()
+            .map(|(id, (kept, _))| (id, kept))
+            .collect(),
+    };
+    if after != before {
+        // A cache: a failed write costs the next listing a longer read.
+        let _ = write_index(dir, &after);
+    }
     sessions
+}
+
+/// Beside the transcripts, how far the last listing read each one. Never a
+/// source of truth: a missing, damaged or foreign index is an empty one.
+const INDEX_FILE: &str = "index.json";
+
+/// [`Index`]'s shape; bump on an incompatible change, which empties it.
+const INDEX_VERSION: u32 = 1;
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Index {
+    version: u32,
+    /// The [`HISTORY_VERSION`] its scans read headers under: they record
+    /// whether a header was this build's schema, so another empties it.
+    history_version: u32,
+    sessions: BTreeMap<SessionId, Scan>,
+}
+
+fn read_index(dir: &Path) -> Index {
+    fs::read(dir.join(INDEX_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Index>(&bytes).ok())
+        .filter(|index| index.version == INDEX_VERSION && index.history_version == HISTORY_VERSION)
+        .unwrap_or_default()
+}
+
+fn write_index(dir: &Path, index: &Index) -> Result<(), ConfigError> {
+    let text = serde_json::to_string(index).expect("the index is always serialisable");
+    fsio::write_atomic_text(&dir.join(INDEX_FILE), &text)
+}
+
+/// What a transcript's first `read` bytes say for the listing. A transcript
+/// is append-only, so those bytes never change while the file is at least
+/// that long.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct Scan {
+    /// Up to the end of the last whole line read.
+    read: u64,
+    header: Header,
+    title: Title,
+    turns: usize,
+}
+
+/// A transcript's first line, as the listing read it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+enum Header {
+    #[default]
+    Unread,
+    /// A schema this build does not read: never listed.
+    Foreign,
+    Read {
+        started_at: u64,
+    },
+}
+
+/// The title from a transcript's first `UserMessage`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+enum Title {
+    /// No `UserMessage` read yet.
+    #[default]
+    Pending,
+    /// The first one had no non-blank line.
+    Blank,
+    Titled(String),
+}
+
+impl Scan {
+    /// Takes in one line of the transcript, the header first.
+    fn read_line(&mut self, line: &[u8]) {
+        if self.header == Header::Unread {
+            self.header = match serde_json::from_slice::<SessionHeader>(line) {
+                Ok(header) if header.version == HISTORY_VERSION => Header::Read {
+                    started_at: header.started_at,
+                },
+                _ => Header::Foreign,
+            };
+        } else if line.starts_with(TURN_ENDED) {
+            // Parsed, not only matched: a torn `TurnEnded` does not end its
+            // turn for `load`, so it must not count one here.
+            if serde_json::from_slice::<LogRecord>(line).is_ok() {
+                self.turns += 1;
+            }
+        } else if self.title == Title::Pending && line.starts_with(USER_MESSAGE) {
+            if let Ok(LogRecord::UserMessage { text, .. }) = serde_json::from_slice(line) {
+                self.title = derive_title(&text).map_or(Title::Blank, Title::Titled);
+            }
+        }
+    }
+
+    fn summary(&self, id: SessionId) -> Option<SessionSummary> {
+        // Nothing to resume, so nothing to list; this also hides header-only
+        // files from older builds.
+        if self.turns == 0 {
+            return None;
+        }
+        let Header::Read { started_at } = self.header else {
+            return None;
+        };
+        Some(SessionSummary {
+            id,
+            started_at,
+            title: match &self.title {
+                Title::Titled(title) => title.clone(),
+                // Only a damaged transcript has a blank first message, or none.
+                Title::Blank | Title::Pending => "(untitled)".into(),
+            },
+            turns: self.turns,
+        })
+    }
+}
+
+/// `prior` carried to the end of the transcript at `path`: what to keep, and
+/// what to list. They differ by a final line with no newline, which the
+/// listing takes in as [`load`] does but the next listing reads again, since
+/// the rest of it may still arrive. A file shorter than `prior` was
+/// replaced, and is read from the start.
+fn scan(path: &Path, prior: Scan) -> io::Result<(Scan, Scan)> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut kept = if len < prior.read {
+        Scan::default()
+    } else {
+        prior
+    };
+    // Nothing past a foreign header matters.
+    if kept.header == Header::Foreign {
+        kept.read = len;
+        return Ok((kept.clone(), kept));
+    }
+    file.seek(SeekFrom::Start(kept.read))?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line)? > 0 {
+        let Some(whole) = line.strip_suffix(b"\n") else {
+            let mut shown = kept.clone();
+            shown.read_line(&line);
+            return Ok((kept, shown));
+        };
+        kept.read_line(whole);
+        kept.read += line.len() as u64;
+        line.clear();
+    }
+    Ok((kept.clone(), kept))
 }
 
 /// One session's records, ready to become a `ConversationLog`.
@@ -321,49 +490,6 @@ fn project_slug(project_root: &Path) -> String {
 /// writing `LogRecord`'s internal tag first.
 const TURN_ENDED: &[u8] = br#"{"type":"turn_ended""#;
 const USER_MESSAGE: &[u8] = br#"{"type":"user_message""#;
-
-/// One row of the listing. Every transcript is summarised at session start,
-/// so only `TurnEnded` lines and the first `UserMessage` are parsed; the
-/// rest are skipped by their tag.
-fn summarise(path: &Path, id: SessionId) -> Option<SessionSummary> {
-    let file = File::open(path).ok()?;
-    let mut lines = lines(file);
-
-    let header: SessionHeader = serde_json::from_slice(&lines.next()?).ok()?;
-    if header.version != HISTORY_VERSION {
-        return None;
-    }
-
-    let mut title = None;
-    let mut turns = 0;
-    for line in lines {
-        if line.starts_with(TURN_ENDED) {
-            // Parsed, not only matched: a torn `TurnEnded` does not end its
-            // turn for `load`, so it must not count one here.
-            if serde_json::from_slice::<LogRecord>(&line).is_ok() {
-                turns += 1;
-            }
-        } else if title.is_none() && line.starts_with(USER_MESSAGE) {
-            if let Ok(LogRecord::UserMessage { text, .. }) = serde_json::from_slice(&line) {
-                title = Some(derive_title(&text));
-            }
-        }
-    }
-
-    // Nothing to resume, so nothing to list; this also hides header-only
-    // files from older builds.
-    if turns == 0 {
-        return None;
-    }
-
-    Some(SessionSummary {
-        id,
-        started_at: header.started_at,
-        // A blank first message, or none: only a damaged transcript has either.
-        title: title.flatten().unwrap_or_else(|| "(untitled)".into()),
-        turns,
-    })
-}
 
 /// A message's first non-blank line, cut to `TITLE_MAX` chars; `None` when
 /// every line is blank. Never summarise it with the model: that would spend
@@ -562,7 +688,7 @@ mod tests {
         );
     }
 
-    /// `summarise` matches lines by their opening bytes.
+    /// `Scan::read_line` matches lines by their opening bytes.
     #[test]
     fn the_tags_the_listing_matches_are_the_ones_serde_writes() {
         let [started, said, _, ended] = &turn(1, "hi")[..] else {
@@ -703,6 +829,123 @@ mod tests {
         assert_eq!(sessions[0].title, "newer question", "newest first");
         assert_eq!(sessions[1].title, "older question");
         assert_eq!(sessions[0].turns, 1);
+    }
+
+    #[test]
+    fn a_listing_reads_each_transcript_only_past_where_the_last_one_stopped() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000003-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "first") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+        assert_eq!(list(dir.path())[0].turns, 1);
+
+        // Bytes already read are not read again: an edit to them, which an
+        // append-only file never has, does not show.
+        let path = transcript_path(dir.path(), &id);
+        let raw = fs::read_to_string(&path).unwrap();
+        fs::write(&path, raw.replace("first", "FIRST")).unwrap();
+        let store = HistoryStore::reopen(dir.path(), &id).unwrap();
+        for record in turn(2, "second") {
+            store.append(&record).unwrap();
+        }
+
+        let listed = &list(dir.path())[0];
+        assert_eq!((listed.title.as_str(), listed.turns), ("first", 2));
+    }
+
+    #[test]
+    fn a_transcript_shorter_than_the_index_says_is_read_from_the_start() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000004-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "a long first question") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+        let _ = list(dir.path());
+
+        fs::remove_file(transcript_path(dir.path(), &id)).unwrap();
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "short") {
+            store.append(&record).unwrap();
+        }
+        assert_eq!(list(dir.path())[0].title, "short");
+    }
+
+    #[test]
+    fn a_damaged_index_lists_what_no_index_would() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000005-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "hello") {
+            store.append(&record).unwrap();
+        }
+        let fresh = list(dir.path());
+        fs::write(dir.path().join(INDEX_FILE), "{not json").unwrap();
+        assert_eq!(list(dir.path()), fresh);
+    }
+
+    #[test]
+    fn an_index_built_under_another_transcript_schema_is_an_empty_one() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000007-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "hello") {
+            store.append(&record).unwrap();
+        }
+        let fresh = list(dir.path());
+        let stale = Index {
+            history_version: HISTORY_VERSION + 1,
+            ..read_index(dir.path())
+        };
+        assert_eq!(stale.sessions.len(), 1, "the listing wrote its index");
+        write_index(dir.path(), &stale).unwrap();
+        assert_eq!(read_index(dir.path()), Index::default());
+        assert_eq!(list(dir.path()), fresh);
+    }
+
+    /// The index holds titles, so it is kept as private as the transcripts
+    /// (ADR 0005).
+    #[cfg(unix)]
+    #[test]
+    fn the_index_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000008-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "a private question") {
+            store.append(&record).unwrap();
+        }
+        let _ = list(dir.path());
+        let mode = fs::metadata(dir.path().join(INDEX_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// `list` and `load` agree on a transcript cut just before its last
+    /// newline, and the next listing does too.
+    #[test]
+    fn a_last_line_with_no_newline_is_listed_as_load_reads_it() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000006-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "hello") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+        let path = transcript_path(dir.path(), &id);
+        let raw = fs::read_to_string(&path).unwrap();
+        fs::write(&path, raw.trim_end_matches('\n')).unwrap();
+
+        assert_eq!(load(dir.path(), &id).unwrap(), turn(1, "hello"));
+        for _ in 0..2 {
+            assert_eq!(list(dir.path())[0].turns, 1);
+        }
     }
 
     /// Regression: a first message of blank lines titled the session "".

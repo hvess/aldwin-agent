@@ -8,7 +8,7 @@ past session can be listed and resumed from inside a running one.
 and its picker, and what a resumed session restores. Excludes the LLM wire
 format, the permission engine, retention, and any launch-time entry point.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-09-29
 
 ## The stale line
 
@@ -52,7 +52,8 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
   `~/.aldwin/history/<project-slug>/<session-id>.jsonl`, mode `0600`. First
   line is a header (`version`, `started_at`, `cwd`, `model`); every line after
   it is one `LogRecord`. JSONL because writes are appends and a torn tail costs
-  one turn, not the session.
+  one turn, not the session. Beside them, `index.json` caches how far the
+  listing has read each one (Progress, 2026-09-29).
 
   The header carries no title. It is derived at listing time instead — at the
   moment a file is opened no user message exists yet, so a header title would
@@ -248,6 +249,16 @@ All done, 2026-09-20.
 
 ## Progress
 
+- **2026-09-29 — the listing reads only what is new.** `list` read every
+  transcript of the project in full at every startup, before the first
+  frame, and history is never pruned. Beside the transcripts,
+  `index.json` now records how far the last listing read each one (the end
+  of its last whole line) and what it found there; a listing reads each
+  transcript only past that point, and from the start when the file is
+  shorter. It is a cache: missing, damaged, or built by another index or
+  transcript version, it is an empty one, and a failed write costs the next listing a longer read. A
+  last line with no newline is listed as `load` reads it but read again
+  next time. Transcripts are unchanged, so `HISTORY_VERSION` stays 1.
 - **2026-09-27 — a failed turn's reason gained a kind.** `TurnEnded`'s
   `Error` is `{kind, message}` where it was the bare message (aldwin-tui's
   Progress entry "a failed turn carries its kind"). The reader takes both

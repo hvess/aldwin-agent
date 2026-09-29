@@ -12,7 +12,7 @@ code against a design principle or look at a picture. One is the loop itself, an
 | stage | what | who |
 | --- | --- | --- |
 | 1 toolchain | `rustc --version` against the baseline | `review` |
-| 2 lint | `cargo fmt --check`, `clippy -D warnings` with the workspace lints — the `rust` skill's checkable rules | `review` |
+| 2 lint | `cargo fmt --check`, `clippy -D warnings` with the workspace lints — the checkable rules of the `rust`, `big-o` and `data-structures` skills | `review` |
 | 3 test | `cargo test --workspace` | `review` |
 | 4 tokens | regenerate `tokens.rs` from `docs/design/` and diff | `review` |
 | 5 frames | `render_snapshot`: the baseline and design conformance | `review` |
@@ -46,7 +46,9 @@ Until then, repeat both of these on every change:
    in a skill the judges read:
    - **Walk quality-gate** against `git diff`, every section; §3 and §4
      above all: a flag or a magic value standing in for a variant, and one
-     rule decided in two places.
+     rule decided in two places. §5's cost check too: for every loop,
+     collection and recursion the diff adds, name n and how often it runs
+     (big-o skill, "Checking a change").
    - **Grep every identifier and phrase the diff removes or renames**
      across `crates/`, `docs/`, `.agents/` *and* `AGENTS.md` — ADRs, specs and their archive,
      `AGENTS.md`, the system prompt, doc comments. Each hit is fixed or
@@ -200,8 +202,12 @@ The shape all three return:
 > 1. `AGENTS.md`, the section **Key Constraints (non-negotiable)**.
 > 2. `docs/adr/*.md` — numbered decisions. A change that follows a later
 >    ADR where an earlier one disagrees is conformant.
-> 3. `.agents/skills/quality-gate/SKILL.md` — every section, and
->    `.agents/skills/comments/SKILL.md`, which its section on comments names.
+> 3. `.agents/skills/quality-gate/SKILL.md` — every section, and the
+>    skills it names: `.agents/skills/comments/SKILL.md` (§6), and
+>    `.agents/skills/big-o/SKILL.md` and
+>    `.agents/skills/data-structures/SKILL.md` (§5). A cost finding names
+>    n, why it is unbounded, and how often the code runs; a small, bounded
+>    n is not a finding (big-o, "When it matters here").
 > 4. The spec for each crate the diff touches: `docs/spec/aldwin-<crate>.md`,
 >    or `docs/spec/archive/` for an archived one. A spec step the change
 >    completes should be noted in it. A change to `.githooks/` is the review

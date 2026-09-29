@@ -32,3 +32,8 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
+# The big-o and data-structures skills' checkable rules (aldwin-review.md Decision 14).
+linkedlist = "warn"
+stable_sort_primitive = "warn"
+large_stack_arrays = "warn"
+inefficient_to_string = "warn"

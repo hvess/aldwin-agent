@@ -46,7 +46,8 @@ how; the review's code judge holds the change to it.
 
 `.agents/skills/*/SKILL.md` are plain Markdown, whatever agent you are: read
 the one whose description matches the task before starting it — `rust` and
-`quality-gate` for any Rust change, `comments` for any comment, `ux` for
+`quality-gate` for any Rust change, `big-o` and `data-structures` for any
+loop, collection, search, sort, cache or recursion, `comments` for any comment, `ux` for
 anything the developer sees, `records` for the specs, ADRs and ledger,
 `review` before committing, `design-sync` before re-syncing the design.
 

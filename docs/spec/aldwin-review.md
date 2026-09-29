@@ -39,11 +39,11 @@ rubric it was graded against.
 | stage | answers | how | hermetic |
 | --- | --- | --- | --- |
 | 1 toolchain | are these results comparable to the last run's | `rustc --version` against the baseline | yes |
-| 2 lint | is it formatted, does it build clean, and does it keep the `rust` skill's checkable rules | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` with the workspace lints (`missing_docs`, `missing_debug_implementations`, `clippy::missing_errors_doc`, `clippy::missing_panics_doc`) | yes |
+| 2 lint | is it formatted, does it build clean, and does it keep the checkable rules of the `rust`, `big-o` and `data-structures` skills | `cargo fmt --all --check`, then `cargo clippy --workspace --all-targets -- -D warnings` with the workspace lints (`missing_docs`, `missing_debug_implementations`, `clippy::missing_errors_doc`, `clippy::missing_panics_doc`; `clippy::linkedlist`, `stable_sort_primitive`, `large_stack_arrays`, `inefficient_to_string`) | yes |
 | 3 test | does the suite pass | `cargo test --workspace` | yes |
 | 4 tokens | is the app's design system still the imported one | regenerate `crates/tui/src/tokens.rs` and diff | yes |
 | 5 frames | do the frames match the baseline, and does every cell come from the design | `render_snapshot.rs` against `tests/snapshots/render.snap`, plus colour, glyph and copy conformance | yes |
-| 6 code judge | does the diff hold to `quality-gate` (with the `comments` skill it names), the Key Constraints and the ADRs, and do the system prompt and tool descriptions still describe the code | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks (`.githooks/`) changed | no |
+| 6 code judge | does the diff hold to `quality-gate` (with the `comments`, `big-o` and `data-structures` skills it names), the Key Constraints and the ADRs, and do the system prompt and tool descriptions still describe the code | two blind subagents over `change.diff`, their findings merged into one verdict; runs when a crate, the workspace manifest or the gate's own hooks (`.githooks/`) changed | no |
 | 7 Rust judge | does the diff hold to the `rust` skill's rules no lint checks | a blind subagent over `change.diff`; runs when Rust source changed | no |
 | 8 frames judge | do the changed scenes look like the design | a blind subagent over the captured frames of the scenes whose snapshot changed | no |
 | 9 iterate | — | any failure: fix, run again from stage 1, fresh judges for what changed; at most five passes | — |
@@ -184,7 +184,9 @@ moves any scene's snapshot has frames for stage 8 to judge.
     examples (since 2026-09-29; before, an example on each new public
     function), a fix with its test — is stage 7's, and a finding stage 7
     makes twice graduates to a lint or a test. Enabling the lints cost 608
-    fixes, made in the commit that enabled them.
+    fixes, made in the commit that enabled them. The `big-o` and
+   `data-structures` skills split the same way (Progress, 2026-09-29, cost
+   and structure): four lints in stage 2, the rest in stage 6.
 
 15. **The pass is recorded against the staged tree, and the commit checks
     it.** `judge` writes the record into the repository's git directory,
@@ -336,6 +338,32 @@ moves any scene's snapshot has frames for stage 8 to judge.
   variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-29, cost and structure)
+
+The developer's call: the review checks time and space complexity and the
+choice of data structure, against two new skills, `big-o` and
+`data-structures`, which quality-gate §5 names. The split is Decision 14's.
+
+- **Stage 2 gets what a lint can tell apart:** `clippy::linkedlist`,
+  `stable_sort_primitive`, `large_stack_arrays` and
+  `inefficient_to_string`, none of which fired; Clippy's default `perf`
+  lints were already in it. A trial of about forty lints left the
+  rest out: `format_collect`'s thirteen hits were test fixtures and a
+  32-byte hash, where the big-o skill asks for the plainest code;
+  `large_futures`' one hit sits under `#[async_trait]`, which already
+  boxes; and nursery lints (`needless_collect`, `redundant_clone`,
+  `set_contains_or_insert`, `large_stack_frames`) are Clippy's own
+  admission of false positives, which would fail correct code.
+- **Stage 6 gets the rest:** an O(n²) search, `remove(0)` in a loop,
+  per-frame work over the whole transcript, recursion as deep as its
+  input, a structure that serves the wrong operation. Each looks like its
+  harmless twin until n's bound and the code's frequency are known — the
+  removed-identifier entry's exception, a finding no machine can tell from
+  its lookalikes. A cost finding names n, why it is unbounded and how
+  often the code runs; a small bounded n is not one. `Judge::reads` is
+  unchanged: the code judge reads the whole diff, so a skill edit voids its
+  carried pass.
 
 ## Progress (2026-09-29, frame K)
 

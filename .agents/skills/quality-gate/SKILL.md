@@ -101,6 +101,11 @@ handles every case.
   explicit (`Arc`, channels) and owned by the composition root.
 - Async code never blocks the runtime; blocking work goes through
   `spawn_blocking` or stays out of async paths.
+- Cost grows no faster than it must. Every loop, collection, search, sort,
+  cache and recursion holds to `.agents/skills/big-o/SKILL.md` (name n,
+  and nothing proportional to an unbounded input runs per frame) and
+  `.agents/skills/data-structures/SKILL.md` (the std type the operations
+  call for; iteration where depth follows input).
 
 ## 6. Clean code
 

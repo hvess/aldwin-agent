@@ -151,7 +151,8 @@ and became the problem it was built to solve.
 disagreement is recorded.** The design's commands include `/changes` and
 `/undo`; the product ships `/resume`, `/model`, `/quit`, `/clear` (the
 developer's call, 2026-09-23), `/theme` (2026-09-25), `/connect` (ADR
-0012, 2026-09-26) and `/reload` (2026-09-29); `/changes` and `/undo` will not be built (the
+0012, 2026-09-26), `/reload` and `/update` (2026-09-29), and the `/` menu lists
+every command, `/help` included (2026-09-29); `/changes` and `/undo` will not be built (the
 developer's call, 2026-09-27). That is in `baseline.json`. A frame is authority
 on tone and position, not on scope.
 

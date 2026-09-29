@@ -30,74 +30,62 @@ pub(crate) struct SlashCommand {
     name: &'static str,
     argument: &'static str,
     summary: &'static str,
-    /// Offered by the `/` menu; `/help` lists every command.
-    in_menu: bool,
 }
 
-/// Every command `intercept` answers; the `/` menu and `/help` both draw
-/// from it. Menu entries and order: `crates/review/baseline.json`,
-/// `frame-command-list-is-not-the-products`. `/quit` and `/exit` are one
-/// command.
+/// Every command `intercept` answers, in the `/` menu's order; the menu and
+/// `/help` both list all of them, so a command added here cannot be left
+/// out of either (baseline.json `frame-command-list-is-not-the-products`).
+/// `/quit` and `/exit` are one command.
 const COMMANDS: [SlashCommand; 10] = [
     SlashCommand {
         name: "resume",
         argument: "",
         summary: "Pick up an earlier conversation",
-        in_menu: true,
     },
     SlashCommand {
         name: "model",
         argument: "",
         summary: "Change the model",
-        in_menu: true,
     },
     SlashCommand {
         name: "connect",
         argument: "",
         summary: "Connect a provider account",
-        in_menu: true,
     },
     SlashCommand {
         name: "quit",
         argument: "",
         summary: "Leave Aldwin",
-        in_menu: true,
     },
     SlashCommand {
         name: "exit",
         argument: "",
         summary: "Leave Aldwin",
-        in_menu: true,
     },
     SlashCommand {
         name: "clear",
         argument: "",
         summary: "Start a fresh conversation in this project",
-        in_menu: true,
     },
     SlashCommand {
         name: "theme",
         argument: "",
         summary: "Switch between the light and dark theme",
-        in_menu: true,
     },
     SlashCommand {
         name: "reload",
         argument: "",
         summary: "Read the settings files again",
-        in_menu: true,
     },
     SlashCommand {
         name: "update",
         argument: "",
         summary: "Install the latest release",
-        in_menu: false,
     },
     SlashCommand {
         name: "help",
         argument: "",
-        summary: "List these commands",
-        in_menu: false,
+        summary: "List every command",
     },
 ];
 
@@ -105,7 +93,6 @@ const COMMANDS: [SlashCommand; 10] = [
 pub(crate) fn menu() -> Vec<aldwin_tui::CommandChoice> {
     COMMANDS
         .iter()
-        .filter(|c| c.in_menu)
         .map(|c| aldwin_tui::CommandChoice {
             name: c.name.into(),
             summary: c.summary.into(),
@@ -246,7 +233,17 @@ async fn intercept(
         Some((name, arg)) => (name, Some(arg.trim())),
         None => (rest, None),
     };
+    // `/reload-config` is the old name, still printed in the headers of
+    // settings files written before the rename.
+    let name = if name == "reload-config" {
+        "reload"
+    } else {
+        name
+    };
     match (name, arg) {
+        // Only a name in `COMMANDS` reaches a handler, so a command missing
+        // from the table, and so from the menu and `/help`, cannot run.
+        _ if !COMMANDS.iter().any(|c| c.name == name) => unknown(rest, events).await,
         ("help", None) => {
             let _ = events
                 .send(Event::Notice {
@@ -255,9 +252,7 @@ async fn intercept(
                 .await;
             Intercepted::Handled
         }
-        // `/reload-config` is the old name, still printed in the headers of
-        // settings files written before the rename.
-        ("reload", None) | ("reload-config", None) => {
+        ("reload", None) => {
             handle_reload(config, session, events).await;
             Intercepted::Handled
         }
@@ -303,15 +298,18 @@ async fn intercept(
             Some(command) => Intercepted::Forward(command),
             None => Intercepted::Handled,
         },
-        _ => {
-            let _ = events
-                .send(Event::Notice {
-                    message: format!("There is no /{rest} command. /help lists them all."),
-                })
-                .await;
-            Intercepted::Handled
-        }
+        _ => unknown(rest, events).await,
     }
+}
+
+/// The answer to input `intercept` has no handler for, as typed.
+async fn unknown(rest: &str, events: &mpsc::Sender<Event>) -> Intercepted {
+    let _ = events
+        .send(Event::Notice {
+            message: format!("There is no /{rest} command. /help lists them all."),
+        })
+        .await;
+    Intercepted::Handled
 }
 
 /// `/resume [id]`: the `Command::Resume` to forward, or `None` after a
@@ -1350,12 +1348,15 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_and_help_are_drawn_from_one_table() {
+    fn the_menu_and_help_list_every_command() {
         let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
         assert_eq!(
             menu,
-            ["resume", "model", "connect", "quit", "exit", "clear", "theme", "reload"],
-            "the developer's eight, in order"
+            [
+                "resume", "model", "connect", "quit", "exit", "clear", "theme", "reload", "update",
+                "help"
+            ],
+            "every command, in order"
         );
         let help = help_text();
         for command in COMMANDS {
@@ -1364,6 +1365,32 @@ mod tests {
                 "{} missing from help",
                 command.name
             );
+        }
+    }
+
+    /// Every row the menu offers must work when picked: a table entry with
+    /// no handler would be listed and then answered as unknown.
+    #[tokio::test]
+    async fn every_command_in_the_menu_is_answered() {
+        let (_project, _global, cfg) = config();
+        for command in COMMANDS {
+            let (tx, mut rx) = mpsc::channel(8);
+            let mut session = session();
+            // Stands in for a running update, so `/update` reaches no network.
+            session.updating = Some(tokio::spawn(std::future::pending::<()>()));
+            let submit = Command::Submit {
+                text: format!("/{}", command.name),
+            };
+            intercept(submit, &cfg, &mut session, None, &tx).await;
+            while let Ok(event) = rx.try_recv() {
+                if let Event::Notice { message } = event {
+                    assert!(
+                        !message.starts_with("There is no /"),
+                        "/{} is listed but not answered: {message}",
+                        command.name
+                    );
+                }
+            }
         }
     }
 

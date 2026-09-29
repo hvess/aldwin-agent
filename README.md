@@ -215,8 +215,9 @@ key.
 
 ### Commands
 
-Type `/` on an empty field: `/resume`, `/model`, `/connect`, `/clear`,
-`/theme`, `/reload`, `/quit` (or `/exit`). `/update` and `/help` work too.
+Type `/` on an empty field for every command: `/resume`, `/model`,
+`/connect`, `/quit` (or `/exit`), `/clear`, `/theme`, `/reload`, `/update`
+and `/help`.
 `/reload` reads the settings files again; Aldwin can reload them itself
 after you approve an edit to one, but a new folder under `roots:` it didn't
 get from your review waits for your `/reload`.

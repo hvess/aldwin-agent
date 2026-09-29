@@ -231,8 +231,7 @@ path, which resolves to the file replaced, so after an update a `git`
 started in the session runs the new binary as the shim. Like `/theme`, it
 is the developer's own write and is not reviewed; a binary run from inside
 the workspace (`target/debug/aldwin`) is replaced the same way, which a
-development build older than the latest release would see. `/help` lists it; the `/` menu stays the developer's
-seven. The releases' `SHA256SUMS` and signature for v0.6.0 are fixtures
+development build older than the latest release would see. It was listed only in `/help` at first; since the same day's `/` menu fix below, it is in the menu with every other command. The releases' `SHA256SUMS` and signature for v0.6.0 are fixtures
 under `tests/fixtures/`, so the signature check is tested against what
 `ssh-keygen` really writes.
 
@@ -251,6 +250,15 @@ the developer's call. The old name is still answered, since settings files
 written before the rename print it in their headers. `apply_roots` goes
 through `Workspace::take_roots`, as the model's `reload` tool does; the
 developer's reload widens, the model's only from what the review wrote.
+
+**Post-archive fix (2026-09-29, the `/` menu lists every command):** The
+developer found `/update` missing from the `/` menu, and commands missing
+from it as a recurring theme: each `SlashCommand` carried an `in_menu`
+flag, and each new one was added with it off. The flag is gone — the menu
+and `/help` both list every entry in `COMMANDS` — and `intercept` answers
+only names in `COMMANDS`, so a command without an entry cannot run either.
+`every_command_in_the_menu_is_answered` sends each row and fails on one
+answered as unknown.
 
 ## Design
 

@@ -31,6 +31,13 @@ mod tests {
         assert!(BASE.contains("shown to you, not to the developer"));
     }
 
+    /// aldwin-tui.md Decisions: messages queued during a turn arrive as one.
+    #[test]
+    fn the_prompt_says_a_message_can_be_lines_sent_while_it_worked() {
+        assert!(BASE.contains("sent while your last turn was still running"));
+        assert!(BASE.contains("already did, say so rather than doing it again"));
+    }
+
     /// ADR 0009: the review, `plan` and `ask` are taught; the per-call
     /// approval phrasing stays removed.
     #[test]

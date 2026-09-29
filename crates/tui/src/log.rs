@@ -81,6 +81,13 @@ pub enum LogEntry {
     },
     /// The blank row after a turn that ended cleanly.
     TurnBreak,
+    /// Messages sent while the turn runs, one band marked `Queued` (frame
+    /// K). Never in `App::log`: `Transcript::sync` draws it after the last
+    /// entry.
+    Queued {
+        /// The messages, in the order sent.
+        messages: Vec<String>,
+    },
 }
 
 impl LogEntry {

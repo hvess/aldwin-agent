@@ -40,6 +40,23 @@ contradicts) and the entry says so before it goes.
    in `render_snapshot.rs` and `scene.rs`. The developer's call,
    2026-09-29: another time.
 
+## TUI
+
+10. **A stop leaves an undecided review on screen.** `⌃C` in a review
+    that is not yet decided cancels the turn, and the turn's wait on the
+    decision (`DispatchContext::review`) is dropped with it. But
+    `Review::closes_at_turn_end` keeps a `Round::Open` review open, so it
+    stays with no turn behind it, and an approve there reaches no one.
+    Seen while building frame K: a queue held across that stop stays
+    queued rather than going into the review's field
+    (`a_stop_over_an_open_review_keeps_the_queue_out_of_its_field`), and
+    since no turn follows, it stays queued until `esc` takes it back.
+    Meanwhile a new message is sent ahead of it, and `/clear` or
+    `/resume` leave it on screen (`App::reset_conversation` keeps
+    `queued`). Closing the review on the stop closes these too.
+    Closing it means the review closing on a cancelled turn, as a waiting
+    one does, or an ADR saying why it stays.
+
 ## Review
 
 6. **Frame capture runs only on Linux.** Capture drives foot under sway,

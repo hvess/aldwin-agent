@@ -370,7 +370,8 @@ impl KeyHint {
 /// What the footer opens with after the mark column's glyph.
 enum Status {
     Ready,
-    /// The working line (`ui::working`), and no keys: `esc` always stops.
+    /// The working line (`ui::working`), and no keys: `esc` stops, once any
+    /// queue is back in the field (`App::take_back_queue`).
     Working,
     Waiting,
     /// No status word; the row opens with the keys.

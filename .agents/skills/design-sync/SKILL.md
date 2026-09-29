@@ -15,7 +15,7 @@ source. Re-sync only when you need something that copy doesn't carry.
   `tokens/`, `guidelines/`, `components/`, `ui_kits/`. The token files are
   the authority for values. It is the only project `list_projects` returns.
 - **"Design system tokens discussion"** — `https://claude.ai/design/p/25845063-2993-4020-ae58-4e7defc6bfef`
-  `type: PROJECT_TYPE_PROJECT`. Holds **`Aldwin Agent TUI.dc.html`**, the ten
+  `type: PROJECT_TYPE_PROJECT`. Holds **`Aldwin Agent TUI.dc.html`**, the
   frames every token value is copied from, plus a copy of the design system
   under `Aldwin Design System/` and a bound copy under `_ds/aldwin-b9de8837-…/`.
   The three copies of `tokens/` were byte-identical on 2026-09-23. The

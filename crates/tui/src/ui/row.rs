@@ -126,6 +126,42 @@ impl Row {
             .collect()
     }
 
+    /// Like [`Row::build_indented`] for one span, with `tag` flush right on
+    /// the first row and one cell of `bg` after it, frame K's `Queued`. The
+    /// text wraps short of the tag on every row.
+    pub fn build_tagged(
+        self,
+        glyph: Span<'static>,
+        text: Span<'static>,
+        tag: Span<'static>,
+        ctx: Ctx,
+    ) -> Vec<Line<'static>> {
+        let indent = glyph.content.width();
+        let avail = self.avail(ctx.width).saturating_sub(indent);
+        let tag_w = tag.content.width() + 1;
+        let field = Style::default().bg(self.bg);
+        wrap_line(Line::from(text), avail.saturating_sub(tag_w + 1).max(1))
+            .into_iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let used: usize = line.spans.iter().map(|s| s.content.width()).sum();
+                let mut content = Vec::with_capacity(line.spans.len() + 3);
+                content.push(if i == 0 {
+                    glyph.clone()
+                } else {
+                    Span::styled(" ".repeat(indent), field)
+                });
+                content.extend(line.spans);
+                if i == 0 {
+                    let gap = avail.saturating_sub(used + tag_w);
+                    content.push(Span::styled(" ".repeat(gap), field));
+                    content.push(tag.clone());
+                }
+                self.assemble(content, ctx)
+            })
+            .collect()
+    }
+
     /// One blank filled row.
     pub fn blank(self, ctx: Ctx) -> Line<'static> {
         self.assemble(Vec::new(), ctx)

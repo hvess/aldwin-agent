@@ -79,10 +79,14 @@ impl Transcript {
         }
         let ctx = Ctx::new(theme.palette(), width);
         self.rebuilt = 0;
-        self.blocks.truncate(app.log.len());
+        let queued = (!app.queued.is_empty()).then(|| LogEntry::Queued {
+            messages: app.queued.clone(),
+        });
+        self.blocks
+            .truncate(app.log.len() + usize::from(queued.is_some()));
 
         let mut first = true;
-        for (i, entry) in app.log.iter().enumerate() {
+        for (i, entry) in app.log.iter().chain(&queued).enumerate() {
             let hit =
                 matches!(self.blocks.get(i), Some(b) if b.first == first && b.entry == *entry);
             if !hit {
@@ -321,6 +325,28 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         }
         // A second blank row: `block_rows` already adds one before it.
         LogEntry::TurnBreak => vec![Line::default()],
+        // Frame K: the echo's band, all `label3`, `○` and `Queued` on its
+        // first row only.
+        LogEntry::Queued { messages } => {
+            let row = Row::band(pal.tint, pal.win);
+            let style = Style::default().fg(pal.label3).bg(pal.tint);
+            messages
+                .iter()
+                .flat_map(|m| m.lines())
+                .enumerate()
+                .flat_map(|(i, l)| {
+                    let text = Span::styled(l.to_string(), style);
+                    if i == 0 {
+                        let glyph = Span::styled(format!("{:<MARK_COL$}", "○"), style);
+                        let tag = Span::styled("Queued", style);
+                        row.build_tagged(glyph, text, tag, ctx)
+                    } else {
+                        let indent = Span::styled(" ".repeat(MARK_COL), style);
+                        row.build_indented(vec![indent, text], MARK_COL, ctx)
+                    }
+                })
+                .collect()
+        }
     }
 }
 

@@ -12,6 +12,27 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, messages queue — frame K):** The frame re-synced
+(`docs/design/IMPORT.md`) with frame `K queued`. A message sent while a
+turn runs used to reach core, which discarded it with "A turn is running,
+so that message was not sent". It is now held in `App::queued` and drawn
+after the log's last entry as a `LogEntry::Queued` that never enters
+`App::log`: `Transcript::sync` chains it on. The band is the echo's band,
+every row in `label3`. The first row carries a `○` and `Queued`, flush
+right (`Row::build_tagged`). A turn that finishes with no review on screen
+sends the queue as one turn, a message a line, echoed once
+(`App::send_queue`). A stopped or failed turn puts the queue back into the
+field (`App::take_back_queue`), and so does `esc`, before its next press
+stops the turn: see Decisions. A `/` command is never queued. It goes at
+once as before, and mid-turn it no longer becomes the turn's start or
+restarts the working line's clock, which had made the next `plan` update
+draw a second plan. A `/` command no longer sets `awaiting_turn` at all:
+core takes a message behind a command, so one typed while a command is
+answered is sent rather than queued, and the first message the model
+question held still opens its turn. A stop over a review left open keeps the queue queued
+rather than putting it in the review's field (open-tasks entry 10).
+Snapshot and capture scene `queued`.
+
 **Progress (2026-09-29, the code ink's loose ends):** The review of the
 entry below left questions, each settled. A fenced block's lines take
 `--code` too, still on `tint`; the `markdown` scene's key variables are
@@ -79,7 +100,8 @@ spaces, `Context ━` — describes it as it was before this one.
   the frame).
 - **While a turn works, the footer is the working line** (`ui::working`):
   what Aldwin is doing in a few plain words, then the turn's time in
-  `label3` (`1m 02s`), and no key — `esc` always stops. The running `●`
+  `label3` (`1m 02s`), and no key — `esc` always stops (since "messages
+  queue", once any queue is back in the field). The running `●`
   blinks to an amber `○` every 500ms; a new phrase types in three
   characters a tick, then a highlight (`Palette::highlight`, generated
   from `W2`'s mixes) sweeps it from four cells beyond one end to four
@@ -2357,7 +2379,9 @@ them defects and one a design question answered by the developer directly.
   maintain (`turn_active`, plus a new `awaiting_turn` covering the gap
   between submitting and `TurnStarted` landing, cleared by whatever comes
   back — a turn, or the `Notice`/`HistoryCleared`/`ThemeChanged` a locally
-  handled command answers with). Added on top as a general escape hatch,
+  handled command answers with). (Since "messages queue", 2026-09-29, a
+  `/` command sets no `awaiting_turn`, so there is nothing for its answer
+  to clear.) Added on top as a general escape hatch,
   since the failure class here is "trapped in the session": a second Ctrl+C
   within `DOUBLE_CTRL_C_TICKS` always exits regardless of what the state
   believes, with the first press saying so in the log.
@@ -2414,9 +2438,20 @@ above it, now parted by a padding row.
   in either, and only what Aldwin writes is. The developer's call, 2026-09-29, with frame
   H updated to match: "we won't support rich text in input fields."
 
+- **A message sent while Aldwin works is queued, and nothing queued is
+  sent without the developer.** The developer's calls, 2026-09-29, on frame
+  K. The queue goes when the turn finishes. If a review is on screen, it
+  waits for the approve or discard, and for the turn that the review's
+  comments start. `esc` takes the queue back into the field, ahead of
+  anything typed there, and the next `esc` stops the turn (baseline
+  `esc-takes-the-queue-back-before-it-stops`). A stop, by `esc` or `⌃C`, or
+  a failure puts the queue back the same way. A `/` command is never
+  queued: `/model` and `/connect` act at once, and `/clear` and `/resume`
+  are refused mid-turn, as before.
+
 - **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in aldwin-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 
-- **Input blocked while an approval card is pending.** — Structural friction — the developer cannot queue submissions while an edit awaits approval. Consistent with "Edit is never allowlistable in any configuration" from the parent spec.
+- **Input blocked while an approval card is pending.** — Structural friction — the developer cannot queue submissions while an edit awaits approval. Consistent with "Edit is never allowlistable in any configuration" from the parent spec. *Superseded:* there is no approval card (ADR 0009), and a message sent while a turn runs is queued (the Decision above).
 
 ## Steps
 

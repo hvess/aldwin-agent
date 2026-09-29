@@ -7,7 +7,7 @@
 //! dropped with a note here, never pointed at a different state under the
 //! same name.
 //!
-//! A running turn (`working`, `running`, `sent`) is held open by
+//! A running turn (`working`, `running`, `sent`, `queued`) is held open by
 //! `fake::held`. A review selection (`selecting`, `commented`, `sent`) uses
 //! `Shift ↓` (ADR 0010).
 
@@ -69,6 +69,7 @@ pub const CATALOGUE: &[&str] = &[
     "stopping",
     "answering",
     "thinking",
+    "queued",
 ];
 
 const ROUTER: &str = "src/gateway/router.rs";
@@ -285,6 +286,18 @@ pub fn script(name: &str) -> Result<Script> {
             history: &[],
             files:   vec![(MOD, MOD_RS), (ROUTER, ROUTER_RS)],
             keys:    ask,
+            provider: true,
+        },
+
+        // Frame K: three messages sent while the turn is held, queued.
+        "queued" => Script {
+            replies: vec![
+                fake::said_then_calls("Nothing limits requests yet. Adding a limit for each key.", &[("call-plan", "plan", plan(["done", "running", "pending"]))]),
+                fake::held(""),
+            ],
+            history: &[],
+            files:   vec![],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,\"Also send a Retry-After header when a request is turned away.\",Enter,\"Use 429, not 503.\",Enter,\"And log the key each time it happens.\",Enter",
             provider: true,
         },
 

@@ -64,8 +64,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
 ## Decisions
 
 1. **One screenshot baseline, not two.** `render.snap` serialises every
-   cell's symbol, foreground, background and modifiers for twenty-two
-   scenes at three sizes in both themes — 132 sections — in under a second,
+   cell's symbol, foreground, background and modifiers for twenty-three
+   scenes at three sizes in both themes — 138 sections — in under a second,
    in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The
@@ -336,6 +336,17 @@ moves any scene's snapshot has frames for stage 8 to judge.
   variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-29, frame K)
+
+The frame re-synced with frame `K queued` (aldwin-tui.md, same date), and
+scene `queued` joins both lists. Frame K draws its context bar in a
+spelling stage 4 could not read: the full segment is `var(--fill)`, not a
+100% mix, and no monospace span wraps the bar. `frame_gauge` now reads each
+segment span's colour in either spelling, from the span holding the
+window's first `var(--track)` to the printed percentage. A bar it cannot
+read fails the stage (`a_context_bar_that_cannot_be_read_fails_the_check`).
+Before, such a bar was skipped, and nothing checked it.
 
 ## Progress (2026-09-29, a colour only the frame declares)
 

@@ -22,6 +22,7 @@
 
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::io::Write;
+use std::iter::repeat_n;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -627,49 +628,60 @@ struct FrameGauge {
 }
 
 /// Every context bar the frame draws, one per window. The bar is the only
-/// thing drawn over `--track`, so it starts at the monospace span holding
-/// the window's first `var(--track)`.
-fn frame_gauges(frame: &str) -> Vec<FrameGauge> {
+/// thing drawn over `--track`, so it runs from the segment span holding the
+/// window's first `var(--track)` to its printed percentage.
+///
+/// # Errors
+///
+/// [`Error::Design`] for a bar it cannot read, so no bar goes unchecked.
+fn frame_gauges(frame: &str) -> Result<Vec<FrameGauge>> {
     frame_windows(frame)
         .iter()
-        .filter_map(|window| frame_gauge(window))
+        .filter_map(|window| {
+            let track = window.find("var(--track)")?;
+            Some(frame_gauge(window, track).ok_or_else(|| {
+                Error::Design("the frame draws a context bar the generator cannot read".into())
+            }))
+        })
         .collect()
 }
 
-/// The context bar one window draws, if it draws one.
-fn frame_gauge(window: &str) -> Option<FrameGauge> {
-    let track = window.find("var(--track)")?;
-    let start = window[..track]
-        .rfind("font-family:var(--font-mono)")
-        .unwrap_or(track);
-    let bar = &window[start..];
-    let filled: Vec<f64> = bar
-        .split("color-mix(in oklch, var(--fill) ")
-        .skip(1)
-        .filter_map(|chunk| {
-            let (pct, rest) = chunk.split_once('%')?;
-            rest.trim_start()
-                .starts_with(", var(--track)")
-                .then(|| pct.trim().parse().ok())?
-        })
-        .collect();
-    // Each segment span's style ends in `var(--track)` or
-    // `var(--track))`; its text is the segments it draws.
-    let cells: String = bar
-        .split("var(--track)")
-        .skip(1)
-        .filter_map(|chunk| chunk.split_once("\">")?.1.split('<').next())
-        .collect();
-    let shown = bar
-        .split("</span> ")
-        .find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok())
-        .unwrap_or(0);
-    Some(FrameGauge {
-        empty: cells.chars().count().saturating_sub(filled.len()),
-        filled,
-        shown,
-        cells,
-    })
+/// The context bar holding `track`, the window's first `var(--track)`, or
+/// `None` if a segment or the percentage cannot be read. A full segment is
+/// spelled either `var(--fill)` or a 100% mix; frame K uses the first.
+fn frame_gauge(window: &str, track: usize) -> Option<FrameGauge> {
+    let start = window[..track].rfind("<span style=\"color:")?;
+    let end = track + window[track..].find("%</span>")?;
+    let bar = &window[start..end];
+    let mut gauge = FrameGauge {
+        filled: Vec::new(),
+        empty: 0,
+        shown: bar.rsplit(' ').next()?.trim().parse().ok()?,
+        cells: String::new(),
+    };
+    // A loop, not a chain: three outputs, and `?` ends the parse on a
+    // colour it cannot read.
+    for segment in bar.split("style=\"color:").skip(1) {
+        let (color, rest) = segment.split_once("\">")?;
+        let text = rest.split('<').next().unwrap_or("");
+        let n = text.chars().count();
+        match color {
+            "var(--track)" => gauge.empty += n,
+            "var(--fill)" => gauge.filled.extend(repeat_n(100.0, n)),
+            mix => {
+                let pct: f64 = mix
+                    .strip_prefix("color-mix(in oklch, var(--fill) ")?
+                    .split_once('%')?
+                    .0
+                    .trim()
+                    .parse()
+                    .ok()?;
+                gauge.filled.extend(repeat_n(pct, n));
+            }
+        }
+        gauge.cells.push_str(text);
+    }
+    Some(gauge)
 }
 
 /// Checks every context bar in the frame against [`gauge_mix`] for the
@@ -677,7 +689,7 @@ fn frame_gauge(window: &str) -> Option<FrameGauge> {
 /// with; a formula drifted from `ContextBar.jsx` would otherwise generate
 /// cleanly.
 fn check_gauge_against_frame(frame: &str) -> Result<char> {
-    let gauges = frame_gauges(frame);
+    let gauges = frame_gauges(frame)?;
     let Some(cell) = gauges.first().and_then(|g| g.cells.chars().next()) else {
         return Err(Error::Design("the frame draws no context bar".into()));
     };
@@ -1345,7 +1357,7 @@ mod tests {
     #[test]
     fn the_gauge_rule_reproduces_every_bar_in_the_frame() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
-        let gauges = frame_gauges(&frame);
+        let gauges = frame_gauges(&frame).expect("every bar reads");
         let drawn = |filled: &[f64], empty: usize, shown: u8| {
             gauges
                 .iter()
@@ -1361,6 +1373,15 @@ mod tests {
         assert_eq!(gauge_mix(4, 0), Some(55.0));
         assert_eq!(gauge_mix(1, 0), Some(100.0));
         assert_eq!(gauge_mix(0, 0), None);
+    }
+
+    /// Regression: a bar the parser could not read was left out of the
+    /// check rather than failing it.
+    #[test]
+    fn a_context_bar_that_cannot_be_read_fails_the_check() {
+        let bar = "<div data-screen-label=\"x\"><span style=\"color:color-mix(in oklch, var(--fill) most%, var(--track))\">█</span> 5%</span></div>";
+        assert!(frame_gauges(bar).is_err());
+        assert!(check_gauge_against_frame(bar).is_err());
     }
 
     #[test]

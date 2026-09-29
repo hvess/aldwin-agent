@@ -31,11 +31,11 @@ const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/ren
 /// and maximized (catches sprawl rather than clipping).
 const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
-/// Frames A–J of `Aldwin Agent TUI.dc.html`, with `sent` and `asked` (review
+/// Frames A–K of `Aldwin Agent TUI.dc.html`, with `sent` and `asked` (review
 /// states the design leaves to the product) beside frame I so the review
 /// scenes stay together, then the other states the design leaves to the
 /// product.
-const SCENES: [&str; 22] = [
+const SCENES: [&str; 23] = [
     "launch",              // A
     "working",             // B
     "details",             // C
@@ -48,6 +48,7 @@ const SCENES: [&str; 22] = [
     "sent",                // the comments with the agent: the review waits, working
     "asked",               // the agent asks while the review waits: the question in its band
     "saved",               // J
+    "queued",              // K
     "markdown",            // a table, a fence, a list and a quote — ADR 0002
     "failure",             // ADR 0009 §5: a sentence, no red
     "long",                // an overflowing transcript
@@ -515,6 +516,30 @@ fn scene(name: &str, app: &mut App) {
             ]));
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
             at_work(app, 62, thought);
+            app.status_mut().context_used = Some(380_000);
+        }
+        "queued" => {
+            ask(app);
+            app.seed(LogEntry::AssistantText {
+                text: "Nothing limits requests yet. Adding a limit for each key.".into(),
+            });
+            app.seed(plan([
+                StepState::Done,
+                StepState::Running,
+                StepState::Pending,
+            ]));
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            at_work(app, 62, thought);
+            for line in [
+                "Also send a Retry-After header when a request is turned away.",
+                "Use 429, not 503.",
+                "And log the key each time it happens.",
+            ] {
+                for c in line.chars() {
+                    press(app, KeyCode::Char(c), KeyModifiers::NONE);
+                }
+                press(app, KeyCode::Enter, KeyModifiers::NONE);
+            }
             app.status_mut().context_used = Some(380_000);
         }
         "details" => {

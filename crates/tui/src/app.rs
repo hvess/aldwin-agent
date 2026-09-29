@@ -224,6 +224,10 @@ pub struct App {
     pub(crate) render_width: u16,
     /// What is typed into the field.
     pub(crate) draft: Draft,
+    /// Messages sent while a turn runs, in order (frame K): sent as one
+    /// turn when it finishes, or back into the field on `esc`, a stop or a
+    /// failure with no review on screen. Never a `/` command.
+    pub(crate) queued: Vec<String>,
     /// The field's text width, cached by its draw like `render_width`.
     pub(crate) composer_width: u16,
     /// First visual row of the draft the field shows.
@@ -232,8 +236,9 @@ pub struct App {
     pub(crate) should_quit: bool,
     /// From `TurnStarted` until the matching `TurnEnded`.
     pub(crate) turn_active: bool,
-    /// From a submitted message until its turn starts, or it is answered
-    /// with no turn (a locally handled slash command).
+    /// From a submitted message until its turn starts. Never set by a `/`
+    /// command: the interceptor answers it with no turn, and core takes a
+    /// message after it, so it must not queue one.
     pub(crate) awaiting_turn: bool,
     /// A stop was requested and the turn has not ended; another `esc` does
     /// nothing.
@@ -282,6 +287,7 @@ impl App {
             scroll: ScrollState::default(),
             render_width: 80,
             draft: Draft::default(),
+            queued: Vec::new(),
             composer_width: 74,
             composer_top: 0,
             status: StatusInfo {
@@ -734,6 +740,7 @@ impl App {
                 self.push(LogEntry::retry(&info));
             }
             Event::TurnEnded { reason, .. } => {
+                let finished = matches!(reason, TurnEndReason::EndTurn);
                 self.pending_calls.clear();
                 self.turn_active = false;
                 self.awaiting_turn = false;
@@ -747,11 +754,18 @@ impl App {
                 }
                 if self
                     .review()
-                    .is_some_and(|r| r.closes_at_turn_end(matches!(reason, TurnEndReason::EndTurn)))
+                    .is_some_and(|r| r.closes_at_turn_end(finished))
                 {
                     self.mode = Mode::Conversation;
                 }
                 self.push_turn_end(reason);
+                // Never into a review's field, which shares `draft`: a
+                // review left open by a stop keeps the queue queued.
+                if finished {
+                    self.send_queue();
+                } else if self.review().is_none() {
+                    self.take_back_queue();
+                }
             }
             // Review comments, echoed like a typed message; the only
             // message the TUI did not send.
@@ -817,7 +831,6 @@ impl App {
                 self.push(LogEntry::Review { outcome });
             }
             Event::Notice { message } => {
-                self.awaiting_turn = false;
                 self.push(LogEntry::Notice { message });
             }
             Event::HistoryCleared => self.reset_conversation(),
@@ -829,7 +842,6 @@ impl App {
                 self.sync_transcript();
             }
             Event::ThemeChanged { theme } => {
-                self.awaiting_turn = false;
                 self.theme = Theme::from_config(Some(&theme));
             }
             Event::ModelChanged {
@@ -837,7 +849,6 @@ impl App {
                 model,
                 context_window,
             } => {
-                self.awaiting_turn = false;
                 self.status.context_window =
                     context_window.or_else(|| self.context_window_for(provider.as_deref(), &model));
                 self.status.model_name = model;
@@ -876,10 +887,11 @@ impl App {
     fn handle_conversation_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.interrupt(),
-            // Answering in words: back to the options, draft kept. Otherwise
-            // stop while busy; nothing when idle.
+            // Answering in words: back to the options, draft kept. Then the
+            // queue back into the field; then stop while busy; nothing when
+            // idle.
             (KeyCode::Esc, _) => {
-                if !self.back_to_options() && self.busy() {
+                if !self.back_to_options() && !self.take_back_queue() && self.busy() {
                     self.stop("Stopping.");
                 }
             }
@@ -1349,6 +1361,12 @@ impl App {
             return;
         }
         let command = text.trim();
+        if self.busy() && !command.starts_with('/') {
+            self.queued.push(text);
+            let total = self.total_lines();
+            self.scroll.on_content_grew(total);
+            return;
+        }
         // No model yet: hold the first message through the provider and
         // model questions, then send it.
         if self.status.model_name.is_empty()
@@ -1375,16 +1393,47 @@ impl App {
         self.submit_text(text);
     }
 
-    /// Logs and submits `text`; every submission ends here.
+    /// Logs and submits `text`; every submission ends here. Mid-turn only a
+    /// `/` command arrives, and the running turn keeps its start and clock.
     fn submit_text(&mut self, text: String) {
-        if !text.trim_start().starts_with('/') {
-            let first = text.lines().next().unwrap_or("").trim();
-            self.request = Some(first.trim_end_matches(['.', '!']).to_string());
+        if self.busy() {
+            self.push(LogEntry::UserMessage { text: text.clone() });
+        } else {
+            if !text.trim_start().starts_with('/') {
+                let first = text.lines().next().unwrap_or("").trim();
+                self.request = Some(first.trim_end_matches(['.', '!']).to_string());
+                self.activity = Activity::new(self.tick);
+                self.awaiting_turn = true;
+            }
+            self.open_turn(text.clone());
         }
-        self.activity = Activity::new(self.tick);
-        self.awaiting_turn = true;
-        self.open_turn(text.clone());
         self.outbox.push(Command::Submit { text });
+    }
+
+    /// Sends the queue as one turn, a message a line, once nothing holds it:
+    /// no turn runs and no review is on screen (a review's comments start a
+    /// follow-up turn first).
+    fn send_queue(&mut self) {
+        if self.queued.is_empty() || self.busy() || self.review().is_some() {
+            return;
+        }
+        let text = std::mem::take(&mut self.queued).join("\n");
+        self.submit_text(text);
+    }
+
+    /// Moves the queue into the field, ahead of what is typed there. False
+    /// when nothing was queued.
+    fn take_back_queue(&mut self) -> bool {
+        if self.queued.is_empty() {
+            return false;
+        }
+        let mut text = std::mem::take(&mut self.queued).join("\n");
+        if !self.draft.is_empty() {
+            text.push('\n');
+            text.push_str(&self.draft.take());
+        }
+        self.draft.set(text);
+        true
     }
 
     /// Sends `Cancel` once per turn and logs `notice` each time.
@@ -1715,6 +1764,27 @@ pub(crate) mod tests {
                     text: "add rate limiting".into()
                 }
             ]
+        );
+        assert!(
+            matches!(&a.log[a.turn_start], LogEntry::UserMessage { text } if text == "add rate limiting"),
+            "the held message opens its turn"
+        );
+        assert_eq!(a.request.as_deref(), Some("add rate limiting"));
+    }
+
+    /// Core takes a message behind a command, so only a message's turn
+    /// holds the next one back.
+    #[test]
+    fn a_message_after_a_command_is_sent_not_queued() {
+        let mut a = app();
+        a.submit_text("/theme".into());
+        send_line(&mut a, "add a limit");
+        assert!(a.queued.is_empty());
+        assert_eq!(
+            a.outbox.last(),
+            Some(&Command::Submit {
+                text: "add a limit".into()
+            })
         );
     }
 
@@ -2623,6 +2693,137 @@ pub(crate) mod tests {
         assert!(!a.should_quit);
         a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(a.should_quit);
+    }
+
+    fn send_line(a: &mut App, text: &str) {
+        type_str(a, text);
+        a.handle_key(press(KeyCode::Enter));
+    }
+
+    fn end_turn(a: &mut App, id: u64, reason: TurnEndReason) {
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(id),
+            reason,
+        });
+    }
+
+    #[test]
+    fn messages_sent_mid_turn_go_as_one_turn_when_it_finishes() {
+        let mut a = app();
+        send_line(&mut a, "add a limit");
+        a.outbox.clear();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        send_line(&mut a, "also a header");
+        send_line(&mut a, "use 429");
+        assert!(a.outbox.is_empty(), "nothing reaches core mid-turn");
+        assert_eq!(a.queued, ["also a header", "use 429"]);
+        let echoes = |a: &App| {
+            a.log
+                .iter()
+                .filter(|e| matches!(e, LogEntry::UserMessage { .. }))
+                .count()
+        };
+        assert_eq!(echoes(&a), 1, "the queue is not echoed yet");
+
+        end_turn(&mut a, 1, TurnEndReason::EndTurn);
+        let text = "also a header\nuse 429".to_string();
+        assert_eq!(a.outbox, vec![Command::Submit { text: text.clone() }]);
+        assert!(a.queued.is_empty() && a.busy());
+        assert_eq!(echoes(&a), 2, "one echo for the whole queue");
+        assert!(matches!(&a.log[a.turn_start], LogEntry::UserMessage { text: t } if *t == text));
+    }
+
+    #[test]
+    fn esc_takes_the_queue_back_before_it_stops() {
+        let mut a = app();
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        send_line(&mut a, "also a header");
+        send_line(&mut a, "use 429");
+        type_str(&mut a, "and log");
+        a.handle_key(press(KeyCode::Esc));
+        assert_eq!(a.draft.text(), "also a header\nuse 429\nand log");
+        assert_eq!(a.draft.cursor(), a.draft.text().chars().count());
+        assert!(a.queued.is_empty() && a.outbox.is_empty());
+        a.handle_key(press(KeyCode::Esc));
+        assert_eq!(a.outbox, vec![Command::Cancel]);
+    }
+
+    #[test]
+    fn a_stopped_or_failed_turn_puts_the_queue_back_in_the_field() {
+        for reason in [
+            TurnEndReason::Cancelled,
+            TurnEndReason::Error(Failure::other("boom")),
+        ] {
+            let mut a = app();
+            a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            send_line(&mut a, "use 429");
+            a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+            end_turn(&mut a, 1, reason);
+            assert_eq!(a.outbox, vec![Command::Cancel], "nothing is sent");
+            assert_eq!(a.draft.text(), "use 429");
+            assert!(a.queued.is_empty());
+        }
+    }
+
+    /// Regression: a stop over an undecided review put the queue in the
+    /// review's "Ask for a change" field.
+    #[test]
+    fn a_stop_over_an_open_review_keeps_the_queue_out_of_its_field() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        a.queued.push("use 429".into());
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        end_turn(&mut a, 1, TurnEndReason::Cancelled);
+        assert!(a.draft.is_empty());
+        assert_eq!(a.queued, ["use 429"]);
+    }
+
+    #[test]
+    fn the_queue_waits_for_the_turn_a_reviews_comments_start() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.queued.push("use 429".into());
+        end_turn(&mut a, 1, TurnEndReason::EndTurn);
+        assert!(a.outbox.is_empty(), "the review's comments go first");
+        a.apply_event(Event::FollowUp {
+            turn_id: TurnId(2),
+            text: "On f.rs, line 1:\nrename it".into(),
+        });
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+        end_turn(&mut a, 2, TurnEndReason::EndTurn);
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "use 429".into()
+            }]
+        );
+    }
+
+    /// Regression: a command sent mid-turn became the turn's start, so the
+    /// next `plan` update drew a second plan, and it restarted the clock.
+    #[test]
+    fn a_command_mid_turn_is_sent_at_once_and_the_turn_keeps_its_start() {
+        let mut a = app();
+        send_line(&mut a, "add a limit");
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.outbox.clear();
+        a.advance(50);
+        let start = a.turn_start;
+        a.submit_text("/theme".into());
+        assert_eq!(
+            a.outbox,
+            vec![Command::Submit {
+                text: "/theme".into()
+            }]
+        );
+        assert!(a.queued.is_empty());
+        assert_eq!(a.turn_start, start);
+        assert_eq!(
+            a.activity.line(a.tick).seconds,
+            5,
+            "the turn's clock runs on"
+        );
     }
 
     #[test]

@@ -1,5 +1,26 @@
 # Design import — provenance
 
+## Re-sync — 2026-09-29, messages queue
+
+`Aldwin Agent TUI.dc.html` was fetched again from the discussion project
+and replaces the local copy verbatim (94 KB). The design system's README
+was fetched and is unchanged.
+
+The frame gained one window, **frame `K queued`**, after frame F: "Messages
+sent while Aldwin works share one echo and go as one turn when it
+finishes, the way you would have typed them together." It is frame B's
+turn, with the messages on one `--tint` band under the plan (the echo's
+margin, `0 3ch`), every row `label3`. The first row has a `○` in the mark
+column and `Queued` flush right, followed by one empty cell. The other rows
+have neither.
+
+Frame K spells its full context-bar segment `var(--fill)`, not a 100% mix,
+and has no monospace span around the bar. The generator's `frame_gauge`
+reads both spellings. `tokens.rs` regenerates unchanged.
+
+The frame's "esc always stops" does not hold once a queue exists (baseline
+`esc-takes-the-queue-back-before-it-stops`).
+
 ## Re-sync — 2026-09-29, code has its own ink
 
 `Aldwin Agent TUI.dc.html` was fetched again from the discussion project

@@ -234,6 +234,30 @@
     </div>
   </div>
 
+
+  <!-- ===== K queued ===== -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:baseline;gap:12px;max-width:var(--fw)"><span style="font:500 12px/20px var(--font-mono);color:var(--onfill);background:var(--canvas-badge);padding:2px 8px;border-radius:5px">K</span><span style="font-size:16px;font-weight:600">Queued</span><span style="font-size:14px;color:var(--canvas-caption)">Messages sent while Aldwin works share one echo and go as one turn when it finishes, the way you would have typed them together.</span></div>
+    <div id="k" data-screen-label="K queued" style="width:var(--fw);background:var(--win);border-radius:10px;overflow:hidden;box-shadow:var(--shadow-window)">
+      <div style="display:flex;align-items:center;height:38px;padding:0 14px;gap:8px;background:var(--chrome)"><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="flex:1;text-align:center;font-size:12px;color:var(--label2);padding-right:52px">gateway — aldwin</span></div>
+      <div style="padding:24px 0;min-height:672px;box-sizing:border-box;display:flex;flex-direction:column;font:400 14px/24px var(--font-mono);color:var(--label)">
+        <div style="white-space:pre;display:flex;margin:0 3ch;background:var(--tint)"><span style="width:2ch;flex:none;color:var(--label3)">›</span><span style="flex:1;min-width:0;color:var(--label2)">Add rate limiting to the gateway. 100 requests a minute per API key.</span></div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;padding:0 5ch">Nothing limits requests yet. Adding a limit for each key.</div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--accent)">✓</span><span style="color:var(--label2)">Count requests per key</span></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--amber)">●</span><span>Turn away requests over the limit</span></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)">○</span><span style="color:var(--label2)">Check that it works</span></div>
+        <div style="height:24px"></div>
+        <div style="margin:0 3ch;background:var(--tint);display:flex;flex-direction:column"><div style="white-space:pre;display:flex"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)">○</span><span style="flex:1;min-width:0;color:var(--label3)">Also send a Retry-After header when a request is turned away.</span><span style="color:var(--label3)">Queued</span><span style="width:1ch;flex:none"></span></div><div style="white-space:pre;display:flex"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)"></span><span style="flex:1;min-width:0;color:var(--label3)">Use 429, not 503.</span><span style="color:var(--label3)"></span><span style="width:1ch;flex:none"></span></div><div style="white-space:pre;display:flex"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)"></span><span style="flex:1;min-width:0;color:var(--label3)">And log the key each time it happens.</span><span style="color:var(--label3)"></span><span style="width:1ch;flex:none"></span></div></div>
+        <div style="flex:1"></div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;margin:0 3ch;background:var(--field)"><span style="width:2ch;flex:none;color:var(--accent)">›</span><span style="flex:1;min-width:0"><span style="display:inline-block;width:2px;height:18px;vertical-align:-4px;margin-right:-2px;background:var(--accent);animation:caret var(--caret-period) steps(1) infinite"></span></span></div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch;color:var(--label2)"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--amber)">●</span><span style="flex:1;min-width:0"><span style="color:var(--label)">Writing the limiter in <span style="color:var(--code)">limit.rs</span></span><span style="color:var(--label3)">  1m 02s</span></span><span style="margin-left:5ch"><span style="color:color-mix(in oklch, var(--fill) 55%, var(--track))">█</span><span style="color:color-mix(in oklch, var(--fill) 70%, var(--track))">█</span><span style="color:color-mix(in oklch, var(--fill) 85%, var(--track))">█</span><span style="color:var(--fill)">█</span><span style="color:var(--track)">██████</span> 38%</span></div>
+      </div>
+    </div>
+  </div>
   </div>
 </section>
 

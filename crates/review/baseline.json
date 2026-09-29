@@ -104,6 +104,13 @@
       "design_also_says": "README: “Every token value here is copied from that page”; `tokens/colors.css` declares no `--code`, and the README's colour section names no code ink.",
       "app_follows": "The frame: the generator reads `--code` from its script into `Palette::code` (`crates/review/src/tokens.rs`, `frame_roles`). Retired when `tokens/colors.css` declares `--code`, which the generator then prefers.",
       "glyphs": ""
+    },
+    {
+      "id": "esc-takes-the-queue-back-before-it-stops",
+      "design_says": "The conversation section: “While working it says what Aldwin is doing and how long it has been at it; esc always stops, so no key is named.”",
+      "design_also_says": "Frame `K queued` draws messages sent while Aldwin works as one band marked `Queued`, and names no way to take one back before it goes.",
+      "app_follows": "The developer's call of 2026-09-29: while messages are queued, `esc` moves them back into the field, ahead of anything typed there, and the next `esc` stops the turn; a stopped or failed turn puts the queue back too, so nothing is sent without the developer. Still no key is named. Retired when the design says what `esc` does with a queue.",
+      "glyphs": ""
     }
   ]
 }

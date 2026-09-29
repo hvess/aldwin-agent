@@ -1,6 +1,6 @@
 # ADR 0007 — Reach is a workspace, and every tool honours it
 
-**Status:** accepted, 2026-09-21. Argument containment (§2) superseded by 0011, which makes the rest the whole boundary.
+**Status:** accepted, 2026-09-21. Argument containment (§2) superseded by 0011, which makes the rest the whole boundary. Amended by 0017: `/reload-config` is `/reload`, and the model's `reload` applies a widening root only from what the review wrote.
 **Amends:** ADR 0004 §4 (the no-enforcement fallback) and §5 (the project-root
 boundary)
 **Affects:** `aldwin-tools`, `aldwin-config`, `aldwin-cli`

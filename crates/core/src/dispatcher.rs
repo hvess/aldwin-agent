@@ -147,6 +147,12 @@ impl DispatchContext {
         let _ = self.events.send(Event::ReviewClosed { outcome }).await;
     }
 
+    /// Tells the developer something a tool did that they must hear from
+    /// Aldwin, not only from the model.
+    pub async fn notice(&self, message: String) {
+        let _ = self.events.send(Event::Notice { message }).await;
+    }
+
     /// Announces the plan as it now stands.
     pub async fn plan_updated(&self, steps: Vec<PlanStep>) {
         let _ = self

@@ -245,6 +245,13 @@ depend on tools the machine may lack, and a missing `ssh-keygen` would
 leave no check at all. It lives in aldwin-cli rather than a leaf crate like
 aldwin-login: one module with one caller, and nothing else needs it.
 
+**Post-archive addition (2026-09-29, `/reload`, ADR 0017):**
+`/reload-config` is `/reload`, and it is in the `/` menu, after `/theme` —
+the developer's call. The old name is still answered, since settings files
+written before the rename print it in their headers. `apply_roots` goes
+through `Workspace::take_roots`, as the model's `reload` tool does; the
+developer's reload widens, the model's only from what the review wrote.
+
 ## Design
 
 - **Invocation:** Zero-arg binary. `aldwin` starts a session rooted at the current working directory. No runtime flags, subcommands, or environment overrides in V0 — everything driven by config files. (Since ADR 0013, 2026-09-27: started under the name `git`, the binary is the git shim instead, and a session puts that shim first on its own `PATH`.)
@@ -257,8 +264,8 @@ aldwin-login: one module with one caller, and nothing else needs it.
   6. Launch TUI (aldwin-tui) with the core's event receiver and command sender.
   7. Block on TUI exit; drop channels; wait for core to drain cleanly.
 - **Additional Context:** Opaque string handed to aldwin-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim. *Since 2026-09-28* it ends with the workspace's skills — each `SKILL.md` under `.agents/skills/` or `.claude/skills/`, by name and description, listed for the model to read when a task calls for one (`context::skills`); one linked from outside every workspace root is left out, since `read` refuses it. *Since 2026-09-29* it also states the date the session started, after the working directory (`context::build`).
-- **Slash Commands:** Input that begins with `/` is intercepted at the CLI layer before the Submit command reaches the core. The CLI maintains a dispatch table of known slash commands. Unknown slash commands are rejected with an error message in the TUI; they do not reach the core. Known V0 commands: /reload-config.
-- **Reload Config:** `/reload-config` calls config.reload_all(). On success, re-initializes the PermissionsEngine from the new snapshot and notifies the TUI. On failure, previous snapshot is retained and the failing file path is surfaced to the TUI verbatim.
+- **Slash Commands:** Input that begins with `/` is intercepted at the CLI layer before the Submit command reaches the core. The CLI maintains a dispatch table of known slash commands. Unknown slash commands are rejected with an error message in the TUI; they do not reach the core. Known V0 commands: /reload-config (`/reload` since 2026-09-29; the rest are in the post-archive entries above).
+- **Reload Config:** `/reload-config` (`/reload` since 2026-09-29, ADR 0017) calls config.reload_all(). On success, re-initializes the PermissionsEngine from the new snapshot and notifies the TUI. On failure, previous snapshot is retained and the failing file path is surfaced to the TUI verbatim.
 
 ## Decisions
 

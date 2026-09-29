@@ -31,7 +31,7 @@ pub const PERMISSIONS: &str = "\
 # now. Aldwin says so once at startup if it finds one; delete them at your
 # leisure.
 #
-# If you edit this while Aldwin is running, /reload-config picks the change up.
+# If you edit this while Aldwin is running, /reload picks the change up.
 version: 2
 ";
 
@@ -62,7 +62,7 @@ pub const CONNECTIONS_HEADER: &str = "\
 # The tokens here are secrets: they act as you at that provider until they
 # expire or you revoke them there. Keep this file to yourself. Deleting an
 # account's entry disconnects it from the next start, or after
-# /reload-config and picking the model again. Aldwin rewrites an entry
+# /reload and picking the model again. Aldwin rewrites an entry
 # whenever the provider rotates its token, and removes it when the provider
 # revokes it.
 ";

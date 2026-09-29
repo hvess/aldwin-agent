@@ -81,7 +81,8 @@ mod tests {
     use super::*;
     use crate::registry::{Tool, ToolDescriptor};
     use crate::Workspace;
-    use aldwin_config::{McpServer, McpTransport};
+    use aldwin_config::{Config, McpServer, McpTransport};
+    use tempfile::tempdir;
 
     fn fake_server(name: &str) -> McpServer {
         let script = concat!(
@@ -109,7 +110,10 @@ mod tests {
     #[tokio::test]
     async fn namespaces_under_server_name_when_it_collides_with_a_built_in() {
         let bridge = Arc::new(McpBridge::new(vec![fake_server("fake")]));
+        let (project, global) = (tempdir().unwrap(), tempdir().unwrap());
+        let config = Config::open_at(project.path(), global.path()).unwrap();
         let mut registry = crate::builtin_registry(
+            config,
             Workspace::new("."),
             std::sync::Arc::new(crate::Staging::new(Workspace::new("."))),
         );

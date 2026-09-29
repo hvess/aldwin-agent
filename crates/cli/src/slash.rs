@@ -82,10 +82,10 @@ const COMMANDS: [SlashCommand; 10] = [
         in_menu: true,
     },
     SlashCommand {
-        name: "reload-config",
+        name: "reload",
         argument: "",
         summary: "Read the settings files again",
-        in_menu: false,
+        in_menu: true,
     },
     SlashCommand {
         name: "update",
@@ -159,7 +159,7 @@ pub struct Session {
     /// Also used when a `/connect` completes, to move the session onto the
     /// account.
     switch: Arc<dyn ModelSwitch>,
-    /// Run after a successful `/reload-config` for state outside `Config`
+    /// Run after a successful `/reload` for state outside `Config`
     /// (the workspace roots, ADR 0007). Returns a notice, or `None`.
     after_reload: Option<AfterReload>,
     /// The `/connect` waiting for approval. A new `/connect` aborts it (two
@@ -255,8 +255,10 @@ async fn intercept(
                 .await;
             Intercepted::Handled
         }
-        ("reload-config", None) => {
-            handle_reload_config(config, session, events).await;
+        // `/reload-config` is the old name, still printed in the headers of
+        // settings files written before the rename.
+        ("reload", None) | ("reload-config", None) => {
+            handle_reload(config, session, events).await;
             Intercepted::Handled
         }
         ("update", None) => {
@@ -561,7 +563,7 @@ fn minutes(lifetime: std::time::Duration) -> String {
 
 /// The notice for an approved, stored account. The session moves onto it
 /// only if it runs that provider's model exactly as `provider.yaml` states
-/// it, so a pending `/reload-config` edit or a `/model` during the wait is
+/// it, so a pending `/reload` edit or a `/model` during the wait is
 /// never overridden.
 fn moved_onto(account: Account, config: &Config, session: &Session) -> String {
     let name = account.name();
@@ -680,7 +682,7 @@ async fn handle_model(
     let now = qualified(&next, identify(&next));
 
     // "Already on" must hold for the session, not only the file: a
-    // `/reload-config` can change the file without touching the client. When
+    // `/reload` can change the file without touching the client. When
     // they disagree, fall through and swap.
     if current.as_ref() == Some(&next) && now == session.model {
         // Points at the list: this is usually reached by naming the current
@@ -835,7 +837,7 @@ fn describe(
     out
 }
 
-async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc::Sender<Event>) {
+async fn handle_reload(config: &Config, session: &Session, events: &mpsc::Sender<Event>) {
     match config.reload_all() {
         Ok(()) => {
             let _ = events
@@ -850,11 +852,7 @@ async fn handle_reload_config(config: &Config, session: &Session, events: &mpsc:
             }
         }
         Err(failures) => {
-            let detail = failures
-                .iter()
-                .map(|f| format!("{}: {}", f.path.display(), f.error))
-                .collect::<Vec<_>>()
-                .join("; ");
+            let detail = aldwin_config::ReloadFailure::describe(&failures);
             let _ = events
                 .send(Event::Notice {
                     message: format!(
@@ -1356,8 +1354,8 @@ mod tests {
         let menu: Vec<String> = menu().into_iter().map(|c| c.name).collect();
         assert_eq!(
             menu,
-            ["resume", "model", "connect", "quit", "exit", "clear", "theme"],
-            "the developer's seven, in order"
+            ["resume", "model", "connect", "quit", "exit", "clear", "theme", "reload"],
+            "the developer's eight, in order"
         );
         let help = help_text();
         for command in COMMANDS {
@@ -1430,14 +1428,7 @@ mod tests {
         match rx.recv().await {
             Some(Event::Notice { message }) => {
                 for command in [
-                    "/help",
-                    "/clear",
-                    "/quit",
-                    "/exit",
-                    "/model",
-                    "/reload-config",
-                    "/theme",
-                    "/update",
+                    "/help", "/clear", "/quit", "/exit", "/model", "/reload", "/theme", "/update",
                 ] {
                     assert!(
                         message.contains(command),
@@ -1508,11 +1499,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_config_success_emits_a_notice() {
+    async fn reload_success_emits_a_notice() {
         let (_project, _global, cfg) = config();
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit {
-            text: "/reload-config".into(),
+            text: "/reload".into(),
         };
         let result = intercept(cmd, &cfg, &mut session(), None, &tx).await;
         assert!(matches!(result, Intercepted::Handled));
@@ -1520,8 +1511,20 @@ mod tests {
         assert!(rx.try_recv().is_err(), "nothing else to say");
     }
 
+    /// Settings files written before the rename still name the old command.
     #[tokio::test]
-    async fn reload_config_failure_surfaces_the_failing_path_verbatim() {
+    async fn the_old_name_still_reloads() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+        let cmd = Command::Submit {
+            text: "/reload-config".into(),
+        };
+        intercept(cmd, &cfg, &mut session(), None, &tx).await;
+        assert_eq!(notice(&mut rx).await, "Settings reloaded.");
+    }
+
+    #[tokio::test]
+    async fn reload_failure_surfaces_the_failing_path_verbatim() {
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let config = Config::open_at(project.path(), global.path()).unwrap();
@@ -1532,7 +1535,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(8);
         let cmd = Command::Submit {
-            text: "/reload-config".into(),
+            text: "/reload".into(),
         };
         intercept(cmd, &config, &mut session(), None, &tx).await;
 
@@ -2291,7 +2294,7 @@ mod tests {
         );
     }
 
-    /// `/reload-config` can change the file without rebuilding the client;
+    /// `/reload` can change the file without rebuilding the client;
     /// "already on" must then not be reported.
     #[tokio::test]
     async fn what_the_file_already_says_is_still_a_swap_when_the_session_is_elsewhere() {

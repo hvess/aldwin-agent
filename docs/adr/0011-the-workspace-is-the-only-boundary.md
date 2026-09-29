@@ -1,7 +1,8 @@
 # 0011 — The workspace is the only boundary
 
 **Status:** accepted, 2026-09-24. Superseded in part by 0014 (§1 for MCP
-servers: they get no workspace root).
+servers: they get no workspace root). Amended by 0017 (who may apply
+`roots:` while Aldwin runs).
 **Supersedes:** ADR 0008 §6 (declare reads as reads); ADR 0009 §1 (a
 `run` declares a class and a read is held to it), §2 (a deny is a lock) and §3 (an unenforceable read runs
 unconfined); ADR 0004 §1 (argv only, never a shell) and §7 (a deny is a

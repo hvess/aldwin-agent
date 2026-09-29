@@ -31,6 +31,13 @@ struct Inner {
     /// Review comments not yet reported resolved; the Saved row shows how
     /// many the approve closed.
     pending_comments: usize,
+    /// What an approve last wrote to each path, until the next reload
+    /// forgets it: `reload` takes new roots only from a `permissions.yaml`
+    /// the review wrote and no reload has applied since, so a text the
+    /// developer has moved on from cannot be restored and trusted again.
+    /// Every path, since staging does not know which file that is; it is a
+    /// record of writes, not an approval any later edit could reuse.
+    written: BTreeMap<PathBuf, String>,
 }
 
 /// The current turn's changeset, shared by every tool and the dispatcher.
@@ -175,11 +182,26 @@ impl Staging {
                 }
             }
             match tokio::fs::write(&resolved, &staged.after).await {
-                Ok(()) => written.files.push(staged.rel),
+                Ok(()) => {
+                    self.lock().written.insert(resolved, staged.after);
+                    written.files.push(staged.rel);
+                }
                 Err(e) => written.skipped.push((staged.rel, e.to_string())),
             }
         }
         written
+    }
+
+    /// What the last approve wrote to `resolved`, if an approve has written
+    /// it this session.
+    pub(crate) fn approved(&self, resolved: &Path) -> Option<String> {
+        self.lock().written.get(resolved).cloned()
+    }
+
+    /// Forgets what approves wrote, once a reload has applied the settings
+    /// (ADR 0017 §3).
+    pub fn forget_approved(&self) {
+        self.lock().written.clear();
     }
 
     /// Drops everything staged. Returns the paths that were.
@@ -303,6 +325,7 @@ mod tests {
         assert_eq!(written.comments_resolved, 2);
         assert!(written.skipped.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(staging.approved(&path).as_deref(), Some("new\n"));
     }
 
     #[tokio::test]
@@ -321,6 +344,11 @@ mod tests {
         assert!(written.files.is_empty());
         assert_eq!(written.skipped[0].0, "f.rs");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "someone else\n");
+        assert_eq!(
+            staging.approved(&path),
+            None,
+            "a skipped file was not approved"
+        );
     }
 
     #[tokio::test]

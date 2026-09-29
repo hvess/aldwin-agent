@@ -5,11 +5,19 @@ Per-domain YAML at project and global scope; typed accessors; refuse-to-start on
 **Status:** archived — implemented, tested, audited
 **Scope:** aldwin-config crate only. On-disk file layout, per-domain typed accessors, first-launch init, in-session reload. Excludes the runtime permission engine, the agent loop, and provider HTTP work.
 **Owner:** Maximilian
-**Last Updated:** 2026-05-16
+**Last Updated:** 2026-09-29
 
 **Completed:** 2026-08-29. Implemented in full — `b9d81f8`, plus a small
 additive `extended_thinking_budget` field on `ProviderConfig` (`5c868ce`,
 needed by aldwin-llm). No known gaps against this spec.
+
+**Post-archive addition (2026-09-29, ADR 0017):** `Config::project_permissions_path`
+names `.aldwin/permissions.yaml`, and `PermissionsConfig::parse` parses a
+text as that file is read (`fsio::parse_versioned`, split out of
+`read_versioned`), so aldwin-tools' `reload` can take roots from the exact
+text the review wrote rather than a second read of the file.
+`ReloadFailure::describe` is the one wording of a failed reload, for
+`/reload` and `reload` alike.
 
 **Post-archive fix (2026-09-02):** Developer report, surfaced against
 aldwin-permissions.md ("editing permissions.yaml doesn't really appear to
@@ -94,13 +102,13 @@ Aldwin's persistent state — permission grants, context-file decisions, provide
 - **Context Files Format:** Project-only. List of approved absolute paths for CLAUDE.md / AGENTS.md. Path-keyed only, no content hash (see aldwin-permissions decision).
 - **First Launch:** On a fresh install with no `~/.aldwin/`, the crate creates it and writes all four global domain files annotated. Project scope is left untouched until something persists to it. First-launch is idempotent — runs only when the directory does not exist. Directory present but missing a file → refuse to start (see pitfall).
 - **Atomic Writes:** Every write via tempfile + fsync + rename within the same directory. A crash mid-write leaves either the old or the new file, never partial YAML.
-- **Reload:** Read once at startup. Hand-edits are silent until `/reload-config`, which re-reads every layer and fires change events through consumer channels. No file watcher in V0. On reload parse failure the previous in-memory snapshot is retained.
+- **Reload:** Read once at startup. Hand-edits are silent until `/reload-config` (`/reload`, or the model's `reload`, since 2026-09-29: ADR 0017), which re-reads every layer and fires change events through consumer channels. No file watcher in V0. On reload parse failure the previous in-memory snapshot is retained.
 
 ## Interfaces
 
 - **Read:** Domain-typed accessors per scope: `project_permissions()`, `global_permissions()`, `project_provider()`, `global_provider()`, `project_mcp()`, `global_mcp()`, `global_tui()`, `project_context_files()`. Each returns a typed snapshot of one (scope, domain) layer. Permissions returns the raw allow and deny lists separately. No merged view — that is the consumer's job.
 - **Write:** Domain-typed mutators per scope: `add_grant`, `remove_grant`, `set_provider`, `add_mcp_server`, etc. Each persists atomically and invalidates the in-memory snapshot. Session-scope writes are not accepted — the session layer lives in aldwin-permissions and never touches disk. All writes round-trip through the same schema validation as the loader.
-- **Reload All:** Re-reads every existing layer. Called by the cli crate's `/reload-config` handler. On failure returns an error and retains the previous snapshot.
+- **Reload All:** Re-reads every existing layer. Called by the cli crate's `/reload-config` handler (`/reload` since 2026-09-29) and by aldwin-tools' `reload` tool. On failure returns an error and retains the previous snapshot.
 - **Init Global If Empty:** Creates `~/.aldwin/` and writes the annotated files if the directory does not exist. Returns Created | AlreadyPresent | PartiallyPresent. PartiallyPresent is refuse-to-start. As of 2026-09-06 that is three files, not four — `provider.yaml` is not among them (see the post-archive note below), and is not required for AlreadyPresent either.
 
 ## Decisions

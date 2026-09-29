@@ -11,7 +11,7 @@ use crate::error::ToolError;
 /// included) goes through [`Workspace::resolve`], symlinks included; every
 /// spawned process runs in `crate::sandbox`. Reads are not bounded (ADR 0011).
 ///
-/// Clones share the roots, so `/reload-config` through one reaches all.
+/// Clones share the roots, so a reload through one reaches all.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     /// Canonical, absolute. `roots[0]` is the project root (base of relative
@@ -26,35 +26,45 @@ impl Workspace {
     }
 
     /// A workspace of the project root plus `extra`; a missing root is
-    /// dropped, as in [`Self::set_extra_roots`].
+    /// dropped, as in [`Self::take_roots`].
     pub fn with_roots(project_root: impl Into<PathBuf>, extra: Vec<PathBuf>) -> Self {
         let project_root = project_root.into();
         let canonical_project = project_root.canonicalize().unwrap_or(project_root);
         let workspace = Self {
             roots: Arc::new(RwLock::new(vec![canonical_project])),
         };
-        workspace.set_extra_roots(extra);
+        workspace.take_roots(&extra, Widening::Allowed);
         workspace
     }
 
-    /// Replaces every root but the project root. Returns the roots dropped
-    /// because they could not be canonicalized, for the caller to tell the
-    /// developer; never swallow them.
-    pub fn set_extra_roots(&self, extra: Vec<PathBuf>) -> Vec<PathBuf> {
+    /// Replaces every root but the project root with `declared`, `roots:` as
+    /// `permissions.yaml` writes them (a relative root joins the project
+    /// root). Returns what was left out, for the caller to say; never
+    /// swallow it.
+    pub fn take_roots(&self, declared: &[PathBuf], widening: Widening) -> TakenRoots {
         let mut roots = self.roots.write().unwrap_or_else(|e| e.into_inner());
-        roots.truncate(1);
-        let mut dropped = Vec::new();
-        for root in extra {
+        let reached = roots.split_off(1);
+        let project = roots[0].clone();
+        let within = |canonical: &Path| {
+            canonical.starts_with(&project) || reached.iter().any(|r| canonical.starts_with(r))
+        };
+        let mut taken = TakenRoots::default();
+        // A loop, for its three outcomes. Each root is resolved once and the
+        // path checked is the path kept: a second resolution would let a
+        // symlink swapped in between widen the workspace.
+        for root in declared.iter().map(|root| project.join(root)) {
             match root.canonicalize() {
-                Ok(canonical) => {
+                Err(_) => taken.dropped.push(root),
+                Ok(canonical) if widening == Widening::Allowed || within(&canonical) => {
                     if !roots.contains(&canonical) {
                         roots.push(canonical);
                     }
                 }
-                Err(_) => dropped.push(root),
+                Ok(_) => taken.withheld.push(root),
             }
         }
-        dropped
+        taken.extra = roots[1..].to_vec();
+        taken
     }
 
     /// The project root, which relative paths resolve against.
@@ -138,6 +148,66 @@ impl Workspace {
     }
 }
 
+/// Whether [`Workspace::take_roots`] may reach beyond the current roots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Widening {
+    /// Every declared root is taken in: the developer's own act (startup,
+    /// `/reload`), or a `permissions.yaml` exactly as the review wrote it.
+    Allowed,
+    /// The model's `reload` of a `permissions.yaml` the review did not
+    /// write: a root outside every current root is withheld (ADR 0017).
+    Withheld,
+}
+
+/// What [`Workspace::take_roots`] reached and left out, for the caller to
+/// say.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TakenRoots {
+    /// Every root now reached beyond the project root.
+    pub extra: Vec<PathBuf>,
+    /// Declared roots that do not exist.
+    pub dropped: Vec<PathBuf>,
+    /// Declared roots that would have widened the workspace.
+    pub withheld: Vec<PathBuf>,
+}
+
+impl TakenRoots {
+    /// What the developer is told: the roots beyond the project and any
+    /// declared root left out, or `None` when there are none. The one
+    /// wording for startup, `/reload` and `reload` (ADR 0007 §1).
+    pub fn notice(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if !self.extra.is_empty() {
+            parts.push(format!(
+                "The workspace also takes in {} (roots in .aldwin/permissions.yaml).",
+                list(&self.extra)
+            ));
+        }
+        if !self.withheld.is_empty() {
+            parts.push(format!(
+                "{} was not taken in: .aldwin/permissions.yaml is not what your review last \
+                 wrote, so it waits for you to check the file and type /reload.",
+                list(&self.withheld)
+            ));
+        }
+        if !self.dropped.is_empty() {
+            parts.push(format!(
+                "Ignored roots that do not exist: {}.",
+                list(&self.dropped)
+            ));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+}
+
+fn list(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Canonicalizes the longest existing ancestor of `path` and re-appends the
 /// missing tail lexically, since the target may not exist yet.
 /// `path` must be lexically normalized: the ancestor walk does not interpret
@@ -189,6 +259,36 @@ mod tests {
 
     // Real temp directories: `Workspace` canonicalizes its roots, so they
     // must exist.
+
+    #[test]
+    fn roots_that_may_not_widen_can_still_narrow() {
+        let project = tempdir().unwrap();
+        let (old, new) = (tempdir().unwrap(), tempdir().unwrap());
+        let ws = Workspace::with_roots(project.path(), vec![old.path().into()]);
+        let declared = vec![new.path().to_path_buf(), "sub".into()];
+
+        let taken = ws.take_roots(&declared, Widening::Withheld);
+
+        assert_eq!(taken.withheld, vec![new.path().to_path_buf()]);
+        assert_eq!(taken.dropped, vec![ws.project_root().join("sub")]);
+        assert_eq!(ws.roots(), vec![ws.project_root()], "old was removed");
+
+        let taken = ws.take_roots(&declared, Widening::Allowed);
+        assert!(taken.withheld.is_empty());
+        assert_eq!(ws.roots()[1], new.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn a_root_inside_the_workspace_is_not_a_widening() {
+        let project = tempdir().unwrap();
+        std::fs::create_dir(project.path().join("sub")).unwrap();
+        let ws = Workspace::new(project.path());
+
+        let taken = ws.take_roots(&["sub".into()], Widening::Withheld);
+
+        assert!(taken.withheld.is_empty() && taken.dropped.is_empty());
+        assert_eq!(taken.extra, vec![ws.project_root().join("sub")]);
+    }
 
     #[test]
     fn ordinary_relative_paths_resolve_under_the_root() {
@@ -342,14 +442,17 @@ mod tests {
         let ws = Workspace::new(project.path());
         let held_by_a_tool = ws.clone();
 
-        let dropped = ws.set_extra_roots(vec![
-            sibling.path().to_path_buf(),
-            PathBuf::from("/nope/not/here"),
-        ]);
-        assert_eq!(dropped, vec![PathBuf::from("/nope/not/here")]);
+        let taken = ws.take_roots(
+            &[
+                sibling.path().to_path_buf(),
+                PathBuf::from("/nope/not/here"),
+            ],
+            Widening::Allowed,
+        );
+        assert_eq!(taken.dropped, vec![PathBuf::from("/nope/not/here")]);
         assert_eq!(held_by_a_tool.roots().len(), 2);
 
-        ws.set_extra_roots(vec![]);
+        ws.take_roots(&[], Widening::Allowed);
         assert_eq!(
             held_by_a_tool.roots().len(),
             1,

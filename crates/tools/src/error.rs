@@ -42,7 +42,7 @@ pub enum ToolError {
 
     /// A path outside the workspace (ADR 0007). The message must name the
     /// roots and the fix, or the model routes around the refusal.
-    #[error("path {path:?} is outside this workspace. Reachable roots: {roots}. To reach it, the developer adds its directory under `roots:` in .aldwin/permissions.yaml and runs /reload-config — say so rather than routing around it")]
+    #[error("path {path:?} is outside this workspace. Reachable roots: {roots}. To reach it, its directory goes under `roots:` in .aldwin/permissions.yaml — ask the developer rather than routing around it, and add it with `edit` only if they say so")]
     PathEscapesWorkspace {
         /// The path as the model gave it.
         path: String,
@@ -90,6 +90,13 @@ pub enum ToolError {
         seconds: u64,
         /// What the command wrote before it was stopped.
         partial: String,
+    },
+
+    /// A settings file could not be read again by `reload`.
+    #[error("these settings files could not be read, so they keep their previous values and the workspace roots were left as they were: {detail}")]
+    Settings {
+        /// Which file could not be read and why, each named.
+        detail: String,
     },
 
     /// The question was open when the turn was cancelled or the session ended.

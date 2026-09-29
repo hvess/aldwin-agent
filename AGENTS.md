@@ -150,8 +150,8 @@ and became the problem it was built to solve.
 **Where the design disagrees with a decision, the decision wins and the
 disagreement is recorded.** The design's commands include `/changes` and
 `/undo`; the product ships `/resume`, `/model`, `/quit`, `/clear` (the
-developer's call, 2026-09-23), `/theme` (2026-09-25) and `/connect` (ADR
-0012, 2026-09-26); `/changes` and `/undo` will not be built (the
+developer's call, 2026-09-23), `/theme` (2026-09-25), `/connect` (ADR
+0012, 2026-09-26) and `/reload` (2026-09-29); `/changes` and `/undo` will not be built (the
 developer's call, 2026-09-27). That is in `baseline.json`. A frame is authority
 on tone and position, not on scope.
 
@@ -180,7 +180,8 @@ a decision they cover.
 - **0007 — Reach is a workspace, and every tool honours it.** In force, and
   since 0011 the whole rule; only its containment of `run`'s arguments is
   superseded. `roots:` in `permissions.yaml` is the one way to widen the
-  workspace.
+  workspace; since 0017 the model's `reload` applies a widening root only
+  from what the review wrote.
 - **0008 — Discussion-first is about intent, not grammar.** Unchanged,
   except §6, which went with the run class (0011), and its bar for adding
   a prompt clause (0016).
@@ -236,12 +237,18 @@ a decision they cover.
   short, direct and exact. `prompt.md` and the tool descriptions change in
   the same commit as the behaviour they describe, and the code judge holds
   a change to them.
+- **0017 — The model reloads the settings, and takes in only roots the
+  review wrote.** `/reload-config` is `/reload`, in the `/` menu. A
+  `reload` tool lets the model read the settings again after an approve;
+  a root that widens the workspace is taken in only while
+  `permissions.yaml` is exactly what the review wrote, and otherwise waits
+  for the developer's `/reload`.
 
 ## Key Constraints (non-negotiable)
 
 - Nothing reaches disk without the review: `edit` stages, and only an approve at the review writes (ADR 0009 §4). There is no approve for one call; the changeset is reviewed whole. An MCP server is given no write access to the workspace (ADR 0014; its Limits say where that cannot hold).
 - Edit is never allowlistable: there is nothing to allowlist it into. The review is structural, not a setting.
-- **The workspace is the only boundary** (ADR 0007, ADR 0011). It is `roots[0]` plus whatever the project `permissions.yaml` declares. Every tool refuses a path outside it, symlinks included, and an approved write is resolved again before it lands.
+- **The workspace is the only boundary** (ADR 0007, ADR 0011). It is `roots[0]` plus whatever the project `permissions.yaml` declares, applied at startup and by `/reload`; the model's `reload` takes in a root that widens it only from what the review wrote (ADR 0017). Every tool refuses a path outside it, symlinks included, and an approved write is resolved again before it lands.
 - Every process Aldwin starts — `run`'s shell, the language server, an MCP server — can write only inside the workspace and the incidental paths (an MCP server only the incidental paths, ADR 0014), enforced by the kernel (Landlock, Seatbelt), not trusted. Where it cannot be enforced, it runs unconfined and **the developer is told once** — never silently (ADR 0011 §3).
 - Discussion-first: resting state is conversation. Action follows the developer's **intent**, not their grammatical mood — a stated constraint is an instruction, an agreed plan is carried out whole (ADR 0008). The structural protection is the review, never the phrasing rule.
 - No Anthropic wire types past `LlmClient`: audit at the trait boundary, not after.

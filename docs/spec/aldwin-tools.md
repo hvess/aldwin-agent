@@ -7,6 +7,25 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, `reload`, ADR 0017):** A seventh built-in,
+`reload`, reads the settings files again and applies `roots:`, observing
+disk so staged edits are reviewed first. `Staging` keeps what each approve
+wrote (`approved`, a record of writes and not approval state an edit could
+reuse — the Pitfall on caching approvals does not apply); `reload` takes in
+a root that widens the workspace only when `permissions.yaml` is exactly
+that text, parsed from the one read (`PermissionsConfig::parse`), and
+otherwise names it for the developer's `/reload`. `Workspace::take_roots`
+is the one place roots are applied — `Widening::Allowed` at startup and
+`/reload`, `Widening::Withheld` for an unreviewed `reload` — and it
+resolves each root once, keeping the path it checked. Every reload forgets
+the record (`forget_approved`), so a reviewed text is trusted once. A
+change, a withheld root or a dropped one is said to the developer
+(`DispatchContext::notice`) in `TakenRoots::notice`'s words, the one
+wording startup and `/reload` use, and the model's result quotes it. `builtin_registry` takes the `Config`.
+The escape refusal no longer tells the model to have the developer run
+`/reload-config`: it says to ask, and to add the root with `edit` only if
+told to. Tests: `tools::reload::tests`, `roots_that_may_not_widen_can_still_narrow`.
+
 **Progress (2026-09-29):** An edit whose `before` does not occur exactly
 once says how to make the next call succeed: `ToolError::AmbiguousMatch`
 carries the line each occurrence starts on (`lines`, replacing `count`),
@@ -159,7 +178,8 @@ fired zero times.
   *resolved* paths only (a lexical pre-check against canonical roots refused
   every symlinked prefix, i.e. `/tmp` on macOS) and also on the path as the
   filesystem resolves it (`out/../x` after a symlink); `Workspace` roots are
-  shared and replaceable, so `/reload-config` re-reads them; the sandbox's
+  shared and replaceable, so `/reload-config` re-reads them (`/reload`
+  and the `reload` tool since 2026-09-29, ADR 0017); the sandbox's
   incidental paths are legitimate `run` arguments (`sandbox::is_incidental`);
   output is accumulated as bytes; a timeout `killpg`s the group `setsid`
   created; and an unenforceable read consults the engine before it asks. The
@@ -448,6 +468,8 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 
 - **A question offers at least a positive, a negative and a chat option.** — The developer's call, 2026-09-27: the design's "a yes, a no, and Chat about this" is a guideline, not literal words. `ask` refuses fewer than two answers of the model's own and appends *Chat about this*; which answer is the positive and which the negative is not readable from the text, so the tool's description asks the model for one of each.
 
+- **`reload` is a built-in.** — The developer's call, 2026-09-29 (ADR 0017), against the Pitfall below: it acts on Aldwin's own settings and workspace, which no MCP server can reach.
+
 - **Each tool owns its cancellation; the dispatcher only promises to release the slot.** — Shell needs SIGKILL on the process group; pure-Rust tools want await-point abort; MCP wants the response future dropped. A single cancellation primitive at the dispatcher would have to lie about at least one of these.
 
 ## Pitfalls
@@ -456,7 +478,7 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 - A `run` test that pins a coreutil's exit code or output shape. GNU (Linux) and BSD (macOS) differ — `ls` on a missing entry exits 2 on one and 1 on the other, which CI's macOS job found on 2026-09-27. A test wants a code or text the shell itself sets (`exit 3`, `echo … >&2`), not a program's.
 - Edit-shape marking for MCP tools drifting back into upfront config (e.g. a UI flow that asks at server registration rather than at first call) — defeats the encounter-driven design and re-creates the wizard the parent spec rejected.
 - MCP edit-shape arg mapping going stale if a server changes its tool schema between sessions — detect schema-hash mismatch on the marked tool and re-prompt, do not silently reuse the old mapping.
-- Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass.
+- Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass. (`Staging::approved` is not one: it records what an approve wrote, for `reload`, and no edit reads it — ADR 0017.)
 - Concurrent tool calls in a step racing on shared resources (same file edited twice, same process group signalled twice) — dispatcher is concurrent; tools must be reentrant or self-serialise.
 - rmcp version drift silently changing the wire shape under us — pin a known-good version and surface protocol mismatches as structured tool errors, not panics.
 - A built-in growing a fifth member under the banner of "small obvious addition" — every addition is permanent surface. Channel it through MCP first.

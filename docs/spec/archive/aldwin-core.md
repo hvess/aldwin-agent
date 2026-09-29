@@ -5,7 +5,7 @@ Agent loop, append-only conversation state, and the typed boundary between LLM a
 **Status:** archived — implemented, tested, audited
 **Scope:** aldwin-core crate only — narrow cut. Excludes tool implementations, permissions, TUI, and provider wire format.
 **Owner:** Maximilian
-**Last Updated:** 2026-05-16
+**Last Updated:** 2026-09-29
 
 **Completed:** 2026-08-29. Implemented in full (agent loop, append-only log,
 event/command types, LlmClient/ToolDispatcher trait boundary) —
@@ -55,6 +55,11 @@ never touches it. No open design question here either — an additive event
 variant on the existing "layer above core needs a vehicle to reach the
 TUI" pattern `Notice`/`PermissionsChanged`/`HistoryCleared` already
 established, not a new mechanism.
+
+**Post-archive addition (2026-09-29, ADR 0017):** `DispatchContext::notice`
+sends a tool's `Event::Notice` to the developer, so aldwin-tools' `reload`
+says a change to the workspace roots itself (ADR 0007 §1) rather than
+leaving it to the model.
 
 **Post-archive fix (2026-09-24, audit):** Four gaps closed. Turn and step
 ids were process-global atomics; the `Agent` now mints them, and a

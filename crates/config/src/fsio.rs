@@ -33,8 +33,17 @@ pub fn read_versioned<T: DeserializeOwned>(
             })
         }
     };
+    parse_versioned(&text, path, current_version).map(Some)
+}
 
-    let probe: VersionOnly = serde_yaml_ng::from_str(&text).map_err(|e| ConfigError::Parse {
+/// Parses `text` as [`read_versioned`] parses a file's; `path` only names it
+/// in an error.
+pub fn parse_versioned<T: DeserializeOwned>(
+    text: &str,
+    path: &Path,
+    current_version: u32,
+) -> Result<T, ConfigError> {
+    let probe: VersionOnly = serde_yaml_ng::from_str(text).map_err(|e| ConfigError::Parse {
         path: path.to_path_buf(),
         source: e,
     })?;
@@ -46,11 +55,10 @@ pub fn read_versioned<T: DeserializeOwned>(
         });
     }
 
-    let value: T = serde_yaml_ng::from_str(&text).map_err(|e| ConfigError::Parse {
+    serde_yaml_ng::from_str(text).map_err(|e| ConfigError::Parse {
         path: path.to_path_buf(),
         source: e,
-    })?;
-    Ok(Some(value))
+    })
 }
 
 /// Writes `text` to `path` atomically: a synced tempfile in the same

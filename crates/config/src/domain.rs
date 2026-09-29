@@ -4,7 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::error::ConfigError;
+use crate::fsio;
 
 pub const PERMISSIONS_VERSION: u32 = 2;
 /// The `provider.yaml` schema version this build reads and writes.
@@ -48,6 +51,16 @@ impl PermissionsConfig {
             allow: None,
             deny: None,
         }
+    }
+
+    /// Parses `text` as `permissions.yaml` at `path` is read.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::Parse`] or [`ConfigError::UnknownVersion`], naming
+    /// `path`.
+    pub fn parse(text: &str, path: &Path) -> Result<Self, ConfigError> {
+        fsio::parse_versioned(text, path, PERMISSIONS_VERSION)
     }
 
     /// Whether `default:`, `allow:` or `deny:` holds anything but an empty

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use aldwin_config::Config;
 use aldwin_core::{DispatchContext, StepId, TurnId};
 use aldwin_tools::{builtin_registry, Staging, Workspace};
 
@@ -36,7 +37,8 @@ async fn a_commit_made_by_run_names_aldwin() {
     }
 
     let workspace = Workspace::new(repo.path());
-    let registry = builtin_registry(workspace.clone(), Arc::new(Staging::new(workspace)));
+    let config = Config::open_at(repo.path(), repo.path()).unwrap();
+    let registry = builtin_registry(config, workspace.clone(), Arc::new(Staging::new(workspace)));
     let run = registry.get("run").expect("run is a built-in");
     let (events, _events) = tokio::sync::mpsc::channel(8);
     let ctx = DispatchContext::for_testing(TurnId(1), StepId(1), events, Default::default());

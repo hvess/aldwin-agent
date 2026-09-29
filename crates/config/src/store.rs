@@ -39,6 +39,18 @@ pub struct ReloadFailure {
     pub error: ConfigError,
 }
 
+impl ReloadFailure {
+    /// Each failure as `path: error`, `; `-separated: the one wording for
+    /// `/reload` and aldwin-tools' `reload`.
+    pub fn describe(failures: &[Self]) -> String {
+        failures
+            .iter()
+            .map(|f| format!("{}: {}", f.path.display(), f.error))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
 struct Inner {
     project_dir: PathBuf,
     global_dir: PathBuf,
@@ -198,6 +210,12 @@ impl Config {
             .parent()
             .unwrap_or(&self.inner.project_dir);
         crate::history::project_dir(&self.inner.global_dir.join("history"), project_root)
+    }
+
+    /// The project's `.aldwin/permissions.yaml`, whose `roots:` widen the
+    /// workspace; it need not exist.
+    pub fn project_permissions_path(&self) -> PathBuf {
+        self.domain_path(Scope::Project, "permissions")
     }
 
     // ── Read ─────────────────────────────────────────────────────────────
@@ -448,7 +466,7 @@ impl Config {
 
     // ── Reload ───────────────────────────────────────────────────────────
 
-    /// Re-reads every layer, for `/reload-config`; a missing file becomes its
+    /// Re-reads every layer, for `/reload` and `reload`; a missing file becomes its
     /// empty value. A layer that fails keeps its previous snapshot, so a bad
     /// hand edit cannot break a running session.
     ///

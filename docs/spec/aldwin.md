@@ -43,7 +43,7 @@ in how it is shaped. It replaces "A tool for thought.")
     - Depends on: aldwin-core
     - Spec: docs/spec/archive/aldwin-config.md
   - **aldwin-tools** (`crates/tools`)
-    - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask), the staged changeset the review opens over, the sandbox every spawned process runs in (writes only inside the workspace), MCP bridge via rmcp.
+    - Role: ToolDispatcher impl. Built-in tools (read, edit, run, explain, plan, ask, reload), the staged changeset the review opens over, the sandbox every spawned process runs in (writes only inside the workspace), MCP bridge via rmcp.
     - Depends on: aldwin-core, aldwin-config
     - Spec: docs/spec/aldwin-tools.md
   - **aldwin-tui** (`crates/tui`)
@@ -81,7 +81,7 @@ in how it is shaped. It replaces "A tool for thought.")
 
 - **Read and Explain are first-class tools; Edit has deliberate friction.** — Amended by ADR 0009: an edit is *staged*, every edit of a turn is one changeset, and the changeset is reviewed in a full-window review at the first moment it would be observed on disk — before a run, or at the turn's end. Nothing is written before an approve. Friction on Edit preserves the developer's role as conscious author; it is structural, and there is no setting for it.
 
-- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). An MCP server is given no write access to the workspace (ADR 0014, within its Limits).
+- **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan, ask and reload (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`; ADR 0017 added `reload`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). An MCP server is given no write access to the workspace (ADR 0014, within its Limits).
 
 - **Permission model — the workspace is the only boundary.** — *Superseded by ADR 0009, then ADR 0011.* Reads and runs need no grant and never ask; every tool refuses a path outside the workspace, and every process Aldwin starts can write only inside it; where that cannot be enforced, the developer is told once. `run` takes a shell command. There is no class and no `deny:` lock. There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking, and since 2026-09-28 the skills under `.agents/skills/` and `.claude/skills/` are listed in it by name and description for the model to read when a task calls for one, leaving out any linked from outside every workspace root. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
 

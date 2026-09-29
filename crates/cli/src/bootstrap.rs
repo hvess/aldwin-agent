@@ -6,7 +6,7 @@ use std::sync::Arc;
 use aldwin_config::{Config, InitOutcome, McpServer, ProviderKind};
 use aldwin_core::{Agent, Event, LlmClient, LlmError, LlmEvent, LlmRequest};
 use aldwin_llm::LlmClientInitError;
-use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging, Workspace};
+use aldwin_tools::{register_mcp_tools, Dispatcher, McpBridge, Staging, Widening, Workspace};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
@@ -230,7 +230,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     // The workspace, the only boundary (ADR 0007, ADR 0011): the project
     // root plus the project-scope `.aldwin/permissions.yaml` roots.
     let workspace = Workspace::new(cwd.clone());
-    let reach_notice = apply_roots(&config, &cwd, &workspace);
+    let reach_notice = apply_roots(&config, &workspace);
     let roots = workspace.roots();
     let additional_context = context::build(
         &cwd,
@@ -242,7 +242,8 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
 
     // Every edit of a turn waits here for the review (ADR 0009 §4).
     let staging = Arc::new(Staging::new(workspace.clone()));
-    let mut registry = aldwin_tools::builtin_registry(workspace.clone(), staging.clone());
+    let mut registry =
+        aldwin_tools::builtin_registry(config.clone(), workspace.clone(), staging.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
     // Best effort per server and tool: a broken server must not stop the
     // session or other servers. Each failure is said.
@@ -259,7 +260,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         };
         let _ = event_tx.try_send(aldwin_core::Event::Notice { message });
     }
-    let dispatcher = Dispatcher::new(registry, staging).with_notices(event_tx.clone());
+    let dispatcher = Dispatcher::new(registry, staging.clone()).with_notices(event_tx.clone());
 
     // `None` when the history directory cannot be written; said once.
     // History must never stop a session starting.
@@ -288,9 +289,15 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         None => agent,
     };
     let session_state = {
-        let (config, cwd, workspace) = (config.clone(), cwd.clone(), workspace.clone());
-        slash::Session::new(session_model, Arc::new(client))
-            .with_after_reload(Box::new(move || apply_roots(&config, &cwd, &workspace)))
+        let (config, workspace) = (config.clone(), workspace.clone());
+        slash::Session::new(session_model, Arc::new(client)).with_after_reload(Box::new(
+            move || {
+                // The developer's reload applies the file as it is now, so
+                // an earlier reviewed text is not trusted again (ADR 0017 §3).
+                staging.forget_approved();
+                apply_roots(&config, &workspace)
+            },
+        ))
     };
 
     // Said once at session start (ADR 0011 §3, ADR 0013).
@@ -387,50 +394,14 @@ fn unshimmed_notice(reason: &ShimError) -> String {
     format!("Commits made in this session will not name Aldwin as a co-author: {reason}.")
 }
 
-/// Sets `workspace`'s extra roots from the project's `permissions.yaml`
-/// (relative to `cwd`) and returns the notice: roots beyond the project and
-/// declared roots that do not exist, or `None` if neither. Called at startup
-/// and after `/reload-config`.
-fn apply_roots(config: &Config, cwd: &Path, workspace: &Workspace) -> Option<String> {
-    let declared: Vec<PathBuf> = config
-        .project_permissions()
-        .roots
-        .iter()
-        .map(|r| {
-            if r.is_absolute() {
-                r.clone()
-            } else {
-                cwd.join(r)
-            }
-        })
-        .collect();
-    let dropped = workspace.set_extra_roots(declared);
-    let extra: Vec<String> = workspace
-        .roots()
-        .iter()
-        .skip(1)
-        .map(|r| r.display().to_string())
-        .collect();
-
-    let mut parts = Vec::new();
-    if !extra.is_empty() {
-        parts.push(format!(
-            "The workspace also takes in {} (roots in .aldwin/permissions.yaml).",
-            extra.join(", ")
-        ));
-    }
-    if !dropped.is_empty() {
-        let names: Vec<String> = dropped.iter().map(|r| r.display().to_string()).collect();
-        parts.push(format!(
-            "Ignored roots that do not exist: {}.",
-            names.join(", ")
-        ));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" "))
-    }
+/// Sets `workspace`'s extra roots from the project's `permissions.yaml` and
+/// returns the notice: roots beyond the project and declared roots that do
+/// not exist, or `None` if neither. Called at startup and after the
+/// developer's `/reload`, which may widen the workspace (ADR 0017).
+fn apply_roots(config: &Config, workspace: &Workspace) -> Option<String> {
+    workspace
+        .take_roots(&config.project_permissions().roots, Widening::Allowed)
+        .notice()
 }
 
 #[cfg(test)]
@@ -701,7 +672,7 @@ mod tests {
 
         let config = Config::open_at(project.path(), global.path()).unwrap();
         let workspace = Workspace::new(project.path());
-        assert_eq!(apply_roots(&config, project.path(), &workspace), None);
+        assert_eq!(apply_roots(&config, &workspace), None);
 
         std::fs::write(
             &file,
@@ -712,7 +683,7 @@ mod tests {
         )
         .unwrap();
         config.reload_all().unwrap();
-        let notice = apply_roots(&config, project.path(), &workspace).expect("a notice");
+        let notice = apply_roots(&config, &workspace).expect("a notice");
         assert_eq!(workspace.roots().len(), 2);
         assert!(
             notice.contains(&sibling.path().canonicalize().unwrap().display().to_string()),

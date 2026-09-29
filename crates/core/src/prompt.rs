@@ -116,6 +116,15 @@ mod tests {
         );
     }
 
+    /// The roots are the boundary; `reload` must not become a way past it.
+    #[test]
+    fn the_prompt_leaves_widening_the_workspace_to_the_developer() {
+        assert!(BASE.contains("widening it is the developer's decision alone"));
+        assert!(BASE.contains("Add a root only when they ask for that directory"));
+        assert!(BASE.contains("waits for them to type `/reload`"));
+        assert!(BASE.contains("calls `run`, `reload` or an MCP tool"));
+    }
+
     /// A command sees the disk and opens the review, so reading staged files
     /// goes through `read`.
     #[test]

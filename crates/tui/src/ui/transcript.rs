@@ -209,7 +209,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                                 &item.target,
                                 width.saturating_sub(DETAIL_COL + fact.width() + 2),
                             ),
-                            Style::default().fg(pal.label),
+                            Style::default().fg(pal.code),
                         ),
                     ];
                     let right = vec![Span::styled(fact, Style::default().fg(pal.label2))];

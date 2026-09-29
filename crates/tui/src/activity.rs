@@ -11,6 +11,9 @@ use crate::motion::ticks;
 /// No new output for this long reads as a stall (frame `W2`).
 const STALL: u64 = ticks(Duration::from_secs(30));
 
+/// What a stalled line's words begin with.
+const STILL: &str = "Still ";
+
 /// One second, for the timer.
 const SECOND: u64 = ticks(Duration::from_secs(1));
 
@@ -31,6 +34,9 @@ pub(crate) struct Activity {
 pub(crate) struct WorkingLine {
     /// `Reading limit.rs`, or `Still reading limit.rs` once stalled.
     pub words: String,
+    /// The char index in `words` where the call's target begins, drawn in
+    /// `--code` to the end.
+    pub code_at: Option<usize>,
     /// Ticks since the phrase began.
     pub age: u64,
     /// Nothing new for `STALL`: drawn still, in `label2`.
@@ -64,13 +70,17 @@ impl Doing {
         Doing::Call(verb, shown.trim().to_string())
     }
 
-    /// Lower case, as it follows `Still`.
-    fn words(&self) -> String {
+    /// Lower case, as it follows `Still`, with the char index its target
+    /// begins at.
+    fn words(&self) -> (String, Option<usize>) {
         match self {
-            Doing::Thinking => "thinking".into(),
-            Doing::Replying => "writing a reply".into(),
-            Doing::Call(verb, target) if target.is_empty() => verb.doing().into(),
-            Doing::Call(verb, target) => format!("{} {target}", verb.doing()),
+            Doing::Thinking => ("thinking".into(), None),
+            Doing::Replying => ("writing a reply".into(), None),
+            Doing::Call(verb, target) if target.is_empty() => (verb.doing().into(), None),
+            Doing::Call(verb, target) => (
+                format!("{} {target}", verb.doing()),
+                Some(verb.doing().chars().count() + 1),
+            ),
         }
     }
 }
@@ -120,14 +130,18 @@ impl Activity {
     /// The line as it reads at `tick`.
     pub(crate) fn line(&self, tick: u64) -> WorkingLine {
         let stalled = tick.saturating_sub(self.heard) >= STALL;
-        let words = self.doing.words();
-        let words = if stalled {
-            format!("Still {words}")
+        let (words, code_at) = self.doing.words();
+        let (words, code_at) = if stalled {
+            (
+                format!("{STILL}{words}"),
+                code_at.map(|at| at + STILL.chars().count()),
+            )
         } else {
-            capitalised(&words)
+            (capitalised(&words), code_at)
         };
         WorkingLine {
             words,
+            code_at,
             age: tick.saturating_sub(self.since),
             stalled,
             seconds: tick.saturating_sub(self.began) / SECOND,
@@ -187,6 +201,21 @@ mod tests {
     }
 
     #[test]
+    fn the_target_is_marked_where_it_begins_and_nothing_else_is() {
+        let mut a = Activity::new(0);
+        assert_eq!(a.line(0).code_at, None, "thinking names no code");
+        a.calls_changed(Some(&running(Verb::Searched, "tower::limit")), 1);
+        let line = a.line(1);
+        let at = line.code_at.expect("a call's target is code");
+        assert_eq!(
+            line.words.chars().skip(at).collect::<String>(),
+            "tower::limit"
+        );
+        a.calls_changed(Some(&running(Verb::Changed, "")), 2);
+        assert_eq!(a.line(2).code_at, None, "no target, no code");
+    }
+
+    #[test]
     fn a_running_call_keeps_the_line_until_none_is_left() {
         let mut a = Activity::new(0);
         a.calls_changed(Some(&running(Verb::Read, "b.rs")), 1);
@@ -219,6 +248,7 @@ mod tests {
         let line = a.line(STALL);
         assert!(line.stalled);
         assert_eq!(line.words, "Still running cargo test");
+        assert_eq!(line.code_at, Some("Still running ".len()));
         assert_eq!(line.seconds, 30);
         a.touch(STALL + 1);
         assert!(!a.line(STALL + 1).stalled);

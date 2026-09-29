@@ -12,6 +12,18 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, code has its own ink):** The frame re-synced
+(`docs/design/IMPORT.md`) with `--code`, a teal set by the frame's script
+and absent from `tokens/colors.css` (baseline
+`code-ink-is-the-frames-not-colors-css`); the generator reads it from the
+frame into `Palette::code`. It is drawn wherever text names code: a
+`` `span` `` in prose, without its backticks and now on the line's own
+ground rather than `tint`; a detail row's target; the working line's target
+from `WorkingLine::code_at`, through the highlight and the stall; and the
+file name in the comment field's label (`Review::selection_label` returns
+the name and the range apart). An input field is plain text: see
+Decisions.
+
 **Progress (2026-09-29, thinking is drawn — ADR 0015):** Each thinking
 block is a `LogEntry::Thinking` where it happened: `ThinkingStart` opens it,
 deltas fill it, `ThinkingEnd` sets its `Took`. Its summary is `Thinking`,
@@ -60,6 +72,8 @@ spaces, `Context ━` — describes it as it was before this one.
   from `W2`'s mixes) sweeps it from four cells beyond one end to four
   beyond the other, on a loop. 30 seconds with nothing new reads as a
   stall: a still `label3` `○`, the phrase `label2` and led by "Still".
+  (The call's target is `--code` through the sweep and the stall since
+  the Progress entry "code has its own ink".)
 - **The words come from the call, not the model** (the developer's
   choice, 2026-09-29: no tokens, no schema change). `activity::Activity`
   follows the turn's events: `Thinking` while the model reasons or has
@@ -359,7 +373,8 @@ what each thing was measured against:
   no red outside a diff; `render_snapshot.rs` asserts it.
 - **Markdown keeps fences and tables and loses highlighting.** Fences are
   `label2` on `tint` under a `label3` caption; tables draw per ADR 0002;
-  `syntect` is gone from the manifest. Inline code is `label` on `tint`.
+  `syntect` is gone from the manifest. Inline code is `label` on `tint`
+  (`--code` on the ground since 2026-09-29: see that Progress entry).
 - **Deleted:** `first_run.rs`, `highlight.rs`, `picker.rs`, `ui/decision.rs`,
   `ui/diff.rs`, `ui/first_run.rs`, `ui/picker.rs`, `examples/snapshot.rs`,
   and the dependency on `aldwin-permissions`.
@@ -2379,6 +2394,11 @@ above it, now parted by a padding row.
 - **Multi-line input; Enter submits, Shift+Enter inserts newline.** — Discussion-first posture benefits from longer prompts. Standard convention for multi-line TUI inputs. Single-line-only rejected as too restrictive for the intended interaction mode.
 
 - **Minimal monochrome palette with one accent color in V0.** — Avoids colour decisions blocked on the open mascot palette. One accent is sufficient to make the approval card unmistakable. Rich theming deferred until the mascot palette is settled. *Extended, not reopened, across several 2026-08-29/08-31 Progress entries:* a small, cohesive set of semantic colors (diff add/remove, code, user tint, warning) was added incrementally, each scoped to one clear role — this is still a fixed, hardcoded palette, not the configurable/user-selectable "rich theming" this decision deferred; that remains blocked on the mascot palette question.
+
+- **An input field is plain text.** The prompt field and the comment field
+  draw what was typed as typed, backticks included: no markdown is drawn
+  in either, and only what Aldwin writes is. The developer's call, 2026-09-29, with frame
+  H updated to match: "we won't support rich text in input fields."
 
 - **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in aldwin-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 

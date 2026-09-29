@@ -35,7 +35,7 @@ enum Command {
     /// it changes — so nothing the author writes is an input to its own
     /// review.
     Review(ReviewArgs),
-    /// Regenerate the app's design system from `docs/design/tokens/`.
+    /// Regenerate the app's design system from `docs/design/`.
     Tokens {
         /// Write the file rather than only checking it.
         #[arg(long)]

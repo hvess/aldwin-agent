@@ -88,7 +88,7 @@
       "id": "footer-is-the-frames-not-the-components",
       "design_says": "Frame `W1` and its section: “In the mark column, the running ● blinks to ○ and back every half second … The context bar drops its label and … its ten segments grow from the thin ━ to the full █ block”; every footer opens with a state glyph and names keys as glyph, a space, verb (`↑↓ Choose`).",
       "design_also_says": "README: “The caret blinks at 1.05s, stepped. Nothing else animates.”, “Ten `━` segments” and “Glyph, two spaces, verb”; `StatusBar.jsx` draws the mark column empty unless running and `ContextBar.jsx` prints `Context` before ten `━`.",
-      "app_follows": "The frame, as it did over `⎋` on 2026-09-25 (docs/design/IMPORT.md, 2026-09-29 re-sync): the working line animates, the bar is ten `GAUGE_CELL`s with no label, and a key hint has one space. Retired when the README and the two components are brought up to the frame.",
+      "app_follows": "The frame, as it did over `⎋` on 2026-09-25 (docs/design/IMPORT.md, “Re-sync — 2026-09-29, the working line”): the working line animates, the bar is ten `GAUGE_CELL`s with no label, and a key hint has one space. Retired when the README and the two components are brought up to the frame.",
       "glyphs": ""
     },
     {
@@ -96,6 +96,13 @@
       "design_says": "The frame's working section: “There is no key hint: esc always stops, and the launch card says so once.”",
       "design_also_says": "Frame `A launch` draws the card as the mark beside four facts — `Aldwin` and its version, `Project`, `Branch`, `Model` — and names no key.",
       "app_follows": "Frame A: the card names no key, and the working line names none either. `esc` stops a turn as it does in every terminal app (HIG, “Keyboards”: familiar keys). Retired when a frame draws the card's line about `esc`.",
+      "glyphs": ""
+    },
+    {
+      "id": "code-ink-is-the-frames-not-colors-css",
+      "design_says": "The frame draws paths, commands and names in `var(--code)`, which its script sets: `setProperty('--code', this.light() ? 'oklch(0.5 0.1 218)' : 'oklch(0.8 0.085 212)')`.",
+      "design_also_says": "README: “Every token value here is copied from that page”; `tokens/colors.css` declares no `--code`, and the README's colour section names no code ink.",
+      "app_follows": "The frame: the generator reads `--code` from its script into `Palette::code` (`crates/review/src/tokens.rs`, `frame_roles`). Retired when `tokens/colors.css` declares `--code`, which the generator then prefers.",
       "glyphs": ""
     }
   ]

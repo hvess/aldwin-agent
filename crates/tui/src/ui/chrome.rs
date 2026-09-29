@@ -596,13 +596,13 @@ pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'stati
 }
 
 /// The comment field, two rows replacing the field while a selection is
-/// commented on: the label on `--select`, the draft on `--field`.
+/// commented on: `Review::selection_label` on `--select`, the draft on
+/// `--field`.
 pub(super) fn draw_comment_field(
     frame: &mut Frame,
     area: Rect,
     app: &App,
-    lines: &str,
-    location: &str,
+    (lines, file, range): &(String, String, String),
     draft: &str,
     cursor: usize,
 ) {
@@ -616,7 +616,13 @@ pub(super) fn draw_comment_field(
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
     let on_select = Style::default().bg(pal.select);
-    let edge = |bg: Color| Span::styled("▎", Style::default().fg(pal.accent).bg(bg));
+    // Frame H: `▎` fills the mark column, so both rows' text is on `--body-x`.
+    let edge = |bg: Color| {
+        Span::styled(
+            format!("{:<MARK_COL$}", "▎"),
+            Style::default().fg(pal.accent).bg(bg),
+        )
+    };
     let left = vec![
         edge(pal.select),
         Span::styled(
@@ -630,8 +636,13 @@ pub(super) fn draw_comment_field(
                 .bg(pal.select)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled("  ", Style::default().fg(pal.label2).bg(pal.select)),
         Span::styled(
-            format!("  {location}"),
+            file.to_string(),
+            Style::default().fg(pal.code).bg(pal.select),
+        ),
+        Span::styled(
+            format!(" · {range}"),
             Style::default().fg(pal.label2).bg(pal.select),
         ),
     ];
@@ -672,7 +683,7 @@ pub(super) fn draw_comment_field(
         .sum();
     place_caret(
         frame,
-        draft_row.x + 1 + column as u16,
+        draft_row.x + (MARK_COL + column) as u16,
         draft_row.y,
         app.tick,
         app.motion,

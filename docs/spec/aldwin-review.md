@@ -74,7 +74,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
 
 2. **The app's design system is generated, not transcribed.**
    `crates/tui/src/tokens.rs` is emitted from `docs/design/tokens/*.css`
-   and committed; stage 4 regenerates it and fails on any diff. Before this,
+   (and, for what only they state, the glyph card and the frame) and
+   committed; stage 4 regenerates it and fails on any diff. Before this,
    `palette.rs` carried eighty-four hand-written hex literals with a
    `// neutral-200` comment beside each as the only link to the design.
 
@@ -335,6 +336,16 @@ moves any scene's snapshot has frames for stage 8 to judge.
   variable) other than as an expansion — a commit message included — and it reads every line of a heredoc as a command, since it
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
+
+## Progress (2026-09-29, a colour only the frame declares)
+
+The frame re-synced with `--code` (aldwin-tui.md, same date), which its
+script sets per theme and `tokens/colors.css` does not declare. Stage 4
+reads it: `frame_roles` finds each `setProperty('--role', this.light() ?
+light : dark)` and adds the role to both scopes where `colors.css` has
+none, so the role is generated, converted and listed in `*_VALUES` like
+any other; once `colors.css` declares it, `colors.css` wins. Baseline
+`code-ink-is-the-frames-not-colors-css` records the disagreement.
 
 ## Progress (2026-09-29, no check for removed identifiers)
 

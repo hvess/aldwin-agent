@@ -193,7 +193,7 @@ fn every_scene_renders_exactly_as_recorded() {
     }
 }
 
-/// Every painted colour is a token generated from `docs/design/tokens/`.
+/// Every painted colour is a token generated from `docs/design/`.
 #[test]
 fn every_cell_carries_a_colour_from_the_design_system() {
     for theme in [Theme::Dark, Theme::Light] {
@@ -248,7 +248,7 @@ fn every_glyph_comes_from_the_closed_table() {
 fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
     for theme in [Theme::Dark, Theme::Light] {
         let pal = aldwin_tui::design_palette(theme);
-        let (accent, del, add) = (pal[0], pal[5], pal[1]); // alphabetical: accent, add, addcode, addrow, amber, del …
+        let (accent, del, add) = (pal[0], pal[6], pal[1]); // alphabetical: accent, add, addcode, addrow, amber, code, del …
         for scene_name in [
             "working", "details", "running", "failure", "saved", "long", "markdown", "stopping",
             "plan",

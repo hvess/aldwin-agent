@@ -1,6 +1,6 @@
 //! The colour palette for `ui/`, one field per token in the design's
-//! `tokens/colors.css` (`docs/design/`). Colour rules: AGENTS.md "Design
-//! System".
+//! `tokens/colors.css` (`docs/design/`), plus `--code`, which only the
+//! frame sets. Colour rules: AGENTS.md "Design System".
 //!
 //! `DARK` (`:root`) and `LIGHT` (`.tui-light`) are chosen once by
 //! `Theme::from_config` and passed explicitly. Never a global or `OnceLock`:
@@ -23,7 +23,7 @@ use crate::tokens::{
 /// on any drift from the design.
 pub(crate) use crate::tokens::{DARK, LIGHT};
 
-/// One theme's colours, one field per `tokens/colors.css` token.
+/// One theme's colours, one field per role the generator carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Palette {
     /// The theme this palette belongs to, so holders need no separate `Theme`.
@@ -50,6 +50,9 @@ pub(crate) struct Palette {
     /// `--label3`: tertiary text (line numbers, folders, pending step, fold,
     /// an action not ready).
     pub label3: Color,
+    /// `--code`: code named in text — a `` `span` `` in prose, a call's
+    /// target, a file name in a label. Set by the frame, not `colors.css`.
+    pub code: Color,
     /// `--accent`: blue, the developer's only: `›`, `▎`, `◆`, `✓`, and the
     /// ready action's glyph.
     pub accent: Color,

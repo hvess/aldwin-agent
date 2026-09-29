@@ -5,7 +5,9 @@
 //! Four sources, each read for what only it states:
 //!
 //! * `tokens/colors.css`: every colour role, as `oklch()` (the light theme
-//!   also has six hexes), converted to sRGB here.
+//!   also has six hexes), converted to sRGB here. A role only the frame's
+//!   script sets (`--code`) is read from the frame; `colors.css` wins once
+//!   it declares one.
 //! * `tokens/layout.css`: the grid, in `ch` and `px`.
 //! * `guidelines/glyphs.html`: the closed glyph table, its only
 //!   machine-readable copy.
@@ -106,8 +108,14 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     let glyph_card = std::fs::read_to_string(design_dir.join("guidelines/glyphs.html"))?;
     let frame = std::fs::read_to_string(design_dir.join(FRAME))?;
 
-    let dark_raw = scope_declarations(&colors, ":root")?;
-    let light_raw = scope_declarations(&colors, ".tui-light")?;
+    let mut dark_raw = scope_declarations(&colors, ":root")?;
+    let mut light_raw = scope_declarations(&colors, ".tui-light")?;
+    for (role, dark_value, light_value) in frame_roles(&frame) {
+        if !dark_raw.contains_key(&role) {
+            dark_raw.insert(role.clone(), dark_value);
+            light_raw.insert(role, light_value);
+        }
+    }
 
     let uncarried = |role: &str| UNCARRIED.iter().any(|(name, _)| *name == role);
     let carried: Vec<&String> = dark_raw.keys().filter(|role| !uncarried(role)).collect();
@@ -720,6 +728,21 @@ fn frame_highlight(frame: &str) -> Result<Vec<u8>> {
     Ok(found.into_iter().rev().collect())
 }
 
+/// Roles the frame's script sets per theme, as (role, dark, light), from
+/// `setProperty('--code', this.light() ? '<light>' : '<dark>')`.
+fn frame_roles(frame: &str) -> Vec<(String, String, String)> {
+    frame
+        .split("setProperty('--")
+        .skip(1)
+        .filter_map(|call| {
+            let (role, rest) = call.split_once("', this.light() ? '")?;
+            let (light, rest) = rest.split_once("' : '")?;
+            let (dark, _) = rest.split_once("')")?;
+            Some((role.to_string(), dark.to_string(), light.to_string()))
+        })
+        .collect()
+}
+
 /// Every window in the frame, each the balanced `<div … data-screen-label="…">`
 /// subtree, so the canvas captions around them are never read as design.
 fn frame_windows(frame: &str) -> Vec<String> {
@@ -1079,6 +1102,19 @@ mod tests {
                 "--{role} is neither generated nor on the uncarried list"
             );
         }
+    }
+
+    #[test]
+    fn the_frame_sets_the_code_ink_for_both_themes() {
+        let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
+        assert_eq!(
+            frame_roles(&frame),
+            [(
+                "code".to_string(),
+                "oklch(0.8 0.085 212)".to_string(),
+                "oklch(0.5 0.1 218)".to_string()
+            )]
+        );
     }
 
     /// `--onfill` is declared only in the dark scope.

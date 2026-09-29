@@ -307,8 +307,8 @@ fn span_width(spans: &[Span<'static>]) -> usize {
 }
 
 /// Renders one prose line (fences are already split out). Styling is
-/// modifiers only: never underline (a stroke), never the accent (blue is
-/// the developer's, not the agent's prose).
+/// modifiers and inline code's `--code` only: never underline (a stroke),
+/// never the accent (blue is the developer's, not the agent's prose).
 pub(super) fn render_line(line: &str, ctx: Ctx) -> Line<'static> {
     let pal = ctx.pal;
     let base = Style::default().fg(pal.label);
@@ -372,11 +372,11 @@ pub(super) fn parse_inline(text: &str, base: Style, ctx: Ctx) -> Vec<Span<'stati
         if let Some(stripped) = rest.strip_prefix('`') {
             if let Some(end) = stripped.find('`') {
                 flush(&mut buf, base, &mut spans);
-                // On `--tint` like a fenced block; ink alone read as prose.
-                // No padding cells, so nothing after it shifts.
+                // The frame's `--code` ink on the line's own ground; the
+                // modifiers of an enclosing `**` or `*` do not reach it.
                 spans.push(Span::styled(
                     stripped[..end].to_string(),
-                    Style::default().fg(ctx.pal.label).bg(ctx.pal.tint),
+                    Style::default().fg(ctx.pal.code),
                 ));
                 rest = &stripped[end + 1..];
                 continue;

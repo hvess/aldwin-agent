@@ -958,7 +958,7 @@ fn a_click_on_a_drawn_diff_line_selects_that_line() {
     a.handle_mouse(click(MouseEventKind::Up(MouseButton::Left)));
     assert_eq!(
         a.review().unwrap().selection_label(),
-        Some(("1 line".into(), "f.rs · 7".into()))
+        Some(("1 line".into(), "f.rs".into(), "7".into()))
     );
     let buf = render(&mut a, 100, 36);
     assert_eq!(
@@ -1234,9 +1234,24 @@ fn the_comment_field_names_escape_as_the_footers_do() {
     let draft = label + 1;
     assert_eq!(
         caret(&mut a, 100, 30),
-        Some((MARGIN_X as u16 + 1, draft)),
-        "the caret after the edge"
+        Some(((MARGIN_X + MARK_COL) as u16, draft)),
+        "the caret after the mark column"
     );
+}
+
+/// Frame H: `router.rs · 144–145`, the name in `--code`, the range not.
+#[test]
+fn the_selection_label_draws_the_file_name_as_code() {
+    let mut a = app();
+    one_file_review(&mut a, "a\nb\n".into());
+    render(&mut a, 100, 30);
+    a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    let buf = render(&mut a, 100, 30);
+    let label = find_row(&buf, "Commenting on").unwrap();
+    let name = col_of(&buf, label, "f.rs · 1").unwrap() as u16;
+    let pal = Theme::Dark.palette();
+    assert_eq!(buf[(name, label)].fg, pal.code);
+    assert_eq!(buf[(name + 5, label)].fg, pal.label2);
 }
 
 /// Regression: a table cut on a column's edge dropped the rest with no `…`.
@@ -1253,6 +1268,25 @@ fn a_table_too_narrow_for_its_columns_ends_every_row_in_an_ellipsis() {
             }
             assert!(text.ends_with('…'), "width {width}: {text:?}");
         }
+    }
+}
+
+/// Frame B's prose: a `` `span` `` loses its backticks and takes `--code`
+/// on the line's own ground, in both themes.
+#[test]
+fn inline_code_is_drawn_in_the_code_ink_without_its_backticks() {
+    for theme in [Theme::Dark, Theme::Light] {
+        let pal = theme.palette();
+        let line = &render_prose("Adding a limit in `limit.rs`.", Ctx::new(pal, 80))[0];
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "Adding a limit in limit.rs.");
+        let code = line
+            .spans
+            .iter()
+            .find(|s| s.content == "limit.rs")
+            .expect("the span is its own run");
+        assert_eq!(code.style.fg, Some(pal.code), "{theme:?}");
+        assert_eq!(code.style.bg, None, "{theme:?}: no band behind it");
     }
 }
 

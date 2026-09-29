@@ -45,7 +45,7 @@ pub use {
 };
 
 /// Every colour the app may paint in `theme`, generated from
-/// `docs/design/tokens/`; for `tests/render_snapshot.rs`.
+/// `docs/design/`; for `tests/render_snapshot.rs`.
 #[cfg(feature = "test-util")]
 pub fn design_palette(theme: Theme) -> &'static [ratatui::style::Color] {
     match theme {

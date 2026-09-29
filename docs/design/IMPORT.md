@@ -1,6 +1,32 @@
 # Design import — provenance
 
-## Re-sync — 2026-09-29, the frame only
+## Re-sync — 2026-09-29, code has its own ink
+
+`Aldwin Agent TUI.dc.html` was fetched again from the discussion project
+and replaces the local copy verbatim (89 KB). The README and
+`tokens/colors.css` in the design-system project and in the bound `_ds/`
+copy were fetched and are unchanged.
+
+What the frame changed:
+
+- **`--code`**, a teal (`oklch(0.8 0.085 212)` dark, `oklch(0.5 0.1 218)`
+  light), set by the frame's script with `setProperty` and declared in no
+  token file (baseline `code-ink-is-the-frames-not-colors-css`). The
+  frame draws in it every name of code: `limit.rs` and `settings.toml` in
+  prose, a detail row's target, the working line's target (the script
+  marks where it begins, `["Reading router.rs", 8]`, and the highlight
+  passes over it) and `router.rs` in the comment field's label. The
+  first fetch also drew `config` and `100` in frame H's draft; the
+  developer took that out the same day ("we won't support rich text in
+  input fields"), and the second fetch, imported here, draws the draft
+  in `label`.
+- **The canvas lost its theme button and its accent picker**; the theme
+  is a prop again. Neither is drawn inside a window.
+
+The generator reads `--code` from the frame (`frame_roles`) until
+`colors.css` declares it.
+
+## Re-sync — 2026-09-29, the working line
 
 `Aldwin Agent TUI.dc.html` was fetched from the discussion project and
 replaces the local copy verbatim (92 KB). The README, all five token files
@@ -107,7 +133,7 @@ and in `_ds/…/` were fetched and are byte-identical.
 | `tokens/elevation.css` | verbatim |
 | `tokens/motion.css` | verbatim |
 | `guidelines/glyphs.html` | `b9de8837-…/guidelines/glyphs.html`, verbatim — **the generator's glyph source** (see below) |
-| `frames/Aldwin Agent TUI.dc.html` | `25845063-…/Aldwin Agent TUI.dc.html`, verbatim, 92 KB since 2026-09-29 |
+| `frames/Aldwin Agent TUI.dc.html` | `25845063-…/Aldwin Agent TUI.dc.html`, verbatim, 89 KB since the second 2026-09-29 re-sync |
 
 The frame is imported this time. Under Mjolnir the frames were "left for a
 targeted fetch" because they were large and restated their palette inline;

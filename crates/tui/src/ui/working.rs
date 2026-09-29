@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
@@ -38,8 +38,8 @@ pub(super) fn mark(line: &WorkingLine, tick: u64, motion: Motion, pal: &Palette)
 }
 
 /// The phrase and the timer, fitted to `room` cells: the phrase is
-/// shortened, the timer never. Under reduced motion the phrase is whole and
-/// in `label` from its first tick.
+/// shortened, the timer never. Under reduced motion the phrase is whole from
+/// its first tick, in `label` up to the call's target.
 pub(super) fn words(
     line: &WorkingLine,
     motion: Motion,
@@ -48,27 +48,45 @@ pub(super) fn words(
 ) -> Vec<Span<'static>> {
     let timer = format!("  {}m {:02}s", line.seconds / 60, line.seconds % 60);
     let phrase = elide(&line.words, room.saturating_sub(timer.width()));
+    let all = phrase.chars().count();
     let mut spans = match (line.stalled, motion) {
-        (true, _) => vec![Span::styled(phrase, Style::default().fg(pal.label2))],
-        (false, Motion::Reduced) => vec![Span::styled(phrase, Style::default().fg(pal.label))],
-        (false, Motion::Full) => animated(&phrase, line.age, pal),
+        (true, _) => runs(&phrase, all, line.code_at, pal, |_| pal.label2),
+        (false, Motion::Reduced) => runs(&phrase, all, line.code_at, pal, |_| pal.label),
+        (false, Motion::Full) => animated(&phrase, line.age, line.code_at, pal),
     };
     spans.push(Span::styled(timer, Style::default().fg(pal.label3)));
     spans
 }
 
 /// `phrase` `age` ticks after it began: typing in, then the highlight
-/// sweeping it on a loop. Runs of one colour share a span.
-fn animated(phrase: &str, age: u64, pal: &Palette) -> Vec<Span<'static>> {
+/// sweeping it on a loop.
+fn animated(phrase: &str, age: u64, code_at: Option<usize>, pal: &Palette) -> Vec<Span<'static>> {
     let len = phrase.chars().count();
     let typing = len.div_ceil(TYPED_PER_TICK) as u64;
     // The highlight's centre, offset by `RUN_OUT` so it stays unsigned.
     let sweep = (age >= typing).then(|| ((age - typing) % (len + 2 * RUN_OUT) as u64) as usize);
     let shown = len.min((age as usize + 1).saturating_mul(TYPED_PER_TICK));
+    runs(phrase, shown, code_at, pal, |i| {
+        sweep.map_or(pal.label, |s| pal.highlight((i + RUN_OUT).abs_diff(s)))
+    })
+}
 
+/// The first `shown` characters of `phrase`, each in `tone(i)` up to
+/// `code_at` and in `--code` from it, which the highlight does not touch
+/// (frame `W2`). Runs of one colour share a span.
+fn runs(
+    phrase: &str,
+    shown: usize,
+    code_at: Option<usize>,
+    pal: &Palette,
+    tone: impl Fn(usize) -> Color,
+) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, c) in phrase.chars().take(shown).enumerate() {
-        let colour = sweep.map_or(pal.label, |s| pal.highlight((i + RUN_OUT).abs_diff(s)));
+        let colour = match code_at {
+            Some(at) if i >= at => pal.code,
+            _ => tone(i),
+        };
         match spans.last_mut() {
             Some(last) if last.style.fg == Some(colour) => last.content.to_mut().push(c),
             _ => spans.push(Span::styled(c.to_string(), Style::default().fg(colour))),
@@ -82,9 +100,12 @@ mod tests {
     use super::*;
     use crate::palette::DARK;
 
+    /// A line whose target begins at char 8, as `Reading router.rs`'s
+    /// does in frame `W2`.
     fn line(words: &str, age: u64) -> WorkingLine {
         WorkingLine {
             words: words.into(),
+            code_at: Some(8),
             age,
             stalled: false,
             seconds: 62,
@@ -93,6 +114,14 @@ mod tests {
 
     fn text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Each character's colour, the timer's included.
+    fn colours(spans: &[Span]) -> Vec<Color> {
+        spans
+            .iter()
+            .flat_map(|s| s.content.chars().map(move |_| s.style.fg.unwrap()))
+            .collect()
     }
 
     /// Frame `W2`'s first four rows, 100ms apart.
@@ -106,9 +135,11 @@ mod tests {
         ] {
             let spans = words(&line("Reading router.rs", age), Motion::Full, &DARK, 80);
             assert_eq!(text(&spans), format!("{typed}  1m 02s"));
-            assert!(spans[..spans.len() - 1]
-                .iter()
-                .all(|s| s.style.fg == Some(DARK.label)));
+            let typed = &colours(&spans)[..typed.len()];
+            for (i, colour) in typed.iter().enumerate() {
+                let wanted = if i < 8 { DARK.label } else { DARK.code };
+                assert_eq!(*colour, wanted, "{i} at {age}");
+            }
         }
     }
 
@@ -117,16 +148,17 @@ mod tests {
     /// first `a`.
     #[test]
     fn the_highlight_runs_in_from_the_left_once_typed() {
-        let colours = |age| {
-            animated("Reading router.rs", age, &DARK)
-                .iter()
-                .flat_map(|s| s.content.chars().map(move |_| s.style.fg.unwrap()))
-                .collect::<Vec<_>>()
-        };
+        let colours = |age| colours(&animated("Reading router.rs", age, Some(8), &DARK));
         let (near, far) = (DARK.highlight(1), DARK.highlight(2));
-        assert!(colours(6).iter().all(|c| *c == far));
+        assert!(colours(6)[..8].iter().all(|c| *c == far));
         assert_eq!(&colours(9)[..2], &[near, far]);
         assert_eq!(&colours(12)[..5], &[far, near, DARK.label, near, far]);
+        for age in [6, 9, 12, 20] {
+            assert!(
+                colours(age)[8..].iter().all(|c| *c == DARK.code),
+                "the target keeps its ink under the highlight at {age}"
+            );
+        }
     }
 
     #[test]
@@ -154,6 +186,23 @@ mod tests {
         let spans = words(&working, reduced, &DARK, 80);
         assert_eq!(text(&spans), "Reading router.rs  1m 02s");
         assert_eq!(spans[0].style.fg, Some(DARK.label));
+        assert_eq!(spans[1].content, "router.rs");
+        assert_eq!(spans[1].style.fg, Some(DARK.code));
+    }
+
+    /// Frame `W2`'s stalled row: the lead in `label2`, the target in `--code`.
+    #[test]
+    fn a_stalled_line_keeps_its_target_in_code() {
+        let stalled = WorkingLine {
+            stalled: true,
+            code_at: Some(14),
+            ..line("Still reading router.rs", 0)
+        };
+        let spans = words(&stalled, Motion::Full, &DARK, 80);
+        assert_eq!(spans[0].content, "Still reading ");
+        assert_eq!(spans[0].style.fg, Some(DARK.label2));
+        assert_eq!(spans[1].content, "router.rs");
+        assert_eq!(spans[1].style.fg, Some(DARK.code));
     }
 
     #[test]

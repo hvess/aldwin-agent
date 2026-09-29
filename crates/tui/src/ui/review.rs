@@ -132,13 +132,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             chrome::draw_field(frame, field, app, &composer, None);
         }
         (None, true) => {
-            let (lines, location) = review.selection_label().unwrap_or_default();
             chrome::draw_comment_field(
                 frame,
                 field_area,
                 app,
-                &lines,
-                &location,
+                &review.selection_label().unwrap_or_default(),
                 review.comment.text(),
                 review.comment.cursor(),
             );

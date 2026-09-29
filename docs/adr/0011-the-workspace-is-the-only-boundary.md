@@ -2,8 +2,8 @@
 
 **Status:** accepted, 2026-09-24. Superseded in part by 0014 (§1 for MCP
 servers: they get no workspace root).
-**Supersedes:** ADR 0009 §1 (a `run` declares a class and a read is held
-to it), §2 (a deny is a lock) and §3 (an unenforceable read runs
+**Supersedes:** ADR 0008 §6 (declare reads as reads); ADR 0009 §1 (a
+`run` declares a class and a read is held to it), §2 (a deny is a lock) and §3 (an unenforceable read runs
 unconfined); ADR 0004 §1 (argv only, never a shell) and §7 (a deny is a
 lock), and with them what ADR 0007 §2 built on argv (per-argument path
 containment). **Keeps:** ADR 0007 whole otherwise — reach is a list of

@@ -176,7 +176,8 @@ a decision they cover.
   superseded. `roots:` in `permissions.yaml` is the one way to widen the
   workspace.
 - **0008 — Discussion-first is about intent, not grammar.** Unchanged,
-  except its bar for adding a prompt clause: 0016.
+  except §6, which went with the run class (0011), and its bar for adding
+  a prompt clause (0016).
 - **0009 — The review is the only gate.** *§1–§3 superseded by 0011.* Reads
   and runs need no grant and never ask. An edit is staged, every edit of a
   turn is one changeset, and the review opens at the first moment the

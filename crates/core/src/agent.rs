@@ -676,57 +676,64 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
     /// Rebuilds the message list from the log. Log order is the provider's
     /// emission order, which it wants back (ADR 0006 §2).
     fn messages_from_log(&self) -> Vec<Message> {
-        let mut messages: Vec<Message> = Vec::new();
+        self.log.with_records(|records| {
+            let mut messages: Vec<Message> = Vec::new();
 
-        for record in self.log.snapshot().iter() {
-            match record {
-                LogRecord::UserMessage { text, .. } => messages.push(Message::user(text.clone())),
-                LogRecord::AssistantMessage { text, .. } => {
-                    push_assistant_block(&mut messages, ContentBlock::Text { text: text.clone() });
-                }
-                LogRecord::Thinking {
-                    text, signature, ..
-                } => {
-                    let block = ContentBlock::Thinking {
-                        text: text.clone(),
-                        signature: signature.clone(),
-                    };
-                    push_assistant_block(&mut messages, block);
-                }
-                LogRecord::RedactedThinking { data, .. } => {
-                    push_assistant_block(
-                        &mut messages,
-                        ContentBlock::RedactedThinking { data: data.clone() },
-                    );
-                }
-                LogRecord::ToolUse { call, .. } => {
-                    push_assistant_block(&mut messages, ContentBlock::ToolUse(call.clone()));
-                }
-                LogRecord::ToolResult { result, .. } => {
-                    let block = ContentBlock::ToolResult(result.clone());
-                    match messages.last_mut() {
-                        Some(last)
-                            if last.role == Role::User
-                                && matches!(
-                                    last.content.first(),
-                                    Some(ContentBlock::ToolResult(_))
-                                ) =>
-                        {
-                            last.content.push(block);
-                        }
-                        _ => messages.push(Message {
-                            role: Role::User,
-                            content: vec![block],
-                        }),
+            for record in records {
+                match record {
+                    LogRecord::UserMessage { text, .. } => {
+                        messages.push(Message::user(text.clone()))
                     }
+                    LogRecord::AssistantMessage { text, .. } => {
+                        push_assistant_block(
+                            &mut messages,
+                            ContentBlock::Text { text: text.clone() },
+                        );
+                    }
+                    LogRecord::Thinking {
+                        text, signature, ..
+                    } => {
+                        let block = ContentBlock::Thinking {
+                            text: text.clone(),
+                            signature: signature.clone(),
+                        };
+                        push_assistant_block(&mut messages, block);
+                    }
+                    LogRecord::RedactedThinking { data, .. } => {
+                        push_assistant_block(
+                            &mut messages,
+                            ContentBlock::RedactedThinking { data: data.clone() },
+                        );
+                    }
+                    LogRecord::ToolUse { call, .. } => {
+                        push_assistant_block(&mut messages, ContentBlock::ToolUse(call.clone()));
+                    }
+                    LogRecord::ToolResult { result, .. } => {
+                        let block = ContentBlock::ToolResult(result.clone());
+                        match messages.last_mut() {
+                            Some(last)
+                                if last.role == Role::User
+                                    && matches!(
+                                        last.content.first(),
+                                        Some(ContentBlock::ToolResult(_))
+                                    ) =>
+                            {
+                                last.content.push(block);
+                            }
+                            _ => messages.push(Message {
+                                role: Role::User,
+                                content: vec![block],
+                            }),
+                        }
+                    }
+                    LogRecord::TurnStarted { .. }
+                    | LogRecord::StepBoundary { .. }
+                    | LogRecord::TurnEnded { .. } => {}
                 }
-                LogRecord::TurnStarted { .. }
-                | LogRecord::StepBoundary { .. }
-                | LogRecord::TurnEnded { .. } => {}
             }
-        }
 
-        messages
+            messages
+        })
     }
 }
 

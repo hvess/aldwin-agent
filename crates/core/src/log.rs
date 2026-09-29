@@ -63,13 +63,19 @@ impl ConversationLog {
         self.inner.write().expect("log lock poisoned").push(record);
     }
 
-    /// An immutable copy of every record so far. O(n) clones per call,
-    /// acceptable only because the agent calls it once per turn.
+    /// `f` over every record so far, read in place under the log's lock: a
+    /// turn rebuilds its messages from a log as long as the session.
     ///
     /// # Panics
     ///
     /// If the log's lock is poisoned.
-    pub fn snapshot(&self) -> Arc<[LogRecord]> {
+    pub fn with_records<R>(&self, f: impl FnOnce(&[LogRecord]) -> R) -> R {
+        f(&self.inner.read().expect("log lock poisoned"))
+    }
+
+    /// A copy of every record so far.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Arc<[LogRecord]> {
         let guard = self.inner.read().expect("log lock poisoned");
         guard.as_slice().into()
     }

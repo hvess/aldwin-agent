@@ -8,7 +8,7 @@ past session can be listed and resumed from inside a running one.
 and its picker, and what a resumed session restores. Excludes the LLM wire
 format, the permission engine, retention, and any launch-time entry point.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 ## The stale line
 
@@ -219,8 +219,9 @@ All done, 2026-09-20.
 - Resume quietly restoring permission grants along with the transcript, on the
   reasoning that "the developer already approved this" — it re-creates a
   persistent allowlist through the back door and breaks ADR 0004's grant model.
-- `snapshot()`'s O(n) clone (`log.rs:23`) is fine once per turn but is *not*
-  fine as the write path. Append one record; never re-serialise the log.
+- `snapshot()`'s O(n) clone (`ConversationLog::snapshot`) is fine once per turn but is *not*
+  fine as the write path (since 2026-09-30 test-only: a turn reads the log in
+  place through `ConversationLog::with_records`). Append one record; never re-serialise the log.
 - Writing a close/seal record and treating its absence as corruption — a killed
   process never writes one. Sealing must be implicit.
 - The header's `title` drifting toward an LLM-generated summary because the

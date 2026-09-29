@@ -5,11 +5,20 @@ Agent loop, append-only conversation state, and the typed boundary between LLM a
 **Status:** archived — implemented, tested, audited
 **Scope:** aldwin-core crate only — narrow cut. Excludes tool implementations, permissions, TUI, and provider wire format.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 **Completed:** 2026-08-29. Implemented in full (agent loop, append-only log,
 event/command types, LlmClient/ToolDispatcher trait boundary) —
 `34760d6`, `440c699`. No known gaps against this spec.
+
+**Post-archive fix (2026-09-30, the complexity audit):** Each turn rebuilt
+its messages from `ConversationLog::snapshot`, a copy of the whole log, and
+then copied every record again into messages. It now reads the log in place
+under its lock (`ConversationLog::with_records`), so the conversation is
+copied once per turn, into the messages the request borrows; `snapshot` is
+test-only. `/resume` still clones the loaded records once, for the log and
+for `Event::HistoryLoaded`: both own them, and the copy costs what the load
+does, once per resume.
 
 **Post-archive fix (2026-08-29):** A live run surfaced a real bug in
 `run_step`: the live in-turn `messages` vector only appended a `ToolUse`
@@ -88,11 +97,11 @@ The narrow heart of Aldwin — the agent loop, the canonical conversation log, a
 - **Step:** One round-trip with the model — a single LLM call and its streaming response.
 - **Event:** A typed message emitted upward (toward the TUI, future web client) describing a state change. Designed to serialise cleanly to JSON-RPC notifications.
 - **Command:** A typed message accepted downward — submit, cancel, approve. The inverse of `event`.
-- **Log:** The canonical conversation state. Append-only. Owned by the core, exposed read-only via snapshots.
+- **Log:** The canonical conversation state. Append-only. Owned by the core, exposed read-only (in place through `with_records` since 2026-09-30).
 
 ## Design
 
-- **State Model:** Single append-only log of structured records (user messages, assistant messages, tool calls, tool results, step boundaries, turn boundaries). Mutation only via the command path; readers receive immutable snapshots. V1's web client reconnects via "give me everything since cursor X".
+- **State Model:** Single append-only log of structured records (user messages, assistant messages, tool calls, tool results, step boundaries, turn boundaries). Mutation only via the command path; readers receive immutable snapshots (since 2026-09-30, a read-only borrow under the log's lock: see that post-archive fix). V1's web client reconnects via "give me everything since cursor X".
 - **Turn/Step Model:** A turn opens on Submit and closes when an inner step ends with no pending tool calls (or on cancellation / terminal error). A step opens when the LlmClient begins a request and closes on its terminal step-ended event. Both levels are observable so the loop's real round-trip count is visible.
 - **Event Flow:** Per step the LlmClient yields: text deltas, thinking start/end markers (content dropped at source), one tool-use-requested per tool call carrying the fully assembled input, and a terminal step-ended carrying stop reason or structured error plus usage and cache stats. The core re-emits these annotated with step/turn IDs and appends to the log.
 - **Tool Round Trip:** A step ending with tool_use carries one or more tool calls. The core dispatches concurrently, awaits all results, and starts the next step with results appended. Tool errors feed back to the model but emit upward as visibly distinct events. Approval-gated tools (Edit) wait inside the dispatcher's future; the core just awaits.
@@ -128,7 +137,7 @@ The narrow heart of Aldwin — the agent loop, the canonical conversation log, a
 
 ## Decisions
 
-- **Append-only conversation log, exposed read-only via snapshots.** — One place owns conversation state. Append-only matches how conversations accrete and catches a class of mutation bugs at compile time. Snapshots give the TUI and future web client a clean read model.
+- **Append-only conversation log, exposed read-only via snapshots.** (Read in place since 2026-09-30: see that post-archive fix.) — One place owns conversation state. Append-only matches how conversations accrete and catches a class of mutation bugs at compile time. Snapshots give the TUI and future web client a clean read model.
 
 - **Both turn and step are first-class in the event model.** — Turn is what the user thinks about; step is what happens on the wire. Exposing both lets the developer inspect the loop's real behaviour — on-spec for "developer's understanding is the product".
 

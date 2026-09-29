@@ -4,6 +4,9 @@
 //! items, `Thinking` its text and time, `Plan` is replaced, `Question` gains
 //! its answer.
 
+use std::ops::{Deref, Index, IndexMut};
+use std::slice::SliceIndex;
+
 use aldwin_core::{Failure, FailureKind, PlanStep, RetryInfo, ReviewOutcome};
 
 /// One entry in the conversation log.
@@ -158,6 +161,85 @@ impl LogEntry {
             detail: Some(failure.message),
             open: false,
         }
+    }
+}
+
+/// The conversation log. Every mutation goes through a method that notes
+/// the lowest entry it may have changed, so the transcript re-renders from
+/// there and a frame with nothing new looks at no logged entry (big-o skill).
+#[derive(Debug, Default)]
+pub(crate) struct Log {
+    entries: Vec<LogEntry>,
+    /// Entries from here on may differ from what the transcript last saw.
+    changed_from: usize,
+}
+
+impl Log {
+    fn touch(&mut self, index: usize) {
+        self.changed_from = self.changed_from.min(index);
+    }
+
+    pub(crate) fn push(&mut self, entry: LogEntry) {
+        self.touch(self.entries.len());
+        self.entries.push(entry);
+    }
+
+    pub(crate) fn last_mut(&mut self) -> Option<&mut LogEntry> {
+        self.touch(self.entries.len().saturating_sub(1));
+        self.entries.last_mut()
+    }
+
+    /// Entries `start..`, or none past the end.
+    pub(crate) fn tail(&self, start: usize) -> &[LogEntry] {
+        &self.entries[start.min(self.entries.len())..]
+    }
+
+    /// Entries `start..`, all counted as changed.
+    pub(crate) fn tail_mut(&mut self, start: usize) -> &mut [LogEntry] {
+        let start = start.min(self.entries.len());
+        self.touch(start);
+        &mut self.entries[start..]
+    }
+
+    pub(crate) fn remove(&mut self, index: usize) -> LogEntry {
+        self.touch(index);
+        self.entries.remove(index)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.touch(0);
+        self.entries.clear();
+    }
+
+    /// The lowest entry changed since the last call; the log's length when
+    /// none was.
+    pub(crate) fn take_changed(&mut self) -> usize {
+        std::mem::replace(&mut self.changed_from, self.entries.len())
+    }
+}
+
+impl Deref for Log {
+    type Target = [LogEntry];
+
+    fn deref(&self) -> &[LogEntry] {
+        &self.entries
+    }
+}
+
+// Every `SliceIndex`, not `usize` alone: an `Index` impl on `Log` hides the
+// slice's own, so a range (`log[a..]`) needs this one too.
+impl<I: SliceIndex<[LogEntry]>> Index<I> for Log {
+    type Output = I::Output;
+
+    fn index(&self, index: I) -> &I::Output {
+        &self.entries[index]
+    }
+}
+
+impl IndexMut<usize> for Log {
+    fn index_mut(&mut self, index: usize) -> &mut LogEntry {
+        self.touch(index);
+        &mut self.entries[index]
     }
 }
 
@@ -377,6 +459,30 @@ pub fn first_line(content: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use aldwin_core::LlmError;
+
+    fn text(t: &str) -> LogEntry {
+        LogEntry::UserMessage { text: t.into() }
+    }
+
+    #[test]
+    fn the_log_reports_the_lowest_entry_any_mutation_reached() {
+        let mut log = Log::default();
+        for t in ["a", "b", "c", "d"] {
+            log.push(text(t));
+        }
+        assert_eq!(log.take_changed(), 0, "a new log changed from the start");
+        assert_eq!(log.take_changed(), 4, "nothing since");
+        log[2] = text("C");
+        log.push(text("e"));
+        assert_eq!(log.take_changed(), 2);
+        let _ = log.last_mut();
+        assert_eq!(log.take_changed(), 4);
+        let _ = log.tail_mut(1);
+        log.remove(3);
+        assert_eq!(log.take_changed(), 1);
+        log.clear();
+        assert_eq!(log.take_changed(), 0);
+    }
 
     #[test]
     fn a_thought_says_how_long_it_took_in_seconds_then_minutes() {

@@ -12,6 +12,28 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, a frame costs what changed):** The complexity audit
+(big-o and data-structures skills) found five paths doing work
+proportional to the whole conversation or file per frame or per key; each
+now costs what changed. The log is a `Log` that notes the lowest entry any
+mutation reached, and `Transcript::sync` starts there, so an idle frame
+(ten a second while the caret blinks), a scroll key and a replayed record
+no longer compare every entry. This brings back a declared change, which
+the transcript-cache entry below retired because a mutation site added
+later would show a stale conversation; the type now rules that out, since
+`Log` hands out no `&mut` except through a method that notes it. Comparing
+every unchanged entry is a full comparison of equal text, cheap at forty
+turns (0.001 ms) but paid per frame, per scroll event and per replayed
+record in a session of any length. A streaming reply or open thought keeps
+the rows before its last safe boundary (`Settled`: a blank line outside a
+fence, or a line end in a thought) and renders only the rest; a test
+streams a reply with fences and a table and compares every step with a
+fresh render. `finish_call` searches only this turn. The review keeps its
+drawn rows' spans (`ReviewFile::drawn`, rebuilt when a fold opens), finds a
+line's row by `partition_point`, and draws only rows that can reach the
+pane. The draft keeps its last `Layout` until the next edit, and the
+composer is measured once per frame.
+
 **Progress (2026-09-29, `⌃C` over a review):** A single `⌃C` in a review
 does nothing, and a second within `DOUBLE_CTRL_C_TICKS` quits: see
 Decisions. It used to stop the turn, which left an undecided review on
@@ -3599,7 +3621,9 @@ Three findings, in the order they were confirmed:
    transcript changed" any more; `sync` asks the data. That was the right
    trade twice over -- the flag had to be set from `push`, `apply_event`
    *and* `resolve_decision`, and a fourth mutation site added later would
-   have shown a stale conversation with nothing to catch it.
+   have shown a stale conversation with nothing to catch it. (Superseded
+   2026-09-29: a declared change came back, and the `Log` type, not each
+   mutation site, now sets it. See that Progress.)
 
 2. **One `terminal.draw` per event.** At 60 tokens/second that is 60 frames
    a second of full-frame work to paint a difference no one can see; on a
@@ -3643,7 +3667,8 @@ append on a 40-turn transcript against one on a 2-turn transcript, which
 goes to an 11x ratio the moment invalidation goes back to whole-log.
 
 **What is deliberately still re-rendered:** the one entry currently being
-streamed into, at the frame rate rather than per token. It is the only entry
+streamed into, at the frame rate rather than per token. (Since 2026-09-29
+only its text after the last safe boundary: see that Progress.) It is the only entry
 in the log whose value is still changing, so it is the only one that cannot
 be rendered once and kept. Asking "did anything else change?" over a 40-turn
 transcript measures 0.001 ms.

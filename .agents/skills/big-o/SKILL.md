@@ -147,11 +147,17 @@ It matters when either factor is unbounded:
 
 **The worked example is the transcript** (`crates/tui/src/ui/transcript.rs`).
 Re-rendering every entry per streamed token was O(entries × rows) per frame
-and cost 58% of a core at four turns. The fix is two techniques from the
-data-structures skill: rendered rows are cached per entry and rebuilt only
-when the entry differs (memoization, O(changed) per frame), and `starts`
-holds prefix sums of row counts so `viewport` finds the first visible block
-with `partition_point` — O(log entries + height) instead of O(total rows).
+and cost 58% of a core at four turns. The first fix cached rendered rows
+per entry — but still compared every entry with its copy each frame, and
+re-rendered a streaming reply from its first byte, so a frame stayed
+O(conversation). What it does now, and what to copy: the log records the
+lowest entry any mutation reached (`Log::take_changed`), so a frame looks
+only from there (O(changed)); a streaming reply keeps the rows before its
+last blank line outside a fence, which later text cannot change, and
+renders only the tail; and `starts` holds prefix sums of row counts so
+`viewport` finds the first visible block with `partition_point` —
+O(log entries + height) instead of O(total rows). A cache that must still
+compare everything to find what changed has not removed the O(n).
 
 ## Checking a change
 

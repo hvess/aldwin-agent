@@ -48,7 +48,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     // match the draw below.
     let typed = !app.draft.text().trim().is_empty();
     let action_width = action_for(review, typed).map_or(0, |a| a.width());
-    let composer = Composer::new(app.draft.text(), area.width, action_width);
+    let composer = Composer::new(&app.draft, area.width, action_width);
     let field_rows: u16 = match (band_question(app, review), review.commenting()) {
         (Some((q, Some(list))), _) => question::panel_rows(&q, Some(list), area.width),
         (Some((q, None)), _) => question::panel_rows(&q, None, area.width) + 1 + composer.height(),
@@ -328,7 +328,7 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (
     );
     let mut lines: Vec<Line<'static>> = vec![Line::default(), header, Line::default()];
 
-    let rows = file.rows();
+    let count = file.row_count();
     let height = (area.height as usize).saturating_sub(3);
     let selection = review.selection();
     // A comment is drawn once, on the last line of its range (frame I).
@@ -338,40 +338,44 @@ fn draw_diff(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> (
             .find(|c| c.lines.1 == line)
             .map(|c| c.text.clone())
     };
-    let drawn: Vec<Vec<Line<'static>>> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let selected = selection.is_some_and(|(a, b)| a <= i && i <= b);
-            diff_row(row, selected, comment_for, ctx)
-        })
-        .collect();
+    // Only rows that can reach the pane are rendered: a file can be
+    // thousands of rows, and an open review draws ten frames a second.
+    let render = |i: usize| {
+        let selected = selection.is_some_and(|(a, b)| a <= i && i <= b);
+        file.row(i)
+            .map(|row| diff_row(&row, selected, comment_for, ctx))
+            .unwrap_or_default()
+    };
 
     // The largest scroll offset that still fills the pane.
-    let mut last_top = rows.len();
+    let mut last_top = count;
     let mut below = 0;
-    while last_top > 0 && below + drawn[last_top - 1].len() <= height {
+    while last_top > 0 {
+        let rows = render(last_top - 1).len();
+        if below + rows > height {
+            break;
+        }
         last_top -= 1;
-        below += drawn[last_top].len();
+        below += rows;
     }
     let top = review.scroll.min(last_top);
 
     let mut shown = Vec::new();
     let mut whole = None;
-    for (i, row_lines) in drawn.iter().enumerate().skip(top) {
+    for i in top..count {
         let room = height - shown.len();
         if room == 0 {
             break;
         }
+        let row_lines = render(i);
         if row_lines.len() <= room {
             whole = Some(i);
         }
-        for line in row_lines.iter().take(room) {
-            lines.push(line.clone());
-            shown.push(i);
-        }
+        let fit = row_lines.len().min(room);
+        lines.extend(row_lines.into_iter().take(fit));
+        shown.extend(std::iter::repeat_n(i, fit));
     }
-    let saw_bottom = rows.is_empty() || whole == Some(rows.len() - 1);
+    let saw_bottom = count == 0 || whole == Some(count - 1);
     let bottom = whole.unwrap_or(top);
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
     let pane = Pane {

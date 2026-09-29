@@ -159,9 +159,10 @@ indexed by subproblem). Naive Fibonacci is O(2ⁿ); memoized it is O(n).
 again; memoization is a cache of a function's results keyed by its inputs.
 Every cache needs a stated **invalidation rule** — what change makes an
 entry stale — and a bound on its size. The model here is the transcript
-(`crates/tui/src/ui/transcript.rs`): rendered rows cached per log entry,
-an entry re-rendered only when it differs by `==` from its cached copy, the
-whole cache dropped when the width or theme changes, and prefix sums over
+(`crates/tui/src/ui/transcript.rs`): rendered rows cached per log entry;
+the log itself notes the lowest entry changed, so only entries from there
+are compared and re-rendered — invalidation told, not searched for; the
+whole cache dropped when the width or theme changes; and prefix sums over
 the rows so the viewport is found by `partition_point`.
 
 ## Before choosing

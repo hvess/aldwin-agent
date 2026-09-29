@@ -4,6 +4,8 @@
 //!
 //! No drawing here: `ui::review` reads this and `App` drives it.
 
+use std::borrow::Cow;
+
 use aldwin_core::{Changeset, Question, ReviewComment, ReviewDecision};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -118,6 +120,11 @@ pub struct ReviewFile {
     unfolded: Vec<DiffRow>,
     /// Unexpanded folds over `unfolded`, as (start row, length), in order.
     folds: Vec<(usize, usize)>,
+    /// Each drawn row as the unfolded rows it stands for: `(start, len,
+    /// folded)`, in order. Derived from `folds`: [`ReviewFile::refold`]
+    /// rebuilds it, a walk of the whole file, only when a fold opens; a
+    /// frame, a scroll or a selection looks rows up in it.
+    drawn: Vec<(usize, usize, bool)>,
     /// The `+11` of `+11 −2`; `removed_lines` is the `−2`.
     pub added_lines: usize,
     pub removed_lines: usize,
@@ -127,12 +134,11 @@ pub struct ReviewFile {
 }
 
 impl ReviewFile {
-    /// Each drawn row as the unfolded rows it stands for: `(start, len,
-    /// folded)`.
-    fn spans(&self) -> impl Iterator<Item = (usize, usize, bool)> + '_ {
+    /// Rebuilds `drawn` from `unfolded` and `folds`.
+    fn refold(&mut self) {
         let mut i = 0;
         let mut folds = self.folds.iter().peekable();
-        std::iter::from_fn(move || {
+        self.drawn = std::iter::from_fn(|| {
             if i >= self.unfolded.len() {
                 return None;
             }
@@ -146,44 +152,62 @@ impl ReviewFile {
             i += span.1;
             Some(span)
         })
+        .collect();
     }
 
-    /// The rows as drawn: folds collapsed to one row each.
-    pub fn rows(&self) -> Vec<DiffRow> {
-        self.spans()
-            .map(|(start, len, folded)| {
-                if folded {
-                    DiffRow::Fold { first: start, len }
-                } else {
-                    self.unfolded[start].clone()
-                }
-            })
+    /// How many rows are drawn: folds collapsed to one row each.
+    pub(crate) fn row_count(&self) -> usize {
+        self.drawn.len()
+    }
+
+    /// Drawn row `row`: borrowed, or built for a fold.
+    pub(crate) fn row(&self, row: usize) -> Option<Cow<'_, DiffRow>> {
+        let &(start, len, folded) = self.drawn.get(row)?;
+        Some(if folded {
+            Cow::Owned(DiffRow::Fold { first: start, len })
+        } else {
+            Cow::Borrowed(&self.unfolded[start])
+        })
+    }
+
+    /// The rows as drawn, cloned.
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> Vec<DiffRow> {
+        (0..self.row_count())
+            .filter_map(|i| self.row(i).map(Cow::into_owned))
             .collect()
     }
 
     /// The unfolded rows drawn row `row` stands for, first and last.
     fn span_of(&self, row: usize) -> Option<(usize, usize)> {
-        self.spans()
-            .nth(row)
-            .map(|(start, len, _)| (start, start + len - 1))
+        self.drawn
+            .get(row)
+            .map(|&(start, len, _)| (start, start + len - 1))
     }
 
     /// The drawn row that shows unfolded row `unfolded` — its own, or the
-    /// fold hiding it.
+    /// fold hiding it; 0 past the end.
     fn row_of(&self, unfolded: usize) -> usize {
-        self.spans()
-            .position(|(start, len, _)| unfolded < start + len)
-            .unwrap_or(0)
+        let row = self
+            .drawn
+            .partition_point(|&(start, len, _)| start + len <= unfolded);
+        if row < self.drawn.len() {
+            row
+        } else {
+            0
+        }
     }
 
     /// Opens the fold starting at unfolded row `first`.
     pub fn expand(&mut self, first: usize) {
         self.folds.retain(|&(start, _)| start != first);
+        self.refold();
     }
 
     /// Opens every fold.
     pub(crate) fn expand_all(&mut self) {
         self.folds.clear();
+        self.refold();
     }
 
     pub(crate) fn has_folds(&self) -> bool {
@@ -417,7 +441,7 @@ impl Review {
     /// otherwise it becomes the one line past the head. With nothing
     /// selected, selects the first line shown.
     fn step_selection(&mut self, up: bool, extend: bool) {
-        let rows = self.file().rows().len();
+        let rows = self.file().row_count();
         let Some(selected) = self.selected else {
             let top = self.scroll.min(rows.saturating_sub(1));
             self.select(top, top);
@@ -492,7 +516,7 @@ impl Review {
                 let Some(at) = self.row_at(column, row, false) else {
                     return;
                 };
-                if let Some(DiffRow::Fold { first, .. }) = self.file().rows().get(at) {
+                if let Some(DiffRow::Fold { first, .. }) = self.file().row(at).as_deref() {
                     let first = *first;
                     self.file_mut().expand(first);
                     self.rows_changed();
@@ -838,16 +862,19 @@ fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
     }
 
     let folds = fold_runs(&unfolded);
-    ReviewFile {
+    let mut file = ReviewFile {
         path: path.to_string(),
         added: before.is_none(),
         unfolded,
         folds,
+        drawn: Vec::new(),
         added_lines,
         removed_lines,
         read: false,
         comments: Vec::new(),
-    }
+    };
+    file.refold();
+    file
 }
 
 /// Folds context runs, keeping `CONTEXT` lines beside each change (a run at
@@ -1628,6 +1655,29 @@ mod tests {
             0,
             "the sent comments are the agent's now"
         );
+    }
+
+    #[test]
+    fn each_drawn_row_and_the_lines_it_stands_for_agree_through_every_fold() {
+        let before = numbered(200);
+        let after = before
+            .replace("line 20\n", "line twenty\n")
+            .replace("line 150\n", "line 150!\n");
+        let mut r = review_of(Some(&before), &after);
+        let agree = |file: &ReviewFile| {
+            for row in 0..file.row_count() {
+                let (first, last) = file.span_of(row).unwrap();
+                assert_eq!((file.row_of(first), file.row_of(last)), (row, row));
+            }
+            assert_eq!(file.row_of(usize::MAX), 0, "past the end");
+        };
+        agree(r.file());
+        let fold = r.file().drawn.iter().find(|span| span.2).unwrap().0;
+        r.file_mut().expand(fold);
+        agree(r.file());
+        r.file_mut().expand_all();
+        agree(r.file());
+        assert_eq!(r.file().row_count(), r.file().unfolded.len());
     }
 
     #[test]

@@ -18,14 +18,13 @@ use aldwin_core::{ReviewOutcome, StepState};
 
 use crate::app::App;
 use crate::draft::expand_tabs;
-use crate::log::{plural, summarise_work, LogEntry};
+use crate::log::{plural, summarise_work, LogEntry, Took};
 use crate::palette::Theme;
 
-/// One entry's rows at `ctx.width`; each line must be exactly one screen
-/// row (see [`Transcript`]). `first` marks the first entry that rendered
-/// anything, which gets no leading blank row.
-fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
-    let rendered = render_entry(entry, ctx);
+/// An entry's rendered rows, each exactly one screen row (see
+/// [`Transcript`]), after a blank row unless `first`: the first entry that
+/// rendered anything gets none, and an entry that renders nothing gets none.
+fn spaced(rendered: Vec<Line<'static>>, first: bool) -> Vec<Line<'static>> {
     if rendered.is_empty() {
         return Vec::new();
     }
@@ -38,6 +37,90 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
+/// An entry whose text streams in: a fixed head, then a body rendered from
+/// the text. The body up to a boundary renders the same however the text
+/// goes on, so a re-render keeps those rows and renders only the rest.
+struct Streaming<'a> {
+    text: &'a str,
+    head: Vec<Line<'static>>,
+    body: fn(&str, Ctx) -> Vec<Line<'static>>,
+    /// The last offset in the text where its body can be split.
+    boundary: fn(&str) -> usize,
+}
+
+/// The rows of a streaming text that no later delta can change: `bytes` of
+/// its text rendered into the block's first `rows` rows.
+#[derive(Debug, Clone, Copy)]
+struct Settled {
+    bytes: usize,
+    rows: usize,
+}
+
+/// What one entry draws: finished rows, or a text still streaming in.
+enum Rendered<'a> {
+    Rows(Vec<Line<'static>>),
+    Stream(Streaming<'a>),
+}
+
+/// Just past the last blank line outside a code fence: fences and tables
+/// never span one, and every other line renders alone (`markdown`).
+fn prose_boundary(text: &str) -> usize {
+    let (mut at, mut boundary, mut fenced) = (0, 0, false);
+    for line in text.split_inclusive('\n') {
+        at += line.len();
+        if !line.ends_with('\n') {
+            break;
+        }
+        if fenced {
+            fenced = !markdown::fence_closes(line);
+        } else if markdown::fence_opens(line).is_some() {
+            fenced = true;
+        } else if line.trim().is_empty() {
+            boundary = at;
+        }
+    }
+    boundary
+}
+
+/// `stream`'s rows after `first`'s spacing, reusing the first `settled.rows`
+/// of `kept` (rendered from the same first `settled.bytes`); and how much is
+/// settled now.
+fn stream_rows(
+    stream: &Streaming,
+    first: bool,
+    ctx: Ctx,
+    kept: Option<(Vec<Line<'static>>, Settled)>,
+) -> (Vec<Line<'static>>, Option<Settled>) {
+    // `spaced`'s rule, applied in place: prepending would move every
+    // settled row on every frame.
+    let spacing = usize::from(!first);
+    let head = at_body(stream.head.clone());
+    let (mut rows, from) = match kept {
+        Some((mut rows, settled)) => {
+            rows.truncate(settled.rows);
+            rows.splice(spacing..spacing + head.len(), head);
+            (rows, settled.bytes)
+        }
+        None => {
+            let mut rows = vec![Line::default(); spacing];
+            rows.extend(head);
+            (rows, 0)
+        }
+    };
+    let rest = &stream.text[from..];
+    let split = from + (stream.boundary)(rest);
+    rows.extend(at_body((stream.body)(&stream.text[from..split], ctx)));
+    let settled = Settled {
+        bytes: split,
+        rows: rows.len(),
+    };
+    rows.extend(at_body((stream.body)(&stream.text[split..], ctx)));
+    if rows.len() == spacing {
+        return (Vec::new(), None);
+    }
+    (rows, Some(settled))
+}
+
 /// The transcript's screen rows, cached per log entry.
 ///
 /// A row here is a row on screen: nothing downstream wraps, so
@@ -46,8 +129,9 @@ fn block_rows(entry: &LogEntry, first: bool, ctx: Ctx) -> Vec<Line<'static>> {
 ///
 /// Per-entry, not one flat list: a streaming reply changes the last entry
 /// per token, and re-rendering everything cost 58% of a core at four turns.
-/// [`Transcript::sync`] re-renders only entries that differ by `==` from
-/// their cached copy.
+/// [`Transcript::sync`] looks only at entries from the first one the log
+/// says changed, and re-renders those that differ by `==` from their cached
+/// copy; a streaming text keeps its settled rows ([`Settled`]).
 #[derive(Debug, Default)]
 pub(crate) struct Transcript {
     width: u16,
@@ -65,12 +149,42 @@ struct CachedBlock {
     entry: LogEntry,
     first: bool,
     rows: Vec<Line<'static>>,
+    /// For a streaming entry, the rows its next render keeps.
+    settled: Option<Settled>,
+}
+
+impl CachedBlock {
+    fn render(entry: &LogEntry, first: bool, ctx: Ctx, old: Option<&mut CachedBlock>) -> Self {
+        let (rows, settled) = match render_entry(entry, ctx) {
+            Rendered::Stream(stream) => {
+                let kept = old.and_then(|old| {
+                    let settled = old.settled?;
+                    // Settled only while streaming, so this renders nothing.
+                    let same_prefix = old.first == first
+                        && std::mem::discriminant(&old.entry) == std::mem::discriminant(entry)
+                        && matches!(render_entry(&old.entry, ctx), Rendered::Stream(was)
+                            if stream.text.as_bytes().get(..settled.bytes)
+                                == was.text.as_bytes().get(..settled.bytes));
+                    same_prefix.then(|| (std::mem::take(&mut old.rows), settled))
+                });
+                stream_rows(&stream, first, ctx, kept)
+            }
+            Rendered::Rows(rows) => (spaced(rows, first), None),
+        };
+        CachedBlock {
+            entry: entry.clone(),
+            first,
+            rows,
+            settled,
+        }
+    }
 }
 
 impl Transcript {
-    /// Brings the cache up to date with `app` at `width`. A width or theme
-    /// change drops the whole cache.
-    pub(crate) fn sync(&mut self, app: &App, width: u16) {
+    /// Brings the cache up to date with `app` at `width`, trusting every
+    /// entry before `changed` (`Log::take_changed`) to be as cached. A width
+    /// or theme change drops the whole cache.
+    pub(crate) fn sync(&mut self, app: &App, width: u16, changed: usize) {
         let theme = app.theme;
         if self.width != width || self.theme != Some(theme) {
             self.blocks.clear();
@@ -85,17 +199,19 @@ impl Transcript {
         self.blocks
             .truncate(app.log.len() + usize::from(queued.is_some()));
 
-        let mut first = true;
-        for (i, entry) in app.log.iter().chain(&queued).enumerate() {
+        // The queued messages sit past the log's end, so they are always
+        // looked at.
+        let start = changed.min(app.log.len()).min(self.blocks.len());
+        let mut first = match start.checked_sub(1).map(|i| &self.blocks[i]) {
+            Some(before) => before.first && before.rows.is_empty(),
+            None => true,
+        };
+        for (i, entry) in app.log.iter().chain(&queued).enumerate().skip(start) {
             let hit =
                 matches!(self.blocks.get(i), Some(b) if b.first == first && b.entry == *entry);
             if !hit {
                 self.rebuilt += 1;
-                let block = CachedBlock {
-                    entry: entry.clone(),
-                    first,
-                    rows: block_rows(entry, first, ctx),
-                };
+                let block = CachedBlock::render(entry, first, ctx, self.blocks.get_mut(i));
                 match self.blocks.get_mut(i) {
                     Some(slot) => *slot = block,
                     None => self.blocks.push(block),
@@ -106,11 +222,12 @@ impl Transcript {
             }
         }
 
-        self.starts.clear();
-        self.starts.reserve(self.blocks.len() + 1);
-        let mut acc = 0;
-        self.starts.push(acc);
-        for block in &self.blocks {
+        self.starts.truncate(start + 1);
+        let mut acc = self.starts.last().copied().unwrap_or(0);
+        if self.starts.is_empty() {
+            self.starts.push(acc);
+        }
+        for block in &self.blocks[start..] {
             acc += block.rows.len();
             self.starts.push(acc);
         }
@@ -154,9 +271,9 @@ pub(super) fn draw_log(frame: &mut Frame, area: Rect, visible: Vec<Line<'static>
     frame.render_widget(Paragraph::new(Text::from(visible)), area);
 }
 
-fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
+fn render_entry<'a>(entry: &'a LogEntry, ctx: Ctx) -> Rendered<'a> {
     let pal = ctx.pal;
-    match entry {
+    Rendered::Rows(match entry {
         // `UserEcho`: `label3` and `label2`, not blue: it is past input, not
         // the current prompt.
         LogEntry::UserMessage { text } => {
@@ -178,18 +295,28 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             }
             lines
         }
-        LogEntry::AssistantText { text } => at_body(render_assistant_text(text, ctx.body())),
-        // A `Disclosure` whose detail is the reasoning, unabridged (ADR 0015).
-        LogEntry::Thinking { text, took, open } => {
-            let mut lines = vec![Line::from(vec![
-                Span::styled(took.summary(), Style::default().fg(pal.label2)),
-                disclosure_glyph(*open, ctx),
-            ])];
-            if *open {
-                lines.extend(disclosed(text.lines(), ctx.body().width as usize, ctx));
-            }
-            at_body(lines)
+        LogEntry::AssistantText { text } => {
+            return Rendered::Stream(Streaming {
+                text,
+                head: Vec::new(),
+                body: |text, ctx| render_assistant_text(text, ctx.body()),
+                boundary: prose_boundary,
+            })
         }
+        LogEntry::Thinking {
+            text,
+            took,
+            open: true,
+        } => {
+            return Rendered::Stream(Streaming {
+                text,
+                head: vec![thinking_head(*took, true, ctx)],
+                body: |text, ctx| disclosed(text.lines(), ctx.body().width as usize, ctx),
+                boundary: |text| text.rfind('\n').map_or(0, |i| i + 1),
+            })
+        }
+        // A `Disclosure` whose detail is the reasoning, unabridged (ADR 0015).
+        LogEntry::Thinking { took, open, .. } => at_body(vec![thinking_head(*took, *open, ctx)]),
         // `Disclosure` and its `DetailRow`s, on the prose column so a fact
         // ends where prose does.
         LogEntry::Work { items, open } => {
@@ -323,7 +450,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             }
             at_body(lines)
         }
-        // A second blank row: `block_rows` already adds one before it.
+        // A second blank row: `spaced` already adds one before it.
         LogEntry::TurnBreak => vec![Line::default()],
         // Frame K: the echo's band, all `label3`, `○` and `Queued` on its
         // first row only.
@@ -347,7 +474,7 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 })
                 .collect()
         }
-    }
+    })
 }
 
 /// The glyph after a disclosure's summary, in its `label2`: `›` closed, `⌄`
@@ -355,6 +482,14 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
 fn disclosure_glyph(open: bool, ctx: Ctx) -> Span<'static> {
     let glyph = if open { "⌄" } else { "›" };
     Span::styled(format!("  {glyph}"), Style::default().fg(ctx.pal.label2))
+}
+
+/// A thinking block's summary row: `Thought for 12s  ›`.
+fn thinking_head(took: Took, open: bool, ctx: Ctx) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(took.summary(), Style::default().fg(ctx.pal.label2)),
+        disclosure_glyph(open, ctx),
+    ])
 }
 
 /// A disclosure's text in `label2`, each line wrapped to `width`.

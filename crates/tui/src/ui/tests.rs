@@ -828,6 +828,80 @@ fn a_streaming_reply_rebuilds_one_block_not_the_conversation() {
     assert_eq!(a.blocks_rebuilt(), 1);
 }
 
+/// Every row of the transcript, after a draw has set its width.
+fn transcript_rows(a: &mut App) -> Vec<String> {
+    let _ = render(a, 80, 24);
+    a.transcript_view(usize::MAX / 2)
+        .iter()
+        .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect()
+}
+
+#[test]
+fn a_streamed_text_draws_as_the_whole_text_would_at_every_delta() {
+    let reply = "Intro line.\n\n## Heading\n\n| a | b |\n|---|--:|\n| 1 | 2 |\n\n\
+                 ```rust\nfn f() {\n\n    x\n}\n```\n\nAfter the fence, a long line \
+                 that wraps past eighty cells because it keeps going and going on.\n\n\
+                 - a bullet\n1. a step\n\nlast";
+    for open_thought in [false, true] {
+        let entry = |text: &str| {
+            if open_thought {
+                LogEntry::Thinking {
+                    text: text.into(),
+                    took: Took::Running,
+                    open: true,
+                }
+            } else {
+                LogEntry::AssistantText { text: text.into() }
+            }
+        };
+        let mut streamed = app();
+        streamed
+            .log
+            .push(LogEntry::UserMessage { text: "go".into() });
+        streamed.log.push(entry(""));
+        let mut at = 0;
+        while at < reply.len() {
+            at = (at + 7).min(reply.len());
+            while !reply.is_char_boundary(at) {
+                at += 1;
+            }
+            let Some(LogEntry::AssistantText { text } | LogEntry::Thinking { text, .. }) =
+                streamed.log.last_mut()
+            else {
+                unreachable!("the test pushed a streaming entry last");
+            };
+            *text = reply[..at].to_string();
+            let mut fresh = app();
+            fresh.log.push(LogEntry::UserMessage { text: "go".into() });
+            fresh.log.push(entry(&reply[..at]));
+            assert_eq!(
+                transcript_rows(&mut streamed),
+                transcript_rows(&mut fresh),
+                "after {at} bytes (thought: {open_thought})"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_frame_after_a_change_looks_only_from_the_changed_entry() {
+    let mut a = app();
+    for i in 0..20 {
+        a.log.push(LogEntry::UserMessage {
+            text: format!("q{i}"),
+        });
+    }
+    let _ = render(&mut a, 100, 36);
+    assert_eq!(a.log.take_changed(), a.log.len(), "the draw caught up");
+    a.log[3] = LogEntry::UserMessage {
+        text: "edited".into(),
+    };
+    let _ = render(&mut a, 100, 36);
+    assert_eq!(a.blocks_rebuilt(), 1);
+    assert!(transcript_rows(&mut a).iter().any(|r| r.contains("edited")));
+}
+
 #[test]
 fn the_idle_footer_sets_commands_beside_the_context_bar() {
     let mut a = app();

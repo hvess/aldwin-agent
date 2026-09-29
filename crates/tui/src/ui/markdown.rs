@@ -22,6 +22,16 @@ pub(super) enum Segment {
     Code { lang: String, body: String },
 }
 
+/// A line opening a ` ``` ` fence, and what follows the backticks.
+pub(super) fn fence_opens(line: &str) -> Option<&str> {
+    line.trim_start().strip_prefix("```")
+}
+
+/// A line closing an open fence.
+pub(super) fn fence_closes(line: &str) -> bool {
+    line.trim() == "```"
+}
+
 /// Splits on ` ``` ` fences; the opening fence may carry a language tag. An
 /// unterminated fence is code to the end of the text: while streaming, its
 /// close has not arrived yet.
@@ -31,14 +41,14 @@ pub(super) fn split_code_fences(text: &str) -> Vec<Segment> {
     let mut lines = text.lines().peekable();
 
     while let Some(line) = lines.next() {
-        match line.trim_start().strip_prefix("```") {
+        match fence_opens(line) {
             Some(lang) => {
                 if !prose.is_empty() {
                     segments.push(Segment::Prose(std::mem::take(&mut prose)));
                 }
                 let mut body = String::new();
                 for line in lines.by_ref() {
-                    if line.trim() == "```" {
+                    if fence_closes(line) {
                         break;
                     }
                     body.push_str(line);

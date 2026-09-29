@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use crate::activity::Activity;
 use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
-use crate::log::{plural, LogEntry, Took, WorkItem};
+use crate::log::{plural, Log, LogEntry, Took, WorkItem};
 use crate::motion::{ticks, Motion};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
@@ -216,7 +216,7 @@ impl StatusInfo {
 /// behaviour is testable without a terminal.
 #[derive(Debug)]
 pub struct App {
-    pub(crate) log: Vec<LogEntry>,
+    pub(crate) log: Log,
     pub(crate) mode: Mode,
     pub(crate) scroll: ScrollState,
     /// The log area's width, cached by `ui::draw` for scrolling between
@@ -282,7 +282,7 @@ impl App {
     /// nothing is configured.
     pub fn new(model_name: String) -> Self {
         Self {
-            log: Vec::new(),
+            log: Log::default(),
             mode: Mode::Conversation,
             scroll: ScrollState::default(),
             render_width: 80,
@@ -449,12 +449,11 @@ impl App {
 
     /// The current turn's entries, or the last turn's while idle.
     pub(crate) fn this_turn(&self) -> &[LogEntry] {
-        &self.log[self.turn_start.min(self.log.len())..]
+        self.log.tail(self.turn_start)
     }
 
     fn this_turn_mut(&mut self) -> &mut [LogEntry] {
-        let start = self.turn_start.min(self.log.len());
-        &mut self.log[start..]
+        self.log.tail_mut(self.turn_start)
     }
 
     /// Logs `message` and marks it as the turn's start.
@@ -510,8 +509,9 @@ impl App {
     }
 
     fn sync_transcript(&mut self) {
+        let changed = self.log.take_changed();
         let mut transcript = std::mem::take(&mut self.transcript);
-        transcript.sync(self, self.render_width);
+        transcript.sync(self, self.render_width, changed);
         self.transcript = transcript;
     }
 
@@ -571,25 +571,33 @@ impl App {
     }
 
     fn finish_call(&mut self, call_id: &str, content: &str, is_error: bool) {
-        // Search every `Work` entry, newest first, not just the last one.
-        for entry in self.log.iter_mut().rev() {
-            if let LogEntry::Work { items, .. } = entry {
+        // Within this turn: `turn_start` moves only between turns, and a
+        // cancelled turn's results are sent before it ends (`abort_dispatch`),
+        // so the call was made after it. Every `Work` entry of it, newest first, not
+        // just the last one; found before it is borrowed mutably, so only
+        // that entry counts as changed.
+        let start = self.turn_start.min(self.log.len());
+        let turn = self.log.tail(start);
+        if let Some(i) = turn.iter().rposition(|e| {
+            matches!(e, LogEntry::Work { items, .. } if items.iter().any(|i| i.call_id == call_id))
+        }) {
+            if let LogEntry::Work { items, .. } = &mut self.log[start + i] {
                 if let Some(item) = items.iter_mut().find(|i| i.call_id == call_id) {
                     item.failed = is_error;
                     item.fact = Some(item.verb.fact(content, is_error));
-                    return;
                 }
             }
+            return;
         }
         // Otherwise an `ask` result answers the newest open question row.
         // `plan` results are dropped.
-        if let Some(LogEntry::Question { answer, .. }) = self
-            .log
-            .iter_mut()
-            .rev()
-            .find(|e| matches!(e, LogEntry::Question { answer: None, .. }))
+        if let Some(i) = turn
+            .iter()
+            .rposition(|e| matches!(e, LogEntry::Question { answer: None, .. }))
         {
-            *answer = Some(Answer::words_of(content).to_string());
+            if let LogEntry::Question { answer, .. } = &mut self.log[start + i] {
+                *answer = Some(Answer::words_of(content).to_string());
+            }
         }
     }
 
@@ -1330,7 +1338,7 @@ impl App {
     }
 
     fn move_cursor_vertical(&mut self, delta: isize) -> bool {
-        let layout = draft::Layout::new(self.draft.text(), self.composer_width as usize);
+        let layout = self.draft.layout(self.composer_width as usize);
         match layout.step_row(self.draft.cursor(), delta) {
             Some(cursor) => {
                 self.draft.move_to(cursor);
@@ -1646,7 +1654,7 @@ pub(crate) mod tests {
             }]
         );
         assert_eq!(
-            a.log,
+            a.log[..],
             vec![LogEntry::UserMessage {
                 text: "hello".into()
             }]
@@ -1941,6 +1949,41 @@ pub(crate) mod tests {
         assert_eq!(items[0].verb, Verb::Read);
         assert_eq!(items[0].target, "src/x.rs");
         assert_eq!(items[0].fact.as_deref(), Some("2 lines"));
+    }
+
+    #[test]
+    fn a_result_finishes_its_call_after_a_command_typed_mid_turn() {
+        let mut a = app();
+        a.submit_text("go".into());
+        a.apply_event(Event::ToolUseRequested {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call: ToolCall {
+                id: "c1".into(),
+                name: "read".into(),
+                input: serde_json::json!({"path": "src/x.rs"}),
+            },
+        });
+        a.apply_event(Event::ToolDispatched {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call_id: "c1".into(),
+        });
+        a.submit_text("/help".into());
+        a.apply_event(Event::ToolCompleted {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            result: ToolResult {
+                call_id: "c1".into(),
+                content: "a\n".into(),
+                is_error: false,
+            },
+        });
+        let work = a.log.iter().find_map(|e| match e {
+            LogEntry::Work { items, .. } => Some(items),
+            _ => None,
+        });
+        assert_eq!(work.unwrap()[0].fact.as_deref(), Some("1 line"));
     }
 
     #[test]

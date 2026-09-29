@@ -1,6 +1,7 @@
 //! The bottom band: the field, the comment field, and the footer with its
 //! context bar. Draws to the `Frame` directly; none of it scrolls.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -15,7 +16,7 @@ use super::{question, working};
 use aldwin_core::ReviewOutcome;
 
 use crate::app::{App, Asker, Mode};
-use crate::draft;
+use crate::draft::{self, Draft};
 use crate::log::LogEntry;
 use crate::motion::{ticks, Motion};
 use crate::palette::Palette;
@@ -37,14 +38,14 @@ const CARET_TICKS: u64 = ticks(Duration::from_millis(525));
 
 /// The draft wrapped to the field's column, measured once per frame.
 pub(super) struct Composer {
-    layout: draft::Layout,
+    layout: Rc<draft::Layout>,
     width: u16,
 }
 
 impl Composer {
     /// Wraps to `frame_width` less the margins, the mark column, the caret's
     /// cell, and `reserve` cells for an action.
-    pub(super) fn new(input: &str, frame_width: u16, reserve: u16) -> Self {
+    pub(super) fn new(input: &Draft, frame_width: u16, reserve: u16) -> Self {
         let width = frame_width
             .saturating_sub(MARGIN_X as u16 * 2)
             .saturating_sub(MARK_COL as u16)
@@ -52,7 +53,7 @@ impl Composer {
             .saturating_sub(reserve)
             .max(1);
         Self {
-            layout: draft::Layout::new(input, width as usize),
+            layout: input.layout(width as usize),
             width,
         }
     }
@@ -79,26 +80,24 @@ pub(super) enum Bottom {
 
 impl Bottom {
     pub(super) fn measure(app: &App, width: u16) -> Self {
-        let composer = Composer::new(app.draft.text(), width, 0);
+        // Measured once, at its final reserve: the draft keeps one layout.
+        let composer = |reserve| Composer::new(&app.draft, width, reserve);
         match (&app.mode, &app.answering) {
             (Mode::Question(asking), _) => Bottom::Question {
                 rows: question::panel_rows(&asking.question, Some(&asking.list), width),
             },
             (Mode::Commands(menu), _) => Bottom::Commands {
                 rows: question::commands_rows(menu),
-                composer,
+                composer: composer(0),
             },
             (_, Some(asking)) => Bottom::Answering {
                 rows: question::panel_rows(&asking.question, None, width),
-                composer,
+                composer: composer(0),
             },
-            _ => match send_action(app) {
-                Some(action) => Bottom::Field(
-                    Composer::new(app.draft.text(), width, action.width()),
-                    Some(action),
-                ),
-                None => Bottom::Field(composer, None),
-            },
+            _ => {
+                let action = send_action(app);
+                Bottom::Field(composer(action.as_ref().map_or(0, |a| a.width())), action)
+            }
         }
     }
 

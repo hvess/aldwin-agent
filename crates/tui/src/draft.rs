@@ -9,6 +9,8 @@
 //! display cells.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
@@ -21,6 +23,7 @@ pub(crate) struct Row {
 }
 
 /// A draft wrapped to a column width.
+#[derive(Debug)]
 pub(crate) struct Layout {
     chars: Vec<char>,
     rows: Vec<Row>,
@@ -93,7 +96,9 @@ impl Layout {
     /// closes.
     pub(crate) fn position(&self, cursor: usize) -> (usize, usize) {
         let cursor = cursor.min(self.chars.len());
-        for (i, row) in self.rows.iter().enumerate() {
+        // Rows are in order: skip, by bisection, every row ending before it.
+        let from = self.rows.partition_point(|row| row.end < cursor);
+        for (i, row) in self.rows.iter().enumerate().skip(from) {
             let last = i + 1 == self.rows.len();
             let hard = !last && self.rows[i + 1].start > row.end;
             if cursor < row.end || (cursor == row.end && (last || hard)) {
@@ -230,9 +235,49 @@ pub(crate) fn expand_tabs(text: &str) -> String {
 pub(crate) struct Draft {
     text: String,
     cursor: usize,
+    layout: LayoutCache,
 }
 
+/// The last [`Layout`] built, with its width: the composer is measured every
+/// frame and a paste can be long. Every change to the text must drop it
+/// ([`Draft::edited`]).
+#[derive(Debug, Default)]
+struct LayoutCache(RefCell<Option<(usize, Rc<Layout>)>>);
+
+/// A cache, not state: a copy starts empty, and it never makes two drafts
+/// differ.
+impl Clone for LayoutCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for LayoutCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LayoutCache {}
+
 impl Draft {
+    /// The text wrapped to `width`, built once per edit and width.
+    pub(crate) fn layout(&self, width: usize) -> Rc<Layout> {
+        let mut cached = self.layout.0.borrow_mut();
+        match &*cached {
+            Some((at, layout)) if *at == width => Rc::clone(layout),
+            _ => {
+                let layout = Rc::new(Layout::new(&self.text, width));
+                *cached = Some((width, Rc::clone(&layout)));
+                layout
+            }
+        }
+    }
+
+    fn edited(&mut self) {
+        *self.layout.0.get_mut() = None;
+    }
+
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
@@ -249,11 +294,13 @@ impl Draft {
     pub(crate) fn set(&mut self, text: String) {
         self.cursor = text.chars().count();
         self.text = text;
+        self.edited();
     }
 
     /// Empties the draft and hands back what it held.
     pub(crate) fn take(&mut self) -> String {
         self.cursor = 0;
+        self.edited();
         std::mem::take(&mut self.text)
     }
 
@@ -265,12 +312,14 @@ impl Draft {
         let at = self.byte_at(self.cursor);
         self.text.insert(at, c);
         self.cursor += 1;
+        self.edited();
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         let at = self.byte_at(self.cursor);
         self.text.insert_str(at, text);
         self.cursor += text.chars().count();
+        self.edited();
     }
 
     /// Applies an editing key (characters without Ctrl, `⌫`, `⌦`, `←` `→`,
@@ -283,12 +332,14 @@ impl Draft {
                     self.cursor -= 1;
                     let at = self.byte_at(self.cursor);
                     self.text.remove(at);
+                    self.edited();
                 }
             }
             KeyCode::Delete => {
                 if self.cursor < self.text.chars().count() {
                     let at = self.byte_at(self.cursor);
                     self.text.remove(at);
+                    self.edited();
                 }
             }
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
@@ -322,6 +373,27 @@ mod tests {
     #[test]
     fn an_empty_draft_is_one_empty_row() {
         assert_eq!(rows("", 10), vec![""]);
+    }
+
+    #[test]
+    fn a_layout_is_built_again_after_every_edit_and_only_then() {
+        let mut draft = Draft::default();
+        draft.set("one two".into());
+        let first = draft.layout(6);
+        assert!(
+            Rc::ptr_eq(&first, &draft.layout(6)),
+            "unchanged: the same layout"
+        );
+        assert!(
+            !Rc::ptr_eq(&first, &draft.layout(7)),
+            "another width: built again"
+        );
+        draft.insert_str(" three");
+        assert_eq!(draft.layout(6).row_text(2), "three");
+        draft.edit(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(draft.layout(6).row_text(2), "thre");
+        draft.take();
+        assert_eq!(draft.layout(6).row_count(), 1);
     }
 
     #[test]

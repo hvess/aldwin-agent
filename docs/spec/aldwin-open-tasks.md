@@ -22,6 +22,24 @@ An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
 contradicts) and the entry says so before it goes.
 
+## Login
+
+8. **`/connect` has never run against a live subscription.** The sign-in
+   is built and tested against a fake (aldwin-login.md, Steps, "Live
+   run"), but three things only a real account shows are unconfirmed: the
+   token response's `expires_in`, the 403 some SuperGrok tiers get after
+   a successful sign-in, and whether a stale token draws the 401 the
+   retry is built for. Closing it means one sign-in and a few requests on
+   the developer's xAI subscription, and fixing what they show. The
+   developer's call, 2026-09-29: another time.
+
+9. **`/connect`'s screens are not pinned.** No snapshot or capture scene
+   draws the account list, the sign-in sentence or the "Connected"
+   notice (aldwin-login.md, Steps, "Review scenes"), so a change to them
+   passes stages 5 and 8 unseen. Closing it means scenes for the three,
+   in `render_snapshot.rs` and `scene.rs`. The developer's call,
+   2026-09-29: another time.
+
 ## Review
 
 6. **Frame capture runs only on Linux.** Capture drives foot under sway,

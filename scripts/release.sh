@@ -208,6 +208,7 @@ cmd_package() {
 # as another; ssh-keygen requires it on both sides and refuses a mismatch.
 #
 # Which releases these constants verify is `allowed_signers`' to say.
+# `/update` checks against the same two: `crates/cli/src/update.rs`.
 readonly SIG_NAMESPACE="aldwin-release"
 readonly SIG_PRINCIPAL="release@aldwin"
 

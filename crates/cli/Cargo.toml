@@ -31,6 +31,13 @@ serde_yaml_ng = "0.10"
 # because a transcript's timestamp is read by the developer who made it,
 # and UTC in a picker row is a small daily subtraction problem.
 chrono        = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# `/update`: the release channel `install.sh` reads, checked the same way.
+reqwest       = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+semver        = "1"
+flate2        = "1"
+tar           = { version = "0.4", default-features = false }
+ssh-key       = { version = "0.6", default-features = false, features = ["ed25519", "std"] }
+sha2          = "0.10"
 
 [dev-dependencies]
 assert_cmd  = { workspace = true }

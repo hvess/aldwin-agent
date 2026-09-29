@@ -5,7 +5,7 @@ Binary crate — startup sequence, session bootstrap, impl wiring, slash-command
 **Status:** archived — implemented, tested, audited
 **Scope:** crates/cli
 **Owner:** Maximilian
-**Last Updated:** 2026-06-10
+**Last Updated:** 2026-09-29
 
 **Completed:** 2026-08-29 — `20a8d39`, plus an audit fix (`f023d4a`) that
 wired up context-file approval (was implemented in aldwin-permissions
@@ -212,6 +212,38 @@ a clean exit. Unix only. `run` takes the install's error, if any, and says
 once at the top of the session that commits will not name Aldwin.
 `tests/git_shim.rs` commits through the shim against real git;
 `tests/git_shim_sandboxed.rs` commits through the real `run` tool, confined.
+
+**Post-archive addition (2026-09-29, `/update`):** The developer asked for
+a command that installs a newer release over the running binary, and
+otherwise says it is up to date. `update.rs` reads the latest tag from the
+redirect GitHub answers `/releases/latest` with, as `install.sh` does, and
+compares it with `CARGO_PKG_VERSION`. A newer release is checked as
+`install.sh` checks it — `SHA256SUMS` against its signature, the archive
+against `SHA256SUMS` — except that the key is the `allowed_signers` the
+running binary was built with, not one fetched beside the signature, so a
+release signed after a key rotation needs `install.sh` once. The binary is
+written beside the one it replaces and renamed over it, so a failure leaves
+the old one whole; the session keeps running on the old one and says to
+start Aldwin again. It runs as its own task, as `/connect` does, and the
+binary's path is resolved at startup because Linux reports a replaced one
+as `… (deleted)`. The git shim (ADR 0013) links to the running binary's
+path, which resolves to the file replaced, so after an update a `git`
+started in the session runs the new binary as the shim. Like `/theme`, it
+is the developer's own write and is not reviewed; a binary run from inside
+the workspace (`target/debug/aldwin`) is replaced the same way, which a
+development build older than the latest release would see. `/help` lists it; the `/` menu stays the developer's
+seven. The releases' `SHA256SUMS` and signature for v0.6.0 are fixtures
+under `tests/fixtures/`, so the signature check is tested against what
+`ssh-keygen` really writes.
+
+The dependencies are a decision (quality-gate §1). `reqwest` (already in
+the tree through aldwin-llm and aldwin-login) fetches; `semver` compares;
+`flate2` and `tar` open the archive; `ssh-key` and `sha2` check the
+signature and the checksum. Shelling out to `ssh-keygen`, `sha256sum` and
+`tar`, as `install.sh` does, was rejected: the running binary would then
+depend on tools the machine may lack, and a missing `ssh-keygen` would
+leave no check at all. It lives in aldwin-cli rather than a leaf crate like
+aldwin-login: one module with one caller, and nothing else needs it.
 
 ## Design
 

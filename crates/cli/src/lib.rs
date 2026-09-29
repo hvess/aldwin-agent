@@ -2,7 +2,7 @@
 //! (`docs/spec/archive/aldwin-cli.md`).
 //!
 //! `bootstrap::run` is integration glue (real terminal, provider, MCP
-//! processes) and is not unit tested; `context` and `slash` are.
+//! processes) and is not unit tested; `context`, `slash` and `update` are.
 
 mod bootstrap;
 mod connect;
@@ -13,6 +13,7 @@ mod error;
 pub mod git_shim;
 mod history;
 mod slash;
+mod update;
 
 pub use bootstrap::run;
 pub use error::{ShimError, StartupError};

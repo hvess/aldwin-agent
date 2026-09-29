@@ -117,6 +117,10 @@ check fails, nothing gets installed. Set `ALDWIN_INSTALL_DIR` to put it
 somewhere else, or `ALDWIN_VERSION` (say `v0.6.0`) to pin a release.
 [`install.sh`](install.sh) is short, so give it a read first if you like.
 
+To update later, type `/update` in Aldwin. It checks the new release's
+checksums and signature against the release key built into the Aldwin you
+have, installs it over the old binary, and tells you to restart.
+
 Rather do it by hand? Grab the archive for your machine from
 [Releases](../../releases), extract it, and put `aldwin` on your `PATH`.
 
@@ -188,7 +192,8 @@ key.
 ## Your data
 
 - **No telemetry.** Aldwin talks to your model provider, to xAI if you
-  `/connect`, and to the MCP servers you configure. Nothing else.
+  `/connect`, to the MCP servers you configure, and to GitHub when you
+  `/update`. Nothing else.
 - **Keys aren't stored.** API keys stay in your environment. A `/connect`
   sign-in is kept in `~/.aldwin/connections.yaml`, and deleting its entry
   disconnects you.
@@ -211,7 +216,8 @@ key.
 ### Commands
 
 Type `/` on an empty field: `/resume`, `/model`, `/connect`, `/clear`,
-`/theme`, `/quit` (or `/exit`). `/reload-config` and `/help` work too.
+`/theme`, `/quit` (or `/exit`). `/update`, `/reload-config` and `/help`
+work too.
 
 ### Config
 

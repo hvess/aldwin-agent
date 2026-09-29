@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use aldwin_config::Config;
@@ -8,6 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::connect;
 use crate::history::History;
+use crate::update::{self, Outcome};
 
 /// What `intercept` decided to do with one incoming command.
 enum Intercepted {
@@ -36,7 +38,7 @@ pub(crate) struct SlashCommand {
 /// from it. Menu entries and order: `crates/review/baseline.json`,
 /// `frame-command-list-is-not-the-products`. `/quit` and `/exit` are one
 /// command.
-const COMMANDS: [SlashCommand; 9] = [
+const COMMANDS: [SlashCommand; 10] = [
     SlashCommand {
         name: "resume",
         argument: "",
@@ -83,6 +85,12 @@ const COMMANDS: [SlashCommand; 9] = [
         name: "reload-config",
         argument: "",
         summary: "Read the settings files again",
+        in_menu: false,
+    },
+    SlashCommand {
+        name: "update",
+        argument: "",
+        summary: "Install the latest release",
         in_menu: false,
     },
     SlashCommand {
@@ -163,12 +171,22 @@ pub struct Session {
     /// current model.
     connected_tx: mpsc::Sender<Account>,
     connected_rx: Option<mpsc::Receiver<Account>>,
+    /// The binary `/update` replaces, resolved at startup: once replaced,
+    /// Linux reports the running one as `… (deleted)`.
+    exe: Option<PathBuf>,
+    /// The `/update` running, if any. Must be aborted on drop, as
+    /// `connecting` is; an abort cannot stop a rename already under way,
+    /// which leaves either binary whole.
+    updating: Option<JoinHandle<()>>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(wait) = self.connecting.take() {
-            wait.abort();
+        for task in [self.connecting.take(), self.updating.take()]
+            .into_iter()
+            .flatten()
+        {
+            task.abort();
         }
     }
 }
@@ -185,6 +203,12 @@ impl Session {
             connecting: None,
             connected_tx,
             connected_rx: Some(connected_rx),
+            // Canonical, so a symlinked install replaces its target rather
+            // than the link.
+            exe: std::env::current_exe()
+                .and_then(|exe| exe.canonicalize())
+                .ok(),
+            updating: None,
         }
     }
 
@@ -233,6 +257,10 @@ async fn intercept(
         }
         ("reload-config", None) => {
             handle_reload_config(config, session, events).await;
+            Intercepted::Handled
+        }
+        ("update", None) => {
+            handle_update(session, events).await;
             Intercepted::Handled
         }
         // Forwarded: core wipes its `ConversationLog`, moves its sink
@@ -484,6 +512,42 @@ async fn handle_connect(
             return;
         }
         let _ = connected.send(account).await;
+    }));
+}
+
+/// `/update`: installs the latest release over this binary
+/// ([`update::update`]). Runs as its own task, as `/connect` does, so the
+/// interceptor stays free.
+async fn handle_update(session: &mut Session, events: &mpsc::Sender<Event>) {
+    if session
+        .updating
+        .as_ref()
+        .is_some_and(|task| !task.is_finished())
+    {
+        let message = "Aldwin is already looking for an update.".to_string();
+        let _ = events.send(Event::Notice { message }).await;
+        return;
+    }
+    let Some(exe) = session.exe.clone() else {
+        let message = "Aldwin could not find its own binary, so it cannot replace it. Install the latest release with install.sh instead.".to_string();
+        let _ = events.send(Event::Notice { message }).await;
+        return;
+    };
+    let message = "Looking for a newer version of Aldwin.".to_string();
+    let _ = events.send(Event::Notice { message }).await;
+
+    let events = events.clone();
+    session.updating = Some(tokio::spawn(async move {
+        let message = match update::update(env!("CARGO_PKG_REPOSITORY"), &exe).await {
+            Ok(Outcome::Current(version)) => {
+                format!("Aldwin is already up to date: {version} is the latest version.")
+            }
+            Ok(Outcome::Installed(version)) => format!(
+                "Aldwin {version} is installed. Quit and start it again to run it; /resume picks this conversation back up."
+            ),
+            Err(e) => format!("Aldwin could not be updated: {e}. Nothing was changed."),
+        };
+        let _ = events.send(Event::Notice { message }).await;
     }));
 }
 
@@ -1373,6 +1437,7 @@ mod tests {
                     "/model",
                     "/reload-config",
                     "/theme",
+                    "/update",
                 ] {
                     assert!(
                         message.contains(command),
@@ -2559,5 +2624,38 @@ mod tests {
         drop(session);
         tokio::task::yield_now().await;
         assert!(abort.is_finished(), "the wait was aborted with the session");
+    }
+
+    #[tokio::test]
+    async fn ending_the_session_aborts_an_update_still_running() {
+        let mut session = session();
+        let update = tokio::spawn(std::future::pending::<()>());
+        let abort = update.abort_handle();
+        session.updating = Some(update);
+        drop(session);
+        tokio::task::yield_now().await;
+        assert!(
+            abort.is_finished(),
+            "the update was aborted with the session"
+        );
+    }
+
+    /// Two updates would race to replace one binary.
+    #[tokio::test]
+    async fn an_update_already_running_is_not_started_again() {
+        let (_project, _global, cfg) = config();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut session = session();
+        session.updating = Some(tokio::spawn(std::future::pending::<()>()));
+        let submit = Command::Submit {
+            text: "/update".into(),
+        };
+        let result = intercept(submit, &cfg, &mut session, None, &tx).await;
+        assert!(matches!(result, Intercepted::Handled));
+        assert_eq!(
+            notice(&mut rx).await,
+            "Aldwin is already looking for an update."
+        );
+        assert!(rx.try_recv().is_err(), "nothing else was said");
     }
 }

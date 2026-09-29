@@ -6,7 +6,7 @@
 use std::io;
 
 use aldwin_core::{
-    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnId,
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState, TurnId,
 };
 use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem};
 use ratatui::backend::CrosstermBackend;
@@ -95,6 +95,13 @@ fn scene(name: &str, app: &mut App) {
                 ],
             });
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            // Frame B's `1m 02s`, typed in and not stalled: 100ms ticks.
+            app.advance(620);
+            app.apply_event(Event::ThinkingDelta {
+                turn_id: TurnId(1),
+                step_id: StepId(1),
+                text: String::new(),
+            });
             app.status_mut().context_used = Some(380_000);
         }
         "question" => {

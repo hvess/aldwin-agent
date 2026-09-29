@@ -222,6 +222,10 @@ pub struct TuiConfig {
     /// The theme `/theme` wrote; aldwin-tui interprets it and `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// `reduced` holds the caret and the working line still; aldwin-tui
+    /// interprets it and `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<String>,
 }
 
 impl TuiConfig {
@@ -230,6 +234,7 @@ impl TuiConfig {
         Self {
             version: TUI_VERSION,
             theme: None,
+            motion: None,
         }
     }
 }

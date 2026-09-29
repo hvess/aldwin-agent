@@ -1,0 +1,169 @@
+//! The footer's working line (frames B–D, `W1`, `W2`): the running `●`
+//! blinking in the mark column, the phrase typing in with a highlight
+//! running along it, and the turn's time after it. Every cell is a glyph
+//! and a foreground colour, redrawn each tick.
+
+use std::time::Duration;
+
+use ratatui::style::Style;
+use ratatui::text::Span;
+use unicode_width::UnicodeWidthStr;
+
+use super::grid::{elide, MARK_COL};
+use crate::activity::WorkingLine;
+use crate::motion::{ticks, Motion};
+use crate::palette::Palette;
+
+/// How long the running `●` and its `○` each show.
+const BLINK: u64 = ticks(Duration::from_millis(500));
+
+/// Characters a new phrase types in per tick.
+const TYPED_PER_TICK: usize = 3;
+
+/// Cells the highlight's centre travels beyond each end of the phrase, so
+/// it enters and leaves rather than jumping.
+const RUN_OUT: usize = 4;
+
+/// The mark column: amber `●` and `○` in turn (a still `●` under reduced
+/// motion), or a still `label3` `○` once stalled.
+pub(super) fn mark(line: &WorkingLine, tick: u64, motion: Motion, pal: &Palette) -> Span<'static> {
+    let (glyph, colour) = if line.stalled {
+        ("○", pal.label3)
+    } else if motion == Motion::Reduced || (tick / BLINK).is_multiple_of(2) {
+        ("●", pal.amber)
+    } else {
+        ("○", pal.amber)
+    };
+    Span::styled(format!("{glyph:<MARK_COL$}"), Style::default().fg(colour))
+}
+
+/// The phrase and the timer, fitted to `room` cells: the phrase is
+/// shortened, the timer never. Under reduced motion the phrase is whole and
+/// in `label` from its first tick.
+pub(super) fn words(
+    line: &WorkingLine,
+    motion: Motion,
+    pal: &Palette,
+    room: usize,
+) -> Vec<Span<'static>> {
+    let timer = format!("  {}m {:02}s", line.seconds / 60, line.seconds % 60);
+    let phrase = elide(&line.words, room.saturating_sub(timer.width()));
+    let mut spans = match (line.stalled, motion) {
+        (true, _) => vec![Span::styled(phrase, Style::default().fg(pal.label2))],
+        (false, Motion::Reduced) => vec![Span::styled(phrase, Style::default().fg(pal.label))],
+        (false, Motion::Full) => animated(&phrase, line.age, pal),
+    };
+    spans.push(Span::styled(timer, Style::default().fg(pal.label3)));
+    spans
+}
+
+/// `phrase` `age` ticks after it began: typing in, then the highlight
+/// sweeping it on a loop. Runs of one colour share a span.
+fn animated(phrase: &str, age: u64, pal: &Palette) -> Vec<Span<'static>> {
+    let len = phrase.chars().count();
+    let typing = len.div_ceil(TYPED_PER_TICK) as u64;
+    // The highlight's centre, offset by `RUN_OUT` so it stays unsigned.
+    let sweep = (age >= typing).then(|| ((age - typing) % (len + 2 * RUN_OUT) as u64) as usize);
+    let shown = len.min((age as usize + 1).saturating_mul(TYPED_PER_TICK));
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, c) in phrase.chars().take(shown).enumerate() {
+        let colour = sweep.map_or(pal.label, |s| pal.highlight((i + RUN_OUT).abs_diff(s)));
+        match spans.last_mut() {
+            Some(last) if last.style.fg == Some(colour) => last.content.to_mut().push(c),
+            _ => spans.push(Span::styled(c.to_string(), Style::default().fg(colour))),
+        }
+    }
+    spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palette::DARK;
+
+    fn line(words: &str, age: u64) -> WorkingLine {
+        WorkingLine {
+            words: words.into(),
+            age,
+            stalled: false,
+            seconds: 62,
+        }
+    }
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Frame `W2`'s first four rows, 100ms apart.
+    #[test]
+    fn a_new_phrase_types_in_three_characters_a_tick() {
+        for (age, typed) in [
+            (0, "Rea"),
+            (1, "Readin"),
+            (2, "Reading r"),
+            (3, "Reading rout"),
+        ] {
+            let spans = words(&line("Reading router.rs", age), Motion::Full, &DARK, 80);
+            assert_eq!(text(&spans), format!("{typed}  1m 02s"));
+            assert!(spans[..spans.len() - 1]
+                .iter()
+                .all(|s| s.style.fg == Some(DARK.label)));
+        }
+    }
+
+    /// Frame `W2`'s hold rows, typed by 600ms: at 600ms the centre is off
+    /// the left edge, at 900ms one cell short of the `R`, at 1200ms on the
+    /// first `a`.
+    #[test]
+    fn the_highlight_runs_in_from_the_left_once_typed() {
+        let colours = |age| {
+            animated("Reading router.rs", age, &DARK)
+                .iter()
+                .flat_map(|s| s.content.chars().map(move |_| s.style.fg.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let (near, far) = (DARK.highlight(1), DARK.highlight(2));
+        assert!(colours(6).iter().all(|c| *c == far));
+        assert_eq!(&colours(9)[..2], &[near, far]);
+        assert_eq!(&colours(12)[..5], &[far, near, DARK.label, near, far]);
+    }
+
+    #[test]
+    fn the_dot_blinks_in_amber_until_the_line_stalls() {
+        let working = line("Thinking", 0);
+        let full = Motion::Full;
+        assert_eq!(mark(&working, 0, full, &DARK).content, "● ");
+        assert_eq!(mark(&working, BLINK, full, &DARK).content, "○ ");
+        assert_eq!(
+            mark(&working, BLINK, full, &DARK).style.fg,
+            Some(DARK.amber)
+        );
+        let stalled = WorkingLine {
+            stalled: true,
+            ..working
+        };
+        assert_eq!(mark(&stalled, 0, full, &DARK).style.fg, Some(DARK.label3));
+    }
+
+    #[test]
+    fn under_reduced_motion_only_the_timer_moves() {
+        let reduced = Motion::Reduced;
+        let working = line("Reading router.rs", 0);
+        assert_eq!(mark(&working, BLINK, reduced, &DARK).content, "● ");
+        let spans = words(&working, reduced, &DARK, 80);
+        assert_eq!(text(&spans), "Reading router.rs  1m 02s");
+        assert_eq!(spans[0].style.fg, Some(DARK.label));
+    }
+
+    #[test]
+    fn a_long_phrase_is_shortened_and_the_timer_kept() {
+        let spans = words(
+            &line("Running cargo test --workspace", 99),
+            Motion::Full,
+            &DARK,
+            20,
+        );
+        assert_eq!(text(&spans), "Running car…  1m 02s");
+    }
+}

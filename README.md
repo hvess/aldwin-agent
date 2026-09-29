@@ -224,7 +224,7 @@ want to change something.
 | `provider.yaml` | provider, model, and the name of the key's variable |
 | `permissions.yaml` | extra folders the agent may work in (project only) |
 | `mcp.yaml` | MCP servers |
-| `tui.yaml` | light or dark theme (global only) |
+| `tui.yaml` | light or dark theme, and reduced motion (global only) |
 | `connections.yaml` | `/connect` sign-ins (global only) |
 
 A custom OpenAI-compatible endpoint:

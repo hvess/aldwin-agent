@@ -150,9 +150,10 @@ impl Proxy {
 
     /// Whether the visible state moved before `timeout`.
     ///
-    /// Used to align with the caret's 1.05 s stepped blink: a picture and a
-    /// grid taken on either side of a blink edge disagree at one cell, so
-    /// capture waits for the edge and then has half a period for both.
+    /// Used to align with the next change on screen (a working line's timer
+    /// ticking over): a picture and a grid taken on either side of it
+    /// disagree, so capture waits for the edge and then has until the next
+    /// one for both.
     pub fn wait_for_change(&self, timeout: Duration) -> bool {
         let before = self.idle.load(Ordering::Relaxed);
         let deadline = Instant::now() + timeout;

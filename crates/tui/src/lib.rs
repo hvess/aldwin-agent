@@ -9,10 +9,12 @@
 //! Shift+Enter needs the Kitty disambiguation flag `run.rs` pushes;
 //! `App::handle_key` keeps Alt+Enter and Ctrl+J as fallbacks.
 
+mod activity;
 mod app;
 mod draft;
 mod list;
 mod log;
+mod motion;
 mod palette;
 mod resume;
 mod review;
@@ -26,6 +28,7 @@ mod ui;
 mod version;
 
 pub use app::{CommandChoice, ModelChoice, ProviderChoice};
+pub use motion::Motion;
 pub use palette::Theme;
 pub use resume::SessionChoice;
 pub use run::{run, SessionProvider};

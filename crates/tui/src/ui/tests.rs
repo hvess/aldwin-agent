@@ -2,8 +2,8 @@
 //! scene is pinned separately by `tests/render_snapshot.rs`.
 
 use aldwin_core::{
-    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnEndReason,
-    TurnId,
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState, ToolCall,
+    ToolResult, TurnEndReason, TurnId,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -18,8 +18,9 @@ use super::markdown::render_prose;
 use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::LogEntry;
+use crate::motion::Motion;
 use crate::palette::Theme;
-use crate::tokens::{MARK_COLS, MARK_ROWS};
+use crate::tokens::{GAUGE_CELL, GROUP_GAP, MARK_COLS, MARK_ROWS};
 
 fn app() -> App {
     App::new("claude-sonnet-5".into())
@@ -63,6 +64,21 @@ fn row_text(buf: &Buffer, y: u16) -> String {
 
 fn find_row(buf: &Buffer, needle: &str) -> Option<u16> {
     (0..buf.area.height).find(|&y| row_text(buf, y).contains(needle))
+}
+
+/// The footer's row: the one the context bar is drawn on.
+fn footer_row(buf: &Buffer) -> u16 {
+    find_row(buf, &GAUGE_CELL.to_string()).expect("every screen draws the context bar")
+}
+
+/// The footer before its context bar, from the mark column: `○ Ready`.
+fn footer_lead(buf: &Buffer) -> String {
+    let row = row_text(buf, footer_row(buf));
+    row.split(GAUGE_CELL)
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn col_of(buf: &Buffer, y: u16, needle: &str) -> Option<usize> {
@@ -145,7 +161,7 @@ fn the_field_is_at_the_margin_with_the_prompt_in_the_mark_column() {
     // The footer, two rows below.
     let footer = row_text(&buf, y + 2);
     assert_eq!(col_of(&buf, y + 2, "Ready"), Some(BODY_X));
-    assert!(footer.contains("/  Commands"));
+    assert!(footer.contains("/ Commands"));
     assert!(footer.trim_end().ends_with("0%"), "{footer:?}");
     assert!(
         row_text(&buf, y + 3).trim().is_empty(),
@@ -293,13 +309,11 @@ fn no_footer_names_the_details_key() {
         }],
         open: false,
     });
-    let footer = |a: &mut App| {
-        let buf = render(a, 100, 36);
-        row_text(&buf, find_row(&buf, "Context").unwrap())
-    };
+    let footer = |a: &mut App| footer_lead(&render(a, 100, 36));
     assert_eq!(
-        footer(&mut a).split("Context").next().unwrap().trim(),
-        "● Working…     esc  Stop"
+        footer(&mut a),
+        "● Thi  0m 00s",
+        "the working line names no key"
     );
     a.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
     assert!(a.details_open, "Space still opens the work");
@@ -420,8 +434,7 @@ fn a_question_takes_the_band_on_the_panel_ground_with_its_current_row_on_field()
     assert_eq!(buf[(option_x, opt + 1)].bg, pal.panel);
     let footer = find_row(&buf, "Waiting for you").unwrap();
     assert!(
-        row_text(&buf, footer).contains("↑↓  Choose")
-            && row_text(&buf, footer).contains("↩  Select"),
+        row_text(&buf, footer).contains("○ Waiting for you     ↑↓ Choose     ↩ Select"),
         "frame E's footer"
     );
     assert!(
@@ -510,10 +523,10 @@ fn the_command_menu_is_a_panel_on_the_field() {
         Some((BODY_X as u16 + 1, field)),
         "the caret after the slash"
     );
-    let footer = row_text(&buf, field + 2);
+    assert_eq!(footer_row(&buf), field + 2);
     assert_eq!(
-        footer.split("Context").next().unwrap().trim(),
-        "↑↓  Choose     ↩  Run     esc  Close",
+        footer_lead(&buf),
+        "○ ↑↓ Choose     ↩ Run     esc Close",
         "frame F's footer, with no status word"
     );
 }
@@ -591,15 +604,27 @@ fn the_caret_stands_before_the_character_it_is_at() {
     assert_eq!(buf[(BODY_X as u16 + 2, y)].fg, pal.label);
 }
 
-/// `--caret-period`.
+/// motion.css: on for the first half of `--caret-period` (1.05s), off for
+/// the second; 100ms ticks.
 #[test]
 fn the_caret_blinks_by_hiding_the_cursor() {
     let mut a = app();
     assert!(caret(&mut a, 100, 36).is_some());
-    for _ in 0..9 {
-        a.tick();
+    a.advance(4);
+    assert!(caret(&mut a, 100, 36).is_some(), "still the shown half");
+    a.advance(1);
+    assert_eq!(caret(&mut a, 100, 36), None, "half a period in");
+    a.advance(5);
+    assert!(caret(&mut a, 100, 36).is_some(), "a whole period in");
+}
+
+#[test]
+fn under_reduced_motion_the_caret_holds() {
+    let mut a = app().with_motion(Motion::Reduced);
+    for _ in 0..10 {
+        a.advance(1);
+        assert!(caret(&mut a, 100, 36).is_some(), "tick {}", a.tick);
     }
-    assert_eq!(caret(&mut a, 100, 36), None);
 }
 
 #[test]
@@ -692,7 +717,7 @@ fn the_review_lays_out_tree_and_diff_on_the_grid() {
         buf[(col_of(&buf, field, "Approve").unwrap() as u16, field)].fg,
         pal.label3
     );
-    assert!(row_text(&buf, field + 2).contains("?  Keys"));
+    assert!(row_text(&buf, field + 2).contains("○ ? Keys"));
 }
 
 #[test]
@@ -740,8 +765,8 @@ fn the_context_bar_lights_round_percent_over_ten_segments() {
     a.status.context_used = Some(410_000);
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
-    let y = find_row(&buf, "Context").unwrap();
-    let start = col_of(&buf, y, "━").unwrap() as u16;
+    let y = footer_row(&buf);
+    let start = col_of(&buf, y, &GAUGE_CELL.to_string()).unwrap() as u16;
     assert!(row_text(&buf, y).trim_end().ends_with("41%"));
     assert_eq!(
         buf[(start + 3, y)].fg,
@@ -776,14 +801,20 @@ fn the_idle_footer_sets_commands_beside_the_context_bar() {
     let mut a = app();
     let buf = render(&mut a, 100, 30);
     let pal = Theme::Dark.palette();
-    let footer = find_row(&buf, "Context").unwrap();
-    assert_eq!(col_of(&buf, footer, "Ready"), Some(BODY_X));
-    let commands = col_of(&buf, footer, "/  Commands").unwrap();
-    let context = col_of(&buf, footer, "Context").unwrap();
+    let footer = footer_row(&buf);
+    assert_eq!(col_of(&buf, footer, "○"), Some(MARGIN_X));
     assert_eq!(
-        commands + "/  Commands".len() + crate::tokens::GROUP_GAP,
-        context,
-        "frame A: right-flush, one group gap before Context"
+        buf[(MARGIN_X as u16, footer)].fg,
+        pal.label3,
+        "idle: a grey ○ in the mark column"
+    );
+    assert_eq!(col_of(&buf, footer, "Ready"), Some(BODY_X));
+    let commands = col_of(&buf, footer, "/ Commands").unwrap();
+    let bar = col_of(&buf, footer, &GAUGE_CELL.to_string()).unwrap();
+    assert_eq!(
+        commands + "/ Commands".len() + GROUP_GAP,
+        bar,
+        "frame A: right-flush, one group gap before the bar"
     );
     assert_eq!(
         buf[(commands as u16, footer)].fg,
@@ -803,12 +834,7 @@ fn after_a_turn_that_saved_the_footer_is_the_context_bar_alone() {
         },
     });
     let buf = render(&mut a, 100, 30);
-    let footer = find_row(&buf, "Context").unwrap();
-    assert_eq!(
-        row_text(&buf, footer).trim_start().split("  ").next(),
-        Some("Context ━━━━━━━━━━ 0%"),
-        "no status word, no keys"
-    );
+    assert_eq!(footer_lead(&buf), "○", "no status word, no keys");
     for c in "next".chars() {
         a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
@@ -820,7 +846,7 @@ fn after_a_turn_that_saved_the_footer_is_the_context_bar_alone() {
     });
     let buf = render(&mut a, 100, 30);
     assert!(
-        row_text(&buf, find_row(&buf, "Context").unwrap()).contains("Ready"),
+        footer_lead(&buf).contains("Ready"),
         "the next turn's footer is its own"
     );
 }
@@ -829,14 +855,14 @@ fn after_a_turn_that_saved_the_footer_is_the_context_bar_alone() {
 fn a_narrow_footer_drops_the_commands_before_the_context_bar() {
     let mut a = app();
     let buf = render(&mut a, 44, 20);
-    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
+    let footer = row_text(&buf, footer_row(&buf));
     assert!(
         footer.contains("Ready") && footer.trim_end().ends_with("0%"),
         "{footer:?}"
     );
     assert!(!footer.contains("Commands"), "{footer:?}");
     let buf = render(&mut a, 100, 20);
-    assert!(row_text(&buf, find_row(&buf, "Context").unwrap()).contains("/  Commands"));
+    assert!(footer_lead(&buf).contains("/ Commands"));
 }
 
 /// Dates must line up at the panel's text column whatever the title length.
@@ -928,15 +954,12 @@ fn the_review_offers_space_only_while_there_is_a_fold() {
         },
     });
     a.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-    let footer = |a: &mut App| {
-        let buf = render(a, 200, 36);
-        row_text(&buf, find_row(&buf, "Context").unwrap())
-    };
+    let footer = |a: &mut App| footer_lead(&render(a, 200, 36));
     let keys = footer(&mut a);
     assert!(
-        keys.contains("Space  Show All Lines")
-            && keys.contains("Click, drag or Shift ↑↓  Select")
-            && keys.contains("Tab  Next file"),
+        keys.contains("Space Show All Lines")
+            && keys.contains("Click, drag or Shift ↑↓ Select")
+            && keys.contains("Tab Next file"),
         "{keys:?}"
     );
     let marks = crate::tokens::MARKS;
@@ -1003,20 +1026,19 @@ fn a_waiting_review_shows_the_turn_working_and_offers_no_action() {
         "the review stays"
     );
     assert!(find_row(&buf, "⌃↩").is_none(), "no action to take");
-    let footer = row_text(&buf, find_row(&buf, "Working…").unwrap());
     assert_eq!(
-        footer.split("Context").next().unwrap().trim(),
-        "● Working…     esc  Stop"
+        footer_lead(&buf),
+        "● Thi  0m 00s",
+        "the working line, naming no key"
     );
     a.apply_event(Event::TurnEnded {
         turn_id: TurnId(1),
         reason: TurnEndReason::EndTurn,
     });
     let buf = render(&mut a, 100, 30);
-    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
     assert_eq!(
-        footer.split("Context").next().unwrap().trim(),
-        "esc  Close",
+        footer_lead(&buf),
+        "○ esc Close",
         "no turn running: the way out"
     );
 }
@@ -1116,12 +1138,11 @@ fn answering_in_words_keeps_the_question_on_screen() {
         find_row(&buf, "1  Yes").is_none(),
         "the options are not offered while you type"
     );
-    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
+    let footer = footer_lead(&buf);
     assert!(
-        footer.contains("Waiting for you") && footer.contains("esc  Back"),
+        footer.starts_with("○ Waiting for you") && footer.contains("esc Back"),
         "{footer:?}"
     );
-    assert!(!footer.contains("Working"), "{footer:?}");
 }
 
 #[test]
@@ -1156,4 +1177,127 @@ fn a_table_too_narrow_for_its_columns_ends_every_row_in_an_ellipsis() {
             assert!(text.ends_with('…'), "width {width}: {text:?}");
         }
     }
+}
+
+/// The working line says what the running call does, in its own words, and
+/// goes back to thinking when it ends (frame `W1`).
+#[test]
+fn the_working_line_names_the_running_call() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.apply_event(Event::ToolUseRequested {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        call: ToolCall {
+            id: "c1".into(),
+            name: "read".into(),
+            input: serde_json::json!({ "path": "src/gateway/router.rs" }),
+        },
+    });
+    a.apply_event(Event::ToolDispatched {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        call_id: "c1".into(),
+    });
+    a.advance(12);
+    let buf = render(&mut a, 100, 30);
+    assert_eq!(footer_lead(&buf), "● Reading router.rs  0m 01s");
+    assert_eq!(
+        buf[(MARGIN_X as u16, footer_row(&buf))].fg,
+        Theme::Dark.palette().amber,
+        "amber means running"
+    );
+    a.apply_event(Event::ToolCompleted {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        result: ToolResult {
+            call_id: "c1".into(),
+            content: "fn main() {}".into(),
+            is_error: false,
+        },
+    });
+    a.advance(5);
+    assert_eq!(footer_lead(&render(&mut a, 100, 30)), "○ Thinking  0m 01s");
+}
+
+/// A stall reads differently from progress: a still grey `○` and "Still".
+#[test]
+fn thirty_quiet_seconds_read_as_a_stall() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.advance(310);
+    let buf = render(&mut a, 100, 30);
+    assert_eq!(footer_lead(&buf), "○ Still thinking  0m 31s");
+    assert_eq!(
+        buf[(MARGIN_X as u16, footer_row(&buf))].fg,
+        Theme::Dark.palette().label3
+    );
+}
+
+/// Time the developer spends on a question is theirs, not the turn's
+/// silence.
+#[test]
+fn a_question_on_screen_does_not_count_toward_a_stall() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    a.apply_event(Event::QuestionAsked {
+        call_id: "q1".into(),
+        question: Question {
+            question: "Should requests without a key be limited?".into(),
+            detail: "Right now they skip the limit.".into(),
+            options: vec!["Yes".into(), Question::CHAT_ABOUT_THIS.into()],
+        },
+    });
+    a.advance(400);
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let lead = footer_lead(&render(&mut a, 100, 30));
+    assert!(lead.starts_with("● Thinking  0m 40s"), "{lead:?}");
+}
+
+/// With calls in parallel the line names the latest still running, read
+/// from the turn's work rows.
+#[test]
+fn a_finished_call_hands_the_line_to_the_latest_still_running() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    for (id, path) in [("c1", "src/a.rs"), ("c2", "src/b.rs")] {
+        a.apply_event(Event::ToolUseRequested {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call: ToolCall {
+                id: id.into(),
+                name: "read".into(),
+                input: serde_json::json!({ "path": path }),
+            },
+        });
+        a.apply_event(Event::ToolDispatched {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call_id: id.into(),
+        });
+    }
+    a.advance(10);
+    assert!(footer_lead(&render(&mut a, 100, 30)).contains("Reading b.rs"));
+    a.apply_event(Event::ToolCompleted {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        result: ToolResult {
+            call_id: "c2".into(),
+            content: "b".into(),
+            is_error: false,
+        },
+    });
+    a.advance(10);
+    assert!(footer_lead(&render(&mut a, 100, 30)).contains("Reading a.rs"));
+}
+
+/// Under reduced motion an idle screen asks for no redraws; a working one
+/// does, for its timer.
+#[test]
+fn under_reduced_motion_only_a_working_turn_redraws() {
+    let mut a = app().with_motion(Motion::Reduced);
+    assert!(!a.is_animating());
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    assert!(a.is_animating());
+    assert!(app().is_animating(), "full motion: the caret blinks");
 }

@@ -15,7 +15,8 @@
 use ratatui::style::Color;
 
 use crate::tokens::{
-    GAUGE_DARK, GAUGE_LIGHT, GAUGE_SEGMENTS, MARK_COLS, MARK_DARK, MARK_LIGHT, MARK_ROWS,
+    GAUGE_DARK, GAUGE_LIGHT, GAUGE_SEGMENTS, HIGHLIGHT_DARK, HIGHLIGHT_LIGHT, MARK_COLS, MARK_DARK,
+    MARK_LIGHT, MARK_ROWS,
 };
 
 /// The two palettes, generated into [`crate::tokens`]; review stage 4 fails
@@ -81,6 +82,16 @@ impl Palette {
             Theme::Dark => &MARK_DARK,
             Theme::Light => &MARK_LIGHT,
         }
+    }
+
+    /// The working line's highlight at `distance` cells from its centre;
+    /// every cell past the table's end takes its last tone.
+    pub fn highlight(&self, distance: usize) -> Color {
+        let table: &[Color] = match self.theme {
+            Theme::Dark => &HIGHLIGHT_DARK,
+            Theme::Light => &HIGHLIGHT_LIGHT,
+        };
+        table[distance.min(table.len() - 1)]
     }
 
     /// The context bar's segments, left to right, with `filled` lit (clamped
@@ -164,6 +175,20 @@ mod tests {
         assert_eq!(Theme::from_config(Some(" LIGHT ")), Theme::Light);
         assert_eq!(Theme::from_config(Some("neon")), Theme::Dark);
         assert_eq!(Theme::from_config(None), Theme::Dark);
+    }
+
+    #[test]
+    fn the_highlight_fades_from_label_toward_label2() {
+        for pal in [&DARK, &LIGHT] {
+            assert_eq!(pal.highlight(0), pal.label);
+            let (near, far) = (pal.highlight(1), pal.highlight(2));
+            let between = |c: Color| {
+                let (l, l2, c) = (luma(pal.label), luma(pal.label2), luma(c));
+                l.min(l2) < c && c < l.max(l2)
+            };
+            assert!(between(near) && between(far), "{:?}", pal.theme);
+            assert_eq!(pal.highlight(9), far, "the far tone holds");
+        }
     }
 
     #[test]

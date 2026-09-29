@@ -13,7 +13,6 @@ use crate::compositor::Compositor;
 use crate::geometry::{Cell, Size, Theme};
 use crate::proxy::{foot_command, shell_quote, verify_against_pixels, Proxy};
 use crate::pty::Pty;
-use crate::vt::Grid;
 use crate::{fake, png, scene, Error, Result};
 
 /// Measures foot's cell for the pinned font and config.
@@ -71,7 +70,7 @@ pub fn measure_cell(comp: &Compositor, font: &str) -> Result<Cell> {
 ///
 /// When the scene is unknown or cannot be seeded, the fake provider or the
 /// proxy cannot start, the app exits before capture, the output holds other
-/// than one surface, no still frame with the caret shown arrives in five
+/// than one surface, no still frame arrives in five
 /// tries, the PNG is the wrong size, too few cells can be cross-checked, or
 /// any file or compositor call fails.
 #[allow(clippy::too_many_arguments)]
@@ -165,22 +164,17 @@ fn take_frame(
         )));
     }
 
-    // Picture and grid must fall in one half-period of the caret's blink
-    // (`Proxy::wait_for_change`); an unchanged grid after the shot proves it,
-    // otherwise retake on the next edge. Only the caret-shown half is taken
-    // (`caret_hidden`), or the judge reports a field with no caret.
+    // Picture and grid must fall between two changes on screen
+    // (`Proxy::wait_for_change`): under the seeded reduced motion the caret
+    // holds and only a working line's timer moves, once a second. An
+    // unchanged grid after the shot proves it, otherwise retake on the next
+    // edge.
     let path = run_dir.join(format!("{scene_name}-{size}-{theme}.png"));
     let mut grid = None;
-    let mut prev = proxy.grid();
     for _ in 0..5 {
         let _ = std::fs::remove_file(&path);
         proxy.wait_for_change(Duration::from_millis(1300));
         let before = proxy.grid();
-        if caret_hidden(&prev, &before) {
-            prev = before;
-            continue;
-        }
-        prev = before.clone();
         comp.exec(&format!(
             "grim {}",
             shell_quote(&path.display().to_string())
@@ -192,7 +186,10 @@ fn take_frame(
         }
     }
     let Some(grid) = grid else {
-        return Err(Error::Capture("no still frame with the caret shown in five half-periods — something faster than the caret is animating".into()));
+        return Err(Error::Capture(
+            "no still frame in five tries — something on screen moves faster than once a second"
+                .into(),
+        ));
     };
 
     let (w, h) = png::size(&path)?;
@@ -219,12 +216,6 @@ fn take_frame(
     Ok(path)
 }
 
-/// Whether `now` is the caret-hidden half of the blink, given `prev`, the grid
-/// one edge earlier. No caret in either reads as shown.
-fn caret_hidden(prev: &Grid, now: &Grid) -> bool {
-    now.caret().is_none() && prev.caret().is_some()
-}
-
 fn wait_for_png(path: &Path) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut stable = 0;
@@ -248,32 +239,4 @@ fn wait_for_png(path: &Path) -> Result<()> {
         "grim wrote no frame at {}",
         path.display()
     )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::caret_hidden;
-    use crate::vt::{Grid, Vt};
-
-    /// A field row with the cursor at column 2, shown or hidden.
-    fn field(shown: bool) -> Grid {
-        let mut vt = Vt::new(12, 1);
-        let cursor = if shown { "\x1b[?25h" } else { "\x1b[?25l" };
-        vt.feed(format!("\x1b[48;2;37;40;44m\u{203a}      \x1b[1;3H{cursor}").as_bytes());
-        vt.grid().clone()
-    }
-
-    #[test]
-    fn the_hidden_half_is_the_one_where_the_cursor_is_hidden() {
-        let (shown, hidden) = (field(true), field(false));
-        assert_eq!(shown.caret(), Some((0, 2)));
-        assert!(caret_hidden(&shown, &hidden));
-        assert!(!caret_hidden(&hidden, &shown));
-    }
-
-    #[test]
-    fn a_screen_with_nothing_blinking_is_never_waited_on() {
-        let still = field(false);
-        assert!(!caret_hidden(&still, &still));
-    }
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use aldwin_core::{
     Answer, Command, Event, LogRecord, PlanStep, Question, ReviewDecision, ReviewOutcome,
@@ -9,9 +10,11 @@ use ratatui::crossterm::event::{
 };
 use ratatui::text::Line;
 
+use crate::activity::Activity;
 use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
 use crate::log::{plural, LogEntry, WorkItem};
+use crate::motion::{ticks, Motion};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
 use crate::review::{Review, ReviewOutcome as ReviewKey};
@@ -19,8 +22,8 @@ use crate::scroll::{ScrollState, WHEEL_ROWS};
 use crate::ui::Transcript;
 use crate::version::{GIT_HASH, VERSION};
 
-/// Ticks (120ms each, `run.rs`) within which a second Ctrl+C quits: ~2s.
-const DOUBLE_CTRL_C_TICKS: u64 = 16;
+/// Ticks within which a second Ctrl+C quits.
+const DOUBLE_CTRL_C_TICKS: u64 = ticks(Duration::from_secs(2));
 
 /// One catalogue provider, formatted by aldwin-cli; this crate never sees
 /// an endpoint or key variable.
@@ -230,6 +233,9 @@ pub struct App {
     turn_start: usize,
     last_ctrl_c: Option<u64>,
     pub(crate) tick: u64,
+    /// What the running turn is doing, for the working line; stale while
+    /// idle.
+    pub(crate) activity: Activity,
     /// Filled on `ToolUseRequested` (the only event with a tool's name and
     /// input), consumed on `ToolDispatched`.
     pending_calls: HashMap<String, (String, serde_json::Value)>,
@@ -240,6 +246,7 @@ pub struct App {
     sessions: Vec<SessionChoice>,
     commands: Vec<CommandChoice>,
     pub(crate) theme: Theme,
+    pub(crate) motion: Motion,
     transcript: Transcript,
 }
 
@@ -274,6 +281,7 @@ impl App {
             turn_start: 0,
             last_ctrl_c: None,
             tick: 0,
+            activity: Activity::default(),
             pending_calls: HashMap::new(),
             outbox: Vec::new(),
             catalogue: Vec::new(),
@@ -281,6 +289,7 @@ impl App {
             sessions: Vec::new(),
             commands: Vec::new(),
             theme: Theme::default(),
+            motion: Motion::default(),
             transcript: Transcript::default(),
         }
     }
@@ -317,6 +326,18 @@ impl App {
         self
     }
 
+    /// Whether the caret and the working line move.
+    ///
+    /// ```
+    /// use aldwin_tui::{App, Motion};
+    ///
+    /// let _app = App::new("claude-sonnet-5".into()).with_motion(Motion::Reduced);
+    /// ```
+    pub fn with_motion(mut self, motion: Motion) -> Self {
+        self.motion = motion;
+        self
+    }
+
     /// The project name and git branch for the launch card, read by
     /// aldwin-cli.
     pub fn with_facts(mut self, project: &str, branch: Option<&str>) -> Self {
@@ -333,18 +354,26 @@ impl App {
         p.models.iter().find(|m| m.id == model).map(|m| m.context)
     }
 
+    /// While the working line is not on screen its stall clock does not
+    /// run: a question or a review is the developer's time, not a stall.
     pub(crate) fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        if !self.is_working() {
+            self.activity.touch(self.tick);
+        }
     }
 
-    /// Whether anything on screen reads `tick`: only the caret, blinking
-    /// wherever a field is drawn (`--caret-period`); the running `●` is
-    /// steady (motion.css).
+    /// Whether anything on screen reads `tick`: the caret, blinking wherever
+    /// a field is drawn, and the working line under it. Under reduced motion
+    /// only the working line's timer moves.
     pub(crate) fn is_animating(&self) -> bool {
-        matches!(
-            self.mode,
-            Mode::Conversation | Mode::Review(_) | Mode::Commands(_)
-        )
+        match self.motion {
+            Motion::Full => matches!(
+                self.mode,
+                Mode::Conversation | Mode::Review(_) | Mode::Commands(_)
+            ),
+            Motion::Reduced => self.is_working(),
+        }
     }
 
     pub(crate) fn review(&self) -> Option<&Review> {
@@ -368,6 +397,18 @@ impl App {
 
     fn busy(&self) -> bool {
         self.turn_active || self.awaiting_turn
+    }
+
+    /// Whether the footer is the working line: a turn runs and nothing on
+    /// screen waits on the developer.
+    pub(crate) fn is_working(&self) -> bool {
+        self.busy()
+            && self.answering.is_none()
+            && match &self.mode {
+                Mode::Conversation => true,
+                Mode::Review(review) => review.waiting(),
+                Mode::Question(_) | Mode::Commands(_) => false,
+            }
     }
 
     /// The current turn's entries, or the last turn's while idle.
@@ -467,6 +508,21 @@ impl App {
         }
     }
 
+    /// Hands the working line the turn's latest call still running: a
+    /// `WorkItem` with no fact yet.
+    fn follow_calls(&mut self) {
+        let running = self
+            .this_turn()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                LogEntry::Work { items, .. } => items.iter().rev().find(|i| i.fact.is_none()),
+                _ => None,
+            })
+            .cloned();
+        self.activity.calls_changed(running.as_ref(), self.tick);
+    }
+
     fn finish_call(&mut self, call_id: &str, content: &str, is_error: bool) {
         // Search every `Work` entry, newest first, not just the last one.
         for entry in self.log.iter_mut().rev() {
@@ -558,8 +614,12 @@ impl App {
     /// Folds one core event into the log, mode and status; any command it
     /// calls for goes to the outbox.
     pub fn apply_event(&mut self, event: Event) {
+        self.activity.touch(self.tick);
         match event {
             Event::TurnStarted { .. } => {
+                if !self.busy() {
+                    self.activity = Activity::new(self.tick);
+                }
                 self.mark_turn_started();
                 self.turn_active = true;
                 self.awaiting_turn = false;
@@ -567,21 +627,24 @@ impl App {
                 self.details_open = false;
             }
             Event::TextDelta { text, .. } => {
+                self.activity.replying(self.tick);
                 if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
                     buf.push_str(&text);
                 } else {
                     self.push(LogEntry::AssistantText { text });
                 }
             }
-            Event::ThinkingStart { .. }
-            | Event::ThinkingDelta { .. }
-            | Event::ThinkingEnd { .. } => {}
+            Event::ThinkingStart { .. } | Event::ThinkingDelta { .. } => {
+                self.activity.thinking(self.tick);
+            }
+            Event::ThinkingEnd { .. } => {}
             Event::ToolUseRequested { call, .. } => {
                 self.pending_calls.insert(call.id, (call.name, call.input));
             }
             Event::ToolDispatched { call_id, .. } => {
                 if let Some((name, input)) = self.pending_calls.remove(&call_id) {
                     self.record_call(call_id, &name, &input);
+                    self.follow_calls();
                 }
             }
             Event::ToolCompleted { result, .. } => {
@@ -590,6 +653,7 @@ impl App {
                     self.record_call(result.call_id.clone(), &name, &input);
                 }
                 self.finish_call(&result.call_id, &result.content, result.is_error);
+                self.follow_calls();
             }
             Event::StepEnded { outcome, .. } => {
                 self.status.context_used = Some(
@@ -598,7 +662,10 @@ impl App {
                         + outcome.cache.cache_creation_input_tokens,
                 );
             }
-            Event::RetryAttempt { info, .. } => self.push(LogEntry::retry(&info)),
+            Event::RetryAttempt { info, .. } => {
+                self.activity.thinking(self.tick);
+                self.push(LogEntry::retry(&info));
+            }
             Event::TurnEnded { reason, .. } => {
                 self.pending_calls.clear();
                 self.turn_active = false;
@@ -624,6 +691,7 @@ impl App {
                 if let Some(review) = self.review_mut() {
                     review.follow_up_started();
                 }
+                self.activity = Activity::new(self.tick);
                 self.awaiting_turn = true;
                 self.open_turn(text);
             }
@@ -1205,6 +1273,7 @@ impl App {
             let first = text.lines().next().unwrap_or("").trim();
             self.request = Some(first.trim_end_matches(['.', '!']).to_string());
         }
+        self.activity = Activity::new(self.tick);
         self.awaiting_turn = true;
         self.open_turn(text.clone());
         self.outbox.push(Command::Submit { text });
@@ -1257,6 +1326,20 @@ impl App {
     /// The open review, when one is on screen.
     pub fn review_for_tests(&mut self) -> Option<&mut Review> {
         self.review_mut()
+    }
+
+    /// Advances the clock `n` ticks, as `run.rs`'s ticker does.
+    ///
+    /// ```
+    /// use aldwin_tui::App;
+    ///
+    /// let mut app = App::new("claude-sonnet-5".into());
+    /// app.advance(10);
+    /// ```
+    pub fn advance(&mut self, n: u64) {
+        for _ in 0..n {
+            self.tick();
+        }
     }
 }
 

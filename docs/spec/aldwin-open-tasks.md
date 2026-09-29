@@ -16,7 +16,7 @@ the note that the macOS sandbox had never run on a Mac was dropped, since
 the developer runs it there. What is still true after that is entered here
 afresh.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-28
+**Last Updated:** 2026-09-29
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -26,8 +26,9 @@ contradicts) and the entry says so before it goes.
 
 3. **The model's thinking is not drawn.** Thinking streams to the TUI
    (`Event::ThinkingDelta`) and is carried and saved (ADR 0006), but
-   `App::apply_event` drops it (`crates/tui/src/app.rs`), so a turn that
-   thinks for a long time shows nothing until its reply starts. ADR 0006
+   `App::apply_event` reads it only to say `Thinking` on the working line
+   (`crates/tui/src/app.rs`), so a turn that thinks for a long time shows
+   none of what it thinks until its reply starts. ADR 0006
    left it undrawn because the design system has no treatment for it, and
    one is not invented locally. The developer's call, 2026-09-27: draw it
    once the design specifies how — a disclosure, say, as `Read 1 file  ›`

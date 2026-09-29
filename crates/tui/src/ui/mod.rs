@@ -13,6 +13,7 @@ mod question;
 pub(crate) mod review;
 mod row;
 mod transcript;
+mod working;
 mod wrap;
 
 #[cfg(test)]

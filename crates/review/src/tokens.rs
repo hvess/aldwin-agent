@@ -10,8 +10,8 @@
 //! * `guidelines/glyphs.html`: the closed glyph table, its only
 //!   machine-readable copy.
 //! * `frames/Aldwin Agent TUI.dc.html`: the brand mark's 108 cells (redrawn
-//!   for a terminal cell) and the context bar's ramp, both `color-mix()`
-//!   expressions found nowhere else.
+//!   for a terminal cell), the context bar's ramp and glyph, and the working
+//!   line's highlight, all `color-mix()` expressions found nowhere else.
 //!
 //! Ten roles are deliberately not carried (`UNCARRIED`, Decision 3): `--syn`
 //! and `--call` are reserved by the design, so carrying them would offer a
@@ -153,7 +153,8 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     };
 
     let mark = fit_to_terminal(&mark_cells(&frame)?, MARK_TERMINAL_ROWS)?;
-    check_gauge_against_frame(&frame)?;
+    let gauge_cell = check_gauge_against_frame(&frame)?;
+    let highlight = frame_highlight(&frame)?;
 
     let mut out = header();
 
@@ -216,6 +217,31 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
         }
         out.push_str("];\n\n");
 
+        // The working line's highlight: `--label` at the centre, then the
+        // frame's mixes outward.
+        let label = oklch_of(raw, &dark_raw, "label")?;
+        let label2 = oklch_of(raw, &dark_raw, "label2")?;
+        let highlight_colors = std::iter::once(label)
+            .chain(highlight.iter().map(|p| mix_oklch(label, label2, *p)))
+            .map(Oklch::to_rgb)
+            .collect::<Result<Vec<Rgb>>>()?;
+        out.push_str(&format!(
+            "/// The working line's highlight, `[distance]` in cells from its centre:\n\
+             /// `--label`, then `--label` mixed over `--label2` at {}%. The last\n\
+             /// holds for every cell further out (frame `W2`).\n\
+             pub(crate) const HIGHLIGHT_{name}: [Color; {}] = [{}];\n\n",
+            highlight
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join("% and "),
+            highlight_colors.len(),
+            highlight_colors
+                .iter()
+                .map(|rgb| format!("{}, ", rgb.literal()))
+                .collect::<String>(),
+        ));
+
         // Every colour of the theme, flat, for stage 5's palette-membership
         // test; it stays current when the design gains a role.
         let mut values: Vec<(String, Rgb)> = roles
@@ -224,16 +250,21 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
             .collect();
         let mut seen: BTreeSet<(u8, u8, u8)> =
             values.iter().map(|(_, c)| (c.0, c.1, c.2)).collect();
-        for rgb in &ramp_colors {
-            if seen.insert((rgb.0, rgb.1, rgb.2)) {
-                values.push(("the context bar, --fill mixed over --track".into(), *rgb));
-            }
-        }
-        for rgb in &mark_colors {
-            if seen.insert((rgb.0, rgb.1, rgb.2)) {
-                values.push(("the mark, --fill mixed over --win".into(), *rgb));
-            }
-        }
+        let mixes = [
+            ("the context bar, --fill mixed over --track", &ramp_colors),
+            ("the mark, --fill mixed over --win", &mark_colors),
+            (
+                "the working line's highlight, --label mixed over --label2",
+                &highlight_colors,
+            ),
+        ];
+        values.extend(
+            mixes
+                .into_iter()
+                .flat_map(|(what, colors)| colors.iter().map(move |rgb| (what, *rgb)))
+                .filter(|(_, rgb)| seen.insert((rgb.0, rgb.1, rgb.2)))
+                .map(|(what, rgb)| (what.to_string(), rgb)),
+        );
         out.push_str(&format!(
             "pub(crate) const {name}_VALUES: [Color; {}] = [\n",
             values.len()
@@ -260,6 +291,10 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
     ));
 
     out.push_str(&grid(&layout)?);
+    out.push_str(&format!(
+        "/// The glyph every context-bar segment is drawn with, filled or empty.\n\
+         pub(crate) const GAUGE_CELL: char = {gauge_cell:?};\n"
+    ));
     out.push_str(&glyphs(&glyph_card, &frame, baseline)?);
     rustfmt(&out)
 }
@@ -326,7 +361,7 @@ fn grid(layout: &str) -> Result<String> {
         out.push_str(&format!("pub(crate) const {name}: usize = {value};\n"));
     }
     out.push_str(&format!(
-        "/// The context bar's segments — ten `━` in every frame.\n\
+        "/// The context bar's segments — ten in every frame.\n\
          pub(crate) const GAUGE_SEGMENTS: usize = {GAUGE_SEGMENTS};\n\
          /// How many of them a percentage fills: `ContextBar.jsx`'s `round(percent / 10)`, clamped.\n\
          pub(crate) fn gauge_filled(percent: u8) -> usize {{\n    \
@@ -568,48 +603,81 @@ fn mix_percent(half: &str) -> Option<u8> {
     rest.split('%').next()?.trim().parse().ok()
 }
 
-/// Every context bar the frame draws, as (filled percentages left to right,
-/// empty segment count, the percentage shown) — one per window.
-fn frame_gauges(frame: &str) -> Vec<(Vec<f64>, usize, u8)> {
-    let mut out = Vec::new();
-    for window in frame_windows(frame) {
-        let Some(at) = window.find("Context ") else {
-            continue;
-        };
-        let bar = &window[at..];
-        let filled: Vec<f64> = bar
-            .split("color-mix(in oklch, var(--fill) ")
-            .skip(1)
-            .filter_map(|chunk| {
-                let (pct, rest) = chunk.split_once('%')?;
-                rest.trim_start()
-                    .starts_with(", var(--track)")
-                    .then(|| pct.trim().parse().ok())?
-            })
-            .collect();
-        let empty = bar
-            .split("color:var(--track)\">")
-            .nth(1)
-            .and_then(|rest| rest.split('<').next())
-            .map_or(0, |run| run.chars().filter(|&c| c == '━').count());
-        let shown = bar
-            .split("</span> ")
-            .find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok())
-            .unwrap_or(0);
-        out.push((filled, empty, shown));
-    }
-    out
+/// One context bar as a window of the frame draws it.
+#[derive(Debug)]
+struct FrameGauge {
+    /// The filled segments' percentages of `--fill`, left to right.
+    filled: Vec<f64>,
+    /// Segments on `--track` alone.
+    empty: usize,
+    /// The percentage printed after the bar.
+    shown: u8,
+    /// Every segment's glyph, in order.
+    cells: String,
+}
+
+/// Every context bar the frame draws, one per window. The bar is the only
+/// thing drawn over `--track`, so it starts at the monospace span holding
+/// the window's first `var(--track)`.
+fn frame_gauges(frame: &str) -> Vec<FrameGauge> {
+    frame_windows(frame)
+        .iter()
+        .filter_map(|window| frame_gauge(window))
+        .collect()
+}
+
+/// The context bar one window draws, if it draws one.
+fn frame_gauge(window: &str) -> Option<FrameGauge> {
+    let track = window.find("var(--track)")?;
+    let start = window[..track]
+        .rfind("font-family:var(--font-mono)")
+        .unwrap_or(track);
+    let bar = &window[start..];
+    let filled: Vec<f64> = bar
+        .split("color-mix(in oklch, var(--fill) ")
+        .skip(1)
+        .filter_map(|chunk| {
+            let (pct, rest) = chunk.split_once('%')?;
+            rest.trim_start()
+                .starts_with(", var(--track)")
+                .then(|| pct.trim().parse().ok())?
+        })
+        .collect();
+    // Each segment span's style ends in `var(--track)` or
+    // `var(--track))`; its text is the segments it draws.
+    let cells: String = bar
+        .split("var(--track)")
+        .skip(1)
+        .filter_map(|chunk| chunk.split_once("\">")?.1.split('<').next())
+        .collect();
+    let shown = bar
+        .split("</span> ")
+        .find_map(|s| s.split('%').next()?.trim().parse::<u8>().ok())
+        .unwrap_or(0);
+    Some(FrameGauge {
+        empty: cells.chars().count().saturating_sub(filled.len()),
+        filled,
+        shown,
+        cells,
+    })
 }
 
 /// Checks every context bar in the frame against [`gauge_mix`] for the
-/// percentage it shows; a formula drifted from `ContextBar.jsx` would
-/// otherwise generate cleanly.
-fn check_gauge_against_frame(frame: &str) -> Result<()> {
+/// percentage it shows, and returns the one glyph every segment is drawn
+/// with; a formula drifted from `ContextBar.jsx` would otherwise generate
+/// cleanly.
+fn check_gauge_against_frame(frame: &str) -> Result<char> {
     let gauges = frame_gauges(frame);
-    if gauges.is_empty() {
+    let Some(cell) = gauges.first().and_then(|g| g.cells.chars().next()) else {
         return Err(Error::Design("the frame draws no context bar".into()));
-    }
-    for (filled, empty, shown) in gauges {
+    };
+    for FrameGauge {
+        filled,
+        empty,
+        shown,
+        cells,
+    } in gauges
+    {
         let n = ((f64::from(shown) / 10.0).round() as usize).min(GAUGE_SEGMENTS);
         let wanted: Vec<f64> = (0..n).filter_map(|i| gauge_mix(n, i)).collect();
         let close = filled.len() == wanted.len()
@@ -620,8 +688,36 @@ fn check_gauge_against_frame(frame: &str) -> Result<()> {
         if !close || empty != GAUGE_SEGMENTS - n {
             return Err(Error::Design(format!("the frame's {shown}% context bar is {filled:?} + {empty} empty; ContextBar.jsx's rule gives {wanted:?} + {}", GAUGE_SEGMENTS - n)));
         }
+        if cells.chars().any(|c| c != cell) {
+            return Err(Error::Design(format!(
+                "the frame's {shown}% context bar draws {cells}; every other bar draws {cell}"
+            )));
+        }
     }
-    Ok(())
+    Ok(cell)
+}
+
+/// The working line's highlight (frame `W2`): the percentages of `--label`
+/// mixed over `--label2`, strongest first, one per cell of distance from the
+/// highlight's centre; the last holds for every cell further out.
+fn frame_highlight(frame: &str) -> Result<Vec<u8>> {
+    const MIX: &str = "color-mix(in oklch, var(--label) ";
+    let found: BTreeSet<u8> = frame_windows(frame)
+        .iter()
+        .flat_map(|window| window.split(MIX).skip(1))
+        .filter_map(|chunk| {
+            let (pct, rest) = chunk.split_once('%')?;
+            rest.trim_start()
+                .starts_with(", var(--label2))")
+                .then(|| pct.trim().parse().ok())?
+        })
+        .collect();
+    if found.is_empty() {
+        return Err(Error::Design(
+            "the frame draws no highlight on the working line".into(),
+        ));
+    }
+    Ok(found.into_iter().rev().collect())
 }
 
 /// Every window in the frame, each the balanced `<div … data-screen-label="…">`
@@ -1199,28 +1295,28 @@ mod tests {
     fn the_gauge_rule_reproduces_every_bar_in_the_frame() {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
         let gauges = frame_gauges(&frame);
-        assert!(
+        let drawn = |filled: &[f64], empty: usize, shown: u8| {
             gauges
                 .iter()
-                .any(|(f, e, s)| f == &[55.0, 70.0, 85.0, 100.0] && *e == 6 && *s == 41),
-            "{gauges:?}"
+                .any(|g| g.filled == filled && g.empty == empty && g.shown == shown)
+        };
+        assert!(drawn(&[55.0, 70.0, 85.0, 100.0], 6, 41), "{gauges:?}");
+        assert!(drawn(&[52.0, 64.0, 76.0, 88.0, 100.0], 5, 46), "{gauges:?}");
+        assert!(drawn(&[], 10, 0), "{gauges:?}");
+        assert_eq!(
+            check_gauge_against_frame(&frame).expect("the rule matches the frame"),
+            '█'
         );
-        assert!(
-            gauges
-                .iter()
-                .any(|(f, e, s)| f == &[52.0, 64.0, 76.0, 88.0, 100.0] && *e == 5 && *s == 46),
-            "{gauges:?}"
-        );
-        assert!(
-            gauges
-                .iter()
-                .any(|(f, e, s)| f.is_empty() && *e == 10 && *s == 0),
-            "{gauges:?}"
-        );
-        check_gauge_against_frame(&frame).expect("the rule matches the frame");
         assert_eq!(gauge_mix(4, 0), Some(55.0));
         assert_eq!(gauge_mix(1, 0), Some(100.0));
         assert_eq!(gauge_mix(0, 0), None);
+    }
+
+    #[test]
+    fn the_highlight_is_read_from_the_working_frames() {
+        let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
+        assert_eq!(frame_highlight(&frame).unwrap(), [70, 40]);
+        assert!(frame_highlight("<div data-screen-label=\"x\"></div>").is_err());
     }
 
     #[test]
@@ -1252,7 +1348,7 @@ mod tests {
             .unwrap();
         for glyph in [
             '›', '✓', '●', '○', '▎', '◆', '⋯', '━', '↩', '⌃', '⎋', '↺', '/', '?', '↑', '↓', '⌄',
-            '−', '▀',
+            '−', '▀', '█',
         ] {
             assert!(
                 marks.contains(&format!("{glyph:?}")),

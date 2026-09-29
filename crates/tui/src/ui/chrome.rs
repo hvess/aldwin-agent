@@ -1,6 +1,8 @@
 //! The bottom band: the field, the comment field, and the footer with its
 //! context bar. Draws to the `Frame` directly; none of it scrolls.
 
+use std::time::Duration;
+
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -9,14 +11,15 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::grid::{truncate_spans, GROUP_GAP, MARGIN_X, MARK_COL};
-use super::question;
+use super::{question, working};
 use aldwin_core::ReviewOutcome;
 
 use crate::app::{App, Asker, Mode};
 use crate::draft;
 use crate::log::LogEntry;
+use crate::motion::{ticks, Motion};
 use crate::palette::Palette;
-use crate::tokens::{gauge_filled, GAUGE_SEGMENTS};
+use crate::tokens::{gauge_filled, GAUGE_CELL, GAUGE_SEGMENTS};
 
 /// The field's maximum height; a longer draft scrolls with the caret in view.
 pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
@@ -25,10 +28,11 @@ pub(super) const COMPOSER_MAX_ROWS: u16 = 10;
 /// full row.
 const CARET_LEN: u16 = 1;
 
-/// Ticks per caret phase: motion.css's `--caret-period` (1.05s) over
-/// `run.rs`'s 120ms tick. Motion tokens are not generated into `tokens.rs`;
-/// keep in step with both by hand.
-const CARET_TICKS: u64 = 9;
+/// Ticks the caret shows, then hides: half of motion.css's
+/// `--caret-period` (1.05s), whose keyframes are on for the first half, in
+/// whole ticks (500ms).
+/// Motion tokens are not generated into `tokens.rs`; keep in step by hand.
+const CARET_TICKS: u64 = ticks(Duration::from_millis(525));
 
 /// The draft wrapped to the field's column, measured once per frame.
 pub(super) struct Composer {
@@ -233,7 +237,7 @@ pub(super) fn draw_field(
             ),
         ]);
         frame.render_widget(Paragraph::new(line).style(field), inner);
-        place_caret(frame, caret_x, inner.y, app.tick);
+        place_caret(frame, caret_x, inner.y, app.tick, app.motion);
         return;
     }
 
@@ -261,7 +265,13 @@ pub(super) fn draw_field(
             spans.extend(action);
         }
         frame.render_widget(Paragraph::new(Line::from(spans)).style(field), inner);
-        place_caret(frame, inner.x + MARK_COL as u16, inner.y, app.tick);
+        place_caret(
+            frame,
+            inner.x + MARK_COL as u16,
+            inner.y,
+            app.tick,
+            app.motion,
+        );
         return;
     }
 
@@ -325,24 +335,25 @@ pub(super) fn draw_field(
         inner.x + (MARK_COL + cursor_col) as u16,
         inner.y + (cursor_row - top) as u16,
         app.tick,
+        app.motion,
     );
 }
 
-/// Whether the blinking caret is showing at `tick`.
-fn caret_on(tick: u64) -> bool {
-    (tick / CARET_TICKS).is_multiple_of(2)
+/// Whether the caret is showing at `tick`: always, under reduced motion.
+fn caret_on(tick: u64, motion: Motion) -> bool {
+    motion == Motion::Reduced || (tick / CARET_TICKS).is_multiple_of(2)
 }
 
 /// The caret is the terminal's cursor (an accent bar, set up by `run.rs`):
 /// the design's 2px bar between cells has no glyph. Blinks on
 /// `--caret-period` via `caret_on`, not the terminal's own blink.
-fn place_caret(frame: &mut Frame, x: u16, y: u16, tick: u64) {
-    if caret_on(tick) {
+fn place_caret(frame: &mut Frame, x: u16, y: u16, tick: u64, motion: Motion) {
+    if caret_on(tick, motion) {
         frame.set_cursor_position((x, y));
     }
 }
 
-/// A footer key: glyph, two spaces, verb.
+/// A footer key: glyph, a space, verb.
 #[derive(Clone, Copy)]
 pub(super) struct KeyHint {
     pub glyph: &'static str,
@@ -355,12 +366,13 @@ impl KeyHint {
     }
 }
 
-/// The footer's leading status word.
+/// What the footer opens with after the mark column's glyph.
 enum Status {
     Ready,
+    /// The working line (`ui::working`), and no keys: `esc` always stops.
     Working,
     Waiting,
-    /// The review: no status word; the row opens with the keys.
+    /// No status word; the row opens with the keys.
     None,
 }
 
@@ -368,7 +380,7 @@ enum Status {
 struct Footer {
     status: Status,
     keys: Vec<KeyHint>,
-    /// `/  Commands`, right-flush one group gap before the context bar
+    /// `/ Commands`, right-flush one group gap before the context bar
     /// (frame A).
     aside: Option<KeyHint>,
 }
@@ -390,7 +402,10 @@ const ESC: &str = "esc";
 /// field but is deliberately unnamed (frames B, C, J): the disclosure's
 /// `›`/`⌄` says it opens.
 fn footer_state(app: &App) -> Footer {
-    // Frame E's list keys; a dismissible list adds `esc  Close`.
+    if app.is_working() {
+        return Footer::new(Status::Working, Vec::new());
+    }
+    // Frame E's list keys; a dismissible list adds `esc Close`.
     let choose = [KeyHint::new("↑↓", "Choose"), KeyHint::new("↩", "Select")];
     let dismissible = || {
         let mut keys = choose.to_vec();
@@ -415,12 +430,9 @@ fn footer_state(app: &App) -> Footer {
                 KeyHint::new(ESC, "Close"),
             ],
         ),
-        // The comments are with the agent: the conversation's own working
-        // footer, so the review reads as the turn it is inside.
-        Mode::Review(r) if r.waiting() && (app.turn_active || app.awaiting_turn) => {
-            Footer::new(Status::Working, vec![KeyHint::new(ESC, "Stop")])
-        }
-        // Nothing running: `esc` leaves the review (`App::handle_review_key`).
+        // A waiting review with a turn running is the working line, above,
+        // so the review reads as the turn it is inside. Nothing running:
+        // `esc` leaves the review (`App::handle_review_key`).
         Mode::Review(r) if r.waiting() => {
             Footer::new(Status::None, vec![KeyHint::new(ESC, "Close")])
         }
@@ -445,15 +457,11 @@ fn footer_state(app: &App) -> Footer {
             Footer::new(Status::None, keys)
         }
         Mode::Review(_) => Footer::new(Status::None, vec![KeyHint::new("?", "Keys")]),
-        // Must precede `Working…`: the turn is running but waits on the
-        // developer.
+        // The turn is running but waits on the developer.
         Mode::Conversation if app.answering.is_some() => Footer::new(
             Status::Waiting,
             vec![KeyHint::new("↩", "Send"), KeyHint::new(ESC, "Back")],
         ),
-        Mode::Conversation if app.turn_active || app.awaiting_turn => {
-            Footer::new(Status::Working, vec![KeyHint::new(ESC, "Stop")])
-        }
         Mode::Conversation if !app.draft.is_empty() => {
             Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
         }
@@ -492,8 +500,9 @@ fn just_saved(app: &App) -> bool {
     })
 }
 
-/// The footer, in `label2`: status, key groups `--group-gap` apart, and the
-/// context bar flush right.
+/// The footer, in `label2`: the state glyph in the mark column (`working`
+/// while a turn runs, else a `label3` `○`), the status and key groups
+/// `--group-gap` apart, and the context bar flush right.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let pal = app.theme.palette();
     let Footer {
@@ -506,43 +515,34 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let group = |key: KeyHint| {
         vec![
             Span::styled(key.glyph, dim),
-            Span::styled(format!("  {}", key.verb), dim),
+            Span::styled(format!(" {}", key.verb), dim),
         ]
     };
 
-    let mut groups: Vec<Vec<Span<'static>>> = Vec::new();
-    match status {
-        Status::Ready => groups.push(vec![
-            Span::raw(" ".repeat(MARK_COL)),
-            Span::styled("Ready", dim),
-        ]),
-        Status::Waiting => groups.push(vec![
-            Span::raw(" ".repeat(MARK_COL)),
-            Span::styled("Waiting for you", dim),
-        ]),
-        Status::Working => {
-            // Steady: only the caret animates (motion.css).
-            groups.push(vec![
-                Span::styled(
-                    format!("{:<width$}", "●", width = MARK_COL),
-                    Style::default().fg(pal.amber),
-                ),
-                Span::styled("Working…", dim),
-            ])
-        }
-        Status::None => groups.push(vec![Span::raw(" ".repeat(MARK_COL))]),
-    }
+    let line = matches!(status, Status::Working).then(|| app.activity.line(app.tick));
+    let mark = match &line {
+        Some(line) => working::mark(line, app.tick, app.motion, pal),
+        None => Span::styled(
+            format!("{:<MARK_COL$}", "○"),
+            Style::default().fg(pal.label3),
+        ),
+    };
+    let mut groups: Vec<Vec<Span<'static>>> = match status {
+        Status::Ready => vec![vec![Span::styled("Ready", dim)]],
+        Status::Waiting => vec![vec![Span::styled("Waiting for you", dim)]],
+        Status::Working | Status::None => Vec::new(),
+    };
+    let status_groups = groups.len();
     groups.extend(keys.into_iter().map(group));
 
     // When the row is short: the context bar is never cut; the aside is
     // dropped first, then trailing key groups, whole.
-    let width = area.width as usize;
+    let row = (area.width as usize).saturating_sub(MARGIN_X * 2 + MARK_COL);
     let bar = context_bar(app.status.context_percent(), pal);
     let span_w = |spans: &[Span]| spans.iter().map(|s| s.content.width()).sum::<usize>();
     let groups_w = |groups: &[Vec<Span<'static>>]| {
         groups.iter().map(|g| span_w(g)).sum::<usize>() + GROUP_GAP * groups.len().saturating_sub(1)
     };
-    let row = width.saturating_sub(MARGIN_X * 2);
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(aside) = aside {
         let aside = group(aside);
@@ -554,48 +554,39 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     right.extend(bar);
     let right_w = span_w(&right);
     let budget = row.saturating_sub(GROUP_GAP).saturating_sub(right_w);
-    while groups.len() > 1 && groups_w(&groups) > budget {
-        groups.pop();
-    }
 
-    let mut left: Vec<Span<'static>> = Vec::new();
-    for (i, group) in groups.into_iter().enumerate() {
-        if i > 0 {
-            left.push(Span::raw(" ".repeat(GROUP_GAP)));
+    let left = match &line {
+        Some(line) => working::words(line, app.motion, pal, budget),
+        None => {
+            while groups.len() > status_groups && groups_w(&groups) > budget {
+                groups.pop();
+            }
+            truncate_spans(groups.join(&Span::raw(" ".repeat(GROUP_GAP))), budget)
         }
-        left.extend(group);
-    }
-    // `Status::None` is only the mark column's blank: drop the group gap
-    // after it so the first key sits where a status word would.
-    if let (Some(first), Some(second)) = (left.first().cloned(), left.get(1).cloned()) {
-        if first.content.trim().is_empty() && second.content.trim().is_empty() {
-            left.remove(1);
-        }
-    }
-    let left = truncate_spans(left, budget);
-    let used: usize = left.iter().map(|s| s.content.width()).sum();
-    let gap = width
-        .saturating_sub(MARGIN_X * 2)
-        .saturating_sub(used)
-        .saturating_sub(right_w);
+    };
+    let gap = row.saturating_sub(span_w(&left)).saturating_sub(right_w);
 
-    let mut line = vec![Span::raw(" ".repeat(MARGIN_X))];
-    line.extend(left);
-    line.push(Span::raw(" ".repeat(gap)));
-    line.extend(right);
-    frame.render_widget(Paragraph::new(Line::from(line)), area);
+    let spans: Vec<Span<'static>> = [Span::raw(" ".repeat(MARGIN_X)), mark]
+        .into_iter()
+        .chain(left)
+        .chain(std::iter::once(Span::raw(" ".repeat(gap))))
+        .chain(right)
+        .collect();
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// `Context ━━━━━━━━━━ 41%`, coloured by `Palette::gauge` (`ContextBar.jsx`).
-/// `None` draws empty at `0%`, as the launch frame does.
+/// `██████████ 41%`, coloured by `Palette::gauge` (`ContextBar.jsx`), with
+/// no label: the footer gives it the row (frame `W1`). `None` draws empty
+/// at `0%`, as the launch frame does.
 pub(super) fn context_bar(percent: Option<u8>, pal: &Palette) -> Vec<Span<'static>> {
     let pct = percent.unwrap_or(0);
     let filled = gauge_filled(pct);
     let colours = pal.gauge(filled);
-    let mut spans = vec![Span::styled("Context ", Style::default().fg(pal.label2))];
-    for colour in colours.iter().take(GAUGE_SEGMENTS) {
-        spans.push(Span::styled("━", Style::default().fg(*colour)));
-    }
+    let mut spans: Vec<Span<'static>> = colours
+        .iter()
+        .take(GAUGE_SEGMENTS)
+        .map(|colour| Span::styled(GAUGE_CELL.to_string(), Style::default().fg(*colour)))
+        .collect();
     spans.push(Span::styled(
         format!(" {pct}%"),
         Style::default().fg(pal.label2),
@@ -683,6 +674,7 @@ pub(super) fn draw_comment_field(
         draft_row.x + 1 + column as u16,
         draft_row.y,
         app.tick,
+        app.motion,
     );
 }
 

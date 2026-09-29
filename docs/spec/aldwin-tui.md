@@ -12,6 +12,52 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, the working line):** The frame re-synced
+(`docs/design/IMPORT.md`) with a new section, "Aldwin · working" (frames
+`W1`, `W2`), and a footer reworked in every frame. The app follows the
+frame; the design system's README, `StatusBar.jsx` and `ContextBar.jsx`
+still draw the old footer, as `⎋` outlived the frame on 2026-09-25
+(baseline `footer-is-the-frames-not-the-components`). Every earlier entry
+that quotes a footer — `Working…`, `esc  Stop`, a key hint with two
+spaces, `Context ━` — describes it as it was before this one.
+
+- **The footer always opens with a state glyph** in the mark column: a
+  `label3` `○` when idle or waiting, the running `●` while a turn works.
+  Key hints are glyph, one space, verb (`↑↓ Choose`). The context bar has
+  no label, and its ten segments are `█` (`tokens::GAUGE_CELL`, read from
+  the frame).
+- **While a turn works, the footer is the working line** (`ui::working`):
+  what Aldwin is doing in a few plain words, then the turn's time in
+  `label3` (`1m 02s`), and no key — `esc` always stops. The running `●`
+  blinks to an amber `○` every 500ms; a new phrase types in three
+  characters a tick, then a highlight (`Palette::highlight`, generated
+  from `W2`'s mixes) sweeps it from four cells beyond one end to four
+  beyond the other, on a loop. 30 seconds with nothing new reads as a
+  stall: a still `label3` `○`, the phrase `label2` and led by "Still".
+- **The words come from the call, not the model** (the developer's
+  choice, 2026-09-29: no tokens, no schema change). `activity::Activity`
+  follows the turn's events: `Thinking` while the model reasons or has
+  not answered, `Writing a reply` while prose streams, and a running call
+  by `Verb::doing` and its target — a file by its name, a command by its
+  first line (`Reading router.rs`, `Running cargo test`, `Looking up
+  tower::limit`, `Changing limit.rs`, `Using <tool>`). With calls in
+  parallel it names the latest still running. A phrase types in only when
+  the phrase changes. The stall clock does not run while a question or
+  the review has the screen (`App::tick`): that time is the developer's.
+- **One clock** (`motion.rs`): the tick is 100ms, the frame's 10 frames a
+  second, and every period is a duration converted by `ticks`. The caret
+  now shows for half of `--caret-period` and hides for the other half, as
+  motion.css's keyframes say; it showed for a whole period before.
+- **Reduced motion** is `tui.yaml`'s `motion: reduced` (`Motion`, read
+  once at startup as `theme` is): the caret and the working line hold
+  still, and the timer still counts — motion.css's
+  `prefers-reduced-motion`, which a terminal cannot ask. The review
+  loop's capture runs with it (aldwin-review.md, same date). An older
+  build refuses a `tui.yaml` that sets it, as it would `theme`.
+- **`…` is licensed by a contradiction.** The frame's only `…` was
+  `Working…`, so the generated glyph table lost it; baseline
+  `ellipsis-marks-shortened-text` keeps it for text shortened to fit.
+
 **Progress (2026-09-28, the review stays open across comment rounds, and
 the tree takes a click):** Two things the developer saw using it, and
 one the review loop found beside them.
@@ -23,7 +69,9 @@ one the review loop found beside them.
   { Commented }` the review waits (`Review::await_agent`): the selection
   goes, the sent comments stay drawn, the field offers no action and the
   footer is the conversation's `● Working…  esc  Stop`, so the review reads
-  as the turn it is inside; `esc` stops that turn as it says. With no turn
+  as the turn it is inside; `esc` stops that turn as it says (since
+  2026-09-29 the footer is the working line and names no key; `esc` still
+  stops). With no turn
   running the footer is `esc  Close` and `esc` leaves the review, so a
   follow-up that ends without a changeset is never a dead end. The agent's
   next changeset — a `ReviewRequested` while a review is open — replaces it
@@ -102,7 +150,8 @@ was unchanged; `Aldwin Agent TUI.dc.html` moved, and the app followed it.
 - **`esc`, not `⎋`.** Every key hint, the comment field's label and the
   two "Stop it with esc first" refusals. The README's glyph list still
   names `⎋`; the frame outranks it.
-- **Space is not named.** Frame C's footer is `esc  Stop` alone. Space
+- **Space is not named.** Frame C's footer is `esc  Stop` alone (the
+  working line since 2026-09-29, naming no key). Space
   still opens and closes the turn's work on an empty field (the
   developer's call), but no footer names it.
 - **The commands are a panel (frame F).** On `--panel`, directly on the
@@ -149,10 +198,13 @@ landed with the test that would have caught it.
   Select  ⎋ …`, and a footer drops a whole key rather than cut one.
 - **Motion.** The running `●` is steady — motion.css: "Nothing else
   animates" — so the entry below that calls it blinking is wrong; a tick
-  redraws only while a caret is on screen.
+  redraws only while a caret is on screen. (Superseded 2026-09-29: the
+  frame's working line blinks the `●`, and the entry below holds again.)
 - **Markdown.** A list item's mark is `·`; a quote is set in with no mark
   (`▎` is the selection's). The glyph test licenses the table's glyphs in
-  the markdown scene only — the licence had been dead code.
+  the markdown scene only — the licence had been dead code. (Since
+  2026-09-29 `nothing_inside_a_frame_is_stroked` holds that scope, at
+  every size.)
 - **Out of the TUI.** Project and branch come from aldwin-cli; the "Ready
   for you to review" line is gone; test seams are behind `test-util`.
 
@@ -235,7 +287,7 @@ what each thing was measured against:
   footer's status word sits on the body column with the running `●` in the
   mark column (amber, and the one thing besides the caret that blinks);
   key groups are `--group-gap` apart; the context bar is flush right, ten
-  `━` segments, the filled run ramping through `tokens::GAUGE_*` —
+  `━` segments (`█` since 2026-09-29), the filled run ramping through `tokens::GAUGE_*` —
   `ContextBar.jsx`'s own arithmetic, `round(pct/10)` segments and a
   `60/n` step, checked against the two bars the frame draws.
 - **The field** carries a `›` in accent and a blinking `label` caret; its

@@ -319,7 +319,16 @@ pub(crate) const GAUGE_DARK: [[Color; GAUGE_SEGMENTS]; GAUGE_SEGMENTS + 1] = [
     ],
 ];
 
-pub(crate) const DARK_VALUES: [Color; 61] = [
+/// The working line's highlight, `[distance]` in cells from its centre:
+/// `--label`, then `--label` mixed over `--label2` at 70% and 40%. The last
+/// holds for every cell further out (frame `W2`).
+pub(crate) const HIGHLIGHT_DARK: [Color; 3] = [
+    Color::Rgb(0xe6, 0xe8, 0xeb),
+    Color::Rgb(0xc9, 0xcc, 0xcf),
+    Color::Rgb(0xad, 0xb0, 0xb4),
+];
+
+pub(crate) const DARK_VALUES: [Color; 63] = [
     Color::Rgb(0x19, 0x8a, 0xff), // --accent
     Color::Rgb(0x4c, 0xd6, 0x76), // --add
     Color::Rgb(0xc6, 0xdf, 0xca), // --addcode
@@ -381,6 +390,8 @@ pub(crate) const DARK_VALUES: [Color; 61] = [
     Color::Rgb(0x11, 0x52, 0xac), // the mark, --fill mixed over --win
     Color::Rgb(0x08, 0x5b, 0xc4), // the mark, --fill mixed over --win
     Color::Rgb(0x01, 0x60, 0xd1), // the mark, --fill mixed over --win
+    Color::Rgb(0xc9, 0xcc, 0xcf), // the working line's highlight, --label mixed over --label2
+    Color::Rgb(0xad, 0xb0, 0xb4), // the working line's highlight, --label mixed over --label2
 ];
 
 pub(crate) const LIGHT: Palette = Palette {
@@ -688,7 +699,16 @@ pub(crate) const GAUGE_LIGHT: [[Color; GAUGE_SEGMENTS]; GAUGE_SEGMENTS + 1] = [
     ],
 ];
 
-pub(crate) const LIGHT_VALUES: [Color; 61] = [
+/// The working line's highlight, `[distance]` in cells from its centre:
+/// `--label`, then `--label` mixed over `--label2` at 70% and 40%. The last
+/// holds for every cell further out (frame `W2`).
+pub(crate) const HIGHLIGHT_LIGHT: [Color; 3] = [
+    Color::Rgb(0x2b, 0x2e, 0x32),
+    Color::Rgb(0x3c, 0x3f, 0x43),
+    Color::Rgb(0x4e, 0x50, 0x55),
+];
+
+pub(crate) const LIGHT_VALUES: [Color; 63] = [
     Color::Rgb(0x00, 0x74, 0xf7), // --accent
     Color::Rgb(0x1e, 0x8a, 0x3c), // --add
     Color::Rgb(0x18, 0x30, 0x20), // --addcode
@@ -750,6 +770,8 @@ pub(crate) const LIGHT_VALUES: [Color; 61] = [
     Color::Rgb(0x44, 0x94, 0xfb), // the mark, --fill mixed over --win
     Color::Rgb(0x1c, 0x85, 0xf9), // the mark, --fill mixed over --win
     Color::Rgb(0x00, 0x7c, 0xf8), // the mark, --fill mixed over --win
+    Color::Rgb(0x3c, 0x3f, 0x43), // the working line's highlight, --label mixed over --label2
+    Color::Rgb(0x4e, 0x50, 0x55), // the working line's highlight, --label mixed over --label2
 ];
 
 // ---- The brand mark's shape, from the frame ------------------------
@@ -783,24 +805,26 @@ pub(crate) const TREE_W: usize = 28;
 pub(crate) const PANE_GAP: usize = 4;
 pub(crate) const GUTTER_LN: usize = 5;
 pub(crate) const SIGN_COL: usize = 2;
-/// The context bar's segments — ten `━` in every frame.
+/// The context bar's segments — ten in every frame.
 pub(crate) const GAUGE_SEGMENTS: usize = 10;
 /// How many of them a percentage fills: `ContextBar.jsx`'s `round(percent / 10)`, clamped.
 pub(crate) fn gauge_filled(percent: u8) -> usize {
     ((f64::from(percent) / 10.0).round() as usize).min(GAUGE_SEGMENTS)
 }
+/// The glyph every context-bar segment is drawn with, filled or empty.
+pub(crate) const GAUGE_CELL: char = '█';
 
 // ---- Glyphs ---------------------------------------------------------
 //
 // The design's closed table: guidelines/glyphs.html, plus every character
 // the frame draws inside a window, plus the mark's half block.
 pub(crate) const MARKS: [char; 23] = [
-    '/', '?', '·', '–', '—', '…', '›', '↑', '↓', '↩', '↺', '−', '⋯', '⌃', '⌄', '⎋', '━', '▀', '▎',
+    '/', '?', '·', '–', '—', '›', '↑', '↓', '↩', '↺', '−', '⋯', '⌃', '⌄', '⎋', '━', '▀', '█', '▎',
     '◆', '○', '●', '✓',
 ];
 
 // Glyphs a recorded design contradiction licenses on top of it. Each is
 // a bug in docs/design/, not in the app; see crates/review/baseline.json
-// (no-table-component-adr-0002).
-pub(crate) const MARKS_BY_EXCEPTION: [char; 11] =
-    ['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
+// (no-table-component-adr-0002, ellipsis-marks-shortened-text).
+pub(crate) const MARKS_BY_EXCEPTION: [char; 12] =
+    ['…', '─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];

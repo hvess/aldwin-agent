@@ -365,9 +365,11 @@ pub fn seed(script: &Script, theme: Theme, root: &Path, endpoint: &str) -> Resul
         .map_err(|e| Error::Scene(format!("seeding global config: {e}")))?;
 
     // Theme is global-only and read at startup, so it is seeded, not typed.
+    // Reduced motion holds the working line still, so a held turn settles;
+    // only its timer moves, once a second.
     std::fs::write(
         global.join("tui.yaml"),
-        format!("version: 1\ntheme: {theme}\n"),
+        format!("version: 1\ntheme: {theme}\nmotion: reduced\n"),
     )?;
 
     if script.provider {

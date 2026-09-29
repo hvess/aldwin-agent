@@ -179,6 +179,17 @@ impl Verb {
         }
     }
 
+    /// The verb as the working line says it while the call runs, lower case.
+    pub(crate) fn doing(self) -> &'static str {
+        match self {
+            Verb::Read => "reading",
+            Verb::Changed => "changing",
+            Verb::Ran => "running",
+            Verb::Searched => "looking up",
+            Verb::Used => "using",
+        }
+    }
+
     /// What the summary counts: `Read 3 files`, `Ran 1 command`.
     fn noun(self) -> &'static str {
         match self {

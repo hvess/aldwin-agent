@@ -1,5 +1,42 @@
 # Design import — provenance
 
+## Re-sync — 2026-09-29, the frame only
+
+`Aldwin Agent TUI.dc.html` was fetched from the discussion project and
+replaces the local copy verbatim (92 KB). The README, all five token files
+and `glyphs.html` in the design-system project were fetched and match this
+directory; the design system's `StatusBar.jsx` and `ContextBar.jsx` still
+draw the old footer, and the README still says "Nothing else animates".
+The frame outranks them, as it did `⎋` on 2026-09-25; baseline
+`footer-is-the-frames-not-the-components` records it.
+
+What the frame changed:
+
+- **A new section, "Aldwin · working"**: `W1`, frame B with its footer
+  animated by the page's script, and `W2`, that animation as rows 100ms
+  apart. The status line says what Aldwin is doing in a few plain words;
+  a new phrase types in three characters a frame, then holds while a
+  highlight runs along it (`--label`, then `--label` over `--label2` at
+  70% and 40%); the running `●` blinks to `○` every half second in amber;
+  the timer follows in `label3`; after 30s with nothing new the `●` sits
+  as a grey `○` and the phrase starts with "Still". Under
+  `prefers-reduced-motion` the script draws nothing new.
+- **Every footer opens with a state glyph** in the mark column: amber `●`
+  while working, `label3` `○` otherwise. Frames B–D's footer is the
+  working line (`Writing the limiter in limit.rs  1m 02s`) with no key.
+- **Key hints lose a space**: `↑↓ Choose`, `esc Close`, `? Keys`. The
+  working section says "esc always stops, and the launch card says so
+  once", but frame A's card names no key; the app follows frame A
+  (baseline `launch-card-names-no-stop-key`).
+- **The context bar loses its label**, and its segments are `█`, not `━`.
+- **Frame F** types `/` and lists `clear` and `exit`, `clear` completed in
+  the field; baseline `frame-command-list-is-not-the-products` updated.
+
+The generator reads two new things from the frame: the bar's glyph
+(`GAUGE_CELL`) and the highlight's mixes (`HIGHLIGHT_*`). `…` is no
+longer drawn by any frame, so baseline `ellipsis-marks-shortened-text`
+licenses it.
+
 ## Re-sync — 2026-09-25, the frame only
 
 `Aldwin Agent TUI.dc.html` was fetched from the discussion project and
@@ -70,7 +107,7 @@ and in `_ds/…/` were fetched and are byte-identical.
 | `tokens/elevation.css` | verbatim |
 | `tokens/motion.css` | verbatim |
 | `guidelines/glyphs.html` | `b9de8837-…/guidelines/glyphs.html`, verbatim — **the generator's glyph source** (see below) |
-| `frames/Aldwin Agent TUI.dc.html` | `25845063-…/Aldwin Agent TUI.dc.html`, verbatim, 71 KB |
+| `frames/Aldwin Agent TUI.dc.html` | `25845063-…/Aldwin Agent TUI.dc.html`, verbatim, 92 KB since 2026-09-29 |
 
 The frame is imported this time. Under Mjolnir the frames were "left for a
 targeted fetch" because they were large and restated their palette inline;

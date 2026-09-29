@@ -91,6 +91,8 @@ macro_rules! tui_header {
 #   theme:  dark (default) | light. Optional. /theme changes it and saves it
 #           here. Anything other than \"light\" (including an unset or
 #           omitted field) means dark.
+#   motion: full (default) | reduced. Optional. Reduced holds the caret and
+#           the working line still; the working line's timer still counts.
 "
     };
 }

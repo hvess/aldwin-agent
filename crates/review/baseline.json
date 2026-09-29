@@ -23,7 +23,7 @@
     },
     {
       "id": "frame-command-list-is-not-the-products",
-      "design_says": "Frame `F commands` types `/c` and the list narrows to `changes` and `clear`, with no shortcut column; the design system's `CommandRow` still shows `changes`, `undo` (`↺`) and `quit` (`⌃D`), a key right-flush like a menu.",
+      "design_says": "Frame `F commands` types `/` and lists `clear` and `exit`, with no shortcut column; the design system's `CommandRow` still shows `changes`, `undo` (`↺`) and `quit` (`⌃D`), a key right-flush like a menu.",
       "design_also_says": "Nothing in the design names `/resume` (ADR 0005, a shipped feature), `/model`, `/connect` (ADR 0012) or `/theme`, and the product has neither `/changes` nor `/undo`.",
       "app_follows": "The developer's decisions of 2026-09-23 and 2026-09-25: `/resume`, `/model`, `/connect` (ADR 0012, 2026-09-26), `/quit` and `/exit` (one command, both in the list), `/clear` and `/theme`, with no shortcut column — as frame F now draws it. The panel's grid, tones, completion and selection are the frame's exactly; only its rows differ. `/changes` and `/undo` will not be built (the developer, 2026-09-27).",
       "glyphs": ""
@@ -68,6 +68,27 @@
       "design_says": "The design system's components are Frame, Field, StatusBar, ContextBar, UserEcho, Prose, Disclosure, PlanStep, Mark, LaunchCard, QuestionPanel, CommandRow and the review set; none of them connects an account, and no frame shows a code to enter elsewhere.",
       "design_also_says": "The Content Fundamentals: lead with a sentence, outcomes not tool names. A device-code sign-in is one URL, one code and one outcome.",
       "app_follows": "ADR 0012 — bare `/connect` is a QuestionPanel listing the accounts (\"Which account?\", each with the subscription it needs as its fact); the sign-in's prompt (\"Open <url> and enter the code <code>. It is good for 30 minutes.\") and its outcome (\"Connected to x.ai. …\") are notices. Retired when the design system draws a connection of its own.",
+      "glyphs": ""
+    },
+    {
+      "id": "ellipsis-marks-shortened-text",
+      "design_says": "The glyph table is closed: `guidelines/glyphs.html` and every character a frame draws inside a window. Since the working line replaced `Working…` (2026-09-29 re-sync), no frame draws `…`.",
+      "design_also_says": "README, Content fundamentals: “Sentence case for prose, labels and keys: *Ready*, *Working…*, *Stop* …” — the design still spells a label with `…`, and gives nothing else to mark text cut short to fit.",
+      "app_follows": "`…` where text is shortened to fit its row (`grid::elide`, `grid::truncate_spans`, `log::first_line`, the working line's phrase) and as a running call's fact before it has one. Retired when the glyph table lists it or a frame draws a shortened row.",
+      "glyphs": "…"
+    },
+    {
+      "id": "footer-is-the-frames-not-the-components",
+      "design_says": "Frame `W1` and its section: “In the mark column, the running ● blinks to ○ and back every half second … The context bar drops its label and … its ten segments grow from the thin ━ to the full █ block”; every footer opens with a state glyph and names keys as glyph, a space, verb (`↑↓ Choose`).",
+      "design_also_says": "README: “The caret blinks at 1.05s, stepped. Nothing else animates.”, “Ten `━` segments” and “Glyph, two spaces, verb”; `StatusBar.jsx` draws the mark column empty unless running and `ContextBar.jsx` prints `Context` before ten `━`.",
+      "app_follows": "The frame, as it did over `⎋` on 2026-09-25 (docs/design/IMPORT.md, 2026-09-29 re-sync): the working line animates, the bar is ten `GAUGE_CELL`s with no label, and a key hint has one space. Retired when the README and the two components are brought up to the frame.",
+      "glyphs": ""
+    },
+    {
+      "id": "launch-card-names-no-stop-key",
+      "design_says": "The frame's working section: “There is no key hint: esc always stops, and the launch card says so once.”",
+      "design_also_says": "Frame `A launch` draws the card as the mark beside four facts — `Aldwin` and its version, `Project`, `Branch`, `Model` — and names no key.",
+      "app_follows": "Frame A: the card names no key, and the working line names none either. `esc` stops a turn as it does in every terminal app (HIG, “Keyboards”: familiar keys). Retired when a frame draws the card's line about `esc`.",
       "glyphs": ""
     }
   ]

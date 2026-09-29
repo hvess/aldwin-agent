@@ -75,7 +75,9 @@ transcript cost more than the wheel was worth (`run.rs`, `aldwin-tui.md`).
    2026-09-28, the developer's call:* the review stays open while the agent addresses its
    comments, and its next changeset replaces it in place (aldwin-tui.md,
    Progress 2026-09-28). In that waiting state nothing selects and nothing
-   decides: `⎋` stops the turn, as the footer says, or leaves the review
+   decides: `⎋` stops the turn, as the footer says (since 2026-09-29 the
+   footer is the working line and names no key; `esc` still stops), or
+   leaves the review
    when no turn is running, and `⌃↩` does nothing; the scroll, file and
    fold keys work as before. A follow-up turn that ends without a new
    changeset closes the review.

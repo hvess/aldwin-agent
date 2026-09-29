@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::app::{App, CommandChoice, ProviderChoice};
+use crate::motion::{Motion, TICK};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
 use crate::ui;
@@ -70,7 +71,7 @@ pub struct SessionProvider {
 /// Synchronized output wraps each frame (`present`).
 ///
 /// `theme` is the caller's `Theme::from_config` result, fixed until
-/// `/theme` changes it.
+/// `/theme` changes it; `motion` its `Motion::from_config` result.
 ///
 /// # Errors
 ///
@@ -82,6 +83,7 @@ pub async fn run(
     commands: mpsc::Sender<Command>,
     model_name: String,
     theme: Theme,
+    motion: Motion,
     session: SessionProvider,
 ) -> io::Result<()> {
     enable_raw_mode()?;
@@ -108,7 +110,16 @@ pub async fn run(
     let backend = CrosstermBackend::new(BufWriter::with_capacity(OUT_BUFFER, stdout));
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, events, commands, model_name, theme, session).await;
+    let result = run_loop(
+        &mut terminal,
+        events,
+        commands,
+        model_name,
+        theme,
+        motion,
+        session,
+    )
+    .await;
     // Must flush before the guard restores: otherwise the last buffered
     // frame lands on the shell after the alternate screen is left.
     let _ = terminal.backend_mut().flush();
@@ -274,16 +285,18 @@ async fn run_loop(
     commands: mpsc::Sender<Command>,
     model_name: String,
     theme: Theme,
+    motion: Motion,
     session: SessionProvider,
 ) -> io::Result<()> {
     let mut app = App::new(model_name)
         .with_theme(theme)
+        .with_motion(motion)
         .with_facts(&session.project, session.branch.as_deref())
         .with_commands(session.commands)
         .with_sessions(session.sessions)
         .with_catalogue(session.catalogue, session.current_provider);
     let mut input = spawn_input_reader();
-    // Drives the caret's blink and the double-Ctrl+C window.
+    // Drives every animation and clock (`ticks`).
     // `Delay`, not the default `Burst`: `Burst` replays missed ticks back to
     // back after a slow frame, as useless catch-up frames.
     let mut ticker = tokio::time::interval(TICK);
@@ -383,10 +396,6 @@ async fn run_loop(
 
     Ok(())
 }
-
-/// The tick period; the caret's blink and the double-Ctrl+C window count
-/// ticks.
-const TICK: Duration = Duration::from_millis(120);
 
 /// Minimum gap between redraws (60fps): a ceiling on burst redraws, not a
 /// frame rate; an idle session does not draw.

@@ -82,9 +82,11 @@ Two things about reading the design, each learned the hard way:
 The glyph vocabulary is fixed and closed. **Do not quote it here** — it is
 generated into `tokens::MARKS` from `guidelines/glyphs.html` and the frame,
 and a copy in this file would go stale. If a mark is needed and it is not in
-that table, do not draw one. **One exception, ADR 0002:** a markdown table
-in assistant prose is drawn with `┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │`, scoped to that one
-construct; it is the only thing in `MARKS_BY_EXCEPTION`.
+that table, do not draw one. **Two exceptions**, each a contradiction in
+`crates/review/baseline.json` and generated into `MARKS_BY_EXCEPTION`:
+ADR 0002's markdown table in assistant prose, drawn with
+`┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─ │` and scoped to that one construct; and `…`, which
+marks text shortened to fit.
 
 Four colour rules, each the design's own sentence:
 
@@ -121,7 +123,7 @@ Two rules that govern every layout decision:
 `cargo run -p aldwin-review -- tokens --write` and committed; the review
 loop's stage 4 regenerates it and fails on any diff. It carries the palettes
 (OKLCH converted to sRGB by the generator), the mark's cells, the gauge's
-ramp table, the grid and the glyphs. Do not edit it, and do not add a colour
+ramp table and glyph, the working line's highlight, the grid and the glyphs. Do not edit it, and do not add a colour
 or a grid constant to the app by writing a literal — add it to the design,
 re-sync, regenerate.
 

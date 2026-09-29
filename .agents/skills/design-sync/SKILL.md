@@ -23,7 +23,7 @@ source. Re-sync only when you need something that copy doesn't carry.
 
 The frame is the authority on positions (every one is a `var(--…)` from
 `layout.css`, so measuring is a token lookup) and on the brand mark, which
-exists nowhere else. Fetch it when either question comes up; it is 71 KB.
+exists nowhere else. Fetch it when either question comes up; it is 92 KB.
 
 ## Traps in addressing them
 

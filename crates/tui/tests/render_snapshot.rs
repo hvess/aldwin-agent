@@ -14,8 +14,8 @@
 use std::fmt::Write as _;
 
 use aldwin_core::{
-    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepState, TurnEndReason,
-    TurnId,
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState,
+    TurnEndReason, TurnId,
 };
 use aldwin_tui::{
     App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, SessionChoice, Theme, Verb, WorkItem,
@@ -206,8 +206,9 @@ fn every_cell_carries_a_colour_from_the_design_system() {
     }
 }
 
-/// Every non-ASCII glyph is in the closed table, or is an ADR 0002 table
-/// glyph in the `markdown` scene.
+/// Every non-ASCII glyph is in the closed table or licensed by a recorded
+/// contradiction; `nothing_inside_a_frame_is_stroked` holds ADR 0002's
+/// table glyphs to the `markdown` scene.
 #[test]
 fn every_glyph_comes_from_the_closed_table() {
     let (marks, by_exception) = aldwin_tui::design_glyphs();
@@ -222,8 +223,7 @@ fn every_glyph_comes_from_the_closed_table() {
                             if ch.is_ascii() || marks.contains(&ch) {
                                 continue;
                             }
-                            let licensed = by_exception.contains(&ch) && scene_name == "markdown";
-                            assert!(licensed, "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {ch:?} is not in the design's glyph table");
+                            assert!(by_exception.contains(&ch), "{theme:?} {scene_name} {width}x{height} at ({x},{y}): {ch:?} is not in the design's glyph table");
                         }
                     }
                 }
@@ -295,21 +295,24 @@ fn every_conversation_scene_respects_the_three_cell_margins() {
     }
 }
 
-/// No box-drawing or edge glyph outside the `markdown` scene (ADR 0002).
+/// No box-drawing or edge glyph outside the `markdown` scene (ADR 0002),
+/// at every size.
 #[test]
 fn nothing_inside_a_frame_is_stroked() {
     for theme in [Theme::Dark, Theme::Light] {
         for scene_name in SCENES.iter().filter(|s| **s != "markdown") {
-            let mut app = app(scene_name, theme);
-            let buffer = render(&mut app, 104, 32);
-            for y in 0..32u16 {
-                for x in 0..104u16 {
-                    let cell = &buffer[(x, y)];
-                    assert!(
-                        !"─│┌┐└┘├┤┬┴┼╭╮╰╯┃║╔╗╚╝▁▔".contains(cell.symbol()),
-                        "{theme:?}/{scene_name} at {x},{y}: {:?} is a stroke",
-                        cell.symbol()
-                    );
+            for (width, height) in SIZES {
+                let mut app = app(scene_name, theme);
+                let buffer = render(&mut app, width, height);
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = &buffer[(x, y)];
+                        assert!(
+                            !"─│┌┐└┘├┤┬┴┼╭╮╰╯┃║╔╗╚╝▁▔".contains(cell.symbol()),
+                            "{theme:?}/{scene_name} {width}x{height} at {x},{y}: {:?} is a stroke",
+                            cell.symbol()
+                        );
+                    }
                 }
             }
         }
@@ -388,6 +391,33 @@ fn work(open: bool) -> LogEntry {
             item(Verb::Searched, "tower::limit", "7 matches"),
         ],
         open,
+    }
+}
+
+/// `seconds` into the turn, doing what `event` says since its start and
+/// heard from again just now, so the phrase is typed and not stalled: frame
+/// B's `1m 02s`, frame D's `1m 40s`. 100ms ticks.
+fn at_work(app: &mut App, seconds: u64, event: fn() -> Event) {
+    app.apply_event(event());
+    app.advance(seconds * 10);
+    app.apply_event(event());
+}
+
+/// A reasoning delta that adds nothing to the log.
+fn thought() -> Event {
+    Event::ThinkingDelta {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        text: String::new(),
+    }
+}
+
+/// A prose delta that adds nothing to the log.
+fn prose() -> Event {
+    Event::TextDelta {
+        turn_id: TurnId(1),
+        step_id: StepId(1),
+        text: String::new(),
     }
 }
 
@@ -474,6 +504,7 @@ fn scene(name: &str, app: &mut App) {
                 StepState::Pending,
             ]));
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            at_work(app, 62, thought);
             app.status_mut().context_used = Some(380_000);
         }
         "details" => {
@@ -490,6 +521,8 @@ fn scene(name: &str, app: &mut App) {
                 text: "Running the tests. About ten seconds.".into(),
             });
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            // Capture's `running` holds the turn after its prose streams.
+            at_work(app, 100, prose);
             app.status_mut().context_used = Some(410_000);
         }
         "question" => {
@@ -553,6 +586,7 @@ fn scene(name: &str, app: &mut App) {
                     .into(),
             });
             app.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+            at_work(app, 4, thought);
         }
         "saved" => {
             echo(app);

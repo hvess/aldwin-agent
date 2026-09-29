@@ -199,8 +199,10 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
         }
     }
 
-    // `theme` is global-only, resolved once before anything draws.
+    // `theme` and `motion` are global-only, resolved once before anything
+    // draws.
     let theme = aldwin_tui::Theme::from_config(config.global_tui().theme.as_deref());
+    let motion = aldwin_tui::Motion::from_config(config.global_tui().motion.as_deref());
 
     // Commands: TUI -> interceptor -> core, so slash commands never reach
     // Submit. Events: core -> TUI directly.
@@ -325,7 +327,8 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
             .map(|p| p.id.to_string()),
         sessions,
     };
-    let tui_result = aldwin_tui::run(event_rx, tui_cmd_tx, model_name, theme, session).await;
+    let tui_result =
+        aldwin_tui::run(event_rx, tui_cmd_tx, model_name, theme, motion, session).await;
 
     let interceptor = interceptor.await;
     let agent = agent_task.await;

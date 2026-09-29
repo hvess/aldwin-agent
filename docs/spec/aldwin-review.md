@@ -13,7 +13,7 @@ that make an agent's commit depend on it (`.githooks/`). Excludes what the
 stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-28
+**Last Updated:** 2026-09-29
 
 ## Why
 
@@ -335,6 +335,32 @@ moves any scene's snapshot has frames for stage 8 to judge.
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
 
+## Progress (2026-09-29, the working line)
+
+The frame re-synced with a working line that moves at 10 frames a second
+(aldwin-tui.md, same date), and two parts of the loop assumed a still
+footer.
+
+- **Stage 4 reads the new footer.** The context bar lost its `Context`
+  label, which `frame_gauges` had anchored on; a bar is now found by its
+  `var(--track)`, the only thing drawn over it, and the segment glyph is
+  read rather than assumed — `GAUGE_CELL`, `█` where every bar used to be
+  `━`, and a bar drawing two glyphs fails the stage. The working line's
+  highlight, two `color-mix` tones of `--label` over `--label2` in frame
+  `W2`, is generated as `HIGHLIGHT_{DARK,LIGHT}` the way the gauge's ramp
+  is. `…` left the glyph table with `Working…`; the app still shortens
+  text with it, so baseline `ellipsis-marks-shortened-text` licenses it,
+  and the snapshot's glyph test now licenses every recorded exception in
+  every scene — ADR 0002's table glyphs are held to `markdown` by
+  `nothing_inside_a_frame_is_stroked`, which now walks every size as the
+  glyph test does.
+- **Capture runs with reduced motion.** A held turn's footer never goes
+  quiet for `wait_quiet`, so every scene seeds `motion: reduced` in
+  `tui.yaml`: the caret and the working line hold still and only the
+  line's timer moves, once a second. The shot still waits for an edge and
+  reads the grid back after it, now against that timer. With no caret
+  blinking in any scene, `caret_hidden` and its skip went.
+
 ## Progress (2026-09-27, macOS)
 
 CI's first macOS run found the crate did not build there: `pty.rs` named
@@ -582,6 +608,8 @@ The loop's shape is unchanged; what it measures moved with the design.
   of an edge — the cells whose ground changed are the caret, and hidden,
   a caret cell is the ground of its left neighbour — and capture skips
   that half-period. Five half-periods before giving up, not three shots.
+  (Gone 2026-09-29: capture runs with reduced motion, so the caret never
+  hides.)
   The same run found the commands field's `/` unpadded, putting its caret
   and filter on cell 4 rather than the body column.
 

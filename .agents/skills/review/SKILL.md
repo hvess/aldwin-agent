@@ -382,6 +382,10 @@ It will sometimes be, because the sources contradict themselves in places.
 frames finding that cites a token becomes an assertion in
 `crates/tui/tests/render_snapshot.rs`; a Rust finding a lint can express
 becomes a workspace lint; a code finding about structure becomes a test.
+The exception is a finding no machine can tell from its lookalikes: a
+removed name still in a comment or doc is stale or is history with its
+pointer, and only reading says which (aldwin-review.md, Progress
+2026-09-29).
 That is what keeps the judges getting cheaper instead of accumulating a
 longer checklist.
 

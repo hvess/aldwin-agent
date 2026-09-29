@@ -336,6 +336,22 @@ moves any scene's snapshot has frames for stage 8 to judge.
   cannot know what the heredoc feeds. Write such text with the file tools;
   do not loosen the guard to let a shell do it.
 
+## Progress (2026-09-29, no check for removed identifiers)
+
+The developer's call, on the evidence: open-tasks 4, a stage-2 check that
+every Rust item a diff deletes is named nowhere in `crates/`, `docs/`,
+`.agents/` or `AGENTS.md`, is not built. A prototype over the last 150
+commits found one surviving name that was not also a word or a variable —
+`caret_hidden`, in a dated Progress entry, where history keeps it on
+purpose — and about 150 false hits: items named with English words
+(`refuses`, `guard`) matched prose, and names that live on as variables or
+fields (`step_id`, `run_dir`) matched code. Code that still uses a removed
+item does not compile, so what is left is comments and docs, where a
+stale current statement and a history entry with its pointer differ only
+by reading. That is a judge's work: the exception to "a finding a judge
+produces twice belongs in a deterministic stage" is a finding no machine
+can tell from its lookalikes. The author's pass keeps its grep.
+
 ## Progress (2026-09-29, no doc examples)
 
 The developer's call: no `# Examples` sections — the code is the example,
@@ -344,7 +360,7 @@ and a behaviour worth pinning is a unit test. The rule leaves the `rust`,
 and every example in `crates/` goes; where one pinned behaviour no other
 test had, a unit test keeps it (a stage's label text is not behaviour). Of the two stage-2 checks the 2026-09-27
 entry below names as next, only the removed-identifier check remains
-(open-tasks 4).
+(open-tasks 4; decided against the same day: see the entry above).
 
 ## Progress (2026-09-29, the working line)
 
@@ -399,8 +415,8 @@ third rule — the code and Rust judges no longer run on a failing tree —
 and puts the author's loop in front of the judges
 (`a_failing_test_holds_back_every_judge`). Checks that would move more of
 the author's pass into stage 2 — an example on every new public function,
-a removed identifier still named in `.claude/` — are the next change (the
-first dropped 2026-09-29 with the rule itself: see that day's entry).
+a removed identifier still named in `.claude/` — are the next change (both
+decided against 2026-09-29: see that day's entries).
 
 ## Progress (2026-09-27, comments)
 

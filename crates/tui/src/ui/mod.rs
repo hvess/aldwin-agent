@@ -24,7 +24,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Block;
 use ratatui::Frame;
 
-use crate::app::{App, Mode};
+use crate::app::App;
 
 pub(crate) use transcript::Transcript;
 
@@ -39,7 +39,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The window ground: drawn first, under everything.
     frame.render_widget(Block::default().style(Style::default().bg(pal.win)), area);
 
-    if matches!(app.mode, Mode::Review(_)) {
+    if app.review().is_some() {
         review::draw(frame, area, app);
         return;
     }

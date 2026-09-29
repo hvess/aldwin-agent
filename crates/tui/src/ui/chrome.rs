@@ -430,6 +430,12 @@ fn footer_state(app: &App) -> Footer {
                 KeyHint::new(ESC, "Close"),
             ],
         ),
+        // "Chat about this", in the conversation or over a waiting review:
+        // the turn waits on the developer.
+        _ if app.answering.is_some() => Footer::new(
+            Status::Waiting,
+            vec![KeyHint::new("↩", "Send"), KeyHint::new(ESC, "Back")],
+        ),
         // A waiting review with a turn running is the working line, above,
         // so the review reads as the turn it is inside. Nothing running:
         // `esc` leaves the review (`App::handle_review_key`).
@@ -457,11 +463,6 @@ fn footer_state(app: &App) -> Footer {
             Footer::new(Status::None, keys)
         }
         Mode::Review(_) => Footer::new(Status::None, vec![KeyHint::new("?", "Keys")]),
-        // The turn is running but waits on the developer.
-        Mode::Conversation if app.answering.is_some() => Footer::new(
-            Status::Waiting,
-            vec![KeyHint::new("↩", "Send"), KeyHint::new(ESC, "Back")],
-        ),
         Mode::Conversation if !app.draft.is_empty() => {
             Footer::new(Status::Ready, vec![KeyHint::new("↩", "Send")])
         }

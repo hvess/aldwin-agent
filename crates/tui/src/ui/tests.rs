@@ -1145,6 +1145,52 @@ fn answering_in_words_keeps_the_question_on_screen() {
     );
 }
 
+/// The agent's question over a waiting review, answered in words: the
+/// question alone over the review's field, and the review above both.
+#[test]
+fn answering_in_words_over_a_review_keeps_both_on_screen() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    one_file_review(&mut a, "a\n".into());
+    for c in "rename it".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    a.apply_event(Event::ReviewClosed {
+        outcome: ReviewOutcome::Commented { comments: 1 },
+    });
+    a.apply_event(Event::QuestionAsked {
+        call_id: "q1".into(),
+        question: Question {
+            question: "Should requests without a key be limited?".into(),
+            detail: "Right now they skip the limit.".into(),
+            options: vec!["Yes".into(), Question::CHAT_ABOUT_THIS.into()],
+        },
+    });
+    let buf = render(&mut a, 100, 30);
+    assert!(
+        find_row(&buf, "1  Yes").is_some(),
+        "the options, in the band"
+    );
+    assert!(find_row(&buf, "src/f.rs").is_some(), "the review under it");
+
+    a.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    for c in "only keyed".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let buf = render(&mut a, 100, 30);
+    let question = find_row(&buf, "Should requests without a key").expect("the question stays");
+    let field = find_row(&buf, "› only keyed").expect("the words in the review's field");
+    assert!(question < field, "above the field");
+    assert!(find_row(&buf, "1  Yes").is_none());
+    assert!(find_row(&buf, "src/f.rs").is_some(), "the review stays");
+    let footer = footer_lead(&buf);
+    assert!(
+        footer.starts_with("○ Waiting for you") && footer.contains("esc Back"),
+        "{footer:?}"
+    );
+}
+
 #[test]
 fn the_comment_field_names_escape_as_the_footers_do() {
     let mut a = app();

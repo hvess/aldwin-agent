@@ -23,14 +23,18 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+use aldwin_core::Question;
+
 use super::chrome::{self, Action, Composer};
 use super::grid::{
     elide, justified, Ctx, BODY_X, GUTTER_LN, MARGIN_X, MARK_COL, PANE_GAP, SIGN_COL, TREE_W,
 };
 use super::question;
 use super::wrap::wrap_line;
-use crate::app::App;
+
+use crate::app::{App, Mode};
 use crate::draft::expand_tabs;
+use crate::list::List;
 use crate::log::{plural, LogEntry};
 use crate::palette::Palette;
 use crate::review::{DiffRow, Pane, Review, Tree};
@@ -40,14 +44,16 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let Some(review) = app.review() else { return };
     let (title, summary) = (review.title.clone(), review_summary(app));
 
-    // Bottom band height: the discard question, the comment field or the
-    // field; must match the draw below.
+    // Bottom band height: a question, the comment field or the field; must
+    // match the draw below.
     let typed = !app.draft.text().trim().is_empty();
     let action_width = action_for(review, typed).map_or(0, |a| a.width());
-    let field_rows: u16 = match (&review.confirm, review.commenting()) {
-        (Some(list), _) => question::panel_rows(&review.discard_question(), Some(list), area.width),
+    let composer = Composer::new(app.draft.text(), area.width, action_width);
+    let field_rows: u16 = match (band_question(app, review), review.commenting()) {
+        (Some((q, Some(list))), _) => question::panel_rows(&q, Some(list), area.width),
+        (Some((q, None)), _) => question::panel_rows(&q, None, area.width) + 1 + composer.height(),
         (None, true) => 2,
-        (None, false) => Composer::new(app.draft.text(), area.width, action_width).height(),
+        (None, false) => composer.height(),
     };
     let [_, title_row, summary_row, _, body, _, field_area, _, footer, _] = Layout::vertical([
         Constraint::Length(1),
@@ -111,14 +117,20 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     let Some(review) = app.review() else { return };
 
-    match (&review.confirm, review.commenting()) {
-        (Some(list), _) => question::draw_panel(
-            frame,
-            field_area,
-            &review.discard_question(),
-            Some(list),
-            pal,
-        ),
+    match (band_question(app, review), review.commenting()) {
+        (Some((q, Some(list))), _) => question::draw_panel(frame, field_area, &q, Some(list), pal),
+        // Answered in words: the question alone, the field under it, as in
+        // the conversation (`chrome::Bottom::Answering`).
+        (Some((q, None)), _) => {
+            let [panel, _, field] = Layout::vertical([
+                Constraint::Length(question::panel_rows(&q, None, area.width)),
+                Constraint::Length(1),
+                Constraint::Length(composer.height()),
+            ])
+            .areas(field_area);
+            question::draw_panel(frame, panel, &q, None, pal);
+            chrome::draw_field(frame, field, app, &composer, None);
+        }
         (None, true) => {
             let (lines, location) = review.selection_label().unwrap_or_default();
             chrome::draw_comment_field(
@@ -133,11 +145,24 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         }
         (None, false) => {
             let action = action_for(review, typed);
-            let composer = Composer::new(app.draft.text(), area.width, action_width);
             chrome::draw_field(frame, field_area, app, &composer, action);
         }
     }
     chrome::draw_footer(frame, footer, app);
+}
+
+/// The question the bottom band holds, with its options, or with `None`
+/// while the agent's is answered in words in the field under it: the
+/// agent's question over a waiting review, else the discard question.
+fn band_question<'a>(app: &'a App, review: &'a Review) -> Option<(Question, Option<&'a List>)> {
+    match (&app.mode, &app.answering) {
+        (Mode::Question(asking), _) => Some((asking.question.clone(), Some(&asking.list))),
+        (_, Some(asking)) => Some((asking.question.clone(), None)),
+        _ => review
+            .confirm
+            .as_ref()
+            .map(|list| (review.discard_question(), Some(list))),
+    }
 }
 
 /// The field's action, naming what `⌃↩` will do: send the comments (a typed

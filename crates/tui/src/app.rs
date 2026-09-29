@@ -87,6 +87,28 @@ pub struct Asking {
     pub question: Question,
     pub list: List,
     pub asker: Asker,
+    /// The waiting review the agent's question is drawn over, in its bottom
+    /// band; back on screen once the question leaves it.
+    covers: Option<Box<Review>>,
+}
+
+impl Asking {
+    fn new(question: Question, list: List, asker: Asker) -> Self {
+        Self {
+            question,
+            list,
+            asker,
+            covers: None,
+        }
+    }
+
+    /// What holds the screen once this question leaves it: the review it
+    /// covered, or the conversation.
+    fn leave(&mut self) -> Mode {
+        self.covers
+            .take()
+            .map_or(Mode::Conversation, |review| Mode::Review(*review))
+    }
 }
 
 /// The `/` menu: commands whose name starts with `filter`.
@@ -376,9 +398,11 @@ impl App {
         }
     }
 
+    /// The review on screen, under the agent's question too.
     pub(crate) fn review(&self) -> Option<&Review> {
         match &self.mode {
             Mode::Review(r) => Some(r),
+            Mode::Question(asking) => asking.covers.as_deref(),
             _ => None,
         }
     }
@@ -386,13 +410,19 @@ impl App {
     pub(crate) fn review_mut(&mut self) -> Option<&mut Review> {
         match &mut self.mode {
             Mode::Review(r) => Some(r),
+            Mode::Question(asking) => asking.covers.as_deref_mut(),
             _ => None,
         }
     }
 
-    /// True while something other than the field takes keys.
+    /// True while something other than the field takes keys. A review's
+    /// field takes them only while it answers the agent in words.
     fn band_is_held(&self) -> bool {
-        !matches!(self.mode, Mode::Conversation)
+        match self.mode {
+            Mode::Conversation => false,
+            Mode::Review(_) => self.answering.is_none(),
+            Mode::Question(_) | Mode::Commands(_) => true,
+        }
     }
 
     fn busy(&self) -> bool {
@@ -673,9 +703,10 @@ impl App {
                 self.stopping = false;
                 // The agent's pending question ends with the turn.
                 self.answering = None;
-                if matches!(&self.mode, Mode::Question(a) if matches!(a.asker, Asker::Agent { .. }))
-                {
-                    self.mode = Mode::Conversation;
+                if let Mode::Question(asking) = &mut self.mode {
+                    if matches!(asking.asker, Asker::Agent { .. }) {
+                        self.mode = asking.leave();
+                    }
                 }
                 if self
                     .review()
@@ -702,11 +733,11 @@ impl App {
                     answer: None,
                 });
                 let rows = question.options.iter().cloned().map(ListRow::new).collect();
-                self.mode = Mode::Question(Asking {
+                self.show_question(Asking::new(
                     question,
-                    list: List::new(rows),
-                    asker: Asker::Agent { call_id },
-                });
+                    List::new(rows),
+                    Asker::Agent { call_id },
+                ));
             }
             Event::ReviewRequested {
                 review_id,
@@ -807,18 +838,11 @@ impl App {
 
     fn handle_conversation_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
-            (KeyCode::Enter, m) if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-                self.draft.insert('\n')
-            }
-            (KeyCode::Enter, _) => self.submit(),
-            (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.draft.insert('\n'),
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => self.interrupt(),
             // Answering in words: back to the options, draft kept. Otherwise
             // stop while busy; nothing when idle.
             (KeyCode::Esc, _) => {
-                if let Some(asking) = self.answering.take() {
-                    self.mode = Mode::Question(asking);
-                } else if self.busy() {
+                if !self.back_to_options() && self.busy() {
                     self.stop("Stopping.");
                 }
             }
@@ -848,10 +872,42 @@ impl App {
                     self.scroll.line_down(total);
                 }
             }
+            _ => self.field_key(key),
+        }
+    }
+
+    /// A key for the field: `↩` sends, `⇧↩`, `⌥↩` and `⌃J` break the line,
+    /// the rest edit.
+    fn field_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Enter, m) if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+                self.draft.insert('\n')
+            }
+            (KeyCode::Enter, _) => self.submit(),
+            (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => self.draft.insert('\n'),
             (code, modifiers) => {
                 self.draft.edit(code, modifiers);
             }
         }
+    }
+
+    /// `esc` while answering in words: the question's options again, the
+    /// draft kept. False when nothing was being answered.
+    fn back_to_options(&mut self) -> bool {
+        let Some(asking) = self.answering.take() else {
+            return false;
+        };
+        self.show_question(asking);
+        true
+    }
+
+    /// Puts `asking` on screen, over the review if one holds it; that review
+    /// is a waiting one, since an open review holds the agent's turn.
+    fn show_question(&mut self, mut asking: Asking) {
+        if let Mode::Review(review) = std::mem::replace(&mut self.mode, Mode::Conversation) {
+            asking.covers = Some(Box::new(review));
+        }
+        self.mode = Mode::Question(asking);
     }
 
     /// Whether the current turn has anything Space can open.
@@ -937,13 +993,20 @@ impl App {
             return;
         };
         let outcome = asking.list.handle_key(key.code, key.modifiers);
-        let Mode::Question(asking) = std::mem::replace(&mut self.mode, Mode::Conversation) else {
+        let Mode::Question(mut asking) = std::mem::replace(&mut self.mode, Mode::Conversation)
+        else {
             return;
         };
         match outcome {
             ListOutcome::Stay => self.mode = Mode::Question(asking),
-            ListOutcome::Close => self.close_question(asking),
-            ListOutcome::Chose(i) => self.answer(asking, i),
+            ListOutcome::Close => {
+                self.mode = asking.leave();
+                self.close_question(asking);
+            }
+            ListOutcome::Chose(i) => {
+                self.mode = asking.leave();
+                self.answer(asking, i);
+            }
         }
     }
 
@@ -1027,11 +1090,11 @@ impl App {
             detail: "Beside each: the key it reads from the environment, or /connect.".into(),
             options: self.catalogue.iter().map(|p| p.id.clone()).collect(),
         };
-        self.mode = Mode::Question(Asking {
+        self.mode = Mode::Question(Asking::new(
             question,
-            list: List::new(rows).opened_on(current),
-            asker: Asker::Provider { then },
-        });
+            List::new(rows).opened_on(current),
+            Asker::Provider { then },
+        ));
     }
 
     /// Catalogue rows reachable through an account.
@@ -1055,11 +1118,7 @@ impl App {
             detail: "You sign in through your browser, and a model on that provider then runs on your subscription rather than an API key.".into(),
             options: connectable.iter().map(|p| p.id.clone()).collect(),
         };
-        self.mode = Mode::Question(Asking {
-            question,
-            list: List::new(rows),
-            asker: Asker::Connection,
-        });
+        self.mode = Mode::Question(Asking::new(question, List::new(rows), Asker::Connection));
     }
 
     fn open_model_question(&mut self, provider: ProviderChoice, then: Option<String>) {
@@ -1078,14 +1137,14 @@ impl App {
             detail: "Any model id the provider offers works; these are the known ones.".into(),
             options: provider.models.iter().map(|m| m.id.clone()).collect(),
         };
-        self.mode = Mode::Question(Asking {
+        self.mode = Mode::Question(Asking::new(
             question,
-            list: List::new(rows).opened_on(current),
-            asker: Asker::Model {
+            List::new(rows).opened_on(current),
+            Asker::Model {
                 provider: provider.id,
                 then,
             },
-        });
+        ));
     }
 
     fn open_session_question(&mut self) {
@@ -1104,17 +1163,30 @@ impl App {
             detail: "Newest first. The one you pick continues in its own file.".into(),
             options: self.sessions.iter().map(|s| s.title.clone()).collect(),
         };
-        self.mode = Mode::Question(Asking {
-            question,
-            list: List::new(rows),
-            asker: Asker::Session,
-        });
+        self.mode = Mode::Question(Asking::new(question, List::new(rows), Asker::Session));
     }
 
     fn handle_review_key(&mut self, key: KeyEvent) {
         // Ctrl+C interrupts the turn, which cancels the review.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.interrupt();
+            return;
+        }
+        // "Chat about this" over the review: the field takes the answer, as
+        // the conversation's does, and `esc` goes back to the options.
+        if self.answering.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.back_to_options();
+                }
+                KeyCode::Up => {
+                    self.move_cursor_vertical(-1);
+                }
+                KeyCode::Down => {
+                    self.move_cursor_vertical(1);
+                }
+                _ => self.field_key(key),
+            }
             return;
         }
         // While the comments are with the agent, `esc` stops the turn, as
@@ -1167,7 +1239,7 @@ impl App {
     /// Capture the mouse only while a review is open (ADR 0010); the
     /// conversation keeps the terminal's own selection.
     pub(crate) fn wants_mouse(&self) -> bool {
-        matches!(self.mode, Mode::Review(_))
+        self.review().is_some()
     }
 
     /// Routes a mouse event to the review if open; otherwise the wheel
@@ -1197,8 +1269,7 @@ impl App {
     }
 
     /// Inserts a bracketed paste into the field whole and sanitised, so its
-    /// newlines never submit; ignored unless the conversation holds the
-    /// screen.
+    /// newlines never submit; ignored unless the field takes the keys.
     pub fn paste(&mut self, text: &str) {
         if self.band_is_held() {
             return;
@@ -2067,6 +2138,131 @@ pub(crate) mod tests {
             },
         });
         assert!(matches!(a.mode, Mode::Conversation));
+    }
+
+    /// A waiting review inside its follow-up turn, and the agent asking.
+    fn ask_over_a_waiting_review(a: &mut App) {
+        a.submit_text("Add a limit.".into());
+        open_review(a, "y\n");
+        a.handle_key(press(KeyCode::Char('?')));
+        send_comment(a, "per key?");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::EndTurn,
+        });
+        a.apply_event(Event::FollowUp {
+            turn_id: TurnId(2),
+            text: "per key?".into(),
+        });
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+        a.apply_event(Event::QuestionAsked {
+            call_id: "q1".into(),
+            question: Question {
+                question: "Limit anonymous requests too?".into(),
+                detail: "why".into(),
+                options: vec!["Yes".into(), "No".into(), CHAT_ABOUT_THIS.into()],
+            },
+        });
+        a.outbox.clear();
+    }
+
+    /// Regression: the question replaced the waiting review, and the next
+    /// changeset opened a fresh one with nothing carried.
+    #[test]
+    fn an_agent_question_is_asked_over_a_waiting_review_and_leaves_it_waiting() {
+        let mut a = app();
+        ask_over_a_waiting_review(&mut a);
+        assert!(matches!(a.mode, Mode::Question(_)));
+        assert!(
+            a.review().is_some_and(Review::waiting),
+            "the review is under it"
+        );
+        assert!(a.wants_mouse());
+
+        a.handle_key(press(KeyCode::Char('2')));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Answer {
+                call_id: "q1".into(),
+                answer: Answer::Chose { index: 1 }
+            }]
+        );
+        assert!(
+            matches!(&a.mode, Mode::Review(r) if r.waiting()),
+            "the review is back, still waiting"
+        );
+
+        a.apply_event(Event::ReviewRequested {
+            review_id: "review-2".into(),
+            changeset: Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: Some("x\n".into()),
+                    after: "z\n".into(),
+                }],
+            },
+        });
+        let review = a.review().expect("the next round replaces it in place");
+        assert_eq!(review.review_id, "review-2");
+        assert!(review.keys_shown, "carried from the review it replaced");
+    }
+
+    #[test]
+    fn chat_about_this_over_a_review_answers_in_its_field_and_esc_goes_back() {
+        let mut a = app();
+        ask_over_a_waiting_review(&mut a);
+        a.handle_key(press(KeyCode::Esc));
+        assert!(a.answering.is_some());
+        assert!(
+            matches!(a.mode, Mode::Review(_)),
+            "the review holds the screen"
+        );
+        type_str(&mut a, "only ");
+        a.handle_key(press(KeyCode::Esc));
+        assert!(
+            matches!(&a.mode, Mode::Question(q) if q.covers.is_some()),
+            "back to the options, over the review"
+        );
+        a.paste("dropped");
+        a.handle_key(press(KeyCode::Esc));
+        a.paste("keyed\nones");
+        a.handle_key(press(KeyCode::Up));
+        type_str(&mut a, "!");
+        a.handle_key(press(KeyCode::Enter));
+        assert_eq!(
+            a.outbox,
+            vec![Command::Answer {
+                call_id: "q1".into(),
+                answer: Answer::Said {
+                    text: "only! keyed\nones".into()
+                }
+            }],
+            "a paste and the arrows work as in the conversation's field"
+        );
+        assert!(a.answering.is_none());
+        assert!(matches!(&a.mode, Mode::Review(r) if r.waiting()));
+    }
+
+    /// Comments sent before a `run` wait within the turn; a turn that ends
+    /// on the question keeps the review the question covered.
+    #[test]
+    fn a_turn_ending_on_the_question_puts_the_review_back() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.apply_event(Event::QuestionAsked {
+            call_id: "q1".into(),
+            question: Question {
+                question: "Q?".into(),
+                detail: String::new(),
+                options: vec!["Yes".into(), CHAT_ABOUT_THIS.into()],
+            },
+        });
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::EndTurn,
+        });
+        assert!(matches!(&a.mode, Mode::Review(r) if r.waiting()));
     }
 
     #[test]

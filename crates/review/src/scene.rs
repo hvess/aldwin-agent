@@ -64,6 +64,7 @@ pub const CATALOGUE: &[&str] = &[
     "selecting",
     "commented",
     "sent",
+    "asked",
     "wrapped",
     "stopping",
     "answering",
@@ -236,6 +237,16 @@ pub fn script(name: &str) -> Result<Script> {
         // the follow-up turn, which the model never finishes.
         "sent" => Script {
             replies: review().into_iter().chain([fake::held("")]).collect(),
+            history: &[],
+            files:   vec![(ROUTER, ROUTER_RS)],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\",Enter,{CTRL_ENTER}",
+            provider: true,
+        },
+
+        // `sent`, but the follow-up turn asks: the question in the waiting
+        // review's bottom band, the review kept under it.
+        "asked" => Script {
+            replies: review().into_iter().chain(question()).collect(),
             history: &[],
             files:   vec![(ROUTER, ROUTER_RS)],
             keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\",Enter,{CTRL_ENTER}",

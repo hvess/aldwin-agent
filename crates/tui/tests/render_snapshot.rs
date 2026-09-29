@@ -31,10 +31,11 @@ const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/ren
 /// and maximized (catches sprawl rather than clipping).
 const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
-/// Frames A–J of `Aldwin Agent TUI.dc.html`, with `sent` (a review state the
-/// design leaves to the product) beside frame I so the review scenes stay
-/// together, then the other states the design leaves to the product.
-const SCENES: [&str; 20] = [
+/// Frames A–J of `Aldwin Agent TUI.dc.html`, with `sent` and `asked` (review
+/// states the design leaves to the product) beside frame I so the review
+/// scenes stay together, then the other states the design leaves to the
+/// product.
+const SCENES: [&str; 21] = [
     "launch",              // A
     "working",             // B
     "details",             // C
@@ -45,6 +46,7 @@ const SCENES: [&str; 20] = [
     "selecting",           // H
     "commented",           // I
     "sent",                // the comments with the agent: the review waits, working
+    "asked",               // the agent asks while the review waits: the question in its band
     "saved",               // J
     "markdown",            // a table, a fence, a list and a quote — ADR 0002
     "failure",             // ADR 0009 §5: a sentence, no red
@@ -58,7 +60,14 @@ const SCENES: [&str; 20] = [
 ];
 
 /// Full-window review scenes; their tree runs from the frame's edge.
-const REVIEW_SCENES: [&str; 5] = ["review", "selecting", "commented", "sent", "wrapped"];
+const REVIEW_SCENES: [&str; 6] = [
+    "review",
+    "selecting",
+    "commented",
+    "sent",
+    "asked",
+    "wrapped",
+];
 
 /// Pinned provider catalogue.
 fn catalogue() -> Vec<ProviderChoice> {
@@ -587,6 +596,21 @@ fn scene(name: &str, app: &mut App) {
             });
             app.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
             at_work(app, 4, thought);
+        }
+        "asked" => {
+            scene("sent", app);
+            app.apply_event(Event::QuestionAsked {
+                call_id: "call-ask".into(),
+                question: Question {
+                    question: "Should requests without an API key be limited too?".into(),
+                    detail: "Right now they skip the limit. Limiting them by address stops anonymous floods.".into(),
+                    options: vec![
+                        "Yes, limit them by address".into(),
+                        "No, let them through".into(),
+                        "Chat about this".into(),
+                    ],
+                },
+            });
         }
         "saved" => {
             echo(app);

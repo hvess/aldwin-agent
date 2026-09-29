@@ -64,8 +64,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
 ## Decisions
 
 1. **One screenshot baseline, not two.** `render.snap` serialises every
-   cell's symbol, foreground, background and modifiers for twenty scenes
-   at three sizes in both themes — 120 sections — in under a second,
+   cell's symbol, foreground, background and modifiers for twenty-one
+   scenes at three sizes in both themes — 126 sections — in under a second,
    in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The

@@ -12,6 +12,19 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, the agent's question over a waiting review):**
+An `ask` in the follow-up turn replaced the waiting review, so the
+answer landed in the conversation and the next changeset opened fresh with
+nothing carried. The question is now drawn in the review's bottom band,
+where the discard question draws: `App::show_question` puts the review
+under the question (`Asking::covers`), `App::review` returns it there, and
+`Asking::leave` puts it back on screen once the question is answered or the
+turn ends. "Chat about this" answers in the review's own field, under the
+question alone, with `esc` back to the options, as in the conversation.
+The mouse stays captured: under the question it scrolls, opens a fold
+or picks a file in the tree, and selects no line, since the review under
+it waits. Scene `asked` pins it (a capture scene too).
+
 **Progress (2026-09-29, the working line):** The frame re-synced
 (`docs/design/IMPORT.md`) with a new section, "Aldwin · working" (frames
 `W1`, `W2`), and a footer reworked in every frame. The app follows the
@@ -87,7 +100,8 @@ one the review loop found beside them.
   is coming, and the agent's reply must not stay hidden behind it. Snapshot and capture scene `sent`. ADR 0010 is
   amended in place for both this and the tree click. One edge stays as it was: a question the agent asks
   mid-round takes the screen as everywhere, and the review after it opens
-  fresh.
+  fresh. (Superseded 2026-09-29: the question draws in the waiting
+  review's band; see that day's Progress entry.)
 - **A click on the tree shows that file.** `draw_tree` returns a `Tree`
   of which file each row shows, as `draw_diff` returns the `Pane`, and
   `Review::handle_mouse` maps a press against it before the diff (HIG,
@@ -176,7 +190,8 @@ landed with the test that would have caught it.
   Closing the provider question puts the held first message back in the
   field. After "Chat about this" the question stays above the field, the
   footer says `Waiting for you  ↩ Send  ⎋ Back`, and `⎋` returns to the
-  options with the draft kept.
+  options with the draft kept — over a waiting review too, in its field
+  (Progress 2026-09-29).
 - **The `/` menu** is aldwin-cli's command table (`slash::COMMANDS`, which
   `/help` is drawn from too), handed in through `SessionProvider`. A
   non-letter, or a filter nothing matches, steps the menu aside and leaves

@@ -80,7 +80,12 @@ transcript cost more than the wheel was worth (`run.rs`, `aldwin-tui.md`).
    leaves the review
    when no turn is running, and `⌃↩` does nothing; the scroll, file and
    fold keys work as before. A follow-up turn that ends without a new
-   changeset closes the review.
+   changeset closes the review. *Amended 2026-09-29* (aldwin-tui.md,
+   Progress 2026-09-29): a question the agent asks in that state draws in
+   the review's bottom band and takes the keys as a question does; the
+   mouse still reaches the review under it. Answered in words, the
+   review's field takes the keys as the conversation's does — typing,
+   `↑↓`, a paste — `↩` sends the answer and `⎋` goes back to the options.
 
 ## Consequences
 

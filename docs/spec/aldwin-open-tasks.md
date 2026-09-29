@@ -32,19 +32,10 @@ contradicts) and the entry says so before it goes.
    left it undrawn because the design system has no treatment for it, and
    one is not invented locally. The developer's call, 2026-09-27: draw it
    once the design specifies how — a disclosure, say, as `Read 1 file  ›`
-   is.
-
-7. **A question asked mid-round closes a waiting review.** Since
-   2026-09-28 a review stays on screen while the agent addresses its
-   comments, and the next changeset replaces it in place
-   (`Review::carry_from`, aldwin-tui.md Progress 2026-09-28). But
-   `Event::QuestionAsked` sets `Mode::Question` whatever holds the screen
-   (`App::apply_event`, `crates/tui/src/app.rs`), so an `ask` in that turn
-   drops the waiting review, the answer lands in the conversation, and the
-   review that follows opens fresh with nothing carried. Closing it means
-   drawing the agent's question in the review's bottom band, where the
-   discard question already draws (`ui::review::draw`), and keeping the
-   review underneath.
+   is. The developer's call, 2026-09-29: the design's `Disclosure` is that
+   treatment. Each thinking block is a collapsed line where it happened,
+   `Thought for 12s  ›` in the work line's tone, that Space opens to the
+   reasoning unabridged; before entry 4.
 
 ## Review
 
@@ -56,7 +47,8 @@ contradicts) and the entry says so before it goes.
    finding a judge produces twice belongs in a deterministic stage (review
    skill, "When a judge is wrong"). Closing it means two stage-2 checks in
    `crates/review/src/stages.rs` over the staged diff. The developer's
-   call, 2026-09-27: its own change, after Decision 18.
+   call, 2026-09-27: its own change, after Decision 18; 2026-09-29: after
+   entry 3.
 
 6. **Frame capture runs only on Linux.** Capture drives foot under sway,
    neither of which runs on macOS, so `Pty::open` refuses there

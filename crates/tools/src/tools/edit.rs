@@ -71,11 +71,17 @@ fn edit_args(input: &Value) -> Result<EditArgs, ToolError> {
     })
 }
 
-/// The 1-based line each occurrence of `before` starts on. `before` must not
-/// be empty: it would match between every character.
+/// The 1-based line each occurrence of `before` starts on, in one pass: a
+/// short `before` can occur thousands of times in a large file. `before`
+/// must not be empty: it would match between every character.
 fn match_lines(text: &str, before: &str) -> Vec<usize> {
+    let (mut line, mut counted) = (1, 0);
     text.match_indices(before)
-        .map(|(at, _)| text[..at].matches('\n').count() + 1)
+        .map(|(at, _)| {
+            line += text[counted..at].matches('\n').count();
+            counted = at;
+            line
+        })
         .collect()
 }
 
@@ -221,6 +227,20 @@ mod tests {
         assert!(matches!(&err, ToolError::AmbiguousMatch { lines, .. } if *lines == [1, 2]));
         assert!(err.to_string().contains("starting on lines 1, 2"));
         assert!(staging.is_empty(), "a failed edit stages nothing");
+    }
+
+    #[test]
+    fn every_match_gets_its_line_and_the_message_names_the_first_ten() {
+        let text = "fn a() {\n}\n".repeat(50);
+        let lines = match_lines(&text, "}");
+        assert_eq!(lines, (1..=50).map(|i| i * 2).collect::<Vec<_>>());
+        let message = ToolError::AmbiguousMatch {
+            path: "f.rs".into(),
+            lines,
+        }
+        .to_string();
+        assert!(message.contains("occurs 50 times, starting on lines 2, 4, 6"));
+        assert!(message.contains("18, 20 and 40 more."), "{message}");
     }
 
     #[tokio::test]

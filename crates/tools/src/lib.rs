@@ -10,6 +10,7 @@ mod dispatcher;
 mod error;
 mod lsp;
 mod mcp;
+mod output;
 mod paths;
 mod registry;
 pub mod sandbox;

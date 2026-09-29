@@ -131,10 +131,17 @@ fn ambiguous_match_fix(lines: &[usize]) -> String {
                with staged edits reads back with them applied"
             .to_string(),
         _ => {
-            let at: Vec<String> = lines.iter().map(usize::to_string).collect();
+            // The first few say where to look; every one would crowd the
+            // conversation when `before` is a line like `}`.
+            const NAMED: usize = 10;
+            let at: Vec<String> = lines.iter().take(NAMED).map(usize::to_string).collect();
+            let more = match lines.len().saturating_sub(NAMED) {
+                0 => String::new(),
+                rest => format!(" and {rest} more"),
+            };
             format!(
-                "the text to replace occurs {} times, starting on lines {}. Add the lines \
-                 around the one you mean to `before` so it occurs once",
+                "the text to replace occurs {} times, starting on lines {}{more}. Add the \
+                 lines around the one you mean to `before` so it occurs once",
                 lines.len(),
                 at.join(", ")
             )

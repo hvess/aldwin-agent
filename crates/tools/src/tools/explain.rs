@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::error::ToolError;
 use crate::lsp::{self, LspClient};
+use crate::output::capped;
 use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
 use crate::staging::Staging;
@@ -45,7 +46,7 @@ impl ExplainTool {
             descriptor: ToolDescriptor {
                 name: "explain".into(),
                 description: "LSP-backed code intelligence: definition, references, hover, implementations, workspace_symbols. \
-                               Returns structured location/signature data as JSON, not prose. Positions, in and out, \
+                               Returns structured location/signature data as JSON, not prose; past about 50 KB it is cut, and no longer parses. Positions, in and out, \
                                are 1-based: `line` is the line number as `grep -n` prints it, and `character` counts \
                                from 1 at the start of the line (in UTF-16 units, so an emoji counts as two), \
                                landing on any character inside the identifier. A position it returns can be passed \
@@ -210,7 +211,7 @@ impl Tool for ExplainTool {
             let result = client
                 .request("workspace/symbol", json!({ "query": query }))
                 .await?;
-            return Ok(format_symbols(result));
+            return Ok(capped(&format_symbols(result)));
         }
 
         let path_str = required_str(&input, "path")?;
@@ -248,10 +249,10 @@ impl Tool for ExplainTool {
             Op::WorkspaceSymbols => unreachable!("handled above"),
         };
 
-        Ok(match op {
+        Ok(capped(&match op {
             Op::Hover => format_hover(result),
             _ => format_locations(result),
-        })
+        }))
     }
 }
 

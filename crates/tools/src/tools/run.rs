@@ -14,16 +14,16 @@ use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
 use crate::error::ToolError;
+use crate::output::{capped, OUTPUT_CAP_BYTES};
 use crate::paths::Workspace;
 use crate::registry::{Tool, ToolDescriptor};
 use crate::sandbox;
 use aldwin_core::DispatchContext;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const OUTPUT_CAP_BYTES: usize = 50 * 1024;
 /// Bytes held per stream; bounds memory for a chatty command. The 4 bytes
-/// over `OUTPUT_CAP_BYTES` keep a straddling character whole and let [`cap`]
-/// see there was more.
+/// over `OUTPUT_CAP_BYTES` keep a straddling character whole and let
+/// [`capped`] see there was more.
 const OUTPUT_KEEP_BYTES: usize = OUTPUT_CAP_BYTES + 4;
 
 pub struct RunTool {
@@ -262,11 +262,11 @@ fn render_partial(out: &str, err: &str) -> String {
     let mut body = String::new();
     if !out.is_empty() {
         body.push_str("partial stdout:\n");
-        body.push_str(&cap(out));
+        body.push_str(&capped(out));
     }
     if !err.is_empty() {
         body.push_str("partial stderr:\n");
-        body.push_str(&cap(err));
+        body.push_str(&capped(err));
     }
     if body.is_empty() {
         body.push_str("the command produced no output before the timeout");
@@ -283,27 +283,13 @@ fn render(status: &std::process::ExitStatus, out: &str, err: &str) -> String {
     );
     if !out.is_empty() {
         body.push_str("stdout:\n");
-        body.push_str(&cap(out));
+        body.push_str(&capped(out));
     }
     if !err.is_empty() {
         body.push_str("stderr:\n");
-        body.push_str(&cap(err));
+        body.push_str(&capped(err));
     }
     body
-}
-
-fn cap(text: &str) -> String {
-    if text.len() <= OUTPUT_CAP_BYTES {
-        return text.to_string();
-    }
-    let mut end = OUTPUT_CAP_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n[truncated at {OUTPUT_CAP_BYTES} bytes]\n",
-        &text[..end]
-    )
 }
 
 #[cfg(test)]
@@ -539,7 +525,7 @@ mod tests {
         let buf = Mutex::new(Vec::new());
         drain(&mut flood.as_slice(), &buf).await.unwrap();
         assert_eq!(buf.lock().unwrap().len(), OUTPUT_KEEP_BYTES);
-        assert!(cap(&take(&buf)).ends_with("bytes]\n"));
+        assert!(capped(&take(&buf)).ends_with("bytes]\n"));
     }
 
     /// Regression: per-read decoding turned a straddling character to U+FFFD.

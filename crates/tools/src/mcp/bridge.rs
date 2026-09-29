@@ -7,6 +7,7 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 
+use crate::output::capped;
 use crate::sandbox;
 
 #[derive(Debug, thiserror::Error)]
@@ -149,13 +150,15 @@ impl McpBridge {
             .iter()
             .filter_map(|c| c.as_text().map(|t| t.text.clone()))
             .collect();
-        Ok((text.join("\n"), result.is_error.unwrap_or(false)))
+        // The server chooses how much it returns; the conversation keeps it.
+        Ok((capped(&text.join("\n")), result.is_error.unwrap_or(false)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::OUTPUT_CAP_BYTES;
     use crate::test_support::{confinement_or_explicit_skip, scratch_dir};
     use aldwin_config::McpTransport;
     use serde_json::json;
@@ -191,6 +194,16 @@ mod tests {
         let (content, is_error) = bridge.call_tool("fake", "echo", args).await.unwrap();
         assert_eq!(content, "hello from the test");
         assert!(!is_error);
+    }
+
+    #[tokio::test]
+    async fn a_result_past_the_cap_comes_back_cut_and_says_so() {
+        let bridge = McpBridge::new(vec![fake_server()]);
+        let mut args = serde_json::Map::new();
+        args.insert("text".into(), json!("x".repeat(OUTPUT_CAP_BYTES * 2)));
+        let (content, _) = bridge.call_tool("fake", "echo", args).await.unwrap();
+        assert!(content.len() < OUTPUT_CAP_BYTES + 64);
+        assert!(content.ends_with(&format!("[truncated at {OUTPUT_CAP_BYTES} bytes]\n")));
     }
 
     #[tokio::test]

@@ -7,6 +7,21 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, output the conversation keeps):** Everything a tool
+returns stays in the conversation and is sent again every step, so no tool
+returns more than `OUTPUT_CAP_BYTES` (50 KB, `output::capped`, shared with
+`run` and `explain`, whose reference and symbol lists had no bound). `read` returned a whole file however large; it now takes `offset`
+and `limit` in lines, stops at the last whole line within the cap, and ends
+anything short of the whole file with a bracketed line naming the lines
+shown, the file's length and the `offset` to read on from — so the prompt
+teaches ranges through `read`, which shows staged edits, where it taught
+`sed -n`. An MCP tool's result is capped the same way, since its server
+chooses its size. An ambiguous `edit` counts lines in one pass (it
+rescanned from the file's start per match, O(matches × file) for a
+`before` like `}`) and names the first ten lines, then how many more.
+Tests: `tools::read::tests`, `every_match_gets_its_line_and_the_message_names_the_first_ten`,
+`a_result_past_the_cap_comes_back_cut_and_says_so`.
+
 **Progress (2026-09-29, `reload`, ADR 0017):** A seventh built-in,
 `reload`, reads the settings files again and applies `roots:`, observing
 disk so staged edits are reviewed first. `Staging` keeps what the last approve

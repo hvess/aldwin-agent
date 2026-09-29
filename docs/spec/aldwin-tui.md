@@ -12,6 +12,19 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, the code ink's loose ends):** The review of the
+entry below left questions, each settled. A fenced block's lines take
+`--code` too, still on `tint`; the `markdown` scene's key variables are
+backticked, so a table cell shows the ink, and
+`an_underscore_inside_a_word_is_a_literal_not_italics` keeps the bare
+`ANTHROPIC_API_KEY` case the scene used to cover. Every working-line
+target is an identifier — a command, a path, a pattern or a tool's name —
+so each takes the ink, and a target shortened to fit keeps it on its `…`,
+as `grid::truncate_spans` gives a cut span's style to its `…`.
+`Review::selection_label` returns a `SelectionLabel`, not a tuple of three
+strings. The comment field's `▎` fills the mark column, so its label,
+draft and caret sit on `--body-x` as frame H draws them.
+
 **Progress (2026-09-29, code has its own ink):** The frame re-synced
 (`docs/design/IMPORT.md`) with `--code`, a teal set by the frame's script
 and absent from `tokens/colors.css` (baseline
@@ -372,7 +385,8 @@ what each thing was measured against:
   `label` with the detail in `label2` one disclosure below. No `✗`, no `!`,
   no red outside a diff; `render_snapshot.rs` asserts it.
 - **Markdown keeps fences and tables and loses highlighting.** Fences are
-  `label2` on `tint` under a `label3` caption; tables draw per ADR 0002;
+  `label2` on `tint` under a `label3` caption (`--code` on `tint` since
+  2026-09-29); tables draw per ADR 0002;
   `syntect` is gone from the manifest. Inline code is `label` on `tint`
   (`--code` on the ground since 2026-09-29: see that Progress entry).
 - **Deleted:** `first_run.rs`, `highlight.rs`, `picker.rs`, `ui/decision.rs`,

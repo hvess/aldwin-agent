@@ -89,6 +89,18 @@ impl DiffRow {
     }
 }
 
+/// The comment field's label for the selection: `2 lines`, `router.rs`,
+/// `144–145`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectionLabel {
+    /// How many lines are selected, as a phrase.
+    pub lines: String,
+    /// The file's name, without its directory.
+    pub file: String,
+    /// New-file line numbers, one or `first–last`.
+    pub range: String,
+}
+
 /// A comment left on a run of lines, not yet sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingComment {
@@ -532,8 +544,8 @@ impl Review {
         Some(pane.lines[(row.saturating_sub(pane.y) as usize).min(shown - 1)])
     }
 
-    /// The comment field's label: (`2 lines`, `router.rs`, `144–145`).
-    pub fn selection_label(&self) -> Option<(String, String, String)> {
+    /// The comment field's label, while a selection is held.
+    pub fn selection_label(&self) -> Option<SelectionLabel> {
         let (first, last) = self.selected?.lines();
         let lines = self.line_range(first, last)?;
         let name = self
@@ -548,7 +560,11 @@ impl Review {
         } else {
             format!("{}–{}", lines.0, lines.1)
         };
-        Some((plural(last - first + 1, "line"), name, range))
+        Some(SelectionLabel {
+            lines: plural(last - first + 1, "line"),
+            file: name,
+            range,
+        })
     }
 
     /// The new-file lines unfolded rows `first` through `last` anchor to.
@@ -922,6 +938,14 @@ mod tests {
     use super::*;
     use aldwin_core::ChangedFile;
 
+    fn label(lines: &str, file: &str, range: &str) -> Option<SelectionLabel> {
+        Some(SelectionLabel {
+            lines: lines.into(),
+            file: file.into(),
+            range: range.into(),
+        })
+    }
+
     fn numbered(n: usize) -> String {
         (1..=n).map(|i| format!("line {i}\n")).collect()
     }
@@ -1108,7 +1132,7 @@ mod tests {
     fn opening_a_fold_keeps_the_selection_on_the_same_lines() {
         let mut r = one_change_in_thirty();
         r.select(3, 3);
-        assert_eq!(r.selection_label().unwrap().2, "15");
+        assert_eq!(r.selection_label().unwrap().range, "15");
         pane_at(&mut r, 0);
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 10);
         assert!(
@@ -1116,7 +1140,7 @@ mod tests {
             "the fold above opened"
         );
         assert_eq!(
-            r.selection_label().unwrap().2,
+            r.selection_label().unwrap().range,
             "15",
             "the selection did not move onto line 4"
         );
@@ -1138,10 +1162,7 @@ mod tests {
         r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 14);
         r.handle_mouse(MouseEventKind::Drag(MouseButton::Left), 40, 15);
         assert_eq!(r.selection(), Some((4, 5)));
-        assert_eq!(
-            r.selection_label(),
-            Some(("15 lines".into(), "x.rs".into(), "16–30".into()))
-        );
+        assert_eq!(r.selection_label(), label("15 lines", "x.rs", "16–30"));
     }
 
     #[test]
@@ -1159,7 +1180,7 @@ mod tests {
             31,
             "thirty lines and the one removed"
         );
-        assert_eq!(r.selection_label().unwrap().2, "15");
+        assert_eq!(r.selection_label().unwrap().range, "15");
     }
 
     #[test]
@@ -1170,34 +1191,34 @@ mod tests {
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
         assert_eq!(
             r.selection_label(),
-            Some(("1 line".into(), "x.rs".into(), "11".into())),
+            label("1 line", "x.rs", "11"),
             "the first line shown"
         );
         r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
         r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
         assert_eq!(
             r.selection_label(),
-            Some(("1 line".into(), "x.rs".into(), "13".into())),
+            label("1 line", "x.rs", "13"),
             "the arrows move a selection"
         );
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
         r.handle_key(KeyCode::Down, KeyModifiers::SHIFT, "");
         assert_eq!(
             r.selection_label(),
-            Some(("3 lines".into(), "x.rs".into(), "13–15".into())),
+            label("3 lines", "x.rs", "13–15"),
             "Shift extends it"
         );
         r.handle_key(KeyCode::Up, KeyModifiers::SHIFT, "");
         assert_eq!(
             r.selection_label(),
-            Some(("2 lines".into(), "x.rs".into(), "13–14".into())),
+            label("2 lines", "x.rs", "13–14"),
             "and takes it back"
         );
         for _ in 0..30 {
             r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
         }
         assert_eq!(
-            r.selection_label().unwrap().2,
+            r.selection_label().unwrap().range,
             "40",
             "it stops at the last line"
         );
@@ -1262,10 +1283,7 @@ mod tests {
         // Rows: 1 ctx, del 2, del 3, add 2, add 3, 4 ctx, 5 ctx (no folds: runs of 1 and 2).
         r.select(4, 3);
         assert_eq!(r.selection(), Some((3, 4)));
-        assert_eq!(
-            r.selection_label(),
-            Some(("2 lines".into(), "x.rs".into(), "2–3".into()))
-        );
+        assert_eq!(r.selection_label(), label("2 lines", "x.rs", "2–3"));
 
         assert!(r.commenting());
         for c in "Use config".chars() {

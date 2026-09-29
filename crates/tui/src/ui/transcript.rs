@@ -362,8 +362,8 @@ fn render_assistant_text(text: &str, ctx: Ctx) -> Vec<Line<'static>> {
     lines
 }
 
-/// A fenced code block: a caption row, then one row per code line, elided
-/// rather than wrapped so a line stays a line.
+/// A fenced code block: a caption row, then one row per code line in
+/// `--code` on `tint`, elided rather than wrapped so a line stays a line.
 fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
     let pal = ctx.pal;
     let rows: Vec<&str> = code.lines().collect();
@@ -385,7 +385,7 @@ fn code_block(lang: &str, code: &str, ctx: Ctx) -> Vec<Line<'static>> {
                 .build(
                     vec![Span::styled(
                         text,
-                        Style::default().fg(pal.label2).bg(pal.tint),
+                        Style::default().fg(pal.code).bg(pal.tint),
                     )],
                     ctx,
                 )

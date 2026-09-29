@@ -632,7 +632,7 @@ fn scene(name: &str, app: &mut App) {
                 text: "which providers are set up?".into(),
             });
             app.seed(LogEntry::AssistantText {
-                text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | ANTHROPIC_API_KEY |\n| openai | gpt-5 | OPENAI_API_KEY |\n\nEach one needs:\n\n- its key exported\n- a model it offers\n\n> The key never goes in a file.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
+                text: "## Providers\n\nThree, one per key — see [the docs](https://docs.example/providers):\n\n| provider | model | key |\n|---|---|---|\n| anthropic | claude-sonnet-5 | `ANTHROPIC_API_KEY` |\n| openai | gpt-5 | `OPENAI_API_KEY` |\n\nEach one needs:\n\n- its key exported\n- a model it offers\n\n> The key never goes in a file.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```".into(),
             });
             app.seed(LogEntry::TurnBreak);
         }

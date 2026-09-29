@@ -108,6 +108,12 @@ Four colour rules, each the design's own sentence:
 - **Three text tones**: `label` for what is current, `label2` for what is
   said around it, `label3` for what is pending or structural.
 
+Code named in text — a backticked span, a fenced block, a call's target, a
+file name in a label — is drawn in its own ink, `--code`, a teal the frame
+sets and no token file declares (baseline
+`code-ink-is-the-frames-not-colors-css`). It is not a fourth tone and not
+the accent: it marks what is code, and code is not the developer's.
+
 The Content Fundamentals hold too: lead with a sentence, outcomes not tool
 names, sentence case, "you" for the developer and never "we", no
 exclamation marks. The one capitalised word in a window is the brand

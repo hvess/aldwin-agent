@@ -20,7 +20,7 @@
 //! hue the app must not use yet. Every other declared role is carried, and
 //! one that does not parse fails [`generate`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -110,10 +110,12 @@ pub fn generate(design_dir: &Path, baseline: &Baseline) -> Result<String> {
 
     let mut dark_raw = scope_declarations(&colors, ":root")?;
     let mut light_raw = scope_declarations(&colors, ".tui-light")?;
-    for (role, dark_value, light_value) in frame_roles(&frame) {
-        if !dark_raw.contains_key(&role) {
-            dark_raw.insert(role.clone(), dark_value);
-            light_raw.insert(role, light_value);
+    // A role `:root` declares is `colors.css`'s in both themes, through its
+    // own cascade.
+    for FrameRole { role, dark, light } in frame_roles(&frame) {
+        if let Entry::Vacant(slot) = dark_raw.entry(role.clone()) {
+            slot.insert(dark);
+            light_raw.insert(role, light);
         }
     }
 
@@ -728,9 +730,18 @@ fn frame_highlight(frame: &str) -> Result<Vec<u8>> {
     Ok(found.into_iter().rev().collect())
 }
 
-/// Roles the frame's script sets per theme, as (role, dark, light), from
+/// A colour role the frame's script sets per theme; each value is as written.
+#[derive(Debug, PartialEq, Eq)]
+struct FrameRole {
+    /// The token without its `--`.
+    role: String,
+    dark: String,
+    light: String,
+}
+
+/// Every role the frame's script sets, from
 /// `setProperty('--code', this.light() ? '<light>' : '<dark>')`.
-fn frame_roles(frame: &str) -> Vec<(String, String, String)> {
+fn frame_roles(frame: &str) -> Vec<FrameRole> {
     frame
         .split("setProperty('--")
         .skip(1)
@@ -738,7 +749,11 @@ fn frame_roles(frame: &str) -> Vec<(String, String, String)> {
             let (role, rest) = call.split_once("', this.light() ? '")?;
             let (light, rest) = rest.split_once("' : '")?;
             let (dark, _) = rest.split_once("')")?;
-            Some((role.to_string(), dark.to_string(), light.to_string()))
+            Some(FrameRole {
+                role: role.to_string(),
+                dark: dark.to_string(),
+                light: light.to_string(),
+            })
         })
         .collect()
 }
@@ -1109,11 +1124,11 @@ mod tests {
         let frame = std::fs::read_to_string(design_dir().join(FRAME)).unwrap();
         assert_eq!(
             frame_roles(&frame),
-            [(
-                "code".to_string(),
-                "oklch(0.8 0.085 212)".to_string(),
-                "oklch(0.5 0.1 218)".to_string()
-            )]
+            [FrameRole {
+                role: "code".into(),
+                dark: "oklch(0.8 0.085 212)".into(),
+                light: "oklch(0.5 0.1 218)".into(),
+            }]
         );
     }
 

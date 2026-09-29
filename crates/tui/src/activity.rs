@@ -248,7 +248,7 @@ mod tests {
         let line = a.line(STALL);
         assert!(line.stalled);
         assert_eq!(line.words, "Still running cargo test");
-        assert_eq!(line.code_at, Some("Still running ".len()));
+        assert_eq!(line.code_at, Some("Still running ".chars().count()));
         assert_eq!(line.seconds, 30);
         a.touch(STALL + 1);
         assert!(!a.line(STALL + 1).stalled);

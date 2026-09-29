@@ -20,6 +20,7 @@ use crate::app::{App, ModelChoice, ProviderChoice};
 use crate::log::{LogEntry, Took};
 use crate::motion::Motion;
 use crate::palette::Theme;
+use crate::review::SelectionLabel;
 use crate::tokens::{GAUGE_CELL, GROUP_GAP, MARK_COLS, MARK_ROWS};
 
 fn app() -> App {
@@ -958,7 +959,11 @@ fn a_click_on_a_drawn_diff_line_selects_that_line() {
     a.handle_mouse(click(MouseEventKind::Up(MouseButton::Left)));
     assert_eq!(
         a.review().unwrap().selection_label(),
-        Some(("1 line".into(), "f.rs".into(), "7".into()))
+        Some(SelectionLabel {
+            lines: "1 line".into(),
+            file: "f.rs".into(),
+            range: "7".into(),
+        })
     );
     let buf = render(&mut a, 100, 36);
     assert_eq!(
@@ -1269,6 +1274,18 @@ fn a_table_too_narrow_for_its_columns_ends_every_row_in_an_ellipsis() {
             assert!(text.ends_with('…'), "width {width}: {text:?}");
         }
     }
+}
+
+#[test]
+fn an_underscore_inside_a_word_is_a_literal_not_italics() {
+    let ctx = Ctx::new(Theme::Dark.palette(), 80);
+    let line = &render_prose("Export ANTHROPIC_API_KEY first.", ctx)[0];
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "Export ANTHROPIC_API_KEY first.");
+    assert!(line
+        .spans
+        .iter()
+        .all(|s| !s.style.add_modifier.contains(Modifier::ITALIC)));
 }
 
 /// Frame B's prose: a `` `span` `` loses its backticks and takes `--code`

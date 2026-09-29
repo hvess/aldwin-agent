@@ -19,6 +19,7 @@ use crate::draft;
 use crate::log::LogEntry;
 use crate::motion::{ticks, Motion};
 use crate::palette::Palette;
+use crate::review::SelectionLabel;
 use crate::tokens::{gauge_filled, GAUGE_CELL, GAUGE_SEGMENTS};
 
 /// The field's maximum height; a longer draft scrolls with the caret in view.
@@ -602,7 +603,7 @@ pub(super) fn draw_comment_field(
     frame: &mut Frame,
     area: Rect,
     app: &App,
-    (lines, file, range): &(String, String, String),
+    label: &SelectionLabel,
     draft: &str,
     cursor: usize,
 ) {
@@ -630,7 +631,7 @@ pub(super) fn draw_comment_field(
             Style::default().fg(pal.label).bg(pal.select),
         ),
         Span::styled(
-            lines.to_string(),
+            label.lines.clone(),
             Style::default()
                 .fg(pal.label)
                 .bg(pal.select)
@@ -638,11 +639,11 @@ pub(super) fn draw_comment_field(
         ),
         Span::styled("  ", Style::default().fg(pal.label2).bg(pal.select)),
         Span::styled(
-            file.to_string(),
+            label.file.clone(),
             Style::default().fg(pal.code).bg(pal.select),
         ),
         Span::styled(
-            format!(" · {range}"),
+            format!(" · {}", label.range),
             Style::default().fg(pal.label2).bg(pal.select),
         ),
     ];

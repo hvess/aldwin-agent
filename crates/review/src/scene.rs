@@ -83,7 +83,7 @@ const LIMIT: &str = "src/gateway/limit.rs";
 
 const PROSE: &str = "Looking at how requests move through the gateway. Every request passes auth and tracing and nothing counts them, so a limit belongs beside the auth layer where the key is already known.";
 
-const TABLE: &str = "Three providers are configured here:\n\n| provider | key variable | streaming |\n| --- | --- | --- |\n| anthropic | ANTHROPIC_API_KEY | yes |\n| openai | OPENAI_API_KEY | yes |\n| google | GOOGLE_API_KEY | no |\n\n- `google` has no streaming yet\n- the others stream\n\n> A key variable must be exported before launch.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```";
+const TABLE: &str = "Three providers are configured here:\n\n| provider | key variable | streaming |\n| --- | --- | --- |\n| anthropic | `ANTHROPIC_API_KEY` | yes |\n| openai | `OPENAI_API_KEY` | yes |\n| google | `GOOGLE_API_KEY` | no |\n\n- `google` has no streaming yet\n- the others stream\n\n> A key variable must be exported before launch.\n\nThe default is set in `provider.yaml`:\n\n```yaml\nprovider: anthropic\nmodel: claude-sonnet-5\n```";
 
 /// `⌃↩` as foot reports it under the Kitty keyboard flag the app pushes at
 /// startup (`CSI > 1 u`): `CSI 13 ; 5 u`, not `\r`.

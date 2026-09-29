@@ -12,6 +12,15 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, `⌃C` over a review):** A single `⌃C` in a review
+does nothing, and a second within `DOUBLE_CTRL_C_TICKS` quits: see
+Decisions. It used to stop the turn, which left an undecided review on
+screen with no turn to take its decision, and a queue held across the stop
+stuck behind it (open-tasks entry 10, now closed). `App::ctrl_c_repeated`
+is the double-press test `App::interrupt` and the review share. Pinned by
+`ctrl_c_over_an_undecided_review_stops_nothing_and_quits_on_repeat` and
+`ctrl_c_over_a_waiting_review_stops_nothing`.
+
 **Progress (2026-09-29, messages queue — frame K):** The frame re-synced
 (`docs/design/IMPORT.md`) with frame `K queued`. A message sent while a
 turn runs used to reach core, which discarded it with "A turn is running,
@@ -30,7 +39,9 @@ draw a second plan. A `/` command no longer sets `awaiting_turn` at all:
 core takes a message behind a command, so one typed while a command is
 answered is sent rather than queued, and the first message the model
 question held still opens its turn. A stop over a review left open keeps the queue queued
-rather than putting it in the review's field (open-tasks entry 10).
+rather than putting it in the review's field (open-tasks entry 10; since
+Progress 2026-09-29, "`⌃C` over a review", `⌃C` stops no turn under a
+review, so none is left open: see Decisions).
 Snapshot and capture scene `queued`.
 
 **Progress (2026-09-29, the code ink's loose ends):** The review of the
@@ -2448,6 +2459,14 @@ above it, now parted by a padding row.
   a failure puts the queue back the same way. A `/` command is never
   queued: `/model` and `/connect` act at once, and `/clear` and `/resume`
   are refused mid-turn, as before.
+
+- **`⌃C` does not stop the turn behind a review.** A single press in a
+  review does nothing, and a second quits Aldwin, so it stays the way out
+  of a session whatever its state (Progress 2026-09-03). A review is left
+  by its own keys: approve, `esc` to discard, and over a waiting review
+  `esc` stops the turn and the stop closes it. The developer's call,
+  2026-09-29: "I don't think that command should do anything... it
+  shouldn't cancel the turn."
 
 - **Thinking indicator shown; thinking content not shown.** — Content is dropped at source in aldwin-core per LlmClient contract. The indicator (ThinkingStart → dim spinner, ThinkingEnd → removed) gives awareness without log clutter.
 

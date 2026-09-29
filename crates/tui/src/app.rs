@@ -759,8 +759,7 @@ impl App {
                     self.mode = Mode::Conversation;
                 }
                 self.push_turn_end(reason);
-                // Never into a review's field, which shares `draft`: a
-                // review left open by a stop keeps the queue queued.
+                // Never into a review's field, which shares `draft`.
                 if finished {
                     self.send_queue();
                 } else if self.review().is_none() {
@@ -1216,9 +1215,13 @@ impl App {
     }
 
     fn handle_review_key(&mut self, key: KeyEvent) {
-        // Ctrl+C interrupts the turn, which cancels the review.
+        // `⌃C` never stops the turn behind a review: a stop leaves an
+        // undecided one open with no turn to take its decision
+        // (`Review::closes_at_turn_end`). A second press still quits.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.interrupt();
+            if self.ctrl_c_repeated() {
+                self.should_quit = true;
+            }
             return;
         }
         // "Chat about this" over the review: the field takes the answer, as
@@ -1447,14 +1450,20 @@ impl App {
         });
     }
 
-    /// `⌃C`: stop a running turn, else clear the draft, else quit; a second
-    /// press within `DOUBLE_CTRL_C_TICKS` always quits.
-    fn interrupt(&mut self) {
+    /// Records a `⌃C` press; whether it follows the last one within
+    /// `DOUBLE_CTRL_C_TICKS`.
+    fn ctrl_c_repeated(&mut self) -> bool {
         let repeat = self
             .last_ctrl_c
             .is_some_and(|t| self.tick.saturating_sub(t) <= DOUBLE_CTRL_C_TICKS);
         self.last_ctrl_c = Some(self.tick);
-        if repeat {
+        repeat
+    }
+
+    /// `⌃C`: stop a running turn, else clear the draft, else quit; a second
+    /// press within `DOUBLE_CTRL_C_TICKS` always quits.
+    fn interrupt(&mut self) {
+        if self.ctrl_c_repeated() {
             self.should_quit = true;
         } else if self.busy() {
             self.stop("Stopping. Press ⌃C again to leave Aldwin.");
@@ -2765,17 +2774,29 @@ pub(crate) mod tests {
         }
     }
 
-    /// Regression: a stop over an undecided review put the queue in the
-    /// review's "Ask for a change" field.
+    /// Regression: `⌃C` cancelled the turn and left the undecided review
+    /// on screen with no turn behind it.
     #[test]
-    fn a_stop_over_an_open_review_keeps_the_queue_out_of_its_field() {
+    fn ctrl_c_over_an_undecided_review_stops_nothing_and_quits_on_repeat() {
         let mut a = app();
         open_review(&mut a, "y\n");
         a.queued.push("use 429".into());
         a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        end_turn(&mut a, 1, TurnEndReason::Cancelled);
-        assert!(a.draft.is_empty());
+        assert!(a.outbox.is_empty() && !a.should_quit);
+        assert!(a.review().is_some());
         assert_eq!(a.queued, ["use 429"]);
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_over_a_waiting_review_stops_nothing() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.handle_key(press_mod(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.outbox.is_empty() && !a.should_quit);
+        assert!(a.review().is_some_and(Review::waiting));
     }
 
     #[test]

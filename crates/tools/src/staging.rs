@@ -31,13 +31,10 @@ struct Inner {
     /// Review comments not yet reported resolved; the Saved row shows how
     /// many the approve closed.
     pending_comments: usize,
-    /// What an approve last wrote to each path, until the next reload
-    /// forgets it: `reload` takes new roots only from a `permissions.yaml`
-    /// the review wrote and no reload has applied since, so a text the
-    /// developer has moved on from cannot be restored and trusted again.
-    /// Every path, since staging does not know which file that is; it is a
-    /// record of writes, not an approval any later edit could reuse.
-    written: BTreeMap<PathBuf, String>,
+    /// `permissions.yaml` as the last approve wrote it, until a reload
+    /// forgets it (ADR 0017 §3). A record of a write, not an approval any
+    /// later edit could reuse.
+    reviewed: Option<String>,
 }
 
 /// The current turn's changeset, shared by every tool and the dispatcher.
@@ -48,6 +45,9 @@ pub struct Staging {
     inner: Mutex<Inner>,
     /// Re-resolves each staged path at write time.
     workspace: Workspace,
+    /// `.aldwin/permissions.yaml`, whose approved text is recorded; `None`
+    /// records nothing.
+    permissions: Option<PathBuf>,
 }
 
 impl Staging {
@@ -56,7 +56,14 @@ impl Staging {
         Self {
             inner: Mutex::default(),
             workspace,
+            permissions: None,
         }
+    }
+
+    /// Records what an approve writes to `permissions`, for `reload`.
+    pub fn with_permissions(mut self, permissions: PathBuf) -> Self {
+        self.permissions = Some(permissions);
+        self
     }
 
     /// Whether nothing is staged.
@@ -183,7 +190,7 @@ impl Staging {
             }
             match tokio::fs::write(&resolved, &staged.after).await {
                 Ok(()) => {
-                    self.lock().written.insert(resolved, staged.after);
+                    self.record_if_permissions(&resolved, &staged.after);
                     written.files.push(staged.rel);
                 }
                 Err(e) => written.skipped.push((staged.rel, e.to_string())),
@@ -192,16 +199,28 @@ impl Staging {
         written
     }
 
-    /// What the last approve wrote to `resolved`, if an approve has written
-    /// it this session.
-    pub(crate) fn approved(&self, resolved: &Path) -> Option<String> {
-        self.lock().written.get(resolved).cloned()
+    /// Keeps `text` when `resolved` is the permissions file. Compared
+    /// canonical: the configured path keeps the form the working directory
+    /// had.
+    fn record_if_permissions(&self, resolved: &Path, text: &str) {
+        let Some(permissions) = &self.permissions else {
+            return;
+        };
+        if permissions.canonicalize().ok() == resolved.canonicalize().ok() {
+            self.lock().reviewed = Some(text.to_string());
+        }
     }
 
-    /// Forgets what approves wrote, once a reload has applied the settings
-    /// (ADR 0017 §3).
-    pub fn forget_approved(&self) {
-        self.lock().written.clear();
+    /// `permissions.yaml` as the last approve wrote it, unless a reload has
+    /// applied the settings since.
+    pub(crate) fn reviewed_permissions(&self) -> Option<String> {
+        self.lock().reviewed.clone()
+    }
+
+    /// Forgets the reviewed `permissions.yaml`, once a reload has applied
+    /// the settings (ADR 0017 §3).
+    pub fn forget_reviewed(&self) {
+        self.lock().reviewed = None;
     }
 
     /// Drops everything staged. Returns the paths that were.
@@ -230,13 +249,14 @@ pub struct Written {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[tokio::test]
     async fn an_edit_is_staged_not_written_and_read_sees_it() {
         let dir = tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("f.rs");
-        std::fs::write(&path, "old\n").unwrap();
+        fs::write(&path, "old\n").unwrap();
         let staging = Staging::new(Workspace::new(dir.path()));
 
         staging
@@ -247,7 +267,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            fs::read_to_string(&path).unwrap(),
             "old\n",
             "nothing on disk changes"
         );
@@ -262,7 +282,7 @@ mod tests {
     async fn a_second_edit_builds_on_the_first() {
         let dir = tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("f.rs");
-        std::fs::write(&path, "a\nb\n").unwrap();
+        fs::write(&path, "a\nb\n").unwrap();
         let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |cur| {
@@ -301,7 +321,7 @@ mod tests {
         let written = staging.write_all().await;
         assert_eq!(written.files, vec!["new/limit.rs".to_string()]);
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            fs::read_to_string(&path).unwrap(),
             "fn x() {}\n",
             "approve creates the directory and the file"
         );
@@ -312,7 +332,7 @@ mod tests {
     async fn approve_writes_and_reports_the_comments_it_closed() {
         let dir = tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("f.rs");
-        std::fs::write(&path, "old\n").unwrap();
+        fs::write(&path, "old\n").unwrap();
         let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
@@ -324,38 +344,71 @@ mod tests {
         assert_eq!(written.files, vec!["f.rs".to_string()]);
         assert_eq!(written.comments_resolved, 2);
         assert!(written.skipped.is_empty());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
-        assert_eq!(staging.approved(&path).as_deref(), Some("new\n"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+    }
+
+    #[tokio::test]
+    async fn only_an_approved_write_of_the_permissions_file_is_recorded() {
+        let dir = tempdir().unwrap();
+        let aldwin = dir.path().canonicalize().unwrap().join(".aldwin");
+        let path = aldwin.join("permissions.yaml");
+        fs::create_dir(&aldwin).unwrap();
+        fs::write(&path, "version: 2\n").unwrap();
+        let staging = Staging::new(Workspace::new(dir.path())).with_permissions(path.clone());
+        let rel = ".aldwin/permissions.yaml";
+
+        staging
+            .edit(path.clone(), rel, |_| Ok("version: 2\nroots: []\n".into()))
+            .await
+            .unwrap();
+        fs::write(&path, "changed under the review\n").unwrap();
+        staging.write_all().await;
+        assert_eq!(staging.reviewed_permissions(), None, "a skipped write");
+
+        let other = aldwin.join("mcp.yaml");
+        staging
+            .edit(other, ".aldwin/mcp.yaml", |_| Ok("version: 1\n".into()))
+            .await
+            .unwrap();
+        staging.write_all().await;
+        assert_eq!(staging.reviewed_permissions(), None, "another file");
+
+        staging
+            .edit(path.clone(), rel, |_| Ok("version: 2\nroots: []\n".into()))
+            .await
+            .unwrap();
+        staging.write_all().await;
+        assert_eq!(
+            staging.reviewed_permissions().as_deref(),
+            Some("version: 2\nroots: []\n")
+        );
+        staging.forget_reviewed();
+        assert_eq!(staging.reviewed_permissions(), None);
     }
 
     #[tokio::test]
     async fn a_file_that_changed_under_the_review_is_not_overwritten() {
         let dir = tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("f.rs");
-        std::fs::write(&path, "old\n").unwrap();
+        fs::write(&path, "old\n").unwrap();
         let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
             .await
             .unwrap();
-        std::fs::write(&path, "someone else\n").unwrap();
+        fs::write(&path, "someone else\n").unwrap();
 
         let written = staging.write_all().await;
         assert!(written.files.is_empty());
         assert_eq!(written.skipped[0].0, "f.rs");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "someone else\n");
-        assert_eq!(
-            staging.approved(&path),
-            None,
-            "a skipped file was not approved"
-        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "someone else\n");
     }
 
     #[tokio::test]
     async fn discard_drops_everything_and_names_it() {
         let dir = tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("f.rs");
-        std::fs::write(&path, "old\n").unwrap();
+        fs::write(&path, "old\n").unwrap();
         let staging = Staging::new(Workspace::new(dir.path()));
         staging
             .edit(path.clone(), "f.rs", |_| Ok("new\n".into()))
@@ -363,7 +416,7 @@ mod tests {
             .unwrap();
         assert_eq!(staging.discard(), vec!["f.rs".to_string()]);
         assert!(staging.is_empty());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old\n");
     }
 
     /// Covers a swapped directory and a swapped file whose target has the
@@ -373,9 +426,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let outside = tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        std::fs::create_dir(root.join("src")).unwrap();
-        std::fs::write(root.join("f.rs"), "old\n").unwrap();
-        std::fs::write(outside.path().join("f.rs"), "old\n").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("f.rs"), "old\n").unwrap();
+        fs::write(outside.path().join("f.rs"), "old\n").unwrap();
         let staging = Staging::new(Workspace::new(&root));
         staging
             .edit(
@@ -390,9 +443,9 @@ mod tests {
             .await
             .unwrap();
 
-        std::fs::remove_dir(root.join("src")).unwrap();
+        fs::remove_dir(root.join("src")).unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("src")).unwrap();
-        std::fs::remove_file(root.join("f.rs")).unwrap();
+        fs::remove_file(root.join("f.rs")).unwrap();
         std::os::unix::fs::symlink(outside.path().join("f.rs"), root.join("f.rs")).unwrap();
 
         let written = staging.write_all().await;
@@ -400,7 +453,7 @@ mod tests {
         assert_eq!(written.skipped.len(), 2);
         assert!(!outside.path().join("new.rs").exists());
         assert_eq!(
-            std::fs::read_to_string(outside.path().join("f.rs")).unwrap(),
+            fs::read_to_string(outside.path().join("f.rs")).unwrap(),
             "old\n"
         );
     }

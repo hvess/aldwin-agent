@@ -32,8 +32,9 @@ impl ReloadTool {
                               a restart. `roots:` in `.aldwin/permissions.yaml` take effect at once, \
                               and the result lists the workspace roots. A root that would widen the \
                               workspace is taken in only while that file is exactly what the review \
-                              last wrote; otherwise the result names it, and it waits for the \
-                              developer's /reload. The provider and the MCP servers are set up when \
+                              last wrote and the root resolves through no symbolic link; \
+                              otherwise the result names it, and it waits for the developer's \
+                              /reload. The provider and the MCP servers are set up when \
                               Aldwin starts, so a reload does not apply a change to provider.yaml or \
                               mcp.yaml."
                     .into(),
@@ -48,19 +49,15 @@ impl ReloadTool {
         }
     }
 
-    /// The text of `permissions.yaml` when it is exactly what the last
-    /// approve wrote to it.
+    /// The reviewed `permissions.yaml`, when the file is exactly what the
+    /// last approve wrote.
     ///
     /// The file is read once and the roots come from that text: a second
     /// read would let a process started by `run` swap the file in between.
     async fn reviewed_permissions(&self, path: &Path) -> Option<String> {
-        // Canonical first: staging keys a file under the canonical project
-        // root, and `path` keeps the form the working directory had.
-        let canonical = path.canonicalize().ok()?;
-        let resolved = self.workspace.resolve(&canonical.to_string_lossy()).ok()?;
-        let approved = self.staging.approved(&resolved)?;
+        let reviewed = self.staging.reviewed_permissions()?;
         let on_disk = tokio::fs::read_to_string(path).await.ok()?;
-        (on_disk == approved).then_some(on_disk)
+        (on_disk == reviewed).then_some(on_disk)
     }
 }
 
@@ -91,14 +88,14 @@ impl Tool for ReloadTool {
                         detail: e.to_string(),
                     })?;
                 self.workspace
-                    .take_roots(&permissions.roots, Widening::Allowed)
+                    .take_roots(&permissions.roots, Widening::Unlinked)
             }
             None => self
                 .workspace
                 .take_roots(&self.config.project_permissions().roots, Widening::Withheld),
         };
         // Applied now, so a later reload never trusts this text again.
-        self.staging.forget_approved();
+        self.staging.forget_reviewed();
 
         // Reach is said to the developer by Aldwin itself (ADR 0007 §1), in
         // the words startup and `/reload` use.
@@ -129,6 +126,7 @@ mod tests {
     use crate::test_support::dispatch_context;
     use aldwin_core::Event;
     use std::fs;
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
     use tempfile::{tempdir, TempDir};
 
@@ -148,10 +146,12 @@ mod tests {
         let (base, global, outside) = (tempdir().unwrap(), tempdir().unwrap(), tempdir().unwrap());
         let project = base.path().join("link");
         fs::create_dir(base.path().join("real")).unwrap();
-        std::os::unix::fs::symlink(base.path().join("real"), &project).unwrap();
+        symlink(base.path().join("real"), &project).unwrap();
         let config = Config::open_at(&project, global.path()).unwrap();
         let workspace = Workspace::new(&project);
-        let staging = Arc::new(Staging::new(workspace.clone()));
+        let staging = Arc::new(
+            Staging::new(workspace.clone()).with_permissions(config.project_permissions_path()),
+        );
         let tool = ReloadTool::new(config, workspace.clone(), staging.clone());
         Fixture {
             _base: base,
@@ -166,10 +166,9 @@ mod tests {
 
     impl Fixture {
         fn permissions(&self) -> String {
-            format!(
-                "version: 2\nroots:\n  - {}\n",
-                self.outside.path().display()
-            )
+            // Canonical: a reviewed root is taken in only through no link,
+            // and a macOS temp directory sits under the `/var` link.
+            format!("version: 2\nroots:\n  - {}\n", self.outside().display())
         }
 
         async fn reload(&self) -> String {
@@ -251,6 +250,51 @@ mod tests {
         f.reload().await;
 
         assert_eq!(f.workspace.roots().len(), 1);
+    }
+
+    /// The review shows a root's name, not where it points: a link swapped
+    /// after the approve must not carry the workspace somewhere else.
+    #[tokio::test]
+    async fn a_root_repointed_after_the_approve_is_withheld() {
+        let f = fixture();
+        let elsewhere = tempdir().unwrap();
+        let link = f.project.join("shared");
+        symlink(f.outside.path(), &link).unwrap();
+        let path = f.workspace.resolve(".aldwin/permissions.yaml").unwrap();
+        f.staging
+            .edit(path, ".aldwin/permissions.yaml", |_| {
+                Ok("version: 2\nroots:\n  - shared\n".into())
+            })
+            .await
+            .unwrap();
+        f.staging.write_all().await;
+        fs::remove_file(&link).unwrap();
+        symlink(elsewhere.path(), &link).unwrap();
+
+        let (_, notices) = f.reload_telling().await;
+
+        assert_eq!(f.workspace.roots().len(), 1, "nothing was taken in");
+        assert!(notices[0].contains("was not taken in"), "{notices:?}");
+    }
+
+    /// A link planted before the approve: the review showed only `shared`.
+    #[tokio::test]
+    async fn a_reviewed_root_through_a_link_waits_for_the_developer() {
+        let f = fixture();
+        symlink(f.outside.path(), f.project.join("shared")).unwrap();
+        let path = f.workspace.resolve(".aldwin/permissions.yaml").unwrap();
+        f.staging
+            .edit(path, ".aldwin/permissions.yaml", |_| {
+                Ok("version: 2\nroots:\n  - shared\n".into())
+            })
+            .await
+            .unwrap();
+        f.staging.write_all().await;
+
+        let (_, notices) = f.reload_telling().await;
+
+        assert_eq!(f.workspace.roots().len(), 1, "nothing was taken in");
+        assert!(notices[0].contains("was not taken in"), "{notices:?}");
     }
 
     /// A reviewed text restored after the developer moved on (say by `git

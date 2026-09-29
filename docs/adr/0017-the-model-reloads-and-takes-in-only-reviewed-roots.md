@@ -5,7 +5,7 @@
 stays the one way to widen the workspace; this decides who may apply it
 while Aldwin runs
 **Affects:** `aldwin-tools` (the `reload` tool, `Workspace::take_roots`,
-`Staging::approved`), `aldwin-cli` (`/reload`), `aldwin-config`
+`Staging::reviewed_permissions`), `aldwin-cli` (`/reload`), `aldwin-config`
 (`PermissionsConfig::parse`), `aldwin-core` (the system prompt,
 `DispatchContext::notice`)
 
@@ -42,7 +42,8 @@ It is a built-in, not an MCP tool, because it acts on Aldwin's own state.
 
 ### §3 A new root only from the review
 
-The review remembers what each approve last wrote (`Staging::approved`).
+The review remembers what the last approve wrote to `permissions.yaml`
+(`Staging::reviewed_permissions`).
 `reload` reads `permissions.yaml` once; when that text is exactly what the
 review last wrote, its roots are taken in, parsed from that same text so no
 second read can be swapped under it. Otherwise a root that would widen the
@@ -54,8 +55,16 @@ check and a store cannot widen it either. The developer's `/reload` and
 startup apply every root, as before (`Widening::Allowed`): they are the
 developer's act.
 
+The review shows a root's name, not where it points, and a command can
+point a link anywhere, before the approve or after it. So even from a
+reviewed text, `reload` takes in a widening root only if it resolves
+through no symbolic link (`Widening::Unlinked`); a root through a link is
+withheld like an unreviewed one, and the developer's `/reload` takes it in
+once they have looked. Staging records only `permissions.yaml`
+(`Staging::with_permissions`).
+
 A reviewed text is trusted once: every reload, the developer's or the
-model's, forgets what approves wrote (`Staging::forget_approved`), so a
+model's, forgets what approves wrote (`Staging::forget_reviewed`), so a
 text the developer has since moved on from — restored by a `git checkout`,
 say — cannot widen the workspace again.
 
@@ -71,7 +80,9 @@ applying every root (which would let a command widen the boundary).
 ## Consequences
 
 - An approved edit to `roots:` takes effect in the same turn: the model
-  edits, the developer approves, `reload` takes it in.
+  edits, the developer approves, `reload` takes it in — unless the root
+  resolves through a symbolic link (a macOS `/tmp` path, say), which waits
+  for the developer's `/reload`.
 - A root written by hand in an editor also waits for `/reload` when the
   model reloads; the result names it, and the prompt tells the model to say
   so.

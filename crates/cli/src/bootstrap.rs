@@ -241,7 +241,9 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     );
 
     // Every edit of a turn waits here for the review (ADR 0009 §4).
-    let staging = Arc::new(Staging::new(workspace.clone()));
+    let staging = Arc::new(
+        Staging::new(workspace.clone()).with_permissions(config.project_permissions_path()),
+    );
     let mut registry =
         aldwin_tools::builtin_registry(config.clone(), workspace.clone(), staging.clone());
     let mcp_bridge = Arc::new(McpBridge::new(merged_mcp_servers(&config)));
@@ -294,7 +296,7 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
             move || {
                 // The developer's reload applies the file as it is now, so
                 // an earlier reviewed text is not trusted again (ADR 0017 §3).
-                staging.forget_approved();
+                staging.forget_reviewed();
                 apply_roots(&config, &workspace)
             },
         ))

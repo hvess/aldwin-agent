@@ -55,7 +55,10 @@ impl Workspace {
         for root in declared.iter().map(|root| project.join(root)) {
             match root.canonicalize() {
                 Err(_) => taken.dropped.push(root),
-                Ok(canonical) if widening == Widening::Allowed || within(&canonical) => {
+                Ok(canonical)
+                    if within(&canonical)
+                        || widening.reaches(&canonical, &normalize_lexically(&root)) =>
+                {
                     if !roots.contains(&canonical) {
                         roots.push(canonical);
                     }
@@ -152,11 +155,29 @@ impl Workspace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Widening {
     /// Every declared root is taken in: the developer's own act (startup,
-    /// `/reload`), or a `permissions.yaml` exactly as the review wrote it.
+    /// `/reload`).
     Allowed,
+    /// The model's `reload` of a `permissions.yaml` exactly as the review
+    /// wrote it: a root outside every current root is taken in only if it
+    /// resolves through no symbolic link. The review shows a root's name,
+    /// and a command can point a link anywhere, before the approve or after
+    /// (ADR 0017 §3).
+    Unlinked,
     /// The model's `reload` of a `permissions.yaml` the review did not
     /// write: a root outside every current root is withheld (ADR 0017).
     Withheld,
+}
+
+impl Widening {
+    /// Whether a root written as `lexical` and resolving to `canonical`,
+    /// outside every current root, may be taken in.
+    fn reaches(self, canonical: &Path, lexical: &Path) -> bool {
+        match self {
+            Widening::Allowed => true,
+            Widening::Unlinked => canonical == lexical,
+            Widening::Withheld => false,
+        }
+    }
 }
 
 /// What [`Workspace::take_roots`] reached and left out, for the caller to
@@ -185,8 +206,9 @@ impl TakenRoots {
         }
         if !self.withheld.is_empty() {
             parts.push(format!(
-                "{} was not taken in: .aldwin/permissions.yaml is not what your review last \
-                 wrote, so it waits for you to check the file and type /reload.",
+                "{} was not taken in, because your review did not approve it as it stands: \
+                 check .aldwin/permissions.yaml and where its roots point, then type /reload \
+                 to take it in.",
                 list(&self.withheld)
             ));
         }

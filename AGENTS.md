@@ -242,8 +242,9 @@ a decision they cover.
   review wrote.** `/reload-config` is `/reload`, in the `/` menu. A
   `reload` tool lets the model read the settings again after an approve;
   a root that widens the workspace is taken in only while
-  `permissions.yaml` is exactly what the review wrote, and otherwise waits
-  for the developer's `/reload`.
+  `permissions.yaml` is exactly what the review wrote and the root
+  resolves through no symbolic link, and otherwise waits for the
+  developer's `/reload`.
 
 ## Key Constraints (non-negotiable)
 

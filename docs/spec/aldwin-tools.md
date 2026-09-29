@@ -9,16 +9,19 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 
 **Progress (2026-09-29, `reload`, ADR 0017):** A seventh built-in,
 `reload`, reads the settings files again and applies `roots:`, observing
-disk so staged edits are reviewed first. `Staging` keeps what each approve
-wrote (`approved`, a record of writes and not approval state an edit could
+disk so staged edits are reviewed first. `Staging` keeps what the last approve
+wrote to `permissions.yaml` (`reviewed_permissions`, a record of a write and not approval state an edit could
 reuse — the Pitfall on caching approvals does not apply); `reload` takes in
 a root that widens the workspace only when `permissions.yaml` is exactly
 that text, parsed from the one read (`PermissionsConfig::parse`), and
 otherwise names it for the developer's `/reload`. `Workspace::take_roots`
 is the one place roots are applied — `Widening::Allowed` at startup and
 `/reload`, `Widening::Withheld` for an unreviewed `reload` — and it
-resolves each root once, keeping the path it checked. Every reload forgets
-the record (`forget_approved`), so a reviewed text is trusted once. A
+resolves each root once, keeping the path it checked. Staging records only
+`permissions.yaml` (`with_permissions`), and `Widening::Unlinked` takes in
+a reviewed widening root only if it resolves through no symbolic link, so a
+link planted before the approve or swapped after it is withheld. Every reload forgets
+the record (`forget_reviewed`), so a reviewed text is trusted once. A
 change, a withheld root or a dropped one is said to the developer
 (`DispatchContext::notice`) in `TakenRoots::notice`'s words, the one
 wording startup and `/reload` use, and the model's result quotes it. `builtin_registry` takes the `Config`.
@@ -478,7 +481,7 @@ Owns every concrete tool Aldwin can dispatch — the V0 built-ins (Read, Diff, E
 - A `run` test that pins a coreutil's exit code or output shape. GNU (Linux) and BSD (macOS) differ — `ls` on a missing entry exits 2 on one and 1 on the other, which CI's macOS job found on 2026-09-27. A test wants a code or text the shell itself sets (`exit 3`, `echo … >&2`), not a program's.
 - Edit-shape marking for MCP tools drifting back into upfront config (e.g. a UI flow that asks at server registration rather than at first call) — defeats the encounter-driven design and re-creates the wizard the parent spec rejected.
 - MCP edit-shape arg mapping going stale if a server changes its tool schema between sessions — detect schema-hash mismatch on the marked tool and re-prompt, do not silently reuse the old mapping.
-- Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass. (`Staging::approved` is not one: it records what an approve wrote, for `reload`, and no edit reads it — ADR 0017.)
+- Approval state for Edit accidentally caching across calls "for ergonomics" — the gate is per-invocation by construction; any cache is a bypass. (`Staging::reviewed_permissions` is not one: it records what an approve wrote, for `reload`, and no edit reads it — ADR 0017.)
 - Concurrent tool calls in a step racing on shared resources (same file edited twice, same process group signalled twice) — dispatcher is concurrent; tools must be reentrant or self-serialise.
 - rmcp version drift silently changing the wire shape under us — pin a known-good version and surface protocol mismatches as structured tool errors, not panics.
 - A built-in growing a fifth member under the banner of "small obvious addition" — every addition is permanent surface. Channel it through MCP first.

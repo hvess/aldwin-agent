@@ -1,6 +1,7 @@
 # ADR 0006 — Thinking is carried, not dropped
 
-**Status:** accepted, 2026-09-21
+**Status:** accepted, 2026-09-21. Its Consequence "The TUI still does not draw
+thinking" is superseded by 0015; the rest stands.
 **Amends:** the archived `aldwin-llm.md`'s "thinking content is dropped at the
 parse site"; `aldwin-core`'s `ContentBlock` and `LogRecord`, which is a
 persisted format (ADR 0005)
@@ -112,7 +113,7 @@ looks like a hang.
 Reasoning is carried for the wire and the transcript; the log shows what the
 agent said, not what it thought. Drawing it needs a treatment the design
 system does not specify, and it is not invented locally; it is to be drawn
-once the design does (open-tasks 3).
+once the design does (open-tasks 3, closed by ADR 0015).
 
 **Transcripts get larger**, by roughly the thinking budget per step. They are
 already `0600` under `~/.aldwin/history/` and already carry tool output; this

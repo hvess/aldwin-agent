@@ -398,8 +398,8 @@ impl Footer {
 /// Escape as every frame names it: the word, not `⎋`.
 const ESC: &str = "esc";
 
-/// The footer for `app`'s state. Space toggles the turn's work on an empty
-/// field but is deliberately unnamed (frames B, C, J): the disclosure's
+/// The footer for `app`'s state. Space toggles the turn's disclosures on an
+/// empty field but is deliberately unnamed (frames B, C, J): the disclosure's
 /// `›`/`⌄` says it opens.
 fn footer_state(app: &App) -> Footer {
     if app.is_working() {

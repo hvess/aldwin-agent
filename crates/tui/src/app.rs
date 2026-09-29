@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use crate::activity::Activity;
 use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
-use crate::log::{plural, LogEntry, WorkItem};
+use crate::log::{plural, LogEntry, Took, WorkItem};
 use crate::motion::{ticks, Motion};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
@@ -241,8 +241,8 @@ pub struct App {
     /// The agent's question the next submission answers in words ("Chat
     /// about this"); kept whole so `esc` can return to its options.
     pub(crate) answering: Option<Asking>,
-    /// Whether the current turn's work disclosures are open; Space toggles
-    /// it (frames B, C and J).
+    /// Whether the current turn's disclosures (work, thoughts, failure
+    /// details) are open; Space toggles it (frames B, C and J).
     pub(crate) details_open: bool,
     /// The first line of the last message the developer typed, not a
     /// command, without a trailing `.` or `!`: a review's title. Never an
@@ -509,6 +509,17 @@ impl App {
         self.transcript = transcript;
     }
 
+    /// The streaming thinking block's text and time: the last entry, while
+    /// it runs.
+    fn running_thought(&mut self) -> Option<(&mut String, &mut Took)> {
+        match self.log.last_mut() {
+            Some(LogEntry::Thinking { text, took, .. }) if *took == Took::Running => {
+                Some((text, took))
+            }
+            _ => None,
+        }
+    }
+
     /// The current step's `Work` items: the last entry, if it is `Work`.
     fn open_work(&mut self) -> Option<&mut Vec<WorkItem>> {
         match self.log.last_mut() {
@@ -593,7 +604,13 @@ impl App {
                 self.finish_call(&result.call_id, &result.content, result.is_error)
             }
             LogRecord::TurnEnded { reason, .. } => self.push_turn_end(reason),
-            LogRecord::Thinking { .. } | LogRecord::RedactedThinking { .. } => {}
+            LogRecord::Thinking { text, seconds, .. } => self.log.push(LogEntry::Thinking {
+                text,
+                took: seconds.into(),
+                open: false,
+            }),
+            // Encrypted: nothing to show.
+            LogRecord::RedactedThinking { .. } => {}
             LogRecord::TurnStarted { .. } => self.mark_turn_started(),
             LogRecord::StepBoundary { .. } => {}
         }
@@ -601,12 +618,16 @@ impl App {
 
     fn push_turn_end(&mut self, reason: TurnEndReason) {
         // Amber means running only: an ended turn's running step goes back
-        // to pending.
+        // to pending, and a thought it cut off no longer says "Thinking".
         for entry in self.this_turn_mut() {
-            if let LogEntry::Plan { steps } = entry {
-                for step in steps.iter_mut().filter(|s| s.state == StepState::Running) {
-                    step.state = StepState::Pending;
+            match entry {
+                LogEntry::Plan { steps } => {
+                    for step in steps.iter_mut().filter(|s| s.state == StepState::Running) {
+                        step.state = StepState::Pending;
+                    }
                 }
+                LogEntry::Thinking { took, .. } if *took == Took::Running => *took = Took::Unknown,
+                _ => {}
             }
         }
         match reason {
@@ -664,10 +685,26 @@ impl App {
                     self.push(LogEntry::AssistantText { text });
                 }
             }
-            Event::ThinkingStart { .. } | Event::ThinkingDelta { .. } => {
+            Event::ThinkingStart { .. } => {
                 self.activity.thinking(self.tick);
+                let open = self.details_open;
+                self.push(LogEntry::Thinking {
+                    text: String::new(),
+                    took: Took::Running,
+                    open,
+                });
             }
-            Event::ThinkingEnd { .. } => {}
+            Event::ThinkingDelta { text, .. } => {
+                self.activity.thinking(self.tick);
+                if let Some((buf, _)) = self.running_thought() {
+                    buf.push_str(&text);
+                }
+            }
+            Event::ThinkingEnd { seconds, .. } => {
+                if let Some((_, took)) = self.running_thought() {
+                    *took = seconds.into();
+                }
+            }
             Event::ToolUseRequested { call, .. } => {
                 self.pending_calls.insert(call.id, (call.name, call.input));
             }
@@ -920,7 +957,7 @@ impl App {
         let open = self.details_open;
         for entry in self.this_turn_mut() {
             match entry {
-                LogEntry::Work { open: o, .. } => *o = open,
+                LogEntry::Work { open: o, .. } | LogEntry::Thinking { open: o, .. } => *o = open,
                 LogEntry::Failure {
                     open: o,
                     detail: Some(_),
@@ -2138,6 +2175,120 @@ pub(crate) mod tests {
             },
         });
         assert!(matches!(a.mode, Mode::Conversation));
+    }
+
+    fn think(a: &mut App, fragments: &[&str]) {
+        let (turn_id, step_id) = (TurnId(1), StepId(1));
+        a.apply_event(Event::ThinkingStart { turn_id, step_id });
+        for text in fragments {
+            a.apply_event(Event::ThinkingDelta {
+                turn_id,
+                step_id,
+                text: (*text).into(),
+            });
+        }
+    }
+
+    /// ADR 0015: a thinking block is one entry where it happened, filled as
+    /// it streams and timed once it ends; Space opens it with the work.
+    #[test]
+    fn a_thought_streams_into_one_entry_and_says_how_long_it_took() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        think(&mut a, &["Weighing ", "it up."]);
+        assert_eq!(
+            a.log.last(),
+            Some(&LogEntry::Thinking {
+                text: "Weighing it up.".into(),
+                took: Took::Running,
+                open: false,
+            })
+        );
+        a.apply_event(Event::ThinkingEnd {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            seconds: Some(12),
+        });
+        a.apply_event(Event::TextDelta {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            text: "Adding it.".into(),
+        });
+        assert!(matches!(
+            &a.log[a.log.len() - 2..],
+            [
+                LogEntry::Thinking {
+                    took: Took::Seconds(12),
+                    ..
+                },
+                LogEntry::AssistantText { .. }
+            ]
+        ));
+        a.handle_key(press(KeyCode::Char(' ')));
+        assert!(
+            matches!(
+                &a.log[a.log.len() - 2],
+                LogEntry::Thinking { open: true, .. }
+            ),
+            "Space opens it"
+        );
+    }
+
+    #[test]
+    fn a_thought_the_turn_cut_off_no_longer_says_thinking() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        think(&mut a, &["Weighing"]);
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Cancelled,
+        });
+        assert!(a.log.iter().any(|e| matches!(
+            e,
+            LogEntry::Thinking {
+                took: Took::Unknown,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn a_resumed_thought_is_drawn_as_it_was_and_a_redacted_one_is_not() {
+        let mut a = app();
+        let thought = |seconds| LogRecord::Thinking {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            text: "hm".into(),
+            signature: String::new(),
+            seconds,
+        };
+        a.apply_event(Event::HistoryLoaded {
+            records: vec![
+                LogRecord::TurnStarted { turn_id: TurnId(1) },
+                LogRecord::UserMessage {
+                    turn_id: TurnId(1),
+                    text: "go".into(),
+                },
+                thought(Some(7)),
+                thought(None),
+                LogRecord::RedactedThinking {
+                    turn_id: TurnId(1),
+                    step_id: StepId(1),
+                    data: "opaque".into(),
+                },
+            ],
+        });
+        let took: Vec<Took> = a
+            .log
+            .iter()
+            .filter_map(|e| match e {
+                LogEntry::Thinking { took, .. } => Some(*took),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(took, vec![Took::Seconds(7), Took::Unknown]);
     }
 
     /// A waiting review inside its follow-up turn, and the agent asking.

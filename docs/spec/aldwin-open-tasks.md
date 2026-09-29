@@ -22,21 +22,6 @@ An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
 contradicts) and the entry says so before it goes.
 
-## TUI
-
-3. **The model's thinking is not drawn.** Thinking streams to the TUI
-   (`Event::ThinkingDelta`) and is carried and saved (ADR 0006), but
-   `App::apply_event` reads it only to say `Thinking` on the working line
-   (`crates/tui/src/app.rs`), so a turn that thinks for a long time shows
-   none of what it thinks until its reply starts. ADR 0006
-   left it undrawn because the design system has no treatment for it, and
-   one is not invented locally. The developer's call, 2026-09-27: draw it
-   once the design specifies how — a disclosure, say, as `Read 1 file  ›`
-   is. The developer's call, 2026-09-29: the design's `Disclosure` is that
-   treatment. Each thinking block is a collapsed line where it happened,
-   `Thought for 12s  ›` in the work line's tone, that Space opens to the
-   reasoning unabridged; before entry 4.
-
 ## Review
 
 4. **Two author's-pass checks are still judgement.** The review skill's
@@ -47,8 +32,7 @@ contradicts) and the entry says so before it goes.
    finding a judge produces twice belongs in a deterministic stage (review
    skill, "When a judge is wrong"). Closing it means two stage-2 checks in
    `crates/review/src/stages.rs` over the staged diff. The developer's
-   call, 2026-09-27: its own change, after Decision 18; 2026-09-29: after
-   entry 3.
+   call, 2026-09-27: its own change, after Decision 18.
 
 6. **Frame capture runs only on Linux.** Capture drives foot under sway,
    neither of which runs on macOS, so `Pty::open` refuses there

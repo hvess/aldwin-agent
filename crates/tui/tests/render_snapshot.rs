@@ -35,7 +35,7 @@ const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 /// states the design leaves to the product) beside frame I so the review
 /// scenes stay together, then the other states the design leaves to the
 /// product.
-const SCENES: [&str; 21] = [
+const SCENES: [&str; 22] = [
     "launch",              // A
     "working",             // B
     "details",             // C
@@ -57,6 +57,7 @@ const SCENES: [&str; 21] = [
     "launch_unconfigured", // nothing configured: the card reads `Model  not set`
     "plan",                // a finished turn: its plan, its work folded, its prose
     "resume",              // bare `/resume` over two past sessions
+    "thinking",            // a finished turn's thought, opened by Space — ADR 0015
 ];
 
 /// Full-window review scenes; their tree runs from the frame's edge.
@@ -712,6 +713,33 @@ fn scene(name: &str, app: &mut App) {
                 turn_id: TurnId(1),
                 reason: TurnEndReason::EndTurn,
             });
+        }
+        "thinking" => {
+            // Capture's fake answers at once: the block takes its 1s floor.
+            echo(app);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            let (turn_id, step_id) = (TurnId(1), StepId(1));
+            app.apply_event(Event::ThinkingStart { turn_id, step_id });
+            app.apply_event(Event::ThinkingDelta {
+                turn_id,
+                step_id,
+                text: "The request is a limit per API key. The router adds auth and then tracing, and the key is only known after auth, so the limit goes right after it. The quota should come from config rather than a literal.".into(),
+            });
+            app.apply_event(Event::ThinkingEnd {
+                turn_id,
+                step_id,
+                seconds: Some(1),
+            });
+            app.apply_event(Event::TextDelta {
+                turn_id,
+                step_id,
+                text: "A limit fits beside the auth layer, where the key is already known.".into(),
+            });
+            app.apply_event(Event::TurnEnded {
+                turn_id,
+                reason: TurnEndReason::EndTurn,
+            });
+            press(app, KeyCode::Char(' '), KeyModifiers::NONE);
         }
         "resume" => {
             // Bare `/resume`, chosen from the menu: the session question.

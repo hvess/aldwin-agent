@@ -17,12 +17,31 @@ pub use aldwin_llm::test_server::{spawn, Canned, FakeServer};
 ///
 /// Only if `serde_json` fails to encode a `String`, which it cannot.
 pub fn text(reply: &str) -> Canned {
-    let mut body = deltas(reply);
-    body.push_str(
-        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-    );
-    body.push_str("data: [DONE]\n\n");
-    Canned::Sse(body)
+    Canned::Sse(deltas(reply) + STOP)
+}
+
+/// The end of a reply that called no tool.
+const STOP: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+/// Reasoning, then a reply, as a provider that thinks streams them: the
+/// wire's `reasoning` deltas open a thinking block the first text closes
+/// (ADR 0006, 0015).
+///
+/// # Panics
+///
+/// Only if `serde_json` fails to encode a `String`, which it cannot.
+///
+/// # Examples
+///
+/// ```
+/// use aldwin_review::fake::{self, Canned};
+/// let Canned::Sse(body) = fake::thought_then_text("Weighing it up.", "Done.") else {
+///     unreachable!()
+/// };
+/// assert!(body.find("reasoning").unwrap() < body.find("Done.").unwrap());
+/// ```
+pub fn thought_then_text(reasoning: &str, reply: &str) -> Canned {
+    Canned::Sse(field_deltas("reasoning", reasoning) + &deltas(reply) + STOP)
 }
 
 /// Streams `reply`, then keeps the stream open and silent, so the app is
@@ -40,16 +59,21 @@ pub fn held(reply: &str) -> Canned {
 }
 
 /// `reply` as SSE text-delta events, with nothing that ends the step.
+fn deltas(reply: &str) -> String {
+    field_deltas("content", reply)
+}
+
+/// `text` as SSE deltas of the delta object's `field`.
 ///
 /// # Panics
 ///
 /// Only if `serde_json` fails to encode a `String`, which it cannot.
-fn deltas(reply: &str) -> String {
-    split_into_deltas(reply)
+fn field_deltas(field: &str, text: &str) -> String {
+    split_into_deltas(text)
         .into_iter()
         .map(|chunk| {
             let escaped = serde_json::to_string(&chunk).expect("a string is always serialisable");
-            format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{escaped}}},\"finish_reason\":null}}]}}\n\n")
+            format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"{field}\":{escaped}}},\"finish_reason\":null}}]}}\n\n")
         })
         .collect()
 }

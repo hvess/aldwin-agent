@@ -459,6 +459,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_thinking_block_loads_back_with_its_seconds() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000003-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        let thought = LogRecord::Thinking {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            text: "weighing it up".into(),
+            signature: "sig".into(),
+            seconds: Some(12),
+        };
+        let mut records = turn(1, "hello");
+        records.insert(2, thought);
+        for record in &records {
+            store.append(record).unwrap();
+        }
+        assert_eq!(load(dir.path(), &id).unwrap(), records);
+    }
+
+    /// Transcripts from before ADR 0015 hold no seconds.
+    #[test]
+    fn a_thinking_block_from_an_older_build_loads_with_no_seconds() {
+        let line = r#"{"type":"thinking","turn_id":1,"step_id":1,"text":"hm","signature":"sig"}"#;
+        let record: LogRecord = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            record,
+            LogRecord::Thinking {
+                turn_id: TurnId(1),
+                step_id: StepId(1),
+                text: "hm".into(),
+                signature: "sig".into(),
+                seconds: None,
+            }
+        );
+    }
+
     /// Counts the `write` calls it is given, the way `O_APPEND` sees them.
     #[derive(Default)]
     struct Writes(Vec<Vec<u8>>);

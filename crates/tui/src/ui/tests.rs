@@ -17,7 +17,7 @@ use super::grid::{Ctx, BODY_X, COMMAND_COL, GUTTER_LN, MARGIN_X, MARK_COL, NUMBE
 use super::markdown::render_prose;
 use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
-use crate::log::LogEntry;
+use crate::log::{LogEntry, Took};
 use crate::motion::Motion;
 use crate::palette::Theme;
 use crate::tokens::{GAUGE_CELL, GROUP_GAP, MARK_COLS, MARK_ROWS};
@@ -265,6 +265,37 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     let y = find_row(&buf, "Read 1 file").unwrap();
     let glyph = col_of(&buf, y, "›").unwrap() as u16;
     assert_eq!(buf[(glyph, y)].fg, pal.label2);
+}
+
+/// ADR 0015: a thought is a `Disclosure` on the prose column, its reasoning
+/// under it in `label2` once open, wrapped, not shortened.
+#[test]
+fn a_thought_is_a_disclosure_of_its_reasoning() {
+    let mut a = app();
+    let reasoning = "The limit belongs beside auth, where the key is already known. ".repeat(3);
+    a.log.push(LogEntry::UserMessage { text: "go".into() });
+    a.log.push(LogEntry::Thinking {
+        text: format!("{reasoning}\nThen a test."),
+        took: Took::Seconds(12),
+        open: false,
+    });
+    let buf = render(&mut a, 100, 36);
+    let pal = Theme::Dark.palette();
+    let y = find_row(&buf, "Thought for 12s  ›").expect("the summary");
+    assert_eq!(col_of(&buf, y, "Thought"), Some(BODY_X));
+    assert_eq!(buf[(BODY_X as u16, y)].fg, pal.label2);
+    assert!(find_row(&buf, "Then a test.").is_none(), "closed");
+
+    if let Some(LogEntry::Thinking { open, .. }) = a.log.last_mut() {
+        *open = true;
+    }
+    let buf = render(&mut a, 100, 36);
+    assert!(find_row(&buf, "Thought for 12s  ⌄").is_some());
+    let first = find_row(&buf, "The limit belongs").unwrap();
+    assert_eq!(col_of(&buf, first, "The limit"), Some(BODY_X));
+    assert_eq!(buf[(BODY_X as u16, first)].fg, pal.label2);
+    let last = find_row(&buf, "Then a test.").expect("every line, unabridged");
+    assert!(last > first + 1, "the long line wraps");
 }
 
 /// Frame J: `Send  ↩` right-flush, one cell in, `label3` until there is a

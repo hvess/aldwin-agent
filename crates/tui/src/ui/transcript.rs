@@ -175,15 +175,25 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
             lines
         }
         LogEntry::AssistantText { text } => at_body(render_assistant_text(text, ctx.body())),
+        // A `Disclosure` whose detail is the reasoning, unabridged (ADR 0015).
+        LogEntry::Thinking { text, took, open } => {
+            let mut lines = vec![Line::from(vec![
+                Span::styled(took.summary(), Style::default().fg(pal.label2)),
+                disclosure_glyph(*open, ctx),
+            ])];
+            if *open {
+                lines.extend(disclosed(text.lines(), ctx.body().width as usize, ctx));
+            }
+            at_body(lines)
+        }
         // `Disclosure` and its `DetailRow`s, on the prose column so a fact
         // ends where prose does.
         LogEntry::Work { items, open } => {
             let width = ctx.body().width as usize;
             let summary = summarise_work(items);
-            let glyph = if *open { "⌄" } else { "›" };
             let head = vec![
                 Span::styled(summary, Style::default().fg(pal.label2)),
-                Span::styled(format!("  {glyph}"), Style::default().fg(pal.label2)),
+                disclosure_glyph(*open, ctx),
             ];
             let mut lines = vec![Line::from(head)];
             if *open {
@@ -300,23 +310,11 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
                 width,
             );
             if let Some(detail) = detail {
-                let glyph = if *open { "⌄" } else { "›" };
                 if let Some(first) = lines.first_mut() {
-                    first.spans.push(Span::styled(
-                        format!("  {glyph}"),
-                        Style::default().fg(pal.label2),
-                    ));
+                    first.spans.push(disclosure_glyph(*open, ctx));
                 }
                 if *open {
-                    for l in detail.lines().take(40) {
-                        lines.extend(wrap_line(
-                            Line::from(Span::styled(
-                                l.to_string(),
-                                Style::default().fg(pal.label2),
-                            )),
-                            width,
-                        ));
-                    }
+                    lines.extend(disclosed(detail.lines().take(40), width, ctx));
                 }
             }
             at_body(lines)
@@ -324,6 +322,32 @@ fn render_entry(entry: &LogEntry, ctx: Ctx) -> Vec<Line<'static>> {
         // A second blank row: `block_rows` already adds one before it.
         LogEntry::TurnBreak => vec![Line::default()],
     }
+}
+
+/// The glyph after a disclosure's summary, in its `label2`: `›` closed, `⌄`
+/// open.
+fn disclosure_glyph(open: bool, ctx: Ctx) -> Span<'static> {
+    let glyph = if open { "⌄" } else { "›" };
+    Span::styled(format!("  {glyph}"), Style::default().fg(ctx.pal.label2))
+}
+
+/// A disclosure's text in `label2`, each line wrapped to `width`.
+fn disclosed<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    width: usize,
+    ctx: Ctx,
+) -> Vec<Line<'static>> {
+    lines
+        .flat_map(|l| {
+            wrap_line(
+                Line::from(Span::styled(
+                    l.to_string(),
+                    Style::default().fg(ctx.pal.label2),
+                )),
+                width,
+            )
+        })
+        .collect()
 }
 
 /// The agent's markdown prose, at the body column's width.

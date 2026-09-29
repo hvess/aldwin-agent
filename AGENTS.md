@@ -161,7 +161,8 @@ a decision they cover.
   0011 widened it. Kept for why argv and the lock were tried.
 - **0005 — A session outlives its process.** Unchanged: a conversation is
   written to disk as it happens and `/resume` picks one back up.
-- **0006 — Thinking is carried, not dropped.** Unchanged.
+- **0006 — Thinking is carried, not dropped.** Unchanged, except that
+  0015 draws it.
 - **0007 — Reach is a workspace, and every tool honours it.** In force, and
   since 0011 the whole rule; only its containment of `run`'s arguments is
   superseded. `roots:` in `permissions.yaml` is the one way to widen the
@@ -208,6 +209,11 @@ a decision they cover.
   §4's one exception wherever the sandbox confines; where nothing can be
   confined 0011 §3 holds, and a workspace under an incidental path stays
   writable.
+- **0015 — Thinking is drawn as a disclosure.** Each thinking block is a
+  `Disclosure` where it happened — `Thought for 12s  ›` — that Space opens
+  to the reasoning, unabridged. Core times the block and saves its seconds
+  in the transcript record, an optional field; an older transcript's
+  thoughts read `Thought`.
 
 ## Key Constraints (non-negotiable)
 

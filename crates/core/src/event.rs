@@ -172,7 +172,7 @@ pub enum Event {
         /// The step within that turn.
         step_id: StepId,
     },
-    /// Thinking text as it streams. Nothing draws it yet (open-tasks 3).
+    /// Thinking text as it streams.
     ThinkingDelta {
         /// The turn this belongs to.
         turn_id: TurnId,
@@ -187,6 +187,8 @@ pub enum Event {
         turn_id: TurnId,
         /// The step within that turn.
         step_id: StepId,
+        /// How long it took, as `LogRecord::Thinking` saves it.
+        seconds: Option<u64>,
     },
 
     /// The model asked for a tool call.
@@ -417,6 +419,11 @@ pub enum LogRecord {
         text: String,
         /// The provider's signature over it, sent back verbatim.
         signature: String,
+        /// Whole seconds from the block's start to its end, rounded up (ADR
+        /// 0015); `None` in a transcript written before it, or for a block
+        /// the provider closed without opening.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<u64>,
     },
     /// The encrypted counterpart, kept for the same reason.
     RedactedThinking {

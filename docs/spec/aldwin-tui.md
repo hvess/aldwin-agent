@@ -12,6 +12,19 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-29
 
+**Progress (2026-09-29, thinking is drawn — ADR 0015):** Each thinking
+block is a `LogEntry::Thinking` where it happened: `ThinkingStart` opens it,
+deltas fill it, `ThinkingEnd` sets its `Took`. Its summary is `Thinking`,
+then `Thought for 12s` (`Took::summary`), with the work summary's `›`/`⌄`
+in `label2`; Space opens it with the turn's other disclosures, to the
+reasoning wrapped on the prose column in `label2`. A turn that ends
+mid-thought leaves `Thought`, as a running plan step goes back to pending.
+`/resume` draws the same entry from `LogRecord::Thinking`, whose `seconds`
+core now saves; redacted thinking is not drawn. The disclosure's glyph and
+disclosed lines are one helper each (`disclosure_glyph`, `disclosed`) for
+work, thoughts and failure details. Snapshot and capture scene
+`thinking`; ledger entry 3 is closed.
+
 **Progress (2026-09-29, the agent's question over a waiting review):**
 An `ask` in the follow-up turn replaced the waiting review, so the
 answer landed in the conversation and the next changeset opened fresh with
@@ -166,7 +179,7 @@ was unchanged; `Aldwin Agent TUI.dc.html` moved, and the app followed it.
   names `⎋`; the frame outranks it.
 - **Space is not named.** Frame C's footer is `esc  Stop` alone (the
   working line since 2026-09-29, naming no key). Space
-  still opens and closes the turn's work on an empty field (the
+  still opens and closes the turn's disclosures on an empty field (the
   developer's call), but no footer names it.
 - **The commands are a panel (frame F).** On `--panel`, directly on the
   field, a blank row inside above and below, rows inset a cell like frame

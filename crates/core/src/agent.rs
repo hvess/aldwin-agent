@@ -2,6 +2,7 @@ use futures::{future, StreamExt};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -353,6 +354,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
         let tools = self.dispatcher.definitions();
 
         let mut text_buf = String::new();
+        let mut thinking_since: Option<Instant> = None;
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         // In arrival order: the provider wants interleaved thinking and text
         // back as emitted, so never sort thinking to the front.
@@ -392,6 +394,7 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                         }).await;
                                     }
                                     LlmEvent::ThinkingStart => {
+                                        thinking_since = Some(Instant::now());
                                         let _ = events.send(Event::ThinkingStart { turn_id, step_id }).await;
                                     }
                                     LlmEvent::ThinkingDelta { text } => {
@@ -404,10 +407,11 @@ impl<C: LlmClient, D: ToolDispatcher> Agent<C, D> {
                                         content.push(ContentBlock::Thinking {
                                             text: text.clone(), signature: signature.clone(),
                                         });
+                                        let seconds = thinking_since.take().map(|since| whole_seconds(since.elapsed()));
                                         self.log.append(LogRecord::Thinking {
-                                            turn_id, step_id, text, signature,
+                                            turn_id, step_id, text, signature, seconds,
                                         });
-                                        let _ = events.send(Event::ThinkingEnd { turn_id, step_id }).await;
+                                        let _ = events.send(Event::ThinkingEnd { turn_id, step_id, seconds }).await;
                                     }
                                     LlmEvent::RedactedThinking { data } => {
                                         self.flush_text(turn_id, step_id, &mut text_buf, &mut content);
@@ -736,6 +740,12 @@ fn push_assistant_block(messages: &mut Vec<Message>, block: ContentBlock) {
     }
 }
 
+/// `elapsed` in whole seconds, rounded up and never 0, so no block reads as
+/// having taken no time.
+fn whole_seconds(elapsed: Duration) -> u64 {
+    (elapsed.as_secs() + u64::from(elapsed.subsec_nanos() > 0)).max(1)
+}
+
 enum StepTerminal {
     Ok(StepOutcome),
     Cancelled,
@@ -1016,6 +1026,15 @@ mod tests {
         assert!(matches!(snap[4], LogRecord::TurnEnded { .. }));
     }
 
+    #[test]
+    fn a_blocks_seconds_round_up_and_are_never_zero() {
+        assert_eq!(whole_seconds(Duration::ZERO), 1);
+        assert_eq!(whole_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(whole_seconds(Duration::from_secs(1)), 1);
+        assert_eq!(whole_seconds(Duration::from_millis(1001)), 2);
+        assert_eq!(whole_seconds(Duration::from_secs(12)), 12);
+    }
+
     /// ADR 0006. Regression: a thinking-only step committed nothing and
     /// rendered blank.
     #[tokio::test]
@@ -1047,22 +1066,27 @@ mod tests {
             .unwrap();
 
         let mut noticed = false;
+        let mut ended = None;
         loop {
             match ev_rx.recv().await.expect("agent dropped the event channel") {
                 Event::Notice { .. } => noticed = true,
+                Event::ThinkingEnd { seconds, .. } => ended = Some(seconds),
                 Event::TurnEnded { .. } => break,
                 _ => {}
             }
         }
 
-        // The thinking survived into the transcript...
+        // The thinking survived into the transcript, with how long it took
+        // (ADR 0015), the same seconds the TUI was told...
         let snap = log.snapshot();
         assert!(
-            snap.iter()
-                .any(|r| matches!(r, LogRecord::Thinking { text, signature, .. }
-                                          if text == "weighing it up" && signature == "sig-1")),
-            "thinking must be persisted: {snap:?}"
+            snap.iter().any(
+                |r| matches!(r, LogRecord::Thinking { text, signature, seconds: Some(1), .. }
+                                          if text == "weighing it up" && signature == "sig-1")
+            ),
+            "thinking must be persisted with its seconds: {snap:?}"
         );
+        assert_eq!(ended, Some(Some(1)));
         // ...and the developer was told there was no reply.
         assert!(noticed, "a turn with no visible output must say so");
     }

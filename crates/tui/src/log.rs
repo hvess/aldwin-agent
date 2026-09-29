@@ -1,7 +1,8 @@
 //! The conversation log's entries, one per row group the design draws.
 //!
-//! Append-only (aldwin-tui.md) except three updated in place: `Work` gains
-//! items, `Plan` is replaced, `Question` gains its answer.
+//! Append-only (aldwin-tui.md) except four updated in place: `Work` gains
+//! items, `Thinking` its text and time, `Plan` is replaced, `Question` gains
+//! its answer.
 
 use aldwin_core::{Failure, FailureKind, PlanStep, RetryInfo, ReviewOutcome};
 
@@ -12,6 +13,16 @@ pub enum LogEntry {
     UserMessage {
         /// The message as it was sent.
         text: String,
+    },
+    /// One thinking block, a summary (`Thought for 12s`) that Space opens
+    /// to the reasoning (ADR 0015). Updated in place while it streams.
+    Thinking {
+        /// The reasoning so far.
+        text: String,
+        /// How long it took, once it has ended.
+        took: Took,
+        /// Whether the disclosure is open.
+        open: bool,
     },
     /// The agent's prose, as markdown.
     AssistantText {
@@ -78,6 +89,7 @@ impl LogEntry {
         matches!(
             self,
             LogEntry::Work { .. }
+                | LogEntry::Thinking { .. }
                 | LogEntry::Failure {
                     detail: Some(_),
                     ..
@@ -139,6 +151,37 @@ impl LogEntry {
             detail: Some(failure.message),
             open: false,
         }
+    }
+}
+
+/// How long a thinking block took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Took {
+    /// Still streaming.
+    Running,
+    /// Ended, in whole seconds.
+    Seconds(u64),
+    /// Ended with no time: a transcript from before ADR 0015, a block the
+    /// provider closed without opening, or a thought the turn cut off.
+    Unknown,
+}
+
+impl Took {
+    /// The disclosure's summary: `Thinking`, `Thought for 12s`,
+    /// `Thought for 2m 05s`, or `Thought`.
+    pub(crate) fn summary(self) -> String {
+        match self {
+            Took::Running => "Thinking".into(),
+            Took::Seconds(s) if s < 60 => format!("Thought for {s}s"),
+            Took::Seconds(s) => format!("Thought for {}m {:02}s", s / 60, s % 60),
+            Took::Unknown => "Thought".into(),
+        }
+    }
+}
+
+impl From<Option<u64>> for Took {
+    fn from(seconds: Option<u64>) -> Self {
+        seconds.map_or(Took::Unknown, Took::Seconds)
     }
 }
 
@@ -327,6 +370,23 @@ pub fn first_line(content: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use aldwin_core::LlmError;
+
+    #[test]
+    fn a_thought_says_how_long_it_took_in_seconds_then_minutes() {
+        let cases = [
+            (Took::Running, "Thinking"),
+            (Took::Seconds(1), "Thought for 1s"),
+            (Took::Seconds(59), "Thought for 59s"),
+            (Took::Seconds(60), "Thought for 1m 00s"),
+            (Took::Seconds(125), "Thought for 2m 05s"),
+            (Took::Unknown, "Thought"),
+        ];
+        for (took, summary) in cases {
+            assert_eq!(took.summary(), summary, "{took:?}");
+        }
+        assert_eq!(Took::from(Some(12)), Took::Seconds(12));
+        assert_eq!(Took::from(None), Took::Unknown);
+    }
 
     fn provider(status: u16, message: &str) -> LlmError {
         LlmError::Provider {

@@ -2,8 +2,10 @@ use futures::{future, StreamExt};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use std::time::Duration;
+// tokio's clock, not std's: a paused test sets how long a thought took
+// (`a_thought_is_timed_from_its_start_to_its_end`).
+use tokio::{sync::mpsc, time::Instant};
 
 use crate::{
     client::{LlmClient, LlmRequest},
@@ -783,10 +785,11 @@ mod tests {
     use super::*;
     use crate::client::LlmError;
     use async_trait::async_trait;
-    use futures::stream;
+    use futures::{stream, Stream};
     use std::collections::VecDeque;
     use std::pin::Pin;
     use std::sync::Mutex;
+    use tokio::time::sleep;
 
     /// Replays one script per `stream()` call and records each request's
     /// `messages`.
@@ -813,7 +816,7 @@ mod tests {
         fn stream<'a>(
             &'a self,
             request: LlmRequest<'a>,
-        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
             self.seen_messages
                 .lock()
                 .unwrap()
@@ -828,6 +831,32 @@ mod tests {
         }
     }
 
+    /// Thinks for its duration on tokio's clock, then ends the step.
+    struct ThinkingFor(Duration);
+
+    impl LlmClient for ThinkingFor {
+        fn stream<'a>(
+            &'a self,
+            _request: LlmRequest<'a>,
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+            let pause = self.0;
+            let thought = stream::once(async move {
+                sleep(pause).await;
+                Ok(LlmEvent::ThinkingEnd {
+                    text: "weighing it up".into(),
+                    signature: String::new(),
+                })
+            });
+            Box::pin(
+                stream::iter([Ok(LlmEvent::ThinkingStart)])
+                    .chain(thought)
+                    .chain(stream::iter([Ok(LlmEvent::StepEnded {
+                        outcome: outcome(StopReason::EndTurn),
+                    })])),
+            )
+        }
+    }
+
     /// Yields one delta then never terminates.
     struct StallingClient;
 
@@ -835,7 +864,7 @@ mod tests {
         fn stream<'a>(
             &'a self,
             _request: LlmRequest<'a>,
-        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
             let first = stream::iter(vec![Ok(LlmEvent::TextDelta {
                 text: "partial".into(),
             })]);
@@ -850,7 +879,7 @@ mod tests {
         fn stream<'a>(
             &'a self,
             _request: LlmRequest<'a>,
-        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
             let call = ToolCall {
                 id: "t1".into(),
                 name: "read".into(),
@@ -1033,6 +1062,37 @@ mod tests {
         assert_eq!(whole_seconds(Duration::from_secs(1)), 1);
         assert_eq!(whole_seconds(Duration::from_millis(1001)), 2);
         assert_eq!(whole_seconds(Duration::from_secs(12)), 12);
+    }
+
+    /// ADR 0015: the seconds saved and sent are the time the block took.
+    #[tokio::test(start_paused = true)]
+    async fn a_thought_is_timed_from_its_start_to_its_end() {
+        let agent = Agent::new(ThinkingFor(Duration::from_secs(12)), EchoDispatcher, None);
+        let log = agent.log().clone();
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::channel(32);
+        tokio::spawn(agent.run(cmd_rx, ev_tx));
+        cmd_tx
+            .send(Command::Submit { text: "go".into() })
+            .await
+            .unwrap();
+
+        let mut ended = None;
+        loop {
+            match ev_rx.recv().await.expect("agent dropped the event channel") {
+                Event::ThinkingEnd { seconds, .. } => ended = Some(seconds),
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(ended, Some(Some(12)));
+        assert!(log.snapshot().iter().any(|r| matches!(
+            r,
+            LogRecord::Thinking {
+                seconds: Some(12),
+                ..
+            }
+        )));
     }
 
     /// ADR 0006. Regression: a thinking-only step committed nothing and
@@ -2221,7 +2281,7 @@ mod tests {
         fn stream<'a>(
             &'a self,
             _request: LlmRequest<'a>,
-        ) -> Pin<Box<dyn futures::Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Stream<Item = Result<LlmEvent, LlmError>> + Send + 'a>> {
             match self.0.lock().unwrap().pop_front() {
                 Some(events) => Box::pin(stream::iter(events.into_iter().map(Ok))),
                 None => Box::pin(stream::pending()),

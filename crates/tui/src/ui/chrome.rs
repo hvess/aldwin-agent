@@ -415,6 +415,15 @@ fn footer_state(app: &App) -> Footer {
                 KeyHint::new(ESC, "Close"),
             ],
         ),
+        // The comments are with the agent: the conversation's own working
+        // footer, so the review reads as the turn it is inside.
+        Mode::Review(r) if r.waiting() && (app.turn_active || app.awaiting_turn) => {
+            Footer::new(Status::Working, vec![KeyHint::new(ESC, "Stop")])
+        }
+        // Nothing running: `esc` leaves the review (`App::handle_review_key`).
+        Mode::Review(r) if r.waiting() => {
+            Footer::new(Status::None, vec![KeyHint::new(ESC, "Close")])
+        }
         Mode::Review(r) if r.confirm.is_some() => Footer::new(Status::None, dismissible()),
         // Shift, Tab and Space are words: the closed glyph table has no
         // mark for them. The mouse is named because it is the main way to

@@ -7,8 +7,9 @@
 //! dropped with a note here, never pointed at a different state under the
 //! same name.
 //!
-//! A running turn (`working`, `running`) is held open by `fake::held`. A
-//! review selection (`selecting`, `commented`) uses `Shift ↓` (ADR 0010).
+//! A running turn (`working`, `running`, `sent`) is held open by
+//! `fake::held`. A review selection (`selecting`, `commented`, `sent`) uses
+//! `Shift ↓` (ADR 0010).
 
 use std::path::{Path, PathBuf};
 
@@ -62,6 +63,7 @@ pub const CATALOGUE: &[&str] = &[
     "running",
     "selecting",
     "commented",
+    "sent",
     "wrapped",
     "stopping",
     "answering",
@@ -227,6 +229,16 @@ pub fn script(name: &str) -> Result<Script> {
             history: &[],
             files:   vec![(ROUTER, ROUTER_RS)],
             keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\",Enter",
+            provider: true,
+        },
+
+        // The comment sent with `⌃↩`: the review stays open and waits inside
+        // the follow-up turn, which the model never finishes.
+        "sent" => Script {
+            replies: review().into_iter().chain([fake::held("")]).collect(),
+            history: &[],
+            files:   vec![(ROUTER, ROUTER_RS)],
+            keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,Tab,ShiftDown,Down,Down,ShiftDown,\"Read the limit from config, not 100.\",Enter,{CTRL_ENTER}",
             provider: true,
         },
 

@@ -229,7 +229,13 @@ pub async fn run(git_shim: Option<&ShimError>) -> Result<(), StartupError> {
     // root plus the project-scope `.aldwin/permissions.yaml` roots.
     let workspace = Workspace::new(cwd.clone());
     let reach_notice = apply_roots(&config, &cwd, &workspace);
-    let additional_context = context::build(&cwd, &workspace.roots(), &context_files(&cwd));
+    let roots = workspace.roots();
+    let additional_context = context::build(
+        &cwd,
+        &roots,
+        &context_files(&cwd),
+        &context::skills(&cwd, &roots),
+    );
 
     // Every edit of a turn waits here for the review (ADR 0009 §4).
     let staging = Arc::new(Staging::new(workspace.clone()));

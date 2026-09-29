@@ -35,6 +35,19 @@ pub(crate) struct Pane {
     pub last_top: usize,
 }
 
+/// Where the tree's rows were drawn last frame; a click on a file row shows
+/// that file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tree {
+    /// Screen cell of the tree's top-left corner; with `y` and `width`.
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    /// The file each screen row from `y` shows; `None` for a blank, the
+    /// dots or a folder.
+    pub files: Vec<Option<usize>>,
+}
+
 /// Unchanged lines kept on each side of a change; the rest fold. One, as
 /// the frame draws it.
 const CONTEXT: usize = 1;
@@ -187,6 +200,18 @@ impl Selection {
     }
 }
 
+/// A review's place in a comment round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Round {
+    /// Nothing sent: the developer reads, comments and decides.
+    Open,
+    /// Comments sent and no follow-up turn started: before a `run` they
+    /// are answered within the same turn, at its end by the follow-up.
+    Sent,
+    /// The follow-up turn is addressing them.
+    Addressing,
+}
+
 /// What one key did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
@@ -217,6 +242,13 @@ pub struct Review {
     /// Where the last frame drew the diff's rows; clicks are measured
     /// against it.
     pub(crate) pane: Option<Pane>,
+    /// Where the last frame drew the tree; the same.
+    pub(crate) tree: Option<Tree>,
+    /// Where the review is in a comment round. While not `Open` no line can
+    /// be selected and no decision made, until the agent's next changeset
+    /// replaces this review (`carry_from`) or a turn end closes it
+    /// (`closes_at_turn_end`).
+    round: Round,
     /// The comment field's text; `esc` closes the field but keeps it.
     pub(crate) comment: Draft,
     /// The discard question's list, while open (`esc` with nothing
@@ -224,6 +256,10 @@ pub struct Review {
     pub(crate) confirm: Option<List>,
     /// `?` toggles the key list in the footer.
     pub keys_shown: bool,
+    /// The header's title: the request the round began with, `Changes`
+    /// until `App` sets it when the review opens; `carry_from` keeps it,
+    /// so the echoed comments of a later round never replace it.
+    pub(crate) title: String,
 }
 
 impl Review {
@@ -263,10 +299,72 @@ impl Review {
             dragging: false,
             scroll: 0,
             pane: None,
+            tree: None,
+            round: Round::Open,
             comment: Draft::default(),
             confirm: None,
             keys_shown: false,
+            title: "Changes".into(),
         })
+    }
+
+    /// Whether the comments are with the agent and the next changeset is
+    /// awaited.
+    pub(crate) fn waiting(&self) -> bool {
+        self.round != Round::Open
+    }
+
+    /// Enters the waiting state once the comments are sent: the selection
+    /// and the discard question go, the comments stay drawn.
+    pub(crate) fn await_agent(&mut self) {
+        self.round = Round::Sent;
+        self.selected = None;
+        self.dragging = false;
+        self.confirm = None;
+    }
+
+    /// The follow-up turn carrying the comments has started (ADR 0009 §4).
+    pub(crate) fn follow_up_started(&mut self) {
+        if self.round == Round::Sent {
+            self.round = Round::Addressing;
+        }
+    }
+
+    /// Whether a turn ending (`finished`: with `EndTurn`) closes this
+    /// review. Comments sent before a `run` come back within the turn, and
+    /// the turn-end review of what is still staged replaces this one before
+    /// the turn ends. A finished turn whose end review took comments starts
+    /// the follow-up, so the review waits on; a stopped or failed one starts
+    /// none, and the follow-up's own end means no changeset came, so the
+    /// agent's reply must not stay hidden behind the review.
+    pub(crate) fn closes_at_turn_end(&self, finished: bool) -> bool {
+        match self.round {
+            Round::Open => false,
+            Round::Sent => !finished,
+            Round::Addressing => true,
+        }
+    }
+
+    /// Takes over from the review this one replaces (the agent's next round
+    /// after comments): the title, a file whose diff did not change stays
+    /// read, the file on screen stays on screen, and the key list stays as
+    /// it was.
+    pub(crate) fn carry_from(&mut self, previous: &Review) {
+        self.title = previous.title.clone();
+        for file in &mut self.files {
+            file.read = previous
+                .files
+                .iter()
+                .any(|p| p.read && p.path == file.path && p.unfolded == file.unfolded);
+        }
+        let shown = &previous.file().path;
+        if let Some(i) = self.files.iter().position(|f| &f.path == shown) {
+            self.current = i;
+            if self.files[i].unfolded == previous.file().unfolded {
+                self.scroll = previous.scroll;
+            }
+        }
+        self.keys_shown = previous.keys_shown;
     }
 
     /// Every file in the review, in the changeset's order; never empty.
@@ -377,9 +475,11 @@ impl Review {
         self.pane = None;
     }
 
-    /// One mouse event (ADR 0010). A press selects a line or opens a fold,
-    /// a drag extends, the wheel scrolls anywhere; ignored while the discard
-    /// question is open. An open comment field keeps its text on a click.
+    /// One mouse event (ADR 0010). A press on the tree shows that file; on
+    /// the diff it selects a line or opens a fold, and a drag extends. The
+    /// wheel scrolls anywhere. Ignored while the discard question is open;
+    /// while waiting, nothing is selected. An open comment field keeps its
+    /// text on a click.
     pub fn handle_mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
         if self.confirm.is_some() {
             return;
@@ -388,6 +488,12 @@ impl Review {
             MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_ROWS as isize)),
             MouseEventKind::ScrollDown => self.scroll_by(WHEEL_ROWS as isize),
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(i) = self.file_at(column, row) {
+                    if i != self.current {
+                        self.go_to_file(i);
+                    }
+                    return;
+                }
                 let Some(at) = self.row_at(column, row, false) else {
                     return;
                 };
@@ -395,6 +501,9 @@ impl Review {
                     let first = *first;
                     self.file_mut().expand(first);
                     self.rows_changed();
+                    return;
+                }
+                if self.waiting() {
                     return;
                 }
                 self.select(at, at);
@@ -412,6 +521,19 @@ impl Review {
             MouseEventKind::Up(MouseButton::Left) => self.dragging = false,
             _ => {}
         }
+    }
+
+    /// The file whose tree row is under a screen cell, or `None` off a file
+    /// row.
+    fn file_at(&self, column: u16, row: u16) -> Option<usize> {
+        let tree = self.tree.as_ref()?;
+        if !(tree.x..tree.x + tree.width).contains(&column) {
+            return None;
+        }
+        tree.files
+            .get(row.checked_sub(tree.y)? as usize)
+            .copied()
+            .flatten()
     }
 
     /// The drawn row under a screen cell, or `None` off the diff. With
@@ -516,7 +638,9 @@ impl Review {
     }
 
     /// One key. `general` is the "Ask for a change" field's text, which the
-    /// caller edits; the keys that send read it.
+    /// caller edits; the keys that send read it. While waiting, the keys
+    /// that select or decide do nothing, and `esc` is the caller's to stop
+    /// the turn with.
     pub fn handle_key(
         &mut self,
         code: KeyCode,
@@ -535,6 +659,8 @@ impl Review {
         }
         let shift = modifiers.contains(KeyModifiers::SHIFT);
         match code {
+            KeyCode::Enter | KeyCode::Esc if self.waiting() => {}
+            KeyCode::Up | KeyCode::Down if shift && self.waiting() => {}
             // Shift+arrow selects (HIG, "Keyboards"; ADR 0010). Plain arrows
             // scroll until a line is selected, then move it.
             KeyCode::Up | KeyCode::Down if shift || self.commenting() => {
@@ -1359,6 +1485,148 @@ mod tests {
             r.handle_key(KeyCode::Enter, KeyModifiers::CONTROL, "rename it"),
             ReviewOutcome::Decide(ReviewDecision::Comment { .. })
         ));
+    }
+
+    /// Three files at `a.rs`, `src/b.rs`, `src/c.rs`.
+    fn three_files() -> Review {
+        Review::open(
+            "r".into(),
+            Changeset {
+                files: ["a.rs", "src/b.rs", "src/c.rs"]
+                    .into_iter()
+                    .map(|p| ChangedFile {
+                        path: p.into(),
+                        before: None,
+                        after: "x\n".into(),
+                    })
+                    .collect(),
+            },
+        )
+        .expect("a changeset with files")
+    }
+
+    /// The tree as `ui::review::draw_tree` lays it out at screen (0, 4):
+    /// blank, dots, blank, `a.rs`, `src`, `b.rs`, `c.rs`.
+    fn tree_at(r: &mut Review) {
+        r.tree = Some(Tree {
+            x: 0,
+            y: 4,
+            width: 28,
+            files: vec![None, None, None, Some(0), None, Some(1), Some(2)],
+        });
+    }
+
+    /// Regression: the tree's rows did not answer a click.
+    #[test]
+    fn a_click_on_a_tree_row_shows_that_file() {
+        let mut r = three_files();
+        tree_at(&mut r);
+        r.scroll = 3;
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 10, 10);
+        assert_eq!((r.current, r.scroll), (2, 0), "c.rs, from its top");
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 10, 9);
+        assert_eq!(r.current, 1, "b.rs");
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 10, 5);
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 10, 8);
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 10, 20);
+        assert_eq!(
+            r.current, 1,
+            "the dots, a folder and below the tree are not files"
+        );
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 7);
+        assert_eq!(r.current, 1, "past the tree's width is the diff");
+    }
+
+    #[test]
+    fn sent_comments_leave_the_review_open_with_nothing_to_decide() {
+        let mut r = review_of(None, &numbered(40));
+        pane_at(&mut r, 0);
+        r.select(2, 2);
+        for c in "why".chars() {
+            r.handle_key(KeyCode::Char(c), KeyModifiers::NONE, "");
+        }
+        r.handle_key(KeyCode::Enter, KeyModifiers::NONE, "");
+        r.select(5, 5);
+        r.await_agent();
+        assert!(r.waiting());
+        assert_eq!(r.selection(), None, "the selection goes");
+        assert_eq!(r.comment_count(), 1, "the sent comment stays drawn");
+        r.mark_read();
+        for (code, modifiers) in [
+            (KeyCode::Enter, KeyModifiers::CONTROL),
+            (KeyCode::Enter, KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Down, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(r.handle_key(code, modifiers, "more"), ReviewOutcome::Stay);
+        }
+        assert!(r.confirm.is_none(), "esc asks no discard question");
+        assert_eq!(r.selection(), None, "Shift ↓ selects nothing");
+        r.handle_mouse(MouseEventKind::Down(MouseButton::Left), 40, 12);
+        assert_eq!(r.selection(), None, "a click selects nothing");
+        r.handle_mouse(MouseEventKind::ScrollDown, 40, 12);
+        r.handle_key(KeyCode::Down, KeyModifiers::NONE, "");
+        assert_eq!(
+            r.scroll,
+            WHEEL_ROWS + 1,
+            "the wheel and the arrows still scroll"
+        );
+    }
+
+    #[test]
+    fn the_next_changeset_replaces_a_waiting_review_and_keeps_what_was_read() {
+        let mut previous = three_files();
+        previous.mark_read();
+        previous.go_to_file(2);
+        previous.mark_read();
+        previous.scroll = 3;
+        previous.keys_shown = true;
+        previous.title = "Add a limit".into();
+        previous.await_agent();
+
+        let mut next = Review::open(
+            "r2".into(),
+            Changeset {
+                files: vec![
+                    ChangedFile {
+                        path: "a.rs".into(),
+                        before: None,
+                        after: "x\n".into(),
+                    },
+                    ChangedFile {
+                        path: "src/b.rs".into(),
+                        before: None,
+                        after: "x\n".into(),
+                    },
+                    ChangedFile {
+                        path: "src/c.rs".into(),
+                        before: None,
+                        after: "y\n".into(),
+                    },
+                ],
+            },
+        )
+        .expect("a changeset with files");
+        next.carry_from(&previous);
+        assert!(!next.waiting());
+        let read: Vec<bool> = next.files().iter().map(|f| f.read).collect();
+        assert_eq!(
+            read,
+            vec![true, false, false],
+            "a.rs is unchanged and was read; b.rs was never read; c.rs changed"
+        );
+        assert_eq!(
+            (next.current, next.scroll),
+            (2, 0),
+            "c.rs stays on screen, its diff new"
+        );
+        assert!(next.keys_shown);
+        assert_eq!(next.title, "Add a limit");
+        assert_eq!(
+            next.comment_count(),
+            0,
+            "the sent comments are the agent's now"
+        );
     }
 
     #[test]

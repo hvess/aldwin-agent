@@ -219,6 +219,11 @@ pub struct App {
     /// Whether the current turn's work disclosures are open; Space toggles
     /// it (frames B, C and J).
     pub(crate) details_open: bool,
+    /// The first line of the last message the developer typed, not a
+    /// command, without a trailing `.` or `!`: a review's title. Never an
+    /// echoed follow-up; `None` after `/clear` or `/resume` until one is
+    /// typed.
+    request: Option<String>,
     /// Index in `log` of the message that opened the current (or last)
     /// turn. Not the last `UserMessage`: a "Chat about this" answer is one
     /// too, mid-turn.
@@ -265,6 +270,7 @@ impl App {
             stopping: false,
             answering: None,
             details_open: false,
+            request: None,
             turn_start: 0,
             last_ctrl_c: None,
             tick: 0,
@@ -393,6 +399,7 @@ impl App {
     }
 
     fn reset_conversation(&mut self) {
+        self.request = None;
         self.turn_start = 0;
         self.log.clear();
         self.scroll = ScrollState::default();
@@ -603,11 +610,20 @@ impl App {
                 {
                     self.mode = Mode::Conversation;
                 }
+                if self
+                    .review()
+                    .is_some_and(|r| r.closes_at_turn_end(matches!(reason, TurnEndReason::EndTurn)))
+                {
+                    self.mode = Mode::Conversation;
+                }
                 self.push_turn_end(reason);
             }
             // Review comments, echoed like a typed message; the only
             // message the TUI did not send.
             Event::FollowUp { text, .. } => {
+                if let Some(review) = self.review_mut() {
+                    review.follow_up_started();
+                }
                 self.awaiting_turn = true;
                 self.open_turn(text);
             }
@@ -631,22 +647,38 @@ impl App {
                 // An empty changeset (the dispatcher never sends one) is
                 // answered with a discard rather than opened.
                 match Review::open(review_id.clone(), changeset) {
-                    Some(review) => self.mode = Mode::Review(review),
+                    Some(mut review) => {
+                        // The agent's next round after comments replaces
+                        // the waiting review in place.
+                        match (self.review(), &self.request) {
+                            (Some(previous), _) => review.carry_from(previous),
+                            (None, Some(request)) => review.title = request.clone(),
+                            (None, None) => {}
+                        }
+                        self.mode = Mode::Review(review);
+                    }
                     None => self.outbox.push(Command::ReviewDecision {
                         review_id,
                         decision: ReviewDecision::Discard,
                     }),
                 }
             }
+            // Comments keep the review open until the agent's next changeset
+            // replaces it, and get no row: at the turn's end they return as
+            // a `FollowUp`, before a `run` as that step's result (ADR 0009
+            // §4). Saved or discarded closes it with a row.
+            Event::ReviewClosed {
+                outcome: ReviewOutcome::Commented { .. },
+            } => {
+                if let Some(review) = self.review_mut() {
+                    review.await_agent();
+                }
+            }
             Event::ReviewClosed { outcome } => {
                 if matches!(self.mode, Mode::Review(_)) {
                     self.mode = Mode::Conversation;
                 }
-                // A comment returns as a `FollowUp`; only saved or discarded
-                // get a row.
-                if !matches!(outcome, ReviewOutcome::Commented { .. }) {
-                    self.push(LogEntry::Review { outcome });
-                }
+                self.push(LogEntry::Review { outcome });
             }
             Event::Notice { message } => {
                 self.awaiting_turn = false;
@@ -1017,6 +1049,18 @@ impl App {
             self.interrupt();
             return;
         }
+        // While the comments are with the agent, `esc` stops the turn, as
+        // the footer says. With no turn running there is nothing to stop,
+        // and `esc` leaves the review, so it always has a way out; a
+        // changeset that comes later opens a review of its own.
+        if key.code == KeyCode::Esc && self.review().is_some_and(Review::waiting) {
+            if self.busy() {
+                self.stop("Stopping.");
+            } else {
+                self.mode = Mode::Conversation;
+            }
+            return;
+        }
         let general = self.draft.text().to_string();
         let typing = self
             .review()
@@ -1157,6 +1201,10 @@ impl App {
 
     /// Logs and submits `text`; every submission ends here.
     fn submit_text(&mut self, text: String) {
+        if !text.trim_start().starts_with('/') {
+            let first = text.lines().next().unwrap_or("").trim();
+            self.request = Some(first.trim_end_matches(['.', '!']).to_string());
+        }
         self.awaiting_turn = true;
         self.open_turn(text.clone());
         self.outbox.push(Command::Submit { text });
@@ -1840,6 +1888,210 @@ pub(crate) mod tests {
         });
         assert!(matches!(a.mode, Mode::Conversation));
         assert!(matches!(a.log.last(), Some(LogEntry::Review { .. })));
+    }
+
+    /// A review over `f.rs`, opened as the turn's end would.
+    fn open_review(a: &mut App, after: &str) {
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.apply_event(Event::ReviewRequested {
+            review_id: "review-1".into(),
+            changeset: Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: Some("x\n".into()),
+                    after: after.into(),
+                }],
+            },
+        });
+    }
+
+    /// Sends `text` as a general comment and lets core answer.
+    fn send_comment(a: &mut App, text: &str) {
+        type_str(a, text);
+        a.handle_key(press_mod(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert!(matches!(
+            a.outbox.pop(),
+            Some(Command::ReviewDecision {
+                decision: ReviewDecision::Comment { .. },
+                ..
+            })
+        ));
+        a.apply_event(Event::ReviewClosed {
+            outcome: ReviewOutcome::Commented { comments: 1 },
+        });
+    }
+
+    /// Regression: sending comments closed the review, and the next one
+    /// opened fresh.
+    #[test]
+    fn comments_keep_the_review_open_until_the_next_changeset_replaces_it() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        open_review(&mut a, "y\n");
+        assert_eq!(a.review().unwrap().title, "Add a limit");
+        a.review_mut().unwrap().mark_read();
+        send_comment(&mut a, "rename it");
+        assert!(a.review().is_some_and(Review::waiting));
+        assert!(a.wants_mouse());
+        assert!(
+            !a.log.iter().any(|e| matches!(e, LogEntry::Review { .. })),
+            "no row for the comments"
+        );
+
+        // The finished turn starts the follow-up turn (ADR 0009 §4).
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::EndTurn,
+        });
+        a.apply_event(Event::FollowUp {
+            turn_id: TurnId(2),
+            text: "On f.rs, line 1:\nrename it".into(),
+        });
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+        assert!(a.review().is_some_and(Review::waiting), "still waiting");
+
+        a.apply_event(Event::ReviewRequested {
+            review_id: "review-2".into(),
+            changeset: Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: Some("x\n".into()),
+                    after: "z\n".into(),
+                }],
+            },
+        });
+        let review = a.review().expect("the review is still on screen");
+        assert!(!review.waiting());
+        assert_eq!(review.review_id, "review-2");
+        assert_eq!(
+            review.title, "Add a limit",
+            "the echoed comments are not the title"
+        );
+        assert!(!review.all_read(), "the changed file is read again");
+        a.review_mut().unwrap().mark_read();
+        a.handle_key(press_mod(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert!(matches!(
+            a.outbox.last(),
+            Some(Command::ReviewDecision {
+                review_id,
+                decision: ReviewDecision::Approve
+            }) if review_id == "review-2"
+        ));
+        a.apply_event(Event::ReviewClosed {
+            outcome: ReviewOutcome::Saved {
+                files: vec!["f.rs".into()],
+                comments_resolved: 1,
+            },
+        });
+        assert!(matches!(a.mode, Mode::Conversation));
+    }
+
+    #[test]
+    fn esc_stops_the_turn_a_waiting_review_is_inside_and_the_stop_closes_it() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.handle_key(press(KeyCode::Esc));
+        assert_eq!(a.outbox, vec![Command::Cancel]);
+        assert!(a.review().is_some(), "open until core answers");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Cancelled,
+        });
+        assert!(matches!(a.mode, Mode::Conversation));
+        assert!(!a.wants_mouse());
+    }
+
+    /// Regression: a follow-up that staged nothing new left its reply
+    /// hidden behind the review.
+    #[test]
+    fn a_follow_up_turn_that_ends_without_a_changeset_closes_the_review() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "why this?");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::EndTurn,
+        });
+        a.apply_event(Event::FollowUp {
+            turn_id: TurnId(2),
+            text: "why this?".into(),
+        });
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+        assert!(a.review().is_some(), "waiting while the follow-up runs");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(2),
+            reason: TurnEndReason::EndTurn,
+        });
+        assert!(
+            matches!(a.mode, Mode::Conversation),
+            "the reply is on screen"
+        );
+    }
+
+    /// Regression: an echoed follow-up could stand last and title a review.
+    #[test]
+    fn a_review_is_titled_by_what_was_typed_never_by_an_echo() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        a.submit_text("/theme light".into());
+        a.apply_event(Event::FollowUp {
+            turn_id: TurnId(2),
+            text: "I discarded the staged changes; nothing was written.".into(),
+        });
+        open_review(&mut a, "y\n");
+        assert_eq!(a.review().unwrap().title, "Add a limit");
+    }
+
+    /// Before a `run`, comments come back within the turn, and the review
+    /// of what is still staged replaces the waiting one in that turn.
+    #[test]
+    fn comments_sent_before_a_run_are_answered_within_the_turn() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.apply_event(Event::ReviewRequested {
+            review_id: "review-2".into(),
+            changeset: Changeset {
+                files: vec![ChangedFile {
+                    path: "f.rs".into(),
+                    before: Some("x\n".into()),
+                    after: "z\n".into(),
+                }],
+            },
+        });
+        let review = a.review().expect("replaced in place");
+        assert!(!review.waiting());
+        assert_eq!(review.title, "Add a limit");
+    }
+
+    /// A waiting review with no turn running is never a dead end.
+    #[test]
+    fn esc_leaves_a_waiting_review_when_no_turn_is_running() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::EndTurn,
+        });
+        assert!(a.review().is_some_and(Review::waiting));
+        a.handle_key(press(KeyCode::Esc));
+        assert!(a.outbox.is_empty(), "nothing to stop");
+        assert!(matches!(a.mode, Mode::Conversation));
+    }
+
+    #[test]
+    fn a_failed_turn_closes_a_waiting_review_too() {
+        let mut a = app();
+        open_review(&mut a, "y\n");
+        send_comment(&mut a, "rename it");
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Error(Failure::other("boom")),
+        });
+        assert!(matches!(a.mode, Mode::Conversation));
     }
 
     #[test]

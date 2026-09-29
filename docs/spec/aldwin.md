@@ -5,7 +5,7 @@ A coding agent harness where the developer's understanding is the product, not t
 **Status:** active
 **Scope:** Entire project — core, TUI, LLM client, tool layer.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-09-28
 
 ## Why
 
@@ -83,7 +83,7 @@ in how it is shaped. It replaces "A tool for thought.")
 
 - **Tool sourcing — built-ins ship in the binary; MCP is the extension surface.** — Built-ins are read, edit, run, explain, plan and ask (ADR 0004 replaced `shell` with `run`; ADR 0009 added `plan` and `ask`). Additional capabilities via MCP through rmcp. An MCP tool runs like any other — nothing asks — and, because it executes in its own process over the real tree, the review opens before it exactly as before a run (ADR 0009 §4). An MCP server is given no write access to the workspace (ADR 0014, within its Limits).
 
-- **Permission model — the workspace is the only boundary.** — *Superseded by ADR 0009, then ADR 0011.* Reads and runs need no grant and never ask; every tool refuses a path outside the workspace, and every process Aldwin starts can write only inside it; where that cannot be enforced, the developer is told once. `run` takes a shell command. There is no class and no `deny:` lock. There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
+- **Permission model — the workspace is the only boundary.** — *Superseded by ADR 0009, then ADR 0011.* Reads and runs need no grant and never ask; every tool refuses a path outside the workspace, and every process Aldwin starts can write only inside it; where that cannot be enforced, the developer is told once. `run` takes a shell command. There is no class and no `deny:` lock. There is no first-run wizard: every launch opens straight to the field under the launch card, and with nothing configured the first message asks provider then model. `CLAUDE.md` and `AGENTS.md` are read into the context without asking, and since 2026-09-28 the skills under `.agents/skills/` and `.claude/skills/` are listed in it by name and description for the model to read when a task calls for one, leaving out any linked from outside every workspace root. The previous Decision — default-deny across every surface, three scopes, per-file prompts — is what ADR 0004 built and ADR 0009 replaced.
 
 - **Edit is never allowlistable.** — Amended by ADR 0008 (intent, not grammar) and ADR 0009 (the review): the agent stages edits when the developer's intent is clear, and the review is where the developer approves, comments on, or discards them. There is nothing to allowlist an edit into. Friction on Edit is structural, not a setting.
 

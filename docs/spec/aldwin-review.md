@@ -13,7 +13,7 @@ that make an agent's commit depend on it (`.githooks/`). Excludes what the
 stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27 (no agent-specific configuration in the repository)
+**Last Updated:** 2026-09-28
 
 ## Why
 
@@ -64,8 +64,8 @@ moves any scene's snapshot has frames for stage 8 to judge.
 ## Decisions
 
 1. **One screenshot baseline, not two.** `render.snap` serialises every
-   cell's symbol, foreground, background and modifiers for nineteen scenes
-   at three sizes in both themes — 114 sections — in under a second,
+   cell's symbol, foreground, background and modifiers for twenty scenes
+   at three sizes in both themes — 120 sections — in under a second,
    in-process.
    Capturing the same frames through a real terminal and diffing those too
    would be a second fixture asserting the same thing on a slower clock. The

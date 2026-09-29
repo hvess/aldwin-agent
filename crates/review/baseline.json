@@ -60,7 +60,7 @@
       "id": "long-diff-lines-wrap",
       "design_says": "README: “Comments ride at the end of their line, `◆ Use config`, like an Xcode annotation. The code is never broken up.”",
       "design_also_says": "Apple's HIG (Layout): “For example, horizontally adjacent views may need to stack vertically to provide more space for text; table rows or other containers may need to grow in height so that text isn’t cropped or doesn’t overlap other content; and table rows with a single line of text by default might need to grow vertically to accommodate multiple lines of text.”",
-      "app_follows": "The HIG (the developer's decision, 2026-09-24): a diff line longer than the pane wraps onto continuation rows with a blank gutter, rather than being cut at the pane's edge.",
+      "app_follows": "The HIG (the developer's decision, 2026-09-24): a diff line longer than the pane wraps onto continuation rows with a blank gutter, rather than being cut at the pane's edge. The same holds for a comment with no room beside its line (the developer's decision, 2026-09-29): it takes a row of its own under the line, with a blank gutter, rather than being cut to nothing.",
       "glyphs": ""
     },
     {

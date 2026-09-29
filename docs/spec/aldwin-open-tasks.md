@@ -16,7 +16,7 @@ the note that the macOS sandbox had never run on a Mac was dropped, since
 the developer runs it there. What is still true after that is entered here
 afresh.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-09-28
 
 An entry leaves this file by being done, or by being decided against — in
 which case the decision goes where it belongs (an ADR, or the spec it
@@ -32,6 +32,18 @@ contradicts) and the entry says so before it goes.
    one is not invented locally. The developer's call, 2026-09-27: draw it
    once the design specifies how — a disclosure, say, as `Read 1 file  ›`
    is.
+
+7. **A question asked mid-round closes a waiting review.** Since
+   2026-09-28 a review stays on screen while the agent addresses its
+   comments, and the next changeset replaces it in place
+   (`Review::carry_from`, aldwin-tui.md Progress 2026-09-28). But
+   `Event::QuestionAsked` sets `Mode::Question` whatever holds the screen
+   (`App::apply_event`, `crates/tui/src/app.rs`), so an `ask` in that turn
+   drops the waiting review, the answer lands in the conversation, and the
+   review that follows opens fresh with nothing carried. Closing it means
+   drawing the agent's question in the review's bottom band, where the
+   discard question already draws (`ui::review::draw`), and keeping the
+   review underneath.
 
 ## Review
 

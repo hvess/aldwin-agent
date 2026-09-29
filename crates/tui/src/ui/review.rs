@@ -33,25 +33,21 @@ use crate::app::App;
 use crate::draft::expand_tabs;
 use crate::log::{plural, LogEntry};
 use crate::palette::Palette;
-use crate::review::{DiffRow, Pane, Review};
+use crate::review::{DiffRow, Pane, Review, Tree};
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let pal = app.theme.palette();
     let Some(review) = app.review() else { return };
-    let (title, summary) = (review_title(app), review_summary(app));
+    let (title, summary) = (review.title.clone(), review_summary(app));
 
     // Bottom band height: the discard question, the comment field or the
     // field; must match the draw below.
     let typed = !app.draft.text().trim().is_empty();
+    let action_width = action_for(review, typed).map_or(0, |a| a.width());
     let field_rows: u16 = match (&review.confirm, review.commenting()) {
         (Some(list), _) => question::panel_rows(&review.discard_question(), Some(list), area.width),
         (None, true) => 2,
-        (None, false) => Composer::new(
-            app.draft.text(),
-            area.width,
-            action_for(review, typed).width(),
-        )
-        .height(),
+        (None, false) => Composer::new(app.draft.text(), area.width, action_width).height(),
     };
     let [_, title_row, summary_row, _, body, _, field_area, _, footer, _] = Layout::vertical([
         Constraint::Length(1),
@@ -103,11 +99,12 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(MARGIN_X as u16),
     ])
     .areas(body);
-    draw_tree(frame, tree, review, pal);
+    let tree = draw_tree(frame, tree, review, pal);
     let (pane, saw_bottom) = draw_diff(frame, diff, review, pal);
     if let Some(review) = app.review_mut() {
         review.scroll = pane.top;
         review.pane = Some(pane);
+        review.tree = Some(tree);
         if saw_bottom {
             review.mark_read();
         }
@@ -136,8 +133,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         }
         (None, false) => {
             let action = action_for(review, typed);
-            let composer = Composer::new(app.draft.text(), area.width, action.width());
-            chrome::draw_field(frame, field_area, app, &composer, Some(action));
+            let composer = Composer::new(app.draft.text(), area.width, action_width);
+            chrome::draw_field(frame, field_area, app, &composer, action);
         }
     }
     chrome::draw_footer(frame, footer, app);
@@ -146,8 +143,12 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
 /// The field's action, naming what `⌃↩` will do: send the comments (a typed
 /// draft counts as one), else approve once every file is read. When not
 /// ready its words say what it waits for, so colour is never the only
-/// signal (HIG, "Accessibility").
-fn action_for(review: &Review, typed: bool) -> Action {
+/// signal (HIG, "Accessibility"). None while the comments are with the
+/// agent: the footer says the turn is working.
+fn action_for(review: &Review, typed: bool) -> Option<Action> {
+    if review.waiting() {
+        return None;
+    }
     let comments = review.comment_count() + usize::from(typed);
     let (label, ready) = if comments > 0 {
         (format!("Send {}", plural(comments, "Comment")), true)
@@ -159,25 +160,11 @@ fn action_for(review: &Review, typed: bool) -> Action {
             false,
         )
     };
-    Action {
+    Some(Action {
         label,
         key: "⌃↩",
         ready,
-    }
-}
-
-/// The first line of the developer's last non-command message, without a
-/// trailing `.` or `!`; `Changes` if there is none.
-fn review_title(app: &App) -> String {
-    let text = app.log.iter().rev().find_map(|e| match e {
-        LogEntry::UserMessage { text } if !text.trim_start().starts_with('/') => {
-            Some(text.lines().next().unwrap_or("").trim().to_string())
-        }
-        _ => None,
-    });
-    text.unwrap_or_else(|| "Changes".into())
-        .trim_end_matches(['.', '!'])
-        .to_string()
+    })
 }
 
 /// The last non-blank line of the agent's last prose.
@@ -194,8 +181,9 @@ fn review_summary(app: &App) -> String {
 }
 
 /// The file tree on `--tint`: a progress dot per file, then folders and
-/// files with a read `✓` or current `›`.
-fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
+/// files with a read `✓` or current `›`. Returns the `Tree` that clicks are
+/// mapped against.
+fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) -> Tree {
     let on_tint = Style::default().bg(pal.tint);
     frame.render_widget(Block::new().style(on_tint), area);
     let width = area.width as usize;
@@ -210,6 +198,8 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
     };
 
     let mut lines: Vec<Line<'static>> = vec![fill(vec![], pal.tint)];
+    // Parallel to `lines`: the file each row shows.
+    let mut files: Vec<Option<usize>> = vec![None];
     let mut dots = vec![Span::styled(" ".repeat(MARGIN_X), on_tint)];
     for file in review.files() {
         let (glyph, fg) = if file.read {
@@ -221,6 +211,7 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
     }
     lines.push(fill(dots, pal.tint));
     lines.push(fill(vec![], pal.tint));
+    files.extend([None, None]);
 
     let mut last_dir: Option<String> = None;
     for (i, file) in review.files().iter().enumerate() {
@@ -239,8 +230,10 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
                 ],
                 pal.tint,
             ));
+            files.push(None);
             last_dir = Some(dir);
         }
+        files.push(Some(i));
         let current = i == review.current;
         let bg = if current { pal.field } else { pal.tint };
         let (glyph, glyph_fg) = if current {
@@ -275,6 +268,13 @@ fn draw_tree(frame: &mut Frame, area: Rect, review: &Review, pal: &Palette) {
         lines.push(fill(spans, bg));
     }
     frame.render_widget(Paragraph::new(Text::from(lines)).style(on_tint), area);
+    files.truncate(area.height as usize);
+    Tree {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        files,
+    }
 }
 
 /// The diff pane: a header of path and `+N −N`, then the rows. Returns the
@@ -476,10 +476,18 @@ fn diff_row(
             .map(|s| s.content.width())
             .sum();
         let free = width.saturating_sub(code_w);
+        // Frame I keeps one blank cell after a comment: the text is
+        // shortened to leave it, never the pad dropped to fit the text.
+        let tag = |room: usize| {
+            format!(
+                "{} ",
+                elide(&format!("◆ {comment}"), room.saturating_sub(1))
+            )
+        };
         // Room for `◆`, a character and the gap before it, else a new row.
         if free >= 2 + 3 {
             last.spans.pop();
-            let tag = elide(&format!("◆ {comment} "), free - 2);
+            let tag = tag(free - 2);
             last.spans.push(Span::styled(
                 " ".repeat(free - tag.width()),
                 Style::default().bg(bg),
@@ -488,7 +496,7 @@ fn diff_row(
         } else {
             let mut spans = gutter("", "");
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
-            let tag = elide(&format!("◆ {comment} "), width.saturating_sub(used));
+            let tag = tag(width.saturating_sub(used));
             spans.push(Span::styled(
                 " ".repeat(width.saturating_sub(used + tag.width())),
                 Style::default().bg(bg),

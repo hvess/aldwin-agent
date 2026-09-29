@@ -81,7 +81,9 @@ The agent has a small, fixed set of tools:
 | `ask` | asks you one question, with a short list of answers |
 
 On top of those you can add your own tools through MCP servers (stdio).
-If your project has a `CLAUDE.md` or `AGENTS.md`, the agent reads it.
+If your project has a `CLAUDE.md` or `AGENTS.md`, the agent reads it, and
+the skills under `.agents/skills/` or `.claude/skills/` are listed for it
+by name and description, to read when a task calls for one.
 
 Conversations are saved as you go, and `/resume` picks one back up where
 you left off.

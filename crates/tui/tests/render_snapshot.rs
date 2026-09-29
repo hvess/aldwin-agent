@@ -31,9 +31,10 @@ const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/ren
 /// and maximized (catches sprawl rather than clipping).
 const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
-/// Frames A–J of `Aldwin Agent TUI.dc.html`, then states the design leaves
-/// to the product.
-const SCENES: [&str; 19] = [
+/// Frames A–J of `Aldwin Agent TUI.dc.html`, with `sent` (a review state the
+/// design leaves to the product) beside frame I so the review scenes stay
+/// together, then the other states the design leaves to the product.
+const SCENES: [&str; 20] = [
     "launch",              // A
     "working",             // B
     "details",             // C
@@ -43,6 +44,7 @@ const SCENES: [&str; 19] = [
     "review",              // G
     "selecting",           // H
     "commented",           // I
+    "sent",                // the comments with the agent: the review waits, working
     "saved",               // J
     "markdown",            // a table, a fence, a list and a quote — ADR 0002
     "failure",             // ADR 0009 §5: a sentence, no red
@@ -56,7 +58,7 @@ const SCENES: [&str; 19] = [
 ];
 
 /// Full-window review scenes; their tree runs from the frame's edge.
-const REVIEW_SCENES: [&str; 4] = ["review", "selecting", "commented", "wrapped"];
+const REVIEW_SCENES: [&str; 5] = ["review", "selecting", "commented", "sent", "wrapped"];
 
 /// Pinned provider catalogue.
 fn catalogue() -> Vec<ProviderChoice> {
@@ -356,6 +358,15 @@ fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     app.handle_key(KeyEvent::new(code, modifiers));
 }
 
+/// Types the request and sends it, as the capture scenes do: a review is
+/// titled by what was typed, never by a seeded message.
+fn ask(app: &mut App) {
+    for c in "Add rate limiting to the gateway. 100 requests a minute per API key.".chars() {
+        press(app, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    press(app, KeyCode::Enter, KeyModifiers::NONE);
+}
+
 fn echo(app: &mut App) {
     app.seed(LogEntry::UserMessage {
         text: "Add rate limiting to the gateway. 100 requests a minute per API key.".into(),
@@ -429,7 +440,7 @@ fn changeset() -> Changeset {
 }
 
 fn open_review(app: &mut App) {
-    echo(app);
+    ask(app);
     app.seed(LogEntry::AssistantText {
         text: "Each key gets 100 requests a minute; the rest are turned away before auth.".into(),
     });
@@ -523,6 +534,26 @@ fn scene(name: &str, app: &mut App) {
             scene("selecting", app);
             press(app, KeyCode::Enter, KeyModifiers::NONE);
         }
+        "sent" => {
+            // `⌃↩` sends the comment; core answers and starts the
+            // follow-up turn, which the review waits inside.
+            scene("commented", app);
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+            press(app, KeyCode::Enter, KeyModifiers::CONTROL);
+            app.apply_event(Event::ReviewClosed {
+                outcome: ReviewOutcome::Commented { comments: 1 },
+            });
+            app.apply_event(Event::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::EndTurn,
+            });
+            app.apply_event(Event::FollowUp {
+                turn_id: TurnId(2),
+                text: "On src/gateway/router.rs, lines 4–5:\nRead the limit from config, not 100."
+                    .into(),
+            });
+            app.apply_event(Event::TurnStarted { turn_id: TurnId(2) });
+        }
         "saved" => {
             echo(app);
             app.apply_event(Event::ReviewClosed {
@@ -564,7 +595,7 @@ fn scene(name: &str, app: &mut App) {
             }
         }
         "wrapped" => {
-            echo(app);
+            ask(app);
             app.apply_event(Event::ReviewRequested {
                 review_id: "review-1".into(),
                 changeset: Changeset {

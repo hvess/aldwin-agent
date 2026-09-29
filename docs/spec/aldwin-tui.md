@@ -10,7 +10,49 @@ the top bar, the permission panel and first run are gone, and the entries
 that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-09-29
+
+**Progress (2026-09-28, the review stays open across comment rounds, and
+the tree takes a click):** Two things the developer saw using it, and
+one the review loop found beside them.
+
+- **Comments do not close the review.** `⌃↩` with comments sends them as
+  before — `ReviewDecision::Comment`, answered within the turn at a review
+  before a `run` and by the follow-up turn at its end; ADR 0009 §4 is
+  unchanged — but the TUI keeps the review on screen. On `ReviewClosed
+  { Commented }` the review waits (`Review::await_agent`): the selection
+  goes, the sent comments stay drawn, the field offers no action and the
+  footer is the conversation's `● Working…  esc  Stop`, so the review reads
+  as the turn it is inside; `esc` stops that turn as it says. With no turn
+  running the footer is `esc  Close` and `esc` leaves the review, so a
+  follow-up that ends without a changeset is never a dead end. The agent's
+  next changeset — a `ReviewRequested` while a review is open — replaces it
+  in place (`Review::carry_from`): a file whose diff did not change stays
+  read, the file on screen stays on screen with its scroll if unchanged,
+  and the key list stays as it was. The title is the first line of the last
+  message the developer typed that is not a command (`App::request`), never an echoed follow-up —
+  comments or a discard — and a replacing review keeps it. A turn that
+  ends stopped or failed starts no follow-up, so it closes a waiting
+  review; a finished one keeps it, its next changeset coming with the
+  follow-up turn (`Review::closes_at_turn_end`). The follow-up turn's own
+  end closes it too: a changeset would have replaced it by then, so none
+  is coming, and the agent's reply must not stay hidden behind it. Snapshot and capture scene `sent`. ADR 0010 is
+  amended in place for both this and the tree click. One edge stays as it was: a question the agent asks
+  mid-round takes the screen as everywhere, and the review after it opens
+  fresh.
+- **A click on the tree shows that file.** `draw_tree` returns a `Tree`
+  of which file each row shows, as `draw_diff` returns the `Pane`, and
+  `Review::handle_mouse` maps a press against it before the diff (HIG,
+  "Pointing devices": a click selects).
+- **A shortened comment keeps its trailing blank cell.** Frame I leaves
+  one blank cell after `◆ comment`; the text was shortened with that cell
+  counted as text, so a comment that fit was cut and a cut one ran to the
+  pane's edge. `diff_row` now shortens the text alone and adds the cell
+  after it (`a_shortened_comment_keeps_one_blank_cell_after_it`); the
+  `commented` and `sent` snapshots moved by those cells. A comment with no
+  room beside its line takes a row of its own under it, as it did: baseline
+  `long-diff-lines-wrap` now names that case (the developer's call,
+  2026-09-29).
 
 **Progress (2026-09-27, a failed turn carries its kind):** Was open-tasks 1.
 `TurnEndReason::Error` holds a `Failure` — a `FailureKind` beside the
@@ -215,7 +257,8 @@ what each thing was measured against:
   window ground above the field, its current row on `tint` rather than
   `field` (frame F: the focus stays in the field).
 - **The review** (`review.rs`, `ui::review`) is the whole window: header
-  with the last request as title and the agent's last sentence as summary;
+  with the last request as title (the last typed one since 2026-09-28: see
+  that Progress entry) and the agent's last sentence as summary;
   the tree 28 cells wide on `tint` from the frame's left edge with reading
   dots and `✓`/`›` file rows; the diff with a 5-cell gutter, a 2-cell sign
   column, `⋯  N lines` folds keeping one context line each side, `▎`

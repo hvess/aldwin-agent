@@ -224,7 +224,7 @@ once at the top of the session that commits will not name Aldwin.
   5. Create the agent loop (aldwin-core) with LlmClient, ToolDispatcher, and additional-context.
   6. Launch TUI (aldwin-tui) with the core's event receiver and command sender.
   7. Block on TUI exit; drop channels; wait for core to drain cleanly.
-- **Additional Context:** Opaque string handed to aldwin-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim.
+- **Additional Context:** Opaque string handed to aldwin-core. Contains: absolute cwd path, then the full text of each approved context file (CLAUDE.md / AGENTS.md) from the project_context_files() snapshot, in path order. Files not in the approved list are excluded regardless of existence on disk. The core composes `<base_system_prompt>\n\n<additional_context>` and sends it verbatim. *Since 2026-09-28* it ends with the workspace's skills — each `SKILL.md` under `.agents/skills/` or `.claude/skills/`, by name and description, listed for the model to read when a task calls for one (`context::skills`); one linked from outside every workspace root is left out, since `read` refuses it.
 - **Slash Commands:** Input that begins with `/` is intercepted at the CLI layer before the Submit command reaches the core. The CLI maintains a dispatch table of known slash commands. Unknown slash commands are rejected with an error message in the TUI; they do not reach the core. Known V0 commands: /reload-config.
 - **Reload Config:** `/reload-config` calls config.reload_all(). On success, re-initializes the PermissionsEngine from the new snapshot and notifies the TUI. On failure, previous snapshot is retained and the failing file path is surfaced to the TUI verbatim.
 
@@ -236,7 +236,7 @@ once at the top of the session that commits will not name Aldwin.
 
 - **Slash commands intercepted at the CLI layer, not forwarded to the core.** — The core's only input is Submit, Cancel, ApproveTool — it has no slash-command semantics. CLI owns the dispatch table so slash commands can trigger config, TUI, or process operations that the core has no visibility into.
 
-- **Additional-context string includes only approved context files.** — Reading arbitrary project files without a permission grant would silently bypass the default-deny model. The project_context_files() snapshot is the authorised list.
+- **Additional-context string includes only approved context files.** — Reading arbitrary project files without a permission grant would silently bypass the default-deny model. The project_context_files() snapshot is the authorised list. *Superseded:* ADR 0009 §6 made reading a read that needs no grant, and since 2026-09-28 the context also lists the skills found under `.agents/skills/` and `.claude/skills/` (`context::skills`).
 
 ## Steps
 
@@ -260,7 +260,7 @@ once at the top of the session that commits will not name Aldwin.
 
 ## Pitfalls
 
-- Context file read bypassing the approved list — always gate on project_context_files() snapshot, not a raw filesystem walk.
+- Context file read bypassing the approved list — always gate on project_context_files() snapshot, not a raw filesystem walk. *Superseded with the Decision "Additional-context string includes only approved context files":* `context::skills` walks the two skill directories by design (2026-09-28).
 - Slash commands reaching the core as Submit commands — interceptor must run synchronously before the channel send, not as a post-send hook.
 - Refuse-to-start error messages that paraphrase the failing field rather than quoting it — quote the exact path, env var name, or domain file verbatim.
 - Reload re-instantiating the PermissionsEngine from stale config on failure — retain previous PermissionsEngine snapshot when reload_all() returns an error.

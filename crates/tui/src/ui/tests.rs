@@ -605,9 +605,10 @@ fn the_caret_blinks_by_hiding_the_cursor() {
 #[test]
 fn the_review_lays_out_tree_and_diff_on_the_grid() {
     let mut a = app();
-    a.log.push(LogEntry::UserMessage {
-        text: "Add rate limiting to the gateway.".into(),
-    });
+    for c in "Add rate limiting to the gateway.".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     a.log.push(LogEntry::AssistantText {
         text: "Each key gets 100 requests a minute.".into(),
     });
@@ -980,6 +981,64 @@ fn the_review_action_says_what_the_key_will_do() {
         buf[(col_of(&buf, field, "Send").unwrap() as u16, field)].fg,
         Theme::Dark.palette().accent
     );
+}
+
+/// While the comments are with the agent the field offers no action and the
+/// footer is the conversation's working one (HIG "Feedback").
+#[test]
+fn a_waiting_review_shows_the_turn_working_and_offers_no_action() {
+    let mut a = app();
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    one_file_review(&mut a, "line 1\n".into());
+    for c in "rename it".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    a.apply_event(Event::ReviewClosed {
+        outcome: ReviewOutcome::Commented { comments: 1 },
+    });
+    let buf = render(&mut a, 100, 30);
+    assert!(
+        find_row(&buf, "Nothing is saved until you approve").is_some(),
+        "the review stays"
+    );
+    assert!(find_row(&buf, "⌃↩").is_none(), "no action to take");
+    let footer = row_text(&buf, find_row(&buf, "Working…").unwrap());
+    assert_eq!(
+        footer.split("Context").next().unwrap().trim(),
+        "● Working…     esc  Stop"
+    );
+    a.apply_event(Event::TurnEnded {
+        turn_id: TurnId(1),
+        reason: TurnEndReason::EndTurn,
+    });
+    let buf = render(&mut a, 100, 30);
+    let footer = row_text(&buf, find_row(&buf, "Context").unwrap());
+    assert_eq!(
+        footer.split("Context").next().unwrap().trim(),
+        "esc  Close",
+        "no turn running: the way out"
+    );
+}
+
+/// Regression: a shortened comment dropped the blank cell frame I keeps
+/// after it, its `…` landing on the pane's last cell.
+#[test]
+fn a_shortened_comment_keeps_one_blank_cell_after_it() {
+    let mut a = app();
+    one_file_review(&mut a, "let limit = 100;\n".into());
+    a.review_for_tests().unwrap().select(0, 0);
+    for c in "Read the limit from config rather than writing a number here".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let width = 80;
+    let buf = render(&mut a, width, 24);
+    let row = find_row(&buf, "◆ Read").expect("the comment is drawn");
+    // The pane ends at the 3-cell right margin.
+    let last = width - MARGIN_X as u16 - 1;
+    assert_eq!(buf[(last, row)].symbol(), " ", "the trailing blank cell");
+    assert_eq!(buf[(last - 1, row)].symbol(), "…", "shortened before it");
 }
 
 /// Baseline `long-diff-lines-wrap`: nothing is cut off, and continuation

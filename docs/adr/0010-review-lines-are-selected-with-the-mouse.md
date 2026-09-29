@@ -40,7 +40,9 @@ transcript cost more than the wheel was worth (`run.rs`, `aldwin-tui.md`).
    under the pointer**, in either direction. A drag past the pane's top or
    bottom stops at the first or last row shown, and a drag that ends on a
    fold takes every line the fold hides. A press on a fold opens it. A
-   press anywhere but a diff row does nothing.
+   press on a file row of the tree shows that file (amended 2026-09-28,
+   the developer's call: the tree answered no click). A press anywhere
+   else does nothing.
 3. **A selection is lines, not rows.** It is kept in the file's unfolded
    rows, so opening a fold — which renumbers every drawn row after it —
    leaves it on the lines it was made on.
@@ -69,7 +71,14 @@ transcript cost more than the wheel was worth (`run.rs`, `aldwin-tui.md`).
    comments. `Tab`/`→` and
    `Shift Tab`/`←` move between files. `⎋` clears the selection and then
    asks before discarding. `?` shows the keys. Shift and Tab are named in
-   words, as Space is: the glyph table has no mark for either.
+   words, as Space is: the glyph table has no mark for either. *Amended
+   2026-09-28, the developer's call:* the review stays open while the agent addresses its
+   comments, and its next changeset replaces it in place (aldwin-tui.md,
+   Progress 2026-09-28). In that waiting state nothing selects and nothing
+   decides: `⎋` stops the turn, as the footer says, or leaves the review
+   when no turn is running, and `⌃↩` does nothing; the scroll, file and
+   fold keys work as before. A follow-up turn that ends without a new
+   changeset closes the review.
 
 ## Consequences
 

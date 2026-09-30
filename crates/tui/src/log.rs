@@ -1,8 +1,7 @@
 //! The conversation log's entries, one per row group the design draws.
 //!
-//! Append-only (aldwin-tui.md) except four updated in place: `Work` gains
-//! items, `Thinking` its text and time, `Plan` is replaced, `Question` gains
-//! its answer.
+//! Append-only (aldwin-tui.md) except three updated in place: `Work` gains
+//! thoughts and calls, `Plan` is replaced, `Question` gains its answer.
 
 use std::ops::{Deref, Index, IndexMut};
 use std::slice::SliceIndex;
@@ -17,26 +16,17 @@ pub enum LogEntry {
         /// The message as it was sent.
         text: String,
     },
-    /// One thinking block, a summary (`Thought for 12s`) that Space opens
-    /// to the reasoning (ADR 0015). Updated in place while it streams.
-    Thinking {
-        /// The reasoning so far.
-        text: String,
-        /// How long it took, once it has ended.
-        took: Took,
-        /// Whether the disclosure is open.
-        open: bool,
-    },
     /// The agent's prose, as markdown.
     AssistantText {
         /// The text so far; streaming deltas append to it.
         text: String,
     },
-    /// One step's work, a summary (`Read 3 files · Ran 1 command`) that
-    /// Space opens.
+    /// A turn's thinking and calls, one summary row (`Thought for 6s ·
+    /// Read 3 files`) that Space opens (ADR 0018). One per turn, where its
+    /// first thought or call happened; updated in place.
     Work {
-        /// The step's calls, in the order asked.
-        items: Vec<WorkItem>,
+        /// The turn's thoughts and calls, in the order they happened.
+        acts: Vec<Act>,
         /// Whether the disclosure is open.
         open: bool,
     },
@@ -99,7 +89,6 @@ impl LogEntry {
         matches!(
             self,
             LogEntry::Work { .. }
-                | LogEntry::Thinking { .. }
                 | LogEntry::Failure {
                     detail: Some(_),
                     ..
@@ -259,11 +248,19 @@ impl Took {
     /// The disclosure's summary: `Thinking`, `Thought for 12s`,
     /// `Thought for 2m 05s`, or `Thought`.
     pub(crate) fn summary(self) -> String {
+        match (self, self.time()) {
+            (Took::Running, _) => "Thinking".into(),
+            (_, Some(time)) => format!("Thought for {time}"),
+            (_, None) => "Thought".into(),
+        }
+    }
+
+    /// The time alone, `12s` or `2m 05s`, once it is known.
+    pub(crate) fn time(self) -> Option<String> {
         match self {
-            Took::Running => "Thinking".into(),
-            Took::Seconds(s) if s < 60 => format!("Thought for {s}s"),
-            Took::Seconds(s) => format!("Thought for {}m {:02}s", s / 60, s % 60),
-            Took::Unknown => "Thought".into(),
+            Took::Seconds(s) if s < 60 => Some(format!("{s}s")),
+            Took::Seconds(s) => Some(format!("{}m {:02}s", s / 60, s % 60)),
+            Took::Running | Took::Unknown => None,
         }
     }
 }
@@ -345,6 +342,20 @@ impl Verb {
     }
 }
 
+/// One thing inside a `Work` disclosure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Act {
+    /// One thinking block (ADR 0015); its text grows while it streams.
+    Thought {
+        /// The reasoning so far.
+        text: String,
+        /// How long it took, once it has ended.
+        took: Took,
+    },
+    /// One tool call.
+    Call(WorkItem),
+}
+
 /// One call inside a `Work` disclosure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkItem {
@@ -393,11 +404,25 @@ impl WorkItem {
     }
 }
 
-/// A `Work` entry's summary: one counted clause per verb, in first-seen
-/// order, joined with ` · `.
-pub fn summarise_work(items: &[WorkItem]) -> String {
+/// A `Work` entry's summary: the thinking first (`Thinking` while a thought
+/// runs, else the thoughts' time added up), then one counted clause per
+/// verb in first-seen order, joined with ` · `.
+pub fn summarise_work(acts: &[Act]) -> String {
+    let mut thought: Option<Took> = None;
     let mut counts: Vec<(Verb, usize, usize)> = Vec::new();
-    for item in items {
+    for act in acts {
+        let item = match act {
+            Act::Thought { took, .. } => {
+                thought = Some(match (thought, *took) {
+                    (Some(Took::Running), _) | (_, Took::Running) => Took::Running,
+                    (Some(Took::Seconds(a)), Took::Seconds(b)) => Took::Seconds(a + b),
+                    (Some(Took::Seconds(a)), Took::Unknown) => Took::Seconds(a),
+                    (None | Some(Took::Unknown), took) => took,
+                });
+                continue;
+            }
+            Act::Call(item) => item,
+        };
         let at = match counts.iter().position(|(verb, ..)| *verb == item.verb) {
             Some(at) => at,
             None => {
@@ -408,16 +433,18 @@ pub fn summarise_work(items: &[WorkItem]) -> String {
         counts[at].1 += 1;
         counts[at].2 += usize::from(item.failed);
     }
-    counts
+    let calls = counts.into_iter().map(|(verb, n, failed)| {
+        let clause = format!("{} {}", verb.word(), plural(n, verb.noun()));
+        if failed > 0 {
+            format!("{clause}, {failed} failed")
+        } else {
+            clause
+        }
+    });
+    thought
+        .map(Took::summary)
         .into_iter()
-        .map(|(verb, n, failed)| {
-            let clause = format!("{} {}", verb.word(), plural(n, verb.noun()));
-            if failed > 0 {
-                format!("{clause}, {failed} failed")
-            } else {
-                clause
-            }
-        })
+        .chain(calls)
         .collect::<Vec<_>>()
         .join(" · ")
 }
@@ -631,12 +658,14 @@ mod tests {
 
     #[test]
     fn the_summary_counts_by_verb_in_first_seen_order() {
-        let item = |verb, failed| WorkItem {
-            call_id: "c".into(),
-            verb,
-            target: String::new(),
-            fact: None,
-            failed,
+        let item = |verb, failed| {
+            Act::Call(WorkItem {
+                call_id: "c".into(),
+                verb,
+                target: String::new(),
+                fact: None,
+                failed,
+            })
         };
         let items = vec![
             item(Verb::Read, false),
@@ -649,6 +678,31 @@ mod tests {
             "Read 3 files · Ran 1 command, 1 failed"
         );
         assert_eq!(summarise_work(&[item(Verb::Read, false)]), "Read 1 file");
+    }
+
+    #[test]
+    fn the_summary_adds_up_the_turns_thoughts_before_its_calls() {
+        let thought = |took| Act::Thought {
+            text: String::new(),
+            took,
+        };
+        let read = Act::Call(WorkItem {
+            call_id: "c".into(),
+            verb: Verb::Read,
+            target: String::new(),
+            fact: None,
+            failed: false,
+        });
+        let acts = vec![
+            read.clone(),
+            thought(Took::Seconds(4)),
+            thought(Took::Unknown),
+            thought(Took::Seconds(2)),
+        ];
+        assert_eq!(summarise_work(&acts), "Thought for 6s · Read 1 file");
+        let running = [thought(Took::Seconds(4)), thought(Took::Running), read];
+        assert_eq!(summarise_work(&running), "Thinking · Read 1 file");
+        assert_eq!(summarise_work(&[thought(Took::Unknown)]), "Thought");
     }
 
     #[test]

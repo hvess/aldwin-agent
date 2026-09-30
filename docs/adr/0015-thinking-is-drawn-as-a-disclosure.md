@@ -1,6 +1,8 @@
 # ADR 0015 — Thinking is drawn as a disclosure
 
-**Status:** accepted, 2026-09-29
+**Status:** accepted, 2026-09-29. §1's "each thinking block is a
+`Disclosure` where it happened" is superseded by 0018, which folds a turn's
+thoughts into its one work row; the rest stands.
 **Amends:** ADR 0006's Consequences, "The TUI still does not draw thinking";
 `aldwin-core`'s `LogRecord::Thinking`, a persisted format (ADR 0005), and
 `Event::ThinkingEnd`

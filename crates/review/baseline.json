@@ -74,7 +74,7 @@
       "id": "no-thinking-component-adr-0015",
       "design_says": "No frame and no component draws the model's reasoning; the working line says only `Thinking` while it runs.",
       "design_also_says": "The Content Fundamentals: \"Technical detail sits one disclosure below, exact and unabridged\", drawn as the `Disclosure` component that Space opens.",
-      "app_follows": "ADR 0015 — each thinking block is a `Disclosure` where it happened: `Thinking` while it streams, then `Thought for 12s`, in `label2` like the work summary; opened, the reasoning unabridged on the prose column in `label2`. Retired when the design system draws reasoning of its own.",
+      "app_follows": "ADR 0015 and 0018 — a turn's thoughts join its one work `Disclosure`, the summary leading with `Thinking` while one streams, then the time added up (`Thought for 6s · Read 3 files`); opened, each thought is a `DetailRow` (`Thought`, its time right-flush) with the reasoning unabridged under it on the prose column in `label2`. Retired when the design system draws reasoning of its own.",
       "glyphs": ""
     },
     {

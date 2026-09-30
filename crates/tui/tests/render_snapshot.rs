@@ -14,11 +14,12 @@
 use std::fmt::Write as _;
 
 use aldwin_core::{
-    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState,
-    TurnEndReason, TurnId,
+    ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState, ToolCall,
+    ToolResult, TurnEndReason, TurnId,
 };
 use aldwin_tui::{
-    App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, SessionChoice, Theme, Verb, WorkItem,
+    Act, App, CommandChoice, LogEntry, ModelChoice, ProviderChoice, SessionChoice, Theme, Verb,
+    WorkItem,
 };
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -58,7 +59,7 @@ const SCENES: [&str; 23] = [
     "launch_unconfigured", // nothing configured: the card reads `Model  not set`
     "plan",                // a finished turn: its plan, its work folded, its prose
     "resume",              // bare `/resume` over two past sessions
-    "thinking",            // a finished turn's thought, opened by Space — ADR 0015
+    "thinking",            // a finished turn's thoughts and read, opened by Space — ADR 0018
 ];
 
 /// Full-window review scenes; their tree runs from the frame's edge.
@@ -388,15 +389,17 @@ fn echo(app: &mut App) {
 }
 
 fn work(open: bool) -> LogEntry {
-    let item = |verb, target: &str, fact: &str| WorkItem {
-        call_id: target.into(),
-        verb,
-        target: target.into(),
-        fact: Some(fact.into()),
-        failed: false,
+    let item = |verb, target: &str, fact: &str| {
+        Act::Call(WorkItem {
+            call_id: target.into(),
+            verb,
+            target: target.into(),
+            fact: Some(fact.into()),
+            failed: false,
+        })
     };
     LogEntry::Work {
-        items: vec![
+        acts: vec![
             item(Verb::Read, "src/gateway/mod.rs", "412 lines"),
             item(Verb::Read, "src/gateway/router.rs", "188 lines"),
             item(Verb::Searched, "tower::limit", "7 matches"),
@@ -716,13 +719,13 @@ fn scene(name: &str, app: &mut App) {
             echo(app);
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
             app.seed(LogEntry::Work {
-                items: vec![WorkItem {
+                acts: vec![Act::Call(WorkItem {
                     call_id: "call-read".into(),
                     verb: Verb::Read,
                     target: "src/gateway/router.rs".into(),
                     fact: Some("6 lines".into()),
                     failed: false,
-                }],
+                })],
                 open: false,
             });
             app.seed(plan([
@@ -741,6 +744,7 @@ fn scene(name: &str, app: &mut App) {
         }
         "thinking" => {
             // Capture's fake answers at once: the block takes its 1s floor.
+            // A read then a second thought join the same row (ADR 0018).
             echo(app);
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
             let (turn_id, step_id) = (TurnId(1), StepId(1));
@@ -754,6 +758,36 @@ fn scene(name: &str, app: &mut App) {
                 turn_id,
                 step_id,
                 seconds: Some(1),
+            });
+            app.apply_event(Event::ToolUseRequested {
+                turn_id,
+                step_id,
+                call: ToolCall {
+                    id: "call-read".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({"path": "src/gateway/router.rs"}),
+                },
+            });
+            app.apply_event(Event::ToolCompleted {
+                turn_id,
+                step_id,
+                result: ToolResult {
+                    call_id: "call-read".into(),
+                    content: "a\nb\nc\n".into(),
+                    is_error: false,
+                },
+            });
+            let step_id = StepId(2);
+            app.apply_event(Event::ThinkingStart { turn_id, step_id });
+            app.apply_event(Event::ThinkingDelta {
+                turn_id,
+                step_id,
+                text: "Auth is the second layer.".into(),
+            });
+            app.apply_event(Event::ThinkingEnd {
+                turn_id,
+                step_id,
+                seconds: Some(2),
             });
             app.apply_event(Event::TextDelta {
                 turn_id,

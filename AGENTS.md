@@ -228,11 +228,10 @@ a decision they cover.
   §4's one exception wherever the sandbox confines; where nothing can be
   confined 0011 §3 holds, and a workspace under an incidental path stays
   writable.
-- **0015 — Thinking is drawn as a disclosure.** Each thinking block is a
-  `Disclosure` where it happened — `Thought for 12s  ›` — that Space opens
-  to the reasoning, unabridged. Core times the block and saves its seconds
+- **0015 — Thinking is drawn as a disclosure.** Space opens a thought to
+  its reasoning, unabridged. Core times the block and saves its seconds
   in the transcript record, an optional field; an older transcript's
-  thoughts read `Thought`.
+  thoughts read `Thought`. *Where it is drawn is superseded by 0018.*
 - **0016 — The system prompt is kept strong, and checked after every
   change.** A clause may teach, not only patch a seen failure; each rule
   carries its reason and hard judgments a worked example. Replies are
@@ -246,6 +245,10 @@ a decision they cover.
   `permissions.yaml` is exactly what the review wrote and the root
   resolves through no symbolic link, and otherwise waits for the
   developer's `/reload`.
+- **0018 — A turn's work is one row.** Every thought and call of a turn
+  is one `Disclosure` where the first happened — `Thought for 6s · Read 3
+  files  ›` — which Space opens to each in order, a thought's reasoning
+  under its row. Prose stays where it was said.
 
 ## Key Constraints (non-negotiable)
 

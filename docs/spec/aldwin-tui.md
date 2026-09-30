@@ -12,6 +12,20 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-30
 
+**Progress (2026-09-30, a turn's work is one row — ADR 0018):** A turn
+drew a row per thought and per step's calls, a blank row between each.
+`LogEntry::Thinking` is gone: a turn's thoughts and calls are `Act`s in its
+one `LogEntry::Work`, which the first act opens (`App::record`) and every
+later one joins, across prose. The summary leads with the thinking
+(`summarise_work`), and opened, a thought is a detail row with its
+reasoning under it. A new text block after an act starts its own entry
+(`prose_ended`), live and on `/resume`, which now starts a turn at its
+`UserMessage` so a turn's work never joins the one before. The transcript
+cache splices a stream's head in place, so it keeps a block's rows only
+while the head keeps its height; a second thought grows it. The 2026-09-29
+entry below is history: see ADR 0018. Snapshot scene `thinking` shows a
+thought, a read and a second thought in one row.
+
 **Progress (2026-09-29, the review's diff):** The review diffed a file with
 an LCS table, O(n · m) time and space on the UI thread, and past 2^20 cells
 gave up: two one-line edits far apart in a long file showed every line
@@ -102,7 +116,8 @@ file name in the comment field's label (`Review::selection_label` returns
 the name and the range apart). An input field is plain text: see
 Decisions.
 
-**Progress (2026-09-29, thinking is drawn — ADR 0015):** Each thinking
+**Progress (2026-09-29, thinking is drawn — ADR 0015):** *(Where a
+thought is drawn is superseded 2026-09-30 by ADR 0018: see above.)* Each thinking
 block is a `LogEntry::Thinking` where it happened: `ThinkingStart` opens it,
 deltas fill it, `ThinkingEnd` sets its `Took`. Its summary is `Thinking`,
 then `Thought for 12s` (`Took::summary`), with the work summary's `›`/`⌄`
@@ -418,9 +433,11 @@ what each thing was measured against:
   `baseline.json` records the frames that draw one).
 - **The plan** is `LogEntry::Plan`, one per turn, replaced in place:
   `✓` accent over `label2`, `●` amber over `label`, `○` `label3` over
-  `label3`. **Work** is `LogEntry::Work`, a disclosure whose summary counts
-  by verb (`Read 3 files · Ran 1 program`) and whose rows are verb /
-  target / right-flush fact; Space on an empty field opens every
+  `label3`. **Work** is `LogEntry::Work`, one per turn (ADR 0018), a
+  disclosure whose summary leads with the thinking and counts calls by
+  verb (`Thought for 6s · Read 3 files · Ran 1 program`) and whose rows
+  are verb / target / right-flush fact, a thought's reasoning under its
+  row; Space on an empty field opens every
   disclosure of the current turn.
 - **A question** (`ui::question`) is the one list control (`list.rs`) on
   the `panel` ground: question in weight 600, detail, blank, numbered

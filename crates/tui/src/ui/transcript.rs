@@ -18,7 +18,7 @@ use aldwin_core::{ReviewOutcome, StepState};
 
 use crate::app::App;
 use crate::draft::expand_tabs;
-use crate::log::{plural, summarise_work, LogEntry, Took};
+use crate::log::{plural, summarise_work, Act, LogEntry, Took, WorkItem};
 use crate::palette::Theme;
 
 /// An entry's rendered rows, each exactly one screen row (see
@@ -159,11 +159,15 @@ impl CachedBlock {
             Rendered::Stream(stream) => {
                 let kept = old.and_then(|old| {
                     let settled = old.settled?;
-                    // Settled only while streaming, so this renders nothing.
+                    // Settled only while streaming, so this renders no body: an
+                    // open `Work`'s head (its earlier acts) is all it builds.
+                    // The head is spliced in place, so it must keep its height:
+                    // a new thought in the same `Work` changes it.
                     let same_prefix = old.first == first
                         && std::mem::discriminant(&old.entry) == std::mem::discriminant(entry)
                         && matches!(render_entry(&old.entry, ctx), Rendered::Stream(was)
-                            if stream.text.as_bytes().get(..settled.bytes)
+                            if was.head.len() == stream.head.len()
+                            && stream.text.as_bytes().get(..settled.bytes)
                                 == was.text.as_bytes().get(..settled.bytes));
                     same_prefix.then(|| (std::mem::take(&mut old.rows), settled))
                 });
@@ -303,49 +307,44 @@ fn render_entry<'a>(entry: &'a LogEntry, ctx: Ctx) -> Rendered<'a> {
                 boundary: prose_boundary,
             })
         }
-        LogEntry::Thinking {
-            text,
-            took,
-            open: true,
-        } => {
-            return Rendered::Stream(Streaming {
-                text,
-                head: vec![thinking_head(*took, true, ctx)],
-                body: |text, ctx| disclosed(text.lines(), ctx.body().width as usize, ctx),
-                boundary: |text| text.rfind('\n').map_or(0, |i| i + 1),
-            })
-        }
-        // A `Disclosure` whose detail is the reasoning, unabridged (ADR 0015).
-        LogEntry::Thinking { took, open, .. } => at_body(vec![thinking_head(*took, *open, ctx)]),
         // `Disclosure` and its `DetailRow`s, on the prose column so a fact
-        // ends where prose does.
-        LogEntry::Work { items, open } => {
-            let width = ctx.body().width as usize;
-            let summary = summarise_work(items);
-            let head = vec![
-                Span::styled(summary, Style::default().fg(pal.label2)),
+        // ends where prose does; a thought's row is followed by its
+        // reasoning, unabridged (ADR 0015, ADR 0018).
+        LogEntry::Work { acts, open } => {
+            let head = Line::from(vec![
+                Span::styled(summarise_work(acts), Style::default().fg(pal.label2)),
                 disclosure_glyph(*open, ctx),
-            ];
-            let mut lines = vec![Line::from(head)];
-            if *open {
-                for item in items {
-                    let fact = item.fact.clone().unwrap_or_else(|| "…".into());
-                    let left = vec![
-                        Span::styled(
-                            column(item.verb.word(), DETAIL_COL),
-                            Style::default().fg(pal.label2),
-                        ),
-                        Span::styled(
-                            elide(
-                                &item.target,
-                                width.saturating_sub(DETAIL_COL + fact.width() + 2),
-                            ),
-                            Style::default().fg(pal.code),
-                        ),
-                    ];
-                    let right = vec![Span::styled(fact, Style::default().fg(pal.label2))];
-                    lines.push(justified(left, right, width));
+            ]);
+            if !*open {
+                return Rendered::Rows(at_body(vec![head]));
+            }
+            let width = ctx.body().width as usize;
+            let mut lines = vec![head];
+            // A thought still streaming is the last act: its reasoning is
+            // the stream, everything above it the fixed head.
+            let (done, streaming) = match acts.split_last() {
+                Some((Act::Thought { text, took }, done)) if *took == Took::Running => {
+                    (done, Some(text))
                 }
+                _ => (&acts[..], None),
+            };
+            for act in done {
+                match act {
+                    Act::Call(item) => lines.push(call_row(item, width, ctx)),
+                    Act::Thought { text, took } => {
+                        lines.push(thought_row(*took, width, ctx));
+                        lines.extend(disclosed(text.lines(), width, ctx));
+                    }
+                }
+            }
+            if let Some(text) = streaming {
+                lines.push(thought_row(Took::Running, width, ctx));
+                return Rendered::Stream(Streaming {
+                    text,
+                    head: lines,
+                    body: |text, ctx| disclosed(text.lines(), ctx.body().width as usize, ctx),
+                    boundary: |text| text.rfind('\n').map_or(0, |i| i + 1),
+                });
             }
             at_body(lines)
         }
@@ -484,12 +483,39 @@ fn disclosure_glyph(open: bool, ctx: Ctx) -> Span<'static> {
     Span::styled(format!("  {glyph}"), Style::default().fg(ctx.pal.label2))
 }
 
-/// A thinking block's summary row: `Thought for 12s  ›`.
-fn thinking_head(took: Took, open: bool, ctx: Ctx) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(took.summary(), Style::default().fg(ctx.pal.label2)),
-        disclosure_glyph(open, ctx),
-    ])
+/// A call's `DetailRow`: verb, target, and its fact right-flush.
+fn call_row(item: &WorkItem, width: usize, ctx: Ctx) -> Line<'static> {
+    let fact = item.fact.clone().unwrap_or_else(|| "…".into());
+    let left = vec![
+        Span::styled(
+            column(item.verb.word(), DETAIL_COL),
+            Style::default().fg(ctx.pal.label2),
+        ),
+        Span::styled(
+            elide(
+                &item.target,
+                width.saturating_sub(DETAIL_COL + fact.width() + 2),
+            ),
+            Style::default().fg(ctx.pal.code),
+        ),
+    ];
+    let right = vec![Span::styled(fact, Style::default().fg(ctx.pal.label2))];
+    justified(left, right, width)
+}
+
+/// A thought's `DetailRow`: `Thought` and its time right-flush (`…` while
+/// it runs), the reasoning below it.
+fn thought_row(took: Took, width: usize, ctx: Ctx) -> Line<'static> {
+    let time = match took {
+        Took::Running => "…".into(),
+        took => took.time().unwrap_or_default(),
+    };
+    let style = Style::default().fg(ctx.pal.label2);
+    justified(
+        vec![Span::styled(column("Thought", DETAIL_COL), style)],
+        vec![Span::styled(time, style)],
+        width,
+    )
 }
 
 /// A disclosure's text in `label2`, each line wrapped to `width`.

@@ -39,7 +39,7 @@ pub use version::VERSION_FULL;
 #[cfg(feature = "test-util")]
 pub use {
     app::{App, StatusInfo},
-    log::{LogEntry, Verb, WorkItem},
+    log::{Act, LogEntry, Verb, WorkItem},
     review::Review,
     ui::draw,
 };

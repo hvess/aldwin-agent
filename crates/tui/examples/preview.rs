@@ -8,7 +8,7 @@ use std::io;
 use aldwin_core::{
     ChangedFile, Changeset, Event, PlanStep, Question, ReviewOutcome, StepId, StepState, TurnId,
 };
-use aldwin_tui::{App, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem};
+use aldwin_tui::{Act, App, LogEntry, ModelChoice, ProviderChoice, Theme, Verb, WorkItem};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::crossterm::terminal::{
@@ -64,15 +64,17 @@ fn scene(name: &str, app: &mut App) {
             app.seed(LogEntry::AssistantText {
                 text: "Looking at how requests move through the gateway.".into(),
             });
-            let item = |verb, target: &str, fact: &str| WorkItem {
-                call_id: target.into(),
-                verb,
-                target: target.into(),
-                fact: Some(fact.into()),
-                failed: false,
+            let item = |verb, target: &str, fact: &str| {
+                Act::Call(WorkItem {
+                    call_id: target.into(),
+                    verb,
+                    target: target.into(),
+                    fact: Some(fact.into()),
+                    failed: false,
+                })
             };
             app.seed(LogEntry::Work {
-                items: vec![
+                acts: vec![
                     item(Verb::Read, "src/gateway/mod.rs", "412 lines"),
                     item(Verb::Searched, "tower::limit", "7 matches"),
                 ],

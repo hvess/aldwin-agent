@@ -323,8 +323,8 @@ pub fn script(name: &str) -> Result<Script> {
             provider: true,
         },
 
-        // A reply the model reasoned before, the thought opened by Space
-        // (ADR 0015). The fake answers at once: `Thought for 1s`.
+        // A reply the model reasoned before, the turn's work opened by Space
+        // (ADR 0015, ADR 0018). The fake answers at once: `Thought for 1s`.
         "thinking" => Script {
             replies: vec![fake::thought_then_text("The request is a limit per API key. The router adds auth and then tracing, and the key is only known after auth, so the limit goes right after it. The quota should come from config rather than a literal.", "A limit fits beside the auth layer, where the key is already known.")],
             history: &[],

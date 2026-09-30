@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use crate::activity::Activity;
 use crate::draft::{self, Draft};
 use crate::list::{List, ListOutcome, ListRow};
-use crate::log::{plural, Log, LogEntry, Took, WorkItem};
+use crate::log::{plural, Act, Log, LogEntry, Took, WorkItem};
 use crate::motion::{ticks, Motion};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
@@ -246,9 +246,13 @@ pub struct App {
     /// The agent's question the next submission answers in words ("Chat
     /// about this"); kept whole so `esc` can return to its options.
     pub(crate) answering: Option<Asking>,
-    /// Whether the current turn's disclosures (work, thoughts, failure
+    /// Whether the current turn's disclosures (its work and failure
     /// details) are open; Space toggles it (frames B, C and J).
     pub(crate) details_open: bool,
+    /// A thought or call came after the last prose: the next text starts
+    /// its own entry rather than running on from it, since the turn's
+    /// `Work` row sits above both (ADR 0018).
+    prose_ended: bool,
     /// The first line of the last message the developer typed, not a
     /// command, without a trailing `.` or `!`: a review's title. Never an
     /// echoed follow-up; `None` after `/clear` or `/resume` until one is
@@ -305,6 +309,7 @@ impl App {
             stopping: false,
             answering: None,
             details_open: false,
+            prose_ended: false,
             request: None,
             turn_start: 0,
             last_ctrl_c: None,
@@ -515,21 +520,41 @@ impl App {
         self.transcript = transcript;
     }
 
-    /// The streaming thinking block's text and time: the last entry, while
-    /// it runs.
-    fn running_thought(&mut self) -> Option<(&mut String, &mut Took)> {
-        match self.log.last_mut() {
-            Some(LogEntry::Thinking { text, took, .. }) if *took == Took::Running => {
-                Some((text, took))
-            }
+    /// The turn's `Work` acts; only that entry counts as changed.
+    fn turn_work(&mut self) -> Option<&mut Vec<Act>> {
+        let start = self.turn_start.min(self.log.len());
+        let at = start
+            + self
+                .log
+                .tail(start)
+                .iter()
+                .rposition(|e| matches!(e, LogEntry::Work { .. }))?;
+        match &mut self.log[at] {
+            LogEntry::Work { acts, .. } => Some(acts),
             _ => None,
         }
     }
 
-    /// The current step's `Work` items: the last entry, if it is `Work`.
-    fn open_work(&mut self) -> Option<&mut Vec<WorkItem>> {
-        match self.log.last_mut() {
-            Some(LogEntry::Work { items, .. }) => Some(items),
+    /// Adds `act` to the turn's one `Work` row, which the first act opens.
+    fn record(&mut self, act: Act) {
+        self.prose_ended = true;
+        match self.turn_work() {
+            Some(acts) => acts.push(act),
+            None => {
+                let open = self.details_open;
+                self.push(LogEntry::Work {
+                    acts: vec![act],
+                    open,
+                });
+            }
+        }
+    }
+
+    /// The streaming thought's text and time: the turn's last act, while it
+    /// runs.
+    fn running_thought(&mut self) -> Option<(&mut String, &mut Took)> {
+        match self.turn_work()?.last_mut() {
+            Some(Act::Thought { text, took }) if *took == Took::Running => Some((text, took)),
             _ => None,
         }
     }
@@ -538,21 +563,13 @@ impl App {
         let Some((verb, target)) = WorkItem::describe(name, input) else {
             return;
         };
-        let item = WorkItem {
+        self.record(Act::Call(WorkItem {
             call_id,
             verb,
             target,
             fact: None,
             failed: false,
-        };
-        let open = self.details_open;
-        match self.open_work() {
-            Some(items) => items.push(item),
-            None => self.push(LogEntry::Work {
-                items: vec![item],
-                open,
-            }),
-        }
+        }));
     }
 
     /// Hands the working line the turn's latest call still running: a
@@ -563,7 +580,10 @@ impl App {
             .iter()
             .rev()
             .find_map(|entry| match entry {
-                LogEntry::Work { items, .. } => items.iter().rev().find(|i| i.fact.is_none()),
+                LogEntry::Work { acts, .. } => acts.iter().rev().find_map(|act| match act {
+                    Act::Call(item) if item.fact.is_none() => Some(item),
+                    _ => None,
+                }),
                 _ => None,
             })
             .cloned();
@@ -573,22 +593,20 @@ impl App {
     fn finish_call(&mut self, call_id: &str, content: &str, is_error: bool) {
         // Within this turn: `turn_start` moves only between turns, and a
         // cancelled turn's results are sent before it ends (`abort_dispatch`),
-        // so the call was made after it. Every `Work` entry of it, newest first, not
-        // just the last one; found before it is borrowed mutably, so only
-        // that entry counts as changed.
-        let start = self.turn_start.min(self.log.len());
-        let turn = self.log.tail(start);
-        if let Some(i) = turn.iter().rposition(|e| {
-            matches!(e, LogEntry::Work { items, .. } if items.iter().any(|i| i.call_id == call_id))
-        }) {
-            if let LogEntry::Work { items, .. } = &mut self.log[start + i] {
-                if let Some(item) = items.iter_mut().find(|i| i.call_id == call_id) {
-                    item.failed = is_error;
-                    item.fact = Some(item.verb.fact(content, is_error));
-                }
-            }
+        // so the call was made after it.
+        let item = self.turn_work().and_then(|acts| {
+            acts.iter_mut().find_map(|act| match act {
+                Act::Call(item) if item.call_id == call_id => Some(item),
+                _ => None,
+            })
+        });
+        if let Some(item) = item {
+            item.failed = is_error;
+            item.fact = Some(item.verb.fact(content, is_error));
             return;
         }
+        let start = self.turn_start.min(self.log.len());
+        let turn = self.log.tail(start);
         // Otherwise an `ask` result answers the newest open question row.
         // `plan` results are dropped.
         if let Some(i) = turn
@@ -604,24 +622,30 @@ impl App {
     /// One loaded record, as the entry the live path would produce.
     fn replay(&mut self, record: LogRecord) {
         match record {
-            LogRecord::UserMessage { text, .. } => self.log.push(LogEntry::UserMessage { text }),
-            LogRecord::AssistantMessage { text, .. } => {
-                if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
+            // Written just after its `TurnStarted`, so the turn starts here:
+            // its work must not join the turn before.
+            LogRecord::UserMessage { text, .. } => {
+                self.turn_start = self.log.len();
+                self.log.push(LogEntry::UserMessage { text });
+            }
+            LogRecord::AssistantMessage { text, .. } => match self.log.last_mut() {
+                Some(LogEntry::AssistantText { text: buf }) if !self.prose_ended => {
                     buf.push('\n');
                     buf.push_str(&text);
-                } else {
+                }
+                _ => {
+                    self.prose_ended = false;
                     self.log.push(LogEntry::AssistantText { text });
                 }
-            }
+            },
             LogRecord::ToolUse { call, .. } => self.record_call(call.id, &call.name, &call.input),
             LogRecord::ToolResult { result, .. } => {
                 self.finish_call(&result.call_id, &result.content, result.is_error)
             }
             LogRecord::TurnEnded { reason, .. } => self.push_turn_end(reason),
-            LogRecord::Thinking { text, seconds, .. } => self.log.push(LogEntry::Thinking {
+            LogRecord::Thinking { text, seconds, .. } => self.record(Act::Thought {
                 text,
                 took: seconds.into(),
-                open: false,
             }),
             // Encrypted: nothing to show.
             LogRecord::RedactedThinking { .. } => {}
@@ -640,7 +664,15 @@ impl App {
                         step.state = StepState::Pending;
                     }
                 }
-                LogEntry::Thinking { took, .. } if *took == Took::Running => *took = Took::Unknown,
+                LogEntry::Work { acts, .. } => {
+                    for act in acts {
+                        if let Act::Thought { took, .. } = act {
+                            if *took == Took::Running {
+                                *took = Took::Unknown;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -693,19 +725,21 @@ impl App {
             }
             Event::TextDelta { text, .. } => {
                 self.activity.replying(self.tick);
-                if let Some(LogEntry::AssistantText { text: buf }) = self.log.last_mut() {
-                    buf.push_str(&text);
-                } else {
-                    self.push(LogEntry::AssistantText { text });
+                match self.log.last_mut() {
+                    Some(LogEntry::AssistantText { text: buf }) if !self.prose_ended => {
+                        buf.push_str(&text)
+                    }
+                    _ => {
+                        self.prose_ended = false;
+                        self.push(LogEntry::AssistantText { text });
+                    }
                 }
             }
             Event::ThinkingStart { .. } => {
                 self.activity.thinking(self.tick);
-                let open = self.details_open;
-                self.push(LogEntry::Thinking {
+                self.record(Act::Thought {
                     text: String::new(),
                     took: Took::Running,
-                    open,
                 });
             }
             Event::ThinkingDelta { text, .. } => {
@@ -976,7 +1010,7 @@ impl App {
         let open = self.details_open;
         for entry in self.this_turn_mut() {
             match entry {
-                LogEntry::Work { open: o, .. } | LogEntry::Thinking { open: o, .. } => *o = open,
+                LogEntry::Work { open: o, .. } => *o = open,
                 LogEntry::Failure {
                     open: o,
                     detail: Some(_),
@@ -1867,7 +1901,7 @@ pub(crate) mod tests {
         let mut a = app();
         a.log.push(LogEntry::UserMessage { text: "go".into() });
         a.log.push(LogEntry::Work {
-            items: vec![],
+            acts: vec![],
             open: false,
         });
         a.apply_event(Event::QuestionAsked {
@@ -1942,13 +1976,16 @@ pub(crate) mod tests {
                 is_error: false,
             },
         });
-        let Some(LogEntry::Work { items, open }) = a.log.last() else {
+        let Some(LogEntry::Work { acts, open }) = a.log.last() else {
             panic!("{:?}", a.log)
         };
         assert!(!open);
-        assert_eq!(items[0].verb, Verb::Read);
-        assert_eq!(items[0].target, "src/x.rs");
-        assert_eq!(items[0].fact.as_deref(), Some("2 lines"));
+        let [Act::Call(item)] = &acts[..] else {
+            panic!("{acts:?}")
+        };
+        assert_eq!(item.verb, Verb::Read);
+        assert_eq!(item.target, "src/x.rs");
+        assert_eq!(item.fact.as_deref(), Some("2 lines"));
     }
 
     #[test]
@@ -1979,11 +2016,14 @@ pub(crate) mod tests {
                 is_error: false,
             },
         });
-        let work = a.log.iter().find_map(|e| match e {
-            LogEntry::Work { items, .. } => Some(items),
+        let fact = a.log.iter().find_map(|e| match e {
+            LogEntry::Work { acts, .. } => match &acts[..] {
+                [Act::Call(item)] => item.fact.clone(),
+                _ => None,
+            },
             _ => None,
         });
-        assert_eq!(work.unwrap()[0].fact.as_deref(), Some("1 line"));
+        assert_eq!(fact.as_deref(), Some("1 line"));
     }
 
     #[test]
@@ -1991,7 +2031,7 @@ pub(crate) mod tests {
         let mut a = app();
         a.log.push(LogEntry::UserMessage { text: "go".into() });
         a.log.push(LogEntry::Work {
-            items: vec![],
+            acts: vec![],
             open: false,
         });
         a.handle_key(press(KeyCode::Char(' ')));
@@ -2311,19 +2351,46 @@ pub(crate) mod tests {
         }
     }
 
-    /// ADR 0015: a thinking block is one entry where it happened, filled as
-    /// it streams and timed once it ends; Space opens it with the work.
+    fn text(a: &mut App, text: &str) {
+        a.apply_event(Event::TextDelta {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            text: text.into(),
+        });
+    }
+
+    fn read(a: &mut App, id: &str) {
+        a.apply_event(Event::ToolUseRequested {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call: ToolCall {
+                id: id.into(),
+                name: "read".into(),
+                input: serde_json::json!({"path": "src/x.rs"}),
+            },
+        });
+        a.apply_event(Event::ToolDispatched {
+            turn_id: TurnId(1),
+            step_id: StepId(1),
+            call_id: id.into(),
+        });
+    }
+
+    /// ADR 0015 and 0018: a thought fills as it streams, is timed once it
+    /// ends, and joins the turn's one `Work` row, which Space opens.
     #[test]
-    fn a_thought_streams_into_one_entry_and_says_how_long_it_took() {
+    fn a_thought_streams_into_the_turns_work_and_says_how_long_it_took() {
         let mut a = app();
         a.submit_text("Add a limit.".into());
         a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
         think(&mut a, &["Weighing ", "it up."]);
         assert_eq!(
             a.log.last(),
-            Some(&LogEntry::Thinking {
-                text: "Weighing it up.".into(),
-                took: Took::Running,
+            Some(&LogEntry::Work {
+                acts: vec![Act::Thought {
+                    text: "Weighing it up.".into(),
+                    took: Took::Running,
+                }],
                 open: false,
             })
         );
@@ -2332,29 +2399,55 @@ pub(crate) mod tests {
             step_id: StepId(1),
             seconds: Some(12),
         });
-        a.apply_event(Event::TextDelta {
-            turn_id: TurnId(1),
-            step_id: StepId(1),
-            text: "Adding it.".into(),
-        });
+        text(&mut a, "Adding it.");
         assert!(matches!(
             &a.log[a.log.len() - 2..],
-            [
-                LogEntry::Thinking {
-                    took: Took::Seconds(12),
-                    ..
-                },
-                LogEntry::AssistantText { .. }
-            ]
+            [LogEntry::Work { acts, .. }, LogEntry::AssistantText { .. }]
+                if matches!(acts[..], [Act::Thought { took: Took::Seconds(12), .. }])
         ));
         a.handle_key(press(KeyCode::Char(' ')));
         assert!(
-            matches!(
-                &a.log[a.log.len() - 2],
-                LogEntry::Thinking { open: true, .. }
-            ),
+            matches!(&a.log[a.log.len() - 2], LogEntry::Work { open: true, .. }),
             "Space opens it"
         );
+    }
+
+    /// ADR 0018: however the turn interleaves thoughts, calls and prose,
+    /// its thoughts and calls are one row where the first happened, and
+    /// prose on either side of an act stays two paragraphs.
+    #[test]
+    fn a_turn_draws_its_thoughts_and_calls_as_one_row() {
+        let mut a = app();
+        a.submit_text("Add a limit.".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        text(&mut a, "Looking first.");
+        think(&mut a, &["Where is it?"]);
+        read(&mut a, "c1");
+        text(&mut a, "Found it.");
+        think(&mut a, &["Now the test."]);
+        read(&mut a, "c2");
+        text(&mut a, "Done.");
+        let kinds: Vec<&str> = a.this_turn()[1..]
+            .iter()
+            .map(|e| match e {
+                LogEntry::Work { .. } => "work",
+                LogEntry::AssistantText { text } => text,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["Looking first.", "work", "Found it.", "Done."]);
+        let Some(LogEntry::Work { acts, .. }) = a.this_turn().get(2) else {
+            panic!()
+        };
+        assert!(matches!(
+            acts[..],
+            [
+                Act::Thought { .. },
+                Act::Call(_),
+                Act::Thought { .. },
+                Act::Call(_)
+            ]
+        ));
     }
 
     #[test]
@@ -2369,10 +2462,8 @@ pub(crate) mod tests {
         });
         assert!(a.log.iter().any(|e| matches!(
             e,
-            LogEntry::Thinking {
-                took: Took::Unknown,
-                ..
-            }
+            LogEntry::Work { acts, .. }
+                if matches!(acts[..], [Act::Thought { took: Took::Unknown, .. }])
         )));
     }
 
@@ -2400,17 +2491,38 @@ pub(crate) mod tests {
                     step_id: StepId(1),
                     data: "opaque".into(),
                 },
+                LogRecord::TurnStarted { turn_id: TurnId(2) },
+                LogRecord::UserMessage {
+                    turn_id: TurnId(2),
+                    text: "again".into(),
+                },
+                thought(Some(3)),
             ],
         });
-        let took: Vec<Took> = a
+        // One row per turn: the second turn's thought does not join the
+        // first's.
+        let took: Vec<Vec<Took>> = a
             .log
             .iter()
             .filter_map(|e| match e {
-                LogEntry::Thinking { took, .. } => Some(*took),
+                LogEntry::Work { acts, .. } => Some(
+                    acts.iter()
+                        .filter_map(|act| match act {
+                            Act::Thought { took, .. } => Some(*took),
+                            Act::Call(_) => None,
+                        })
+                        .collect(),
+                ),
                 _ => None,
             })
             .collect();
-        assert_eq!(took, vec![Took::Seconds(7), Took::Unknown]);
+        assert_eq!(
+            took,
+            [
+                vec![Took::Seconds(7), Took::Unknown],
+                vec![Took::Seconds(3)]
+            ]
+        );
     }
 
     /// A waiting review inside its follow-up turn, and the agent asking.
@@ -2939,9 +3051,8 @@ pub(crate) mod tests {
                 },
             ],
         });
-        assert!(
-            matches!(&a.log[1], LogEntry::Work { items, .. } if items[0].fact.as_deref() == Some("ok"))
-        );
+        assert!(matches!(&a.log[1], LogEntry::Work { acts, .. }
+                if matches!(&acts[..], [Act::Call(item)] if item.fact.as_deref() == Some("ok"))));
         assert_eq!(a.log.last(), Some(&LogEntry::TurnBreak));
     }
 

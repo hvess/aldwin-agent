@@ -17,7 +17,7 @@ use super::grid::{Ctx, BODY_X, COMMAND_COL, GUTTER_LN, MARGIN_X, MARK_COL, NUMBE
 use super::markdown::render_prose;
 use super::question::{OPTION_INSET, PANEL_PAD};
 use crate::app::{App, ModelChoice, ProviderChoice};
-use crate::log::{LogEntry, Took};
+use crate::log::{Act, LogEntry, Took, Verb, WorkItem};
 use crate::motion::Motion;
 use crate::palette::Theme;
 use crate::review::SelectionLabel;
@@ -252,13 +252,7 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     let mut a = app();
     a.log.push(LogEntry::UserMessage { text: "go".into() });
     a.log.push(LogEntry::Work {
-        items: vec![crate::log::WorkItem {
-            call_id: "c".into(),
-            verb: crate::log::Verb::Read,
-            target: "src/x.rs".into(),
-            fact: Some("6 lines".into()),
-            failed: false,
-        }],
+        acts: vec![read_call()],
         open: false,
     });
     let buf = render(&mut a, 100, 36);
@@ -268,35 +262,53 @@ fn a_disclosure_glyph_is_in_the_rows_tone() {
     assert_eq!(buf[(glyph, y)].fg, pal.label2);
 }
 
-/// ADR 0015: a thought is a `Disclosure` on the prose column, its reasoning
-/// under it in `label2` once open, wrapped, not shortened.
+fn read_call() -> Act {
+    Act::Call(WorkItem {
+        call_id: "c".into(),
+        verb: Verb::Read,
+        target: "src/x.rs".into(),
+        fact: Some("6 lines".into()),
+        failed: false,
+    })
+}
+
+/// ADR 0015 and 0018: a turn's thoughts and calls are one `Disclosure` on
+/// the prose column; opened, each thought's reasoning sits under its row,
+/// in `label2`, wrapped, not shortened, in the order it happened.
 #[test]
-fn a_thought_is_a_disclosure_of_its_reasoning() {
+fn a_turns_thoughts_and_calls_are_one_disclosure() {
     let mut a = app();
     let reasoning = "The limit belongs beside auth, where the key is already known. ".repeat(3);
     a.log.push(LogEntry::UserMessage { text: "go".into() });
-    a.log.push(LogEntry::Thinking {
-        text: format!("{reasoning}\nThen a test."),
-        took: Took::Seconds(12),
+    a.log.push(LogEntry::Work {
+        acts: vec![
+            Act::Thought {
+                text: format!("{reasoning}\nThen a test."),
+                took: Took::Seconds(12),
+            },
+            read_call(),
+        ],
         open: false,
     });
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
-    let y = find_row(&buf, "Thought for 12s  ›").expect("the summary");
+    let y = find_row(&buf, "Thought for 12s · Read 1 file  ›").expect("the summary");
     assert_eq!(col_of(&buf, y, "Thought"), Some(BODY_X));
     assert_eq!(buf[(BODY_X as u16, y)].fg, pal.label2);
     assert!(find_row(&buf, "Then a test.").is_none(), "closed");
 
-    if let Some(LogEntry::Thinking { open, .. }) = a.log.last_mut() {
+    if let Some(LogEntry::Work { open, .. }) = a.log.last_mut() {
         *open = true;
     }
     let buf = render(&mut a, 100, 36);
-    assert!(find_row(&buf, "Thought for 12s  ⌄").is_some());
+    assert!(find_row(&buf, "Thought for 12s · Read 1 file  ⌄").is_some());
     let first = find_row(&buf, "The limit belongs").unwrap();
     assert_eq!(col_of(&buf, first, "The limit"), Some(BODY_X));
     assert_eq!(buf[(BODY_X as u16, first)].fg, pal.label2);
     let last = find_row(&buf, "Then a test.").expect("every line, unabridged");
     assert!(last > first + 1, "the long line wraps");
+    let call = find_row(&buf, "src/x.rs").expect("the call's row");
+    assert!(call > last, "in the order it happened");
 }
 
 /// Frame J: `Send  ↩` right-flush, one cell in, `label3` until there is a
@@ -332,13 +344,7 @@ fn no_footer_names_the_details_key() {
     let mut a = app();
     a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
     a.log.push(LogEntry::Work {
-        items: vec![crate::log::WorkItem {
-            call_id: "c".into(),
-            verb: crate::log::Verb::Read,
-            target: "src/x.rs".into(),
-            fact: Some("6 lines".into()),
-            failed: false,
-        }],
+        acts: vec![read_call()],
         open: false,
     });
     let footer = |a: &mut App| footer_lead(&render(a, 100, 36));
@@ -846,9 +852,19 @@ fn a_streamed_text_draws_as_the_whole_text_would_at_every_delta() {
     for open_thought in [false, true] {
         let entry = |text: &str| {
             if open_thought {
-                LogEntry::Thinking {
-                    text: text.into(),
-                    took: Took::Running,
+                // Earlier acts make the stream's head more than one row.
+                LogEntry::Work {
+                    acts: vec![
+                        read_call(),
+                        Act::Thought {
+                            text: "Done.".into(),
+                            took: Took::Seconds(1),
+                        },
+                        Act::Thought {
+                            text: text.into(),
+                            took: Took::Running,
+                        },
+                    ],
                     open: true,
                 }
             } else {
@@ -866,12 +882,16 @@ fn a_streamed_text_draws_as_the_whole_text_would_at_every_delta() {
             while !reply.is_char_boundary(at) {
                 at += 1;
             }
-            let Some(LogEntry::AssistantText { text } | LogEntry::Thinking { text, .. }) =
-                streamed.log.last_mut()
-            else {
-                unreachable!("the test pushed a streaming entry last");
-            };
-            *text = reply[..at].to_string();
+            match streamed.log.last_mut() {
+                Some(LogEntry::AssistantText { text }) => *text = reply[..at].to_string(),
+                Some(LogEntry::Work { acts, .. }) => {
+                    let Some(Act::Thought { text, .. }) = acts.last_mut() else {
+                        unreachable!("the test's work ends in a thought");
+                    };
+                    *text = reply[..at].to_string();
+                }
+                _ => unreachable!("the test pushed a streaming entry last"),
+            }
             let mut fresh = app();
             fresh.log.push(LogEntry::UserMessage { text: "go".into() });
             fresh.log.push(entry(&reply[..at]));
@@ -882,6 +902,34 @@ fn a_streamed_text_draws_as_the_whole_text_would_at_every_delta() {
             );
         }
     }
+}
+
+/// A new thought in an open `Work` grows the stream's fixed head: the
+/// cached rows of the last thought must not be spliced under it.
+#[test]
+fn a_second_thought_streams_as_the_whole_work_would_draw() {
+    let work = |acts: Vec<Act>| LogEntry::Work { acts, open: true };
+    let thought = |text: &str, took| Act::Thought {
+        text: text.into(),
+        took,
+    };
+    let mut streamed = app();
+    streamed
+        .log
+        .push(LogEntry::UserMessage { text: "go".into() });
+    streamed
+        .log
+        .push(work(vec![thought("One.", Took::Running)]));
+    let _ = transcript_rows(&mut streamed);
+    let last = work(vec![
+        thought("One.", Took::Seconds(1)),
+        thought("Two", Took::Running),
+    ]);
+    *streamed.log.last_mut().unwrap() = last.clone();
+    let mut fresh = app();
+    fresh.log.push(LogEntry::UserMessage { text: "go".into() });
+    fresh.log.push(last);
+    assert_eq!(transcript_rows(&mut streamed), transcript_rows(&mut fresh));
 }
 
 #[test]

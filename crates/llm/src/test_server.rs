@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -19,6 +20,8 @@ pub enum Canned {
     /// 200, writes the SSE prefix, then holds the connection open silently;
     /// for idle-timeout tests.
     SseThenStall(String),
+    /// 200, then only a keepalive comment every period, never an event.
+    Keepalives(Duration),
     /// Closes without a response: a transport-level failure.
     HangUp,
 }
@@ -110,6 +113,14 @@ async fn handle_connection(
             let _ = socket.write_all(head.as_bytes()).await;
             let _ = socket.write_all(prefix.as_bytes()).await;
             std::future::pending::<()>().await;
+        }
+        Canned::Keepalives(period) => {
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let _ = socket.write_all(head.as_bytes()).await;
+            while socket.write_all(b": keepalive\n\n").await.is_ok() {
+                tokio::time::sleep(period).await;
+            }
         }
         Canned::HangUp => {
             let _ = socket.shutdown().await;

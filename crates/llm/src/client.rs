@@ -141,6 +141,7 @@ mod tests {
     use aldwin_core::{Message, ToolDefinition};
     use futures::StreamExt;
     use std::time::Duration;
+    use tokio::time::timeout;
 
     fn config() -> ProviderConfig {
         ProviderConfig {
@@ -298,6 +299,30 @@ data: {"type":"message_stop"}
             .filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. })))
             .collect();
         assert_eq!(retries.len(), 1);
+        assert!(matches!(
+            events.last(),
+            Some(Ok(LlmEvent::StepEnded { .. }))
+        ));
+    }
+
+    /// A keepalive comment is no activity: a stream that sends only
+    /// keepalives, each well inside the idle timeout, still runs it out.
+    #[tokio::test]
+    async fn a_stream_of_only_keepalives_times_out_and_retries() {
+        let server = test_server::spawn(vec![
+            Canned::Keepalives(Duration::from_millis(10)),
+            Canned::Sse(success_sse()),
+        ]);
+        let client = client_at(&server, Duration::from_millis(50));
+
+        let events = timeout(Duration::from_secs(5), collect(&client, &empty_messages()))
+            .await
+            .expect("keepalives held the stream open past its idle timeout");
+        let retries = events
+            .iter()
+            .filter(|e| matches!(e, Ok(LlmEvent::RetryAttempt { .. })))
+            .count();
+        assert_eq!(retries, 1);
         assert!(matches!(
             events.last(),
             Some(Ok(LlmEvent::StepEnded { .. }))

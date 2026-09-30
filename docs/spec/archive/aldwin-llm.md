@@ -5,7 +5,7 @@ V0 Anthropic client implementing core's LlmClient trait — thin reqwest + SSE, 
 **Status:** archived — implemented, tested, audited
 **Scope:** aldwin-llm crate only. HTTP, SSE, Anthropic-wire to normalised event mapping, wire-level retry, prompt-cache placement, provider config resolution. Excludes the LlmClient trait itself (core), the agent loop (core), tool execution (tools), and YAML I/O (config).
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 **Completed:** 2026-08-29 — `be6cd75`. Known, accepted (not a spec
 deviation): `build_request` clones the full conversation history per turn,
@@ -32,7 +32,8 @@ call in one event produces. The idle timeout still runs from the last
 event, an empty one included, not the last chunk, so a keepalive comment
 does not reset it; a lone `\r` still ends a line and a leading byte-order
 mark is still dropped, as the crate did.
-Tests: `sse::tests`, `several_text_blocks_join_into_one_content_and_one_is_only_borrowed`.
+Tests: `sse::tests`, `several_text_blocks_join_into_one_content_and_one_is_only_borrowed`,
+`a_stream_of_only_keepalives_times_out_and_retries` (2026-09-30).
 
 **Post-archive fix (2026-09-01, extended thinking rejected by a real
 Anthropic key):** The live run flagged above surfaced exactly the gap it

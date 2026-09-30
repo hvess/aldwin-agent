@@ -250,6 +250,16 @@ All done, 2026-09-20.
 
 ## Progress
 
+- **2026-09-30 — the listing index, made safe.** The 2026-09-29 index
+  trusted a transcript at least as long as it had read to be the same file;
+  it now also reads each transcript's header line and reads from the start
+  when it is not the header the index recorded, whole — start second,
+  directory and model, so `INDEX_VERSION` is 2
+  (`a_transcript_replaced_by_a_longer_one_is_read_from_the_start`). A read
+  error partway through a transcript dropped the whole session from the
+  listing, where the listing before the index, and `load`, keep what came
+  before the error; `read_on` ends there again
+  (`a_read_error_ends_the_listing_read_and_keeps_what_came_before`).
 - **2026-09-29 — the listing reads only what is new.** `list` read every
   transcript of the project in full at every startup, before the first
   frame, and history is never pruned. Beside the transcripts,

@@ -274,7 +274,7 @@ pub fn list(dir: &Path) -> Vec<SessionSummary> {
 const INDEX_FILE: &str = "index.json";
 
 /// [`Index`]'s shape; bump on an incompatible change, which empties it.
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Index {
@@ -298,9 +298,12 @@ fn write_index(dir: &Path, index: &Index) -> Result<(), ConfigError> {
     fsio::write_atomic_text(&dir.join(INDEX_FILE), &text)
 }
 
-/// What a transcript's first `read` bytes say for the listing. A transcript
-/// is append-only, so those bytes never change while the file is at least
-/// that long.
+/// What a transcript's first `read` bytes say for the listing. They are
+/// trusted while the file is at least that long and still opens with the
+/// header recorded here. Aldwin only appends to a transcript and never
+/// creates one over another (`HistoryStore::materialise`), so a file that
+/// matches both is taken for the one read; only something outside Aldwin,
+/// writing the same start second, directory and model, could fool that.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Scan {
     /// Up to the end of the last whole line read.
@@ -317,9 +320,16 @@ enum Header {
     Unread,
     /// A schema this build does not read: never listed.
     Foreign,
-    Read {
-        started_at: u64,
-    },
+    Read(SessionHeader),
+}
+
+impl Header {
+    fn of(line: &[u8]) -> Self {
+        match serde_json::from_slice::<SessionHeader>(line) {
+            Ok(header) if header.version == HISTORY_VERSION => Header::Read(header),
+            _ => Header::Foreign,
+        }
+    }
 }
 
 /// The title from a transcript's first `UserMessage`.
@@ -337,12 +347,7 @@ impl Scan {
     /// Takes in one line of the transcript, the header first.
     fn read_line(&mut self, line: &[u8]) {
         if self.header == Header::Unread {
-            self.header = match serde_json::from_slice::<SessionHeader>(line) {
-                Ok(header) if header.version == HISTORY_VERSION => Header::Read {
-                    started_at: header.started_at,
-                },
-                _ => Header::Foreign,
-            };
+            self.header = Header::of(line);
         } else if line.starts_with(TURN_ENDED) {
             // Parsed, not only matched: a torn `TurnEnded` does not end its
             // turn for `load`, so it must not count one here.
@@ -362,12 +367,12 @@ impl Scan {
         if self.turns == 0 {
             return None;
         }
-        let Header::Read { started_at } = self.header else {
+        let Header::Read(header) = &self.header else {
             return None;
         };
         Some(SessionSummary {
             id,
-            started_at,
+            started_at: header.started_at,
             title: match &self.title {
                 Title::Titled(title) => title.clone(),
                 // Only a damaged transcript has a blank first message, or none.
@@ -378,38 +383,57 @@ impl Scan {
     }
 }
 
+/// Past this many bytes a first line is no header this build wrote: it is
+/// one line of JSON naming a time, a directory and a model.
+const HEADER_MAX: u64 = 64 * 1024;
+
 /// `prior` carried to the end of the transcript at `path`: what to keep, and
-/// what to list. They differ by a final line with no newline, which the
-/// listing takes in as [`load`] does but the next listing reads again, since
-/// the rest of it may still arrive. A file shorter than `prior` was
-/// replaced, and is read from the start.
+/// what to list ([`read_on`]). A file shorter than `prior`, or whose header
+/// is not the one `prior` read, was replaced, and is read from the start.
 fn scan(path: &Path, prior: Scan) -> io::Result<(Scan, Scan)> {
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
-    let mut kept = if len < prior.read {
-        Scan::default()
-    } else {
-        prior
-    };
+    let mut file = BufReader::new(File::open(path)?);
+    let len = file.get_ref().metadata()?.len();
+    let mut kept = prior;
+    if kept.read > 0 {
+        // Capped: a foreign file's first line can be any length, and this
+        // runs for every transcript at every startup. An error here is
+        // `load`'s too, which then returns nothing to list.
+        let mut first = Vec::new();
+        file.by_ref()
+            .take(HEADER_MAX)
+            .read_until(b'\n', &mut first)?;
+        let first = first.strip_suffix(b"\n").unwrap_or(&first);
+        if len < kept.read || Header::of(first) != kept.header {
+            kept = Scan::default();
+        }
+    }
     // Nothing past a foreign header matters.
     if kept.header == Header::Foreign {
         kept.read = len;
         return Ok((kept.clone(), kept));
     }
     file.seek(SeekFrom::Start(kept.read))?;
-    let mut reader = BufReader::new(file);
+    Ok(read_on(file, kept))
+}
+
+/// `kept` carried through the rest of `reader`: what to keep, and what to
+/// list. They differ by a final line with no newline, which the listing
+/// takes in as [`load`] does but the next listing reads again, since the
+/// rest of it may still arrive. A read error ends the reading there, as it
+/// ends [`load`]'s, so what came before it is still listed.
+fn read_on(mut reader: impl BufRead, mut kept: Scan) -> (Scan, Scan) {
     let mut line = Vec::new();
-    while reader.read_until(b'\n', &mut line)? > 0 {
+    while let Ok(1..) = reader.read_until(b'\n', &mut line) {
         let Some(whole) = line.strip_suffix(b"\n") else {
             let mut shown = kept.clone();
             shown.read_line(&line);
-            return Ok((kept, shown));
+            return (kept, shown);
         };
         kept.read_line(whole);
         kept.read += line.len() as u64;
         line.clear();
     }
-    Ok((kept.clone(), kept))
+    (kept.clone(), kept)
 }
 
 /// One session's records, ready to become a `ConversationLog`.
@@ -925,6 +949,117 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn a_transcript_replaced_by_a_longer_one_is_read_from_the_start() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000009-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "first") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+        let _ = list(dir.path());
+
+        fs::remove_file(transcript_path(dir.path(), &id)).unwrap();
+        let later = SessionHeader {
+            started_at: 1_700_000_999,
+            ..header()
+        };
+        let store = HistoryStore::create(dir.path(), &id, &later).unwrap();
+        for record in turn(1, "a much longer first question than before") {
+            store.append(&record).unwrap();
+        }
+        let listed = &list(dir.path())[0];
+        assert_eq!(listed.started_at, 1_700_000_999);
+        assert_eq!(listed.title, "a much longer first question than before");
+    }
+
+    #[test]
+    fn a_transcript_replaced_in_the_same_second_is_told_apart_by_its_header() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000010-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "first") {
+            store.append(&record).unwrap();
+        }
+        drop(store);
+        let _ = list(dir.path());
+
+        fs::remove_file(transcript_path(dir.path(), &id)).unwrap();
+        let other_model = SessionHeader {
+            model: "another".into(),
+            ..header()
+        };
+        let store = HistoryStore::create(dir.path(), &id, &other_model).unwrap();
+        for record in turn(1, "the same second, a longer question") {
+            store.append(&record).unwrap();
+        }
+        assert_eq!(
+            list(dir.path())[0].title,
+            "the same second, a longer question"
+        );
+    }
+
+    #[test]
+    fn a_foreign_transcript_replaced_by_this_builds_is_listed() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000011-1".into());
+        let path = transcript_path(dir.path(), &id);
+        fs::write(&path, "{\"version\":999}\n{\"type\":\"turn_ended\"}\n").unwrap();
+        assert!(list(dir.path()).is_empty());
+
+        fs::remove_file(&path).unwrap();
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "now readable") {
+            store.append(&record).unwrap();
+        }
+        assert_eq!(list(dir.path())[0].title, "now readable");
+    }
+
+    #[test]
+    fn a_transcript_replaced_by_a_longer_foreign_one_is_no_longer_listed() {
+        let dir = tempdir().unwrap();
+        let id = SessionId("0000000012-1".into());
+        let store = HistoryStore::create(dir.path(), &id, &header()).unwrap();
+        for record in turn(1, "was readable") {
+            store.append(&record).unwrap();
+        }
+        assert_eq!(list(dir.path()).len(), 1);
+
+        let path = transcript_path(dir.path(), &id);
+        let foreign = format!(
+            "{{\"version\":999}}\n{}",
+            fs::read_to_string(&path).unwrap()
+        );
+        fs::write(&path, foreign).unwrap();
+        assert!(list(dir.path()).is_empty());
+    }
+
+    /// Regression: a read error mid-transcript dropped the whole session
+    /// from the listing, where `load` still returns the turns before it.
+    #[test]
+    fn a_read_error_ends_the_listing_read_and_keeps_what_came_before() {
+        struct FailsAfter(io::Cursor<Vec<u8>>);
+        impl Read for FailsAfter {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                match self.0.read(buf)? {
+                    0 => Err(io::Error::other("the disk went away")),
+                    n => Ok(n),
+                }
+            }
+        }
+        let mut bytes = serde_json::to_vec(&header()).unwrap();
+        bytes.push(b'\n');
+        for record in turn(1, "hello") {
+            bytes.extend(serde_json::to_vec(&record).unwrap());
+            bytes.push(b'\n');
+        }
+        let reader = BufReader::new(FailsAfter(io::Cursor::new(bytes)));
+        let (_, shown) = read_on(reader, Scan::default());
+        let listed = shown.summary(SessionId("s".into())).unwrap();
+        assert_eq!((listed.title.as_str(), listed.turns), ("hello", 1));
     }
 
     /// `list` and `load` agree on a transcript cut just before its last

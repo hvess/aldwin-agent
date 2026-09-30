@@ -56,6 +56,15 @@ mod tests {
         );
     }
 
+    /// Frame P: the docked plan draws each step's file and the running
+    /// step's note only when the model gives them.
+    #[test]
+    fn the_prompt_asks_for_each_steps_file_and_the_running_steps_note() {
+        assert!(BASE.contains("Give each step that changes a file its `file`"));
+        assert!(BASE.contains("give the running step a `note`"));
+        assert!(BASE.contains("The note is drawn only on the docked plan"));
+    }
+
     /// ADR 0011: `run` takes a command and no class. Regression: the prompt
     /// told the model to declare each call `read` or `write`.
     #[test]

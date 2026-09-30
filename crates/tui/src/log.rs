@@ -35,6 +35,9 @@ pub enum LogEntry {
     Plan {
         /// The steps, in order.
         steps: Vec<PlanStep>,
+        /// Drawn as the card above the field (frame P), not in the
+        /// conversation: set while the turn has something staged.
+        docked: bool,
     },
     /// A question asked through `ask`, drawn as the question, ` · `, and
     /// the answer.
@@ -312,7 +315,8 @@ impl Verb {
     pub(crate) fn doing(self) -> &'static str {
         match self {
             Verb::Read => "reading",
-            Verb::Changed => "changing",
+            // Nothing is written until the review: the edit is a draft.
+            Verb::Changed => "drafting",
             Verb::Ran => "running",
             Verb::Searched => "looking up",
             Verb::Used => "using",

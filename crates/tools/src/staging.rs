@@ -5,6 +5,7 @@
 //! `run` sees disk, and the changeset is reviewed before any call that would
 //! observe disk (`Dispatcher::before_step`).
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -17,7 +18,9 @@ use crate::paths::Workspace;
 /// One staged file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Staged {
-    /// The path as the model named it; the review shows it.
+    /// The path as the model first named it: a later edit under another
+    /// spelling keeps it, so the review and every `Event::Staged` name one
+    /// file one way.
     pub rel: String,
     /// The disk content when first staged; `None` for a new file.
     /// `Staging::write_all` skips the file if disk no longer matches.
@@ -82,7 +85,8 @@ impl Staging {
     }
 
     /// Applies `change` to the file's staged content, else its disk content
-    /// (`None` if absent), and stages the result.
+    /// (`None` if absent), stages the result, and returns the file as it is
+    /// now staged.
     ///
     /// # Errors
     ///
@@ -93,7 +97,7 @@ impl Staging {
         resolved: PathBuf,
         rel: &str,
         change: impl FnOnce(Option<&str>) -> Result<String, ToolError>,
-    ) -> Result<(), ToolError> {
+    ) -> Result<ChangedFile, ToolError> {
         // Read disk before locking, even for a staged file: a `std::sync::Mutex`
         // must not be held across an await, and an approve may unstage the
         // file in between. It is used only when nothing is staged.
@@ -113,23 +117,23 @@ impl Staging {
             None => on_disk.as_deref(),
         };
         let after = change(current)?;
-        match inner.files.get_mut(&resolved) {
-            Some(staged) => {
-                staged.rel = rel.to_string();
+        let staged = match inner.files.entry(resolved) {
+            Entry::Occupied(entry) => {
+                let staged = entry.into_mut();
                 staged.after = after;
+                staged
             }
-            None => {
-                inner.files.insert(
-                    resolved,
-                    Staged {
-                        rel: rel.to_string(),
-                        before: on_disk,
-                        after,
-                    },
-                );
-            }
-        }
-        Ok(())
+            Entry::Vacant(entry) => entry.insert(Staged {
+                rel: rel.to_string(),
+                before: on_disk,
+                after,
+            }),
+        };
+        Ok(ChangedFile {
+            path: staged.rel.clone(),
+            before: staged.before.clone(),
+            after: staged.after.clone(),
+        })
     }
 
     /// The changeset as the review draws it, in path order.

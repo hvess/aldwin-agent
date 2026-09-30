@@ -12,6 +12,27 @@ that measured them are no longer claims about the code.
 **Owner:** Maximilian
 **Last Updated:** 2026-09-30
 
+**Progress (2026-09-30, the plan card — frame P):** While a turn has edits
+staged, its plan is a card docked above the field (`ui::plan`,
+`Bottom::Drafting`) rather than rows in the conversation: the request as
+its title with `Draft, nothing saved`, then each step with its file and
+the file's staged `+N −N`, the running step's note under it. The plan
+entry carries `docked`, so the transcript draws nothing for it while the
+card does. `edit` sends `Event::Staged` with the one file it staged, and
+`App` counts that file alone with the review's own diff
+(`StagedFile::counted`), so the card and the review agree and an edit
+costs its own file, not the changeset. `Staging` names a file by its first
+spelling in every event, so a later `Staged` replaces its counts by path;
+a step's `file` names a staged file when either is the other's trailing
+components (`StagedFile::is`), and a name two staged files answer to gets
+no counts. The review
+opening or the turn ending undocks it. `PlanStep` gains `file` and
+`note`, both optional and given by the `plan` tool. An edit's working line
+reads `Drafting router.rs`: nothing is written yet. Snapshot scene
+`drafting` is frame P. Frame P's work row and its footer words are not
+adopted (baseline `frame-p-draws-its-own-work-row`; the words come from
+the call, Decisions below).
+
 **Progress (2026-09-30, a turn's work is one row — ADR 0018):** A turn
 drew a row per thought and per step's calls, a blank row between each.
 `LogEntry::Thinking` is gone: a turn's thoughts and calls are `Act`s in its
@@ -174,7 +195,7 @@ spaces, `Context ━` — describes it as it was before this one.
   not answered, `Writing a reply` while prose streams, and a running call
   by `Verb::doing` and its target — a file by its name, a command by its
   first line (`Reading router.rs`, `Running cargo test`, `Looking up
-  tower::limit`, `Changing limit.rs`, `Using <tool>`). With calls in
+  tower::limit`, `Drafting limit.rs` since 2026-09-30, `Using <tool>`). With calls in
   parallel it names the latest still running. A phrase types in only when
   the phrase changes. The stall clock does not run while a question or
   the review has the screen (`App::tick`): that time is the developer's.
@@ -433,7 +454,8 @@ what each thing was measured against:
   `baseline.json` records the frames that draw one).
 - **The plan** is `LogEntry::Plan`, one per turn, replaced in place:
   `✓` accent over `label2`, `●` amber over `label`, `○` `label3` over
-  `label3`. **Work** is `LogEntry::Work`, one per turn (ADR 0018), a
+  `label2` (frame B). While edits are staged it is the card of frame P
+  instead (Progress 2026-09-30, the plan card). **Work** is `LogEntry::Work`, one per turn (ADR 0018), a
   disclosure whose summary leads with the thinking and counts calls by
   verb (`Thought for 6s · Read 3 files · Ran 1 program`) and whose rows
   are verb / target / right-flush fact, a thought's reasoning under its
@@ -2509,6 +2531,18 @@ above it, now parted by a padding row.
   a failure puts the queue back the same way. A `/` command is never
   queued: `/model` and `/connect` act at once, and `/clear` and `/resume`
   are refused mid-turn, as before.
+
+- **While edits are staged, the plan is a card above the field.** The
+  developer's calls, 2026-09-30, on frame P: it docks from the first
+  staged edit until the review opens, as the frame says ("While Aldwin
+  drafts an edit"), and a plan with nothing staged stays in the
+  conversation. A step's file is the model's, given to `plan`, so a
+  pending step names its file before anything is staged; its counts come
+  from what is staged. The running step's note is drawn in the card only,
+  reversing the 2026-09-27 call that a step has no note (baseline
+  `a-plan-step-note-is-the-cards`). The card's title is the review's, the
+  request. A question from the agent takes the card's place while it is
+  open. Like the question panel, the card has no short-window fallback.
 
 - **`⌃C` does not stop the turn behind a review.** A single press in a
   review does nothing, and a second quits Aldwin, so it stays the way out

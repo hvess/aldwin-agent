@@ -17,7 +17,7 @@ use crate::log::{plural, Act, Log, LogEntry, Took, WorkItem};
 use crate::motion::{ticks, Motion};
 use crate::palette::Theme;
 use crate::resume::SessionChoice;
-use crate::review::{Review, ReviewOutcome as ReviewKey};
+use crate::review::{Review, ReviewOutcome as ReviewKey, StagedFile, UNTITLED};
 use crate::scroll::{ScrollState, WHEEL_ROWS};
 use crate::ui::Transcript;
 use crate::version::{GIT_HASH, VERSION};
@@ -258,6 +258,10 @@ pub struct App {
     /// echoed follow-up; `None` after `/clear` or `/resume` until one is
     /// typed.
     request: Option<String>,
+    /// Each file the running turn has staged, counted when its `Staged`
+    /// arrives; emptied when the review opens or the turn ends. The plan is
+    /// docked while it is not.
+    staged: Vec<StagedFile>,
     /// Index in `log` of the message that opened the current (or last)
     /// turn. Not the last `UserMessage`: a "Chat about this" answer is one
     /// too, mid-turn.
@@ -311,6 +315,7 @@ impl App {
             details_open: false,
             prose_ended: false,
             request: None,
+            staged: Vec::new(),
             turn_start: 0,
             last_ctrl_c: None,
             tick: 0,
@@ -481,6 +486,7 @@ impl App {
 
     fn reset_conversation(&mut self) {
         self.request = None;
+        self.staged.clear();
         self.turn_start = 0;
         self.log.clear();
         self.scroll = ScrollState::default();
@@ -655,14 +661,16 @@ impl App {
     }
 
     fn push_turn_end(&mut self, reason: TurnEndReason) {
+        self.staged.clear();
         // Amber means running only: an ended turn's running step goes back
         // to pending, and a thought it cut off no longer says "Thinking".
         for entry in self.this_turn_mut() {
             match entry {
-                LogEntry::Plan { steps } => {
+                LogEntry::Plan { steps, docked } => {
                     for step in steps.iter_mut().filter(|s| s.state == StepState::Running) {
                         step.state = StepState::Pending;
                     }
+                    *docked = false;
                 }
                 LogEntry::Work { acts, .. } => {
                     for act in acts {
@@ -819,6 +827,7 @@ impl App {
                 self.open_turn(text);
             }
             Event::PlanUpdated { steps, .. } => self.set_plan(steps),
+            Event::Staged { file } => self.stage(StagedFile::counted(&file)),
             Event::QuestionAsked { call_id, question } => {
                 self.push(LogEntry::Question {
                     question: question.question.clone(),
@@ -835,16 +844,20 @@ impl App {
                 review_id,
                 changeset,
             } => {
+                // The review takes the changeset from here: the plan undocks.
+                // After comments it stays on screen over the next round's
+                // card, so the counts restart with that round's edits.
+                self.staged.clear();
+                self.dock_plan();
                 // An empty changeset (the dispatcher never sends one) is
                 // answered with a discard rather than opened.
                 match Review::open(review_id.clone(), changeset) {
                     Some(mut review) => {
                         // The agent's next round after comments replaces
                         // the waiting review in place.
-                        match (self.review(), &self.request) {
-                            (Some(previous), _) => review.carry_from(previous),
-                            (None, Some(request)) => review.title = request.clone(),
-                            (None, None) => {}
+                        match self.review() {
+                            Some(previous) => review.carry_from(previous),
+                            None => review.title = self.changes_title().to_string(),
                         }
                         self.mode = Mode::Review(review);
                     }
@@ -900,15 +913,68 @@ impl App {
 
     /// Replaces the turn's one `Plan` entry in place, or adds it.
     fn set_plan(&mut self, steps: Vec<PlanStep>) {
+        let plan = LogEntry::Plan {
+            steps,
+            docked: !self.staged.is_empty(),
+        };
         if let Some(entry) = self
             .this_turn_mut()
             .iter_mut()
             .find(|e| matches!(e, LogEntry::Plan { .. }))
         {
-            *entry = LogEntry::Plan { steps };
+            *entry = plan;
         } else {
-            self.push(LogEntry::Plan { steps });
+            self.push(plan);
         }
+    }
+
+    /// Keeps `file`'s counts in place of any it replaces, and docks the plan.
+    fn stage(&mut self, file: StagedFile) {
+        // `Staging` names a file the same way in every event.
+        match self.staged.iter_mut().find(|s| s.path == file.path) {
+            Some(kept) => *kept = file,
+            None => self.staged.push(file),
+        }
+        self.dock_plan();
+    }
+
+    /// Docks the turn's plan while a file is staged, and undocks it once none is.
+    fn dock_plan(&mut self) {
+        let dock = !self.staged.is_empty();
+        let moves = self
+            .this_turn()
+            .iter()
+            .any(|e| matches!(e, LogEntry::Plan { docked, .. } if *docked != dock));
+        // Only a move re-renders the turn: `this_turn_mut` counts it changed.
+        if moves {
+            for entry in self.this_turn_mut() {
+                if let LogEntry::Plan { docked, .. } = entry {
+                    *docked = dock;
+                }
+            }
+        }
+    }
+
+    /// The turn's plan while it is drawn as the card above the field.
+    pub(crate) fn docked_plan(&self) -> Option<&[PlanStep]> {
+        self.this_turn().iter().find_map(|e| match e {
+            LogEntry::Plan {
+                steps,
+                docked: true,
+            } => Some(steps.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Each file the running turn has staged.
+    pub(crate) fn staged(&self) -> &[StagedFile] {
+        &self.staged
+    }
+
+    /// What the changes are called: the request, as the review's title and
+    /// the plan card's.
+    pub(crate) fn changes_title(&self) -> &str {
+        self.request.as_deref().unwrap_or(UNTITLED)
     }
 
     /// Handles a key press for whatever holds the screen; repeats and
@@ -2051,6 +2117,8 @@ pub(crate) mod tests {
         let step = |t: &str, s| PlanStep {
             text: t.into(),
             state: s,
+            file: None,
+            note: None,
         };
         a.apply_event(Event::PlanUpdated {
             turn_id: TurnId(1),
@@ -2070,7 +2138,7 @@ pub(crate) mod tests {
                 .count(),
             1
         );
-        let Some(LogEntry::Plan { steps }) = a.log.last() else {
+        let Some(LogEntry::Plan { steps, .. }) = a.log.last() else {
             panic!()
         };
         assert_eq!(steps.len(), 2);
@@ -2081,7 +2149,7 @@ pub(crate) mod tests {
             .log
             .iter()
             .filter_map(|e| {
-                if let LogEntry::Plan { steps } = e {
+                if let LogEntry::Plan { steps, .. } = e {
                     Some(steps)
                 } else {
                     None
@@ -2103,6 +2171,8 @@ pub(crate) mod tests {
             let step = |t: &str, s| PlanStep {
                 text: t.into(),
                 state: s,
+                file: None,
+                note: None,
             };
             a.apply_event(Event::PlanUpdated {
                 turn_id: TurnId(1),
@@ -2131,6 +2201,8 @@ pub(crate) mod tests {
         let step = |t: &str, s| PlanStep {
             text: t.into(),
             state: s,
+            file: None,
+            note: None,
         };
         a.apply_event(Event::PlanUpdated {
             turn_id: TurnId(1),
@@ -2162,6 +2234,95 @@ pub(crate) mod tests {
             reason: TurnEndReason::EndTurn,
         });
         assert_eq!(plan_states(&a), vec![Done, Pending]);
+    }
+
+    fn staged_file(path: &str, before: Option<&str>, after: &str) -> ChangedFile {
+        ChangedFile {
+            path: path.into(),
+            before: before.map(Into::into),
+            after: after.into(),
+        }
+    }
+
+    /// Frame P: from the first staged edit until the review opens.
+    #[test]
+    fn the_plan_docks_while_edits_are_staged_and_undocks_for_the_review() {
+        let mut a = app();
+        a.submit_text("Add rate limiting.".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        let steps = vec![PlanStep {
+            text: "Turn away requests".into(),
+            state: StepState::Running,
+            file: Some("router.rs".into()),
+            note: None,
+        }];
+        a.apply_event(Event::PlanUpdated {
+            turn_id: TurnId(1),
+            steps: steps.clone(),
+        });
+        assert!(
+            a.docked_plan().is_none(),
+            "nothing staged: the plan is inline"
+        );
+
+        a.apply_event(Event::Staged {
+            file: staged_file("src/router.rs", Some("a\nb\n"), "a\nx\n"),
+        });
+        // A second edit to the file replaces its counts.
+        let file = staged_file("src/router.rs", Some("a\nb\n"), "a\nc\nd\n");
+        a.apply_event(Event::Staged { file: file.clone() });
+        assert_eq!(a.docked_plan(), Some(steps.as_slice()));
+        assert_eq!(
+            a.staged(),
+            [StagedFile {
+                path: "src/router.rs".into(),
+                added: 2,
+                removed: 1
+            }]
+        );
+        assert_eq!(a.changes_title(), "Add rate limiting");
+
+        a.apply_event(Event::PlanUpdated {
+            turn_id: TurnId(1),
+            steps: steps.clone(),
+        });
+        assert!(
+            a.docked_plan().is_some(),
+            "a plan updated while staged stays docked"
+        );
+
+        a.apply_event(Event::ReviewRequested {
+            review_id: "r".into(),
+            changeset: Changeset { files: vec![file] },
+        });
+        assert!(a.docked_plan().is_none());
+        assert!(a.staged().is_empty());
+    }
+
+    #[test]
+    fn a_turn_that_ends_with_edits_staged_undocks_its_plan() {
+        let mut a = app();
+        a.submit_text("go".into());
+        a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+        a.apply_event(Event::PlanUpdated {
+            turn_id: TurnId(1),
+            steps: vec![PlanStep {
+                text: "Count".into(),
+                state: StepState::Running,
+                file: None,
+                note: None,
+            }],
+        });
+        a.apply_event(Event::Staged {
+            file: staged_file("f.rs", None, "x\n"),
+        });
+        assert!(a.docked_plan().is_some());
+        a.apply_event(Event::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Cancelled,
+        });
+        assert!(a.docked_plan().is_none());
+        assert!(a.staged().is_empty());
     }
 
     /// ADR 0010 §3.

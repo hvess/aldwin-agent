@@ -13,7 +13,7 @@ that make an agent's commit depend on it (`.githooks/`). Excludes what the
 stages themselves test (that is
 each crate's own spec) and the design system's content.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 ## Why
 
@@ -365,6 +365,17 @@ choice of data structure, against two new skills, `big-o` and
   unchanged: the code judge reads the whole diff, so a skill edit voids its
   carried pass.
 
+## Progress (2026-09-30, frame P)
+
+The frame re-synced with frame `P plan card` (aldwin-tui.md, same date),
+and scene `drafting` joins both lists: two edits staged and the turn held,
+so the plan is docked. `tokens.rs` regenerates unchanged. `drafting` stays
+out of `the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red`,
+since its counts are green and red (baseline
+`staged-counts-are-green-and-red`). Baseline `a-plan-step-has-no-note` is
+now `a-plan-step-note-is-the-cards`: the developer reversed the 2026-09-27
+call for the card.
+
 ## Progress (2026-09-29, frame K)
 
 The frame re-synced with frame `K queued` (aldwin-tui.md, same date), and
@@ -578,7 +589,8 @@ stopping at "the code is written".
   of the change, to come back with the put-back confined by the kernel
   (open-tasks 2, since closed by ADR 0014 without a put-back). The saved review's `›` and frame D's step note were
   decided against on the way (`baseline.json`,
-  `saved-review-is-not-reopened` and `a-plan-step-has-no-note`). The cap stays five:
+  `saved-review-is-not-reopened` and `a-plan-step-has-no-note`, the note
+  since 2026-09-30 `a-plan-step-note-is-the-cards`). The cap stays five:
   going past it is the developer's call each time, never the loop's.
 
 ## Progress (2026-09-24, the audit)

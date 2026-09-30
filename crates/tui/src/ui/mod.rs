@@ -9,6 +9,7 @@ pub(crate) mod chrome;
 mod grid;
 mod launch;
 mod markdown;
+mod plan;
 mod question;
 pub(crate) mod review;
 mod row;

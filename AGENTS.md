@@ -104,7 +104,8 @@ Four colour rules, each the design's own sentence:
   `✓` on a step done for them, and the key glyph of the action that is
   ready. The agent's prose is never blue.
 - **Amber means running**, and nothing else is amber.
-- **Green and red appear only in diffs.** A failure is a sentence in
+- **Green and red appear only in diffs**, and in a diff's line counts
+  (baseline `staged-counts-are-green-and-red`). A failure is a sentence in
   `label`, not a red row (ADR 0009 §5). There is no `✗` and no `!`.
 - **Three text tones**: `label` for what is current, `label2` for what is
   said around it, `label3` for what is pending or structural.

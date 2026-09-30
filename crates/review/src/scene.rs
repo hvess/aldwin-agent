@@ -70,6 +70,7 @@ pub const CATALOGUE: &[&str] = &[
     "answering",
     "thinking",
     "queued",
+    "drafting",
 ];
 
 const ROUTER: &str = "src/gateway/router.rs";
@@ -298,6 +299,34 @@ pub fn script(name: &str) -> Result<Script> {
             history: &[],
             files:   vec![],
             keys:    "\"Add rate limiting to the gateway. 100 requests a minute per API key.\",Enter,\"Also send a Retry-After header when a request is turned away.\",Enter,\"Use 429, not 503.\",Enter,\"And log the key each time it happens.\",Enter",
+            provider: true,
+        },
+
+        // Frame P: two edits staged and the turn held, so the plan is docked.
+        "drafting" => Script {
+            replies: vec![
+                fake::said_then_calls("Looking at how requests move through the gateway.", &[
+                    ("call-read-mod", "read", serde_json::json!({ "path": MOD })),
+                    ("call-read-router", "read", serde_json::json!({ "path": ROUTER })),
+                ]),
+                fake::said_then_calls("Nothing limits requests yet. Adding a limit for each key.", &[
+                    ("call-plan", "plan", serde_json::json!({ "steps": [
+                        { "text": "Count requests per key", "state": "done", "file": "limit.rs" },
+                        { "text": "Turn away requests over the limit", "state": "running", "file": "router.rs", "note": "Adding the limiter to `build_stack`" },
+                        { "text": "Check that it works", "state": "pending", "file": "tests/limit.rs" },
+                    ] })),
+                    ("call-new", "edit", serde_json::json!({ "path": LIMIT, "before": "", "after": "pub struct Limit { per_minute: u32, store: Arc<dyn LimitStore> }\n" })),
+                    ("call-edit", "edit", serde_json::json!({
+                        "path":   ROUTER,
+                        "before": "        .layer(auth_layer(cfg))\n",
+                        "after":  "        .layer(RateLimitLayer::new(\n            Quota::per_minute(100),\n            cfg.limit_store.clone(),\n        ))\n        .layer(auth_layer(cfg))\n",
+                    })),
+                ]),
+                fake::held(""),
+            ],
+            history: &[],
+            files:   vec![(MOD, MOD_RS), (ROUTER, ROUTER_RS)],
+            keys:    ask,
             provider: true,
         },
 

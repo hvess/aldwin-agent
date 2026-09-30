@@ -6,8 +6,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     event::Event,
     types::{
-        Answer, Changeset, PlanStep, Question, ReviewDecision, ReviewOutcome, StepId, ToolCall,
-        ToolResult, TurnId,
+        Answer, ChangedFile, Changeset, PlanStep, Question, ReviewDecision, ReviewOutcome, StepId,
+        ToolCall, ToolResult, TurnId,
     },
 };
 
@@ -162,6 +162,11 @@ impl DispatchContext {
                 steps,
             })
             .await;
+    }
+
+    /// Announces the file an edit staged, as it now stands.
+    pub async fn staged(&self, file: ChangedFile) {
+        let _ = self.events.send(Event::Staged { file }).await;
     }
 
     /// Drops every review entry; the abort path cannot find one by call id.

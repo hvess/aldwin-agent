@@ -212,16 +212,23 @@ fn the_plan_marks_done_running_and_pending_in_their_three_tones() {
             PlanStep {
                 text: "Count requests per key".into(),
                 state: StepState::Done,
+                file: None,
+                note: None,
             },
             PlanStep {
                 text: "Turn away requests over the limit".into(),
                 state: StepState::Running,
+                file: None,
+                note: None,
             },
             PlanStep {
                 text: "Check that it works".into(),
                 state: StepState::Pending,
+                file: None,
+                note: None,
             },
         ],
+        docked: false,
     });
     let buf = render(&mut a, 100, 36);
     let pal = Theme::Dark.palette();
@@ -244,6 +251,208 @@ fn the_plan_marks_done_running_and_pending_in_their_three_tones() {
         pal.label2,
         "frame B: a pending step's text is label2"
     );
+}
+
+/// Frame P's turn: three steps with their files, the middle one running
+/// with a note, and two files staged.
+fn drafting() -> App {
+    let mut a = app();
+    for c in "Add rate limiting to the gateway.".chars() {
+        a.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    a.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
+    let step = |text: &str, state, file: &str, note: Option<&str>| PlanStep {
+        text: text.into(),
+        state,
+        file: Some(file.into()),
+        note: note.map(Into::into),
+    };
+    a.apply_event(Event::PlanUpdated {
+        turn_id: TurnId(1),
+        steps: vec![
+            step("Count requests per key", StepState::Done, "limit.rs", None),
+            step(
+                "Turn away requests over the limit",
+                StepState::Running,
+                "router.rs",
+                Some("Adding the limiter to `build_stack`"),
+            ),
+            step(
+                "Check that it works",
+                StepState::Pending,
+                "tests/limit.rs",
+                None,
+            ),
+        ],
+    });
+    let limit = "x\n".repeat(48);
+    for file in [
+        ChangedFile {
+            path: "src/gateway/limit.rs".into(),
+            before: None,
+            after: limit,
+        },
+        ChangedFile {
+            path: "src/gateway/router.rs".into(),
+            before: Some("a\nb\nc\n".into()),
+            after: "a\nB\nc\nd\ne\nf\ng\nh\n".into(),
+        },
+    ] {
+        a.apply_event(Event::Staged { file });
+    }
+    a
+}
+
+/// Frame P: the plan docked above the field on `tint`, its rows inset one
+/// cell, each step's file and counts flush right with a mark column spare.
+#[test]
+fn the_plan_card_holds_the_plan_above_the_field_while_edits_are_staged() {
+    let mut a = drafting();
+    let (width, height) = (100, 36);
+    let buf = render(&mut a, width, height);
+    let pal = Theme::Dark.palette();
+
+    let title = find_row(&buf, "Draft, nothing saved").expect("the card's title row");
+    let glyph_x = MARGIN_X + OPTION_INSET;
+    let text_x = glyph_x + MARK_COL;
+    // The right column ends a mark column and the inset inside the card.
+    let right_end = width as usize - MARGIN_X - OPTION_INSET - MARK_COL;
+    assert_eq!(
+        col_of(&buf, title, "Add rate limiting to the gateway"),
+        Some(text_x)
+    );
+    assert_eq!(buf[(text_x as u16, title)].fg, pal.label);
+    assert_eq!(
+        col_of(&buf, title, "Draft, nothing saved"),
+        Some(right_end - "Draft, nothing saved".len())
+    );
+    assert_eq!(buf[(MARGIN_X as u16, title)].bg, pal.tint);
+    assert_eq!(buf[(MARGIN_X as u16 - 1, title)].bg, pal.win);
+    assert_eq!(
+        buf[(MARGIN_X as u16, title - 1)].bg,
+        pal.tint,
+        "a blank row pads the top"
+    );
+
+    let done = title + 2;
+    assert_eq!(buf[(glyph_x as u16, done)].symbol(), "✓");
+    assert_eq!(buf[(glyph_x as u16, done)].fg, pal.accent);
+    assert_eq!(col_of(&buf, done, "Count requests per key"), Some(text_x));
+    assert_eq!(
+        buf[(text_x as u16, done)].fg,
+        pal.label3,
+        "frame P: done steps back to label3"
+    );
+    assert!(
+        row_text(&buf, done).contains("limit.rs  +48 "),
+        "a new file has no −0"
+    );
+
+    let running = done + 1;
+    assert_eq!(buf[(glyph_x as u16, running)].fg, pal.amber);
+    assert_eq!(buf[(text_x as u16, running)].fg, pal.label);
+    let counts = "router.rs  +6 −1";
+    let at = col_of(&buf, running, counts).expect("the running step's file and counts");
+    assert_eq!(at + counts.chars().count(), right_end);
+    assert_eq!(buf[(at as u16, running)].fg, pal.label2);
+    assert_eq!(buf[((at + 11) as u16, running)].fg, pal.add);
+    assert_eq!(buf[((at + 14) as u16, running)].fg, pal.del);
+
+    let note = running + 1;
+    assert_eq!(
+        col_of(&buf, note, "Adding the limiter to build_stack"),
+        Some(text_x)
+    );
+    assert_eq!(buf[(text_x as u16, note)].fg, pal.label2);
+    let code = col_of(&buf, note, "build_stack").unwrap();
+    assert_eq!(
+        buf[(code as u16, note)].fg,
+        pal.code,
+        "a name in the note is code"
+    );
+
+    let pending = note + 1;
+    assert_eq!(buf[(glyph_x as u16, pending)].symbol(), "○");
+    assert_eq!(buf[(text_x as u16, pending)].fg, pal.label3);
+    assert!(row_text(&buf, pending)
+        .trim_end()
+        .ends_with("tests/limit.rs"));
+
+    // Its bottom pad, a blank row on the window, then the field.
+    assert_eq!(buf[(MARGIN_X as u16, pending + 1)].bg, pal.tint);
+    assert_eq!(buf[(MARGIN_X as u16, pending + 2)].bg, pal.win);
+    assert_eq!(buf[(MARGIN_X as u16, pending + 3)].symbol(), "›");
+    assert_eq!(
+        (0..height)
+            .filter(|&y| row_text(&buf, y).contains("Count requests per key"))
+            .count(),
+        1,
+        "the docked plan is not drawn in the conversation too"
+    );
+}
+
+#[test]
+fn a_file_name_two_staged_files_answer_to_gets_no_counts() {
+    let mut a = drafting();
+    a.apply_event(Event::Staged {
+        file: ChangedFile {
+            path: "tests/limit.rs".into(),
+            before: None,
+            after: "x\n".into(),
+        },
+    });
+    let buf = render(&mut a, 100, 36);
+    let done = find_row(&buf, "Count requests per key").unwrap();
+    assert!(
+        row_text(&buf, done).trim_end().ends_with("limit.rs"),
+        "`limit.rs` names both staged files"
+    );
+    let pending = find_row(&buf, "Check that it works").unwrap();
+    assert!(row_text(&buf, pending).contains("tests/limit.rs  +1"));
+}
+
+/// The comments' round edits under the waiting review, which holds the
+/// screen: its card is never drawn over the review.
+#[test]
+fn a_review_holds_the_screen_over_the_next_rounds_card() {
+    let mut a = drafting();
+    a.apply_event(Event::ReviewRequested {
+        review_id: "r".into(),
+        changeset: Changeset {
+            files: vec![ChangedFile {
+                path: "src/gateway/router.rs".into(),
+                before: None,
+                after: "x\n".into(),
+            }],
+        },
+    });
+    a.apply_event(Event::Staged {
+        file: ChangedFile {
+            path: "src/gateway/router.rs".into(),
+            before: None,
+            after: "y\n".into(),
+        },
+    });
+    let buf = render(&mut a, 100, 36);
+    assert!(find_row(&buf, "Nothing is saved until you approve").is_some());
+    assert!(find_row(&buf, "Draft, nothing saved").is_none());
+}
+
+#[test]
+fn a_question_from_the_agent_takes_the_cards_place() {
+    let mut a = drafting();
+    a.apply_event(Event::QuestionAsked {
+        call_id: "q1".into(),
+        question: Question {
+            question: "Limit requests without a key too?".into(),
+            detail: String::new(),
+            options: vec!["Yes".into(), "No".into(), "Chat about this".into()],
+        },
+    });
+    let buf = render(&mut a, 100, 36);
+    assert!(find_row(&buf, "Limit requests without a key too?").is_some());
+    assert!(find_row(&buf, "Draft, nothing saved").is_none());
 }
 
 /// Frames B, C and J.

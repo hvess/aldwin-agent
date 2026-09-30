@@ -5,7 +5,15 @@ ToolDispatcher impl, built-in tool set, the staged changeset, the sandbox every 
 **Status:** active.
 **Scope:** aldwin-tools crate only. Built-in tool implementations, registry, dispatch, staging, the sandbox, MCP bridge. Excludes agent loop, TUI, config persistence.
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
+
+**Progress (2026-09-30, the plan card):** `plan` takes an optional `file`
+and `note` on each step, trimmed, blank being absent; its description
+teaches both (aldwin-tui.md, the plan card). `Staging::edit` returns the
+file as it is now staged, under the spelling it was first staged with, and `edit` sends it to the screen
+(`DispatchContext::staged`, `Event::Staged`): one file's two texts cloned
+per edit, where the whole changeset would cost every staged file each
+time. Test: `an_edit_is_staged_and_the_disk_is_untouched`.
 
 **Progress (2026-09-29, what `explain` keeps open):** `view` read every file
 the session had ever shown a server from disk on each call, and compared
@@ -427,7 +435,8 @@ offer-as-write — is gone. What replaced it:
   are gone — and **`Tool::permission` returns `Option`**: `None` is outside
   the lock (`edit`, `plan`, `ask`); `Some` is a program and a class the
   lock may refuse. `ToolDescriptor::edit_class` is gone with the gate.
-- **`plan`** validates one to seven steps of `{text, state}` and announces
+- **`plan`** validates one to seven steps of `{text, state}` (`file` and
+  `note` optional since 2026-09-30) and announces
   them with `DispatchContext::plan_updated`. **`ask`** validates a question
   with one to four answers (two to four since 2026-09-27: see Decisions), appends
   *Chat about this* if absent, and

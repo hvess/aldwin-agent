@@ -297,7 +297,7 @@ The shape all three return:
 > 3. `docs/design/tokens/*.css` — the token layer. This is what the app
 >    can actually draw through, so it is the operative statement; a colour
 >    only the frame's script sets is recorded under source 2.
-> 4. `docs/design/frames/Aldwin Agent TUI.dc.html` — the frames, A to K and the working section's W1 and W2.
+> 4. `docs/design/frames/Aldwin Agent TUI.dc.html` — the frames, A to K, the working section's W1 and W2, and the drafting section's P.
 >    Every position in them is a `var(--…)` from `tokens/layout.css`, so a
 >    position is a lookup, not a measurement; the brand mark and the context
 >    bar's ramp exist only here.

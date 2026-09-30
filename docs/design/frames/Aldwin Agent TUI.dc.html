@@ -327,6 +327,40 @@
 
 <section style="display:flex;flex-direction:column;gap:32px;padding:56px;min-width:max-content;font-family:var(--font-ui);color:var(--canvas-ink)">
   <div style="display:flex;flex-direction:column;gap:10px;max-width:70ch">
+    <div style="font:500 12px/20px var(--font-mono);color:var(--canvas-caption)">Aldwin · drafting</div>
+    <div style="font-size:26px;font-weight:600;letter-spacing:-.015em">The plan stays in view, and says what is happening now.</div>
+    <div style="font-size:15px;line-height:25px;color:var(--canvas-body);text-wrap:pretty">While Aldwin drafts an edit, the plan becomes one card docked above the field. The conversation scrolls behind it; the card stays put until the review opens. All three steps stay listed, each with its file and line counts. The running step opens to say what is being written in it.</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:baseline;gap:12px;max-width:var(--fw)"><span style="font:500 12px/20px var(--font-mono);color:var(--onfill);background:var(--canvas-badge);padding:2px 8px;border-radius:5px">P</span><span style="font-size:16px;font-weight:600">Plan card</span><span style="font-size:14px;color:var(--canvas-caption)">The current step opens to show its file and what is being written in it.</span></div>
+    <div id="p" data-screen-label="P plan card" style="width:var(--fw);background:var(--win);border-radius:10px;overflow:hidden;box-shadow:var(--shadow-window)">
+      <div style="display:flex;align-items:center;height:38px;padding:0 14px;gap:8px;background:var(--chrome)"><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="width:12px;height:12px;border-radius:50%;background:var(--dot)"></span><span style="flex:1;text-align:center;font-size:12px;color:var(--label2);padding-right:52px">gateway — aldwin</span></div>
+      <div style="padding:24px 0;min-height:672px;box-sizing:border-box;display:flex;flex-direction:column;font:400 14px/24px var(--font-mono);color:var(--label)">
+        <div style="white-space:pre;display:flex;margin:0 3ch;background:var(--tint)"><span style="width:2ch;flex:none;color:var(--label3)">›</span><span style="flex:1;min-width:0;color:var(--label2)">Add rate limiting to the gateway. 100 requests a minute per API key.</span></div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;padding:0 5ch">Nothing limits requests yet. Adding a limit for each key.</div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)">✓</span><span style="flex:1;min-width:0;color:var(--label2)">Read 3 files</span><span style="font-family:system-ui;color:var(--label3)">›</span><span style="width:2ch;flex:none"></span></div>
+        <div style="flex:1"></div>
+        <div style="margin:0 3ch;background:var(--tint);padding:24px 0">
+          <div style="white-space:pre;display:flex;padding:0 1ch"><span style="width:2ch;flex:none"></span><span style="flex:1;min-width:0">Rate limiting for the gateway</span><span style="color:var(--label2)">Draft, nothing saved</span><span style="width:2ch;flex:none"></span></div>
+          <div style="height:24px"></div>
+          <div style="white-space:pre;display:flex;padding:0 1ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--accent)">✓</span><span style="flex:1;min-width:0;color:var(--label3)">Count requests per key</span><span style="color:var(--label3)">limit.rs  <span style="color:var(--add)">+48</span></span><span style="width:2ch;flex:none"></span></div>
+          <div style="white-space:pre;display:flex;padding:0 1ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--amber)">●</span><span style="flex:1;min-width:0">Turn away requests over the limit</span><span style="color:var(--label2)">router.rs  <span style="color:var(--add)">+6</span> <span style="color:var(--del)">−1</span></span><span style="width:2ch;flex:none"></span></div>
+          <div style="white-space:pre;display:flex;padding:0 1ch"><span style="width:2ch;flex:none"></span><span style="flex:1;min-width:0;color:var(--label2)">Adding the limiter to <span style="color:var(--code)">build_stack</span></span></div>
+          <div style="white-space:pre;display:flex;padding:0 1ch"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--label3)">○</span><span style="flex:1;min-width:0;color:var(--label3)">Check that it works</span><span style="color:var(--label3)">tests/limit.rs</span><span style="width:2ch;flex:none"></span></div>
+        </div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;margin:0 3ch;background:var(--field)"><span style="width:2ch;flex:none;color:var(--accent)">›</span><span style="flex:1;min-width:0"><span style="display:inline-block;width:2px;height:18px;vertical-align:-4px;margin-right:-2px;background:var(--accent);animation:caret var(--caret-period) steps(1) infinite"></span></span></div>
+        <div style="height:24px"></div>
+        <div style="white-space:pre;display:flex;padding:0 3ch;color:var(--label2)"><span style="width:2ch;flex:none;font-family:system-ui;color:var(--amber)">●</span><span style="flex:1;min-width:0"><span style="color:var(--label)">Drafting the edit</span><span style="color:var(--label3)">  1m 12s</span></span><span style="margin-left:5ch"><span style="color:color-mix(in oklch, var(--fill) 55%, var(--track))">█</span><span style="color:color-mix(in oklch, var(--fill) 70%, var(--track))">█</span><span style="color:color-mix(in oklch, var(--fill) 85%, var(--track))">█</span><span style="color:var(--fill)">█</span><span style="color:var(--track)">██████</span> 42%</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:32px;padding:56px;min-width:max-content;font-family:var(--font-ui);color:var(--canvas-ink)">
+  <div style="display:flex;flex-direction:column;gap:10px;max-width:70ch">
     <div style="font:500 12px/20px var(--font-mono);color:var(--canvas-caption)">Aldwin · review</div>
     <div style="font-size:26px;font-weight:600;letter-spacing:-.015em">The code is the content.</div>
     <div style="font-size:15px;line-height:25px;color:var(--canvas-body);text-wrap:pretty">Aldwin never edits directly: every edit opens as a review, and nothing is saved until you approve. Blue means you: your selection, your comments, your next action, and nothing else. Select lines and the field says which lines you are commenting on; ↩ adds the comment, which sits at the end of its line so the code is never broken up. Unchanged code folds away, and the keys live behind ?. ⌃↩ stays grey until every file is read, then turns blue. When you approve, the review folds back into the conversation as one line you can open again.</div>

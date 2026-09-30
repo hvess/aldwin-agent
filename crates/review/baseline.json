@@ -43,10 +43,10 @@
       "glyphs": ""
     },
     {
-      "id": "a-plan-step-has-no-note",
-      "design_says": "Frame `D`: under the running `● Check that it works` step, `Running the tests. About ten seconds.` in `label2` on the very next row — `<div style=\"white-space:pre;padding:0 5ch;color:var(--label2)\">`, a note belonging to the step.",
-      "design_also_says": "`PlanStep` is the design's component for a step, and it carries a glyph and one line of text; nothing in the component set gives a step a second line.",
-      "app_follows": "The developer's decision of 2026-09-27: a plan step has no note. What the agent says about the running step is its own prose — `label`, after a blank row — and the `stopping` scene draws that sentence as prose.",
+      "id": "a-plan-step-note-is-the-cards",
+      "design_says": "Frame `D`: under the running `● Check that it works` step of the plan in the conversation, `Running the tests. About ten seconds.` in `label2` on the very next row — `<div style=\"white-space:pre;padding:0 5ch;color:var(--label2)\">`, a note belonging to the step.",
+      "design_also_says": "Frame `P plan card`: the note is the card's — `Adding the limiter to build_stack` in `label2`, the name in `--code`, under the running step of the plan docked above the field; `PlanStep`, the component for a step in the conversation, carries a glyph and one line of text.",
+      "app_follows": "The developer's call of 2026-09-30, reversing that of 2026-09-27: a step's note is frame P's, given by the `plan` tool and drawn only in the card. The plan in the conversation (frames B and D) has no note; what the agent says about the running step there is its own prose, and the `stopping` scene draws that sentence as prose.",
       "glyphs": ""
     },
     {
@@ -110,6 +110,27 @@
       "design_says": "The conversation section: “While working it says what Aldwin is doing and how long it has been at it; esc always stops, so no key is named.”",
       "design_also_says": "Frame `K queued` draws messages sent while Aldwin works as one band marked `Queued`, and names no way to take one back before it goes.",
       "app_follows": "The developer's call of 2026-09-29: while messages are queued, `esc` moves them back into the field, ahead of anything typed there, and the next `esc` stops the turn; a stopped or failed turn puts the queue back too, so nothing is sent without the developer. Still no key is named. Retired when the design says what `esc` does with a queue.",
+      "glyphs": ""
+    },
+    {
+      "id": "frame-p-draws-its-own-work-row",
+      "design_says": "Frame `P plan card`: the turn's work row is `✓ Read 3 files … ›` — a `label3` `✓` in the mark column, the summary in `label2`, and the `›` flush right with an empty mark column after it.",
+      "design_also_says": "Frames `B`, `C` and `E` draw the same row as `Read 3 files  ›`: nothing in the mark column and the `›` two spaces after the summary, the row ADR 0018 records.",
+      "app_follows": "Frames B, C and E and ADR 0018 (the developer's call, 2026-09-30: frame P's row is not part of the plan card). Retired when the frames draw one row.",
+      "glyphs": ""
+    },
+    {
+      "id": "staged-counts-are-green-and-red",
+      "design_says": "README: “Green and red appear only in diffs.”",
+      "design_also_says": "Frame `P plan card`: each step's file carries its staged line counts on the card in the conversation — `limit.rs  +48` and `router.rs  +6 −1`, the `+` counts in `--add` and the `−` in `--del`.",
+      "app_follows": "Frame P, as the developer adopted it on 2026-09-30: a staged file's counts are its diff's, in the diff's colours; nothing else outside the review is green or red. `the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red` leaves the `drafting` scene out for this. Retired when the README names the counts.",
+      "glyphs": ""
+    },
+    {
+      "id": "changes-are-titled-by-the-request",
+      "design_says": "Frames `G` and `P plan card` title the changes with a summary the frame writes: `Rate limiting for the gateway`, in weight 600 over the review and in `label` on the plan card.",
+      "design_also_says": "The product has nothing to write that summary from: no tool gives the changes a title, and the design says nothing of where it comes from.",
+      "app_follows": "The developer's request, its first line without a trailing `.` or `!`, as the review's title and the plan card's (`App::changes_title`), `Changes` when nothing was typed. Retired when the design says where the title comes from, or a tool gives one.",
       "glyphs": ""
     }
   ]

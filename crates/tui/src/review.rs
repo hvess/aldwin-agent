@@ -5,9 +5,10 @@
 //! No drawing here: `ui::review` reads this and `App` drives it.
 
 use std::borrow::Cow;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use aldwin_core::{Changeset, Question, ReviewComment, ReviewDecision};
+use aldwin_core::{ChangedFile, Changeset, Question, ReviewComment, ReviewDecision};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use similar::{capture_diff_slices_deadline, Algorithm, Change, ChangeTag};
 
@@ -259,6 +260,9 @@ pub enum ReviewOutcome {
     Decide(ReviewDecision),
 }
 
+/// The title of changes made with no typed request to name them.
+pub(crate) const UNTITLED: &str = "Changes";
+
 /// The full-window review of one changeset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
@@ -325,7 +329,7 @@ impl Review {
             comment: Draft::default(),
             confirm: None,
             keys_shown: false,
-            title: "Changes".into(),
+            title: UNTITLED.into(),
         })
     }
 
@@ -781,6 +785,36 @@ impl Review {
     }
 }
 
+/// One staged file's line counts, the `+11 −2` its review header will show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StagedFile {
+    /// As the model named it in the `edit`.
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+impl StagedFile {
+    /// Counts `file` with the review's own diff, so the plan card and the
+    /// review agree.
+    pub(crate) fn counted(file: &ChangedFile) -> Self {
+        let diff = file_from(&file.path, file.before.as_deref(), &file.after);
+        Self {
+            path: file.path.clone(),
+            added: diff.added_lines,
+            removed: diff.removed_lines,
+        }
+    }
+
+    /// Whether a step's `file` names this file: either is the other's
+    /// trailing components, so `limit.rs` and `./src/limit.rs` name
+    /// `src/limit.rs`.
+    pub(crate) fn is(&self, path: &str) -> bool {
+        let (a, b) = (Path::new(&self.path), Path::new(path));
+        a.ends_with(b) || b.ends_with(a)
+    }
+}
+
 /// A file's diff, folded. The common prefix and suffix are trimmed before
 /// the diff, which costs O((n + m) · d) for d changed lines ([`line_diff`]).
 fn file_from(path: &str, before: Option<&str>, after: &str) -> ReviewFile {
@@ -925,7 +959,19 @@ fn line_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<Change<&'a str>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aldwin_core::ChangedFile;
+
+    #[test]
+    fn a_file_is_named_by_its_trailing_components() {
+        let file = StagedFile {
+            path: "src/gateway/limit.rs".into(),
+            added: 0,
+            removed: 0,
+        };
+        assert!(file.is("limit.rs"));
+        assert!(file.is("./src/gateway/limit.rs"));
+        assert!(!file.is("tests/limit.rs"));
+        assert!(!file.is("unlimit.rs"));
+    }
 
     fn label(lines: &str, file: &str, range: &str) -> Option<SelectionLabel> {
         Some(SelectionLabel {

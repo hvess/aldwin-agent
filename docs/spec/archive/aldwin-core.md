@@ -65,6 +65,12 @@ variant on the existing "layer above core needs a vehicle to reach the
 TUI" pattern `Notice`/`PermissionsChanged`/`HistoryCleared` already
 established, not a new mechanism.
 
+**Post-archive addition (2026-09-30, the plan card):** `PlanStep` gains
+two optional fields, `file` and `note` (`serde` default, skipped when
+absent), and `Event::Staged { file: ChangedFile }` tells the TUI which file
+an `edit` staged, sent through `DispatchContext::staged`. Neither is in a
+transcript record; aldwin-tui.md, Progress 2026-09-30, draws them.
+
 **Post-archive addition (2026-09-29, ADR 0017):** `DispatchContext::notice`
 sends a tool's `Event::Notice` to the developer, so aldwin-tools' `reload`
 says a change to the workspace roots itself (ADR 0007 §1) rather than

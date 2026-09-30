@@ -12,7 +12,7 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::grid::{truncate_spans, GROUP_GAP, MARGIN_X, MARK_COL};
-use super::{question, working};
+use super::{plan, question, working};
 use aldwin_core::ReviewOutcome;
 
 use crate::app::{App, Asker, Mode};
@@ -76,22 +76,29 @@ pub(super) enum Bottom {
     /// The agent's question answered in words: the question panel, then
     /// blank / field / blank / footer / blank.
     Answering { rows: u16, composer: Composer },
+    /// A turn with edits staged: the plan card, then blank / field / blank /
+    /// footer / blank (frame P).
+    Drafting { rows: u16, composer: Composer },
 }
 
 impl Bottom {
     pub(super) fn measure(app: &App, width: u16) -> Self {
         // Measured once, at its final reserve: the draft keeps one layout.
         let composer = |reserve| Composer::new(&app.draft, width, reserve);
-        match (&app.mode, &app.answering) {
-            (Mode::Question(asking), _) => Bottom::Question {
+        match (&app.mode, &app.answering, app.docked_plan()) {
+            (Mode::Question(asking), _, _) => Bottom::Question {
                 rows: question::panel_rows(&asking.question, Some(&asking.list), width),
             },
-            (Mode::Commands(menu), _) => Bottom::Commands {
+            (Mode::Commands(menu), _, _) => Bottom::Commands {
                 rows: question::commands_rows(menu),
                 composer: composer(0),
             },
-            (_, Some(asking)) => Bottom::Answering {
+            (_, Some(asking), _) => Bottom::Answering {
                 rows: question::panel_rows(&asking.question, None, width),
+                composer: composer(0),
+            },
+            (_, None, Some(steps)) => Bottom::Drafting {
+                rows: plan::card_rows(steps),
                 composer: composer(0),
             },
             _ => {
@@ -106,7 +113,9 @@ impl Bottom {
             Bottom::Field(c, _) => c.height() + 4,
             Bottom::Question { rows } => rows + 3,
             Bottom::Commands { rows, composer } => rows + composer.height() + 4,
-            Bottom::Answering { rows, composer } => rows + composer.height() + 4,
+            Bottom::Answering { rows, composer } | Bottom::Drafting { rows, composer } => {
+                rows + composer.height() + 4
+            }
         }
     }
 
@@ -144,17 +153,18 @@ impl Bottom {
                 draw_footer(frame, footer, app);
             }
             Bottom::Answering { rows, composer } => {
-                let [panel, _, field, _, footer, _] = Layout::vertical([
-                    Constraint::Length(rows),
-                    Constraint::Length(1),
-                    Constraint::Length(composer.height()),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ])
-                .areas(area);
+                let [panel, field, footer] = panel_over_field(area, rows, &composer);
                 if let Some(asking) = &app.answering {
                     question::draw_panel(frame, panel, &asking.question, None, app.theme.palette());
+                }
+                draw_field(frame, field, app, &composer, None);
+                draw_footer(frame, footer, app);
+            }
+            Bottom::Drafting { rows, composer } => {
+                let [panel, field, footer] = panel_over_field(area, rows, &composer);
+                if let Some(steps) = app.docked_plan() {
+                    let pal = app.theme.palette();
+                    plan::draw_card(frame, panel, app.changes_title(), steps, app.staged(), pal);
                 }
                 draw_field(frame, field, app, &composer, None);
                 draw_footer(frame, footer, app);
@@ -177,6 +187,21 @@ impl Bottom {
             }
         }
     }
+}
+
+/// A panel of `rows`, then blank / field / blank / footer / blank: the
+/// panel, field and footer areas.
+fn panel_over_field(area: Rect, rows: u16, composer: &Composer) -> [Rect; 3] {
+    let [panel, _, field, _, footer, _] = Layout::vertical([
+        Constraint::Length(rows),
+        Constraint::Length(1),
+        Constraint::Length(composer.height()),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    [panel, field, footer]
 }
 
 /// The field's right-hand action, e.g. `Approve  ⌃↩`; accent only when

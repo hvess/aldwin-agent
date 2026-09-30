@@ -255,6 +255,13 @@ pub enum Event {
         steps: Vec<PlanStep>,
     },
 
+    /// An `edit` staged a change to one file. The TUI draws the plan as a
+    /// card while the turn has one staged.
+    Staged {
+        /// The file as it now stands, whole.
+        file: ChangedFile,
+    },
+
     /// The `ask` tool needs an answer. Keyed by the call id: a call has at
     /// most one round trip outstanding (see `PendingReply`).
     QuestionAsked {

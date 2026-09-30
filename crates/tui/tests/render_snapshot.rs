@@ -32,11 +32,11 @@ const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/ren
 /// and maximized (catches sprawl rather than clipping).
 const SIZES: [(u16, u16); 3] = [(80, 24), (104, 32), (200, 50)];
 
-/// Frames A–K of `Aldwin Agent TUI.dc.html`, with `sent` and `asked` (review
+/// Frames A–K and P of `Aldwin Agent TUI.dc.html`, with `sent` and `asked` (review
 /// states the design leaves to the product) beside frame I so the review
 /// scenes stay together, then the other states the design leaves to the
 /// product.
-const SCENES: [&str; 23] = [
+const SCENES: [&str; 24] = [
     "launch",              // A
     "working",             // B
     "details",             // C
@@ -50,6 +50,7 @@ const SCENES: [&str; 23] = [
     "asked",               // the agent asks while the review waits: the question in its band
     "saved",               // J
     "queued",              // K
+    "drafting",            // P
     "markdown",            // a table, a fence, a list and a quote — ADR 0002
     "failure",             // ADR 0009 §5: a sentence, no red
     "long",                // an overflowing transcript
@@ -250,6 +251,8 @@ fn every_glyph_comes_from_the_closed_table() {
 fn the_agents_prose_is_never_blue_and_nothing_outside_a_diff_is_red() {
     for theme in [Theme::Dark, Theme::Light] {
         let pal = aldwin_tui::design_palette(theme);
+        // Not `drafting`: its card's counts are green and red (baseline
+        // `staged-counts-are-green-and-red`).
         let (accent, del, add) = (pal[0], pal[6], pal[1]); // alphabetical: accent, add, addcode, addrow, amber, code, del …
         for scene_name in [
             "working", "details", "running", "failure", "saved", "long", "markdown", "stopping",
@@ -448,8 +451,11 @@ fn plan(states: [StepState; 3]) -> LogEntry {
             .map(|(t, s)| PlanStep {
                 text: (*t).into(),
                 state: s,
+                file: None,
+                note: None,
             })
             .collect(),
+        docked: false,
     }
 }
 
@@ -544,6 +550,60 @@ fn scene(name: &str, app: &mut App) {
                 press(app, KeyCode::Enter, KeyModifiers::NONE);
             }
             app.status_mut().context_used = Some(380_000);
+        }
+        "drafting" => {
+            ask(app);
+            app.seed(LogEntry::AssistantText {
+                text: "Nothing limits requests yet. Adding a limit for each key.".into(),
+            });
+            app.seed(work(false));
+            let (turn_id, step_id) = (TurnId(1), StepId(1));
+            app.apply_event(Event::TurnStarted { turn_id });
+            let step = |text: &str, state, file: &str, note: Option<&str>| PlanStep {
+                text: text.into(),
+                state,
+                file: Some(file.into()),
+                note: note.map(Into::into),
+            };
+            app.apply_event(Event::PlanUpdated {
+                turn_id,
+                steps: vec![
+                    step("Count requests per key", StepState::Done, "limit.rs", None),
+                    step(
+                        "Turn away requests over the limit",
+                        StepState::Running,
+                        "router.rs",
+                        Some("Adding the limiter to `build_stack`"),
+                    ),
+                    step(
+                        "Check that it works",
+                        StepState::Pending,
+                        "tests/limit.rs",
+                        None,
+                    ),
+                ],
+            });
+            app.apply_event(Event::ToolUseRequested {
+                turn_id,
+                step_id,
+                call: ToolCall {
+                    id: "call-edit".into(),
+                    name: "edit".into(),
+                    input: serde_json::json!({"path": "src/gateway/router.rs"}),
+                },
+            });
+            app.apply_event(Event::ToolDispatched {
+                turn_id,
+                step_id,
+                call_id: "call-edit".into(),
+            });
+            // The edit announces what is staged while it runs; nothing yet
+            // for the step still to come.
+            for file in changeset().files.into_iter().take(2) {
+                app.apply_event(Event::Staged { file });
+            }
+            at_work(app, 72, thought);
+            app.status_mut().context_used = Some(420_000);
         }
         "details" => {
             scene("working", app);

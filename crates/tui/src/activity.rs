@@ -197,7 +197,11 @@ mod tests {
             named(&mut a, Verb::Searched, "tower::limit"),
             "Looking up tower::limit"
         );
-        assert_eq!(named(&mut a, Verb::Changed, ""), "Changing");
+        assert_eq!(
+            named(&mut a, Verb::Changed, "src/gateway/router.rs"),
+            "Drafting router.rs"
+        );
+        assert_eq!(named(&mut a, Verb::Changed, ""), "Drafting");
     }
 
     #[test]

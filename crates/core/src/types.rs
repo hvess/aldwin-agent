@@ -190,6 +190,12 @@ pub struct PlanStep {
     pub text: String,
     /// Where it stands.
     pub state: StepState,
+    /// The one file the step changes, as the model named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// What is being written in the step now; drawn only while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A question from the `ask` tool: its options offer a positive, a negative

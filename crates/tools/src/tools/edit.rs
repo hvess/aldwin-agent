@@ -95,13 +95,14 @@ impl Tool for EditTool {
         &self,
         _call_id: &str,
         input: Value,
-        _ctx: &DispatchContext,
+        ctx: &DispatchContext,
     ) -> Result<String, ToolError> {
         let args = edit_args(&input)?;
         let path = self.workspace.resolve(&args.path)?;
         let rel = args.path.clone();
 
-        self.staging
+        let staged = self
+            .staging
             .edit(path.clone(), &rel, |current| match current {
                 // Only an empty `before` creates a missing file.
                 None if args.before.is_empty() => Ok(args.after.clone()),
@@ -134,6 +135,7 @@ impl Tool for EditTool {
                 }
             })
             .await?;
+        ctx.staged(staged).await;
         Ok(format!(
             "staged an edit to {rel}; the developer reviews it before it is written"
         ))
@@ -144,6 +146,7 @@ impl Tool for EditTool {
 mod tests {
     use super::*;
     use crate::test_support::dispatch_context;
+    use aldwin_core::Event;
     use tempfile::tempdir;
 
     fn tool(dir: &tempfile::TempDir) -> (EditTool, Arc<Staging>) {
@@ -160,7 +163,7 @@ mod tests {
         let path = dir.path().join("f.rs");
         std::fs::write(&path, "fn a() {}\nfn b() {}\n").unwrap();
         let (tool, staging) = tool(&dir);
-        let (ctx, _e, _p) = dispatch_context();
+        let (ctx, mut events, _p) = dispatch_context();
 
         let out = tool
             .call(
@@ -181,6 +184,16 @@ mod tests {
             staging.changeset().files[0].after,
             "fn a() { hi(); }\nfn b() {}\n"
         );
+        match events.try_recv().unwrap() {
+            Event::Staged { file } => {
+                assert_eq!(
+                    vec![file],
+                    staging.changeset().files,
+                    "the screen hears the file as staged"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -334,5 +347,31 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(staging.changeset().files[0].after, "A\nB\n");
+    }
+
+    /// The screen tells files apart by the path each `Staged` carries.
+    #[tokio::test]
+    async fn a_file_edited_under_a_second_spelling_keeps_its_first() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("f.rs"), "a\nb\n").unwrap();
+        let (tool, staging) = tool(&dir);
+        let (ctx, mut events, _p) = dispatch_context();
+        for (id, path, before) in [("c1", "f.rs", "a"), ("c2", "./f.rs", "b")] {
+            tool.call(
+                id,
+                json!({"path": path, "before": before, "after": "x"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        }
+        let paths: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|e| match e {
+                Event::Staged { file } => Some(file.path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths, ["f.rs", "f.rs"]);
+        assert_eq!(staging.changeset().files[0].path, "f.rs");
     }
 }

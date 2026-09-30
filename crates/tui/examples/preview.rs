@@ -85,16 +85,23 @@ fn scene(name: &str, app: &mut App) {
                     PlanStep {
                         text: "Count requests per key".into(),
                         state: StepState::Done,
+                        file: None,
+                        note: None,
                     },
                     PlanStep {
                         text: "Turn away requests over the limit".into(),
                         state: StepState::Running,
+                        file: None,
+                        note: None,
                     },
                     PlanStep {
                         text: "Check that it works".into(),
                         state: StepState::Pending,
+                        file: None,
+                        note: None,
                     },
                 ],
+                docked: false,
             });
             app.apply_event(Event::TurnStarted { turn_id: TurnId(1) });
             // Frame B's `1m 02s`, typed in and not stalled: 100ms ticks.

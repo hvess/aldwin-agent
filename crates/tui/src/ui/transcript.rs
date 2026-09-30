@@ -12,6 +12,7 @@ use super::grid::{
     at_body, column, elide, justified, marked, Ctx, BODY_X, DETAIL_COL, MARGIN_X, MARK_COL,
 };
 use super::markdown::{self, Segment};
+use super::plan;
 use super::row::Row;
 use super::wrap::wrap_line;
 use aldwin_core::{ReviewOutcome, StepState};
@@ -348,14 +349,16 @@ fn render_entry<'a>(entry: &'a LogEntry, ctx: Ctx) -> Rendered<'a> {
             }
             at_body(lines)
         }
+        // Drawn by the card above the field instead (frame P).
+        LogEntry::Plan { docked: true, .. } => Vec::new(),
         // `PlanStep`, frame B.
-        LogEntry::Plan { steps } => steps
+        LogEntry::Plan { steps, .. } => steps
             .iter()
             .map(|step| {
-                let (glyph, glyph_fg, text_fg) = match step.state {
-                    StepState::Done => ("✓", pal.accent, pal.label2),
-                    StepState::Running => ("●", pal.amber, pal.label),
-                    StepState::Pending => ("○", pal.label3, pal.label2),
+                let (glyph, glyph_fg) = plan::mark(step.state, pal);
+                let text_fg = match step.state {
+                    StepState::Running => pal.label,
+                    StepState::Done | StepState::Pending => pal.label2,
                 };
                 // Frame B's `padding: 0 3ch`: the right edge is `MARGIN_X`,
                 // not prose's `BODY_X`.

@@ -30,7 +30,12 @@ impl PlanTool {
                                never a command or a file name. Call it with the whole list before starting a change \
                                that takes more than one step, and again as each step starts (`running`) and \
                                finishes (`done`). Two or three steps is usual. The plan is drawn on screen; do \
-                               not list its steps again in your reply."
+                               not list its steps again in your reply. Give each step that changes a file its \
+                               `file`, the workspace path: while your edits are staged the plan is docked above \
+                               the field, each step with its file and how many lines it changes. Give the running \
+                               step a `note` saying what you are writing in it now, the code named in backticks: \
+                               \"Adding the limiter to `build_stack`\", and call again as the work moves on. The \
+                               note is drawn only on the docked plan."
                     .into(),
                 input_schema: json!({
                     "type": "object",
@@ -42,6 +47,8 @@ impl PlanTool {
                                 "properties": {
                                     "text":  { "type": "string" },
                                     "state": { "type": "string", "enum": ["pending", "running", "done"] },
+                                    "file":  { "type": "string", "description": "The one file the step changes, as its workspace path. Omit when it changes none." },
+                                    "note":  { "type": "string", "description": "Only on the running step: what is being written in it now, in a few words. Drawn only while edits are staged." },
                                 },
                                 "required": ["text", "state"],
                             },
@@ -60,6 +67,15 @@ fn invalid(message: impl Into<String>) -> ToolError {
         tool: "plan".into(),
         message: message.into(),
     }
+}
+
+/// A step's optional string field, trimmed; blank is absent.
+fn optional(item: &Value, field: &str) -> Option<String> {
+    item.get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn parse(input: &Value) -> Result<Vec<PlanStep>, ToolError> {
@@ -97,6 +113,8 @@ fn parse(input: &Value) -> Result<Vec<PlanStep>, ToolError> {
             Ok(PlanStep {
                 text: text.to_string(),
                 state,
+                file: optional(item, "file"),
+                note: optional(item, "note"),
             })
         })
         .collect()
@@ -139,7 +157,7 @@ mod tests {
         let tool = PlanTool::new();
         let (ctx, mut events, _p) = dispatch_context();
         let out = tool
-            .call("c1", json!({"steps": [{"text": "Count requests per key", "state": "done"}, {"text": "Check that it works", "state": "running"}]}), &ctx)
+            .call("c1", json!({"steps": [{"text": "Count requests per key", "state": "done", "file": " src/limit.rs "}, {"text": "Check that it works", "state": "running", "note": " "}]}), &ctx)
             .await
             .unwrap();
         assert_eq!(out, "plan shown: 1 of 2 done, 1 running");
@@ -149,10 +167,13 @@ mod tests {
                     steps[0],
                     PlanStep {
                         text: "Count requests per key".into(),
-                        state: StepState::Done
+                        state: StepState::Done,
+                        file: Some("src/limit.rs".into()),
+                        note: None,
                     }
                 );
                 assert_eq!(steps[1].state, StepState::Running);
+                assert_eq!(steps[1].note, None, "a blank note is no note");
             }
             other => panic!("{other:?}"),
         }

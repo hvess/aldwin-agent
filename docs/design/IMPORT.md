@@ -1,5 +1,38 @@
 # Design import — provenance
 
+## Re-sync — 2026-09-30, the plan card
+
+`Aldwin Agent TUI.dc.html` was fetched again from the discussion project
+and replaces the local copy verbatim (100 KB). Nothing else in it moved.
+The project also holds `aldwin-frames.js`, the frames' markup as strings
+for the canvas; it adds nothing the frame lacks and is not imported.
+
+The frame gained one section, **"Aldwin · drafting"**, with one window,
+**frame `P plan card`**: "While Aldwin drafts an edit, the plan becomes one
+card docked above the field … All three steps stay listed, each with its
+file and line counts. The running step opens to say what is being written
+in it." The card is `--tint`, `margin:0 3ch`, `padding:24px 0`, its rows
+`padding:0 1ch` with an empty mark column held at the right end: the title
+in `label` with `Draft, nothing saved` in `label2`, a blank row, then the
+steps — `✓` accent over `label3`, `●` amber over `label` with its file in
+`label2`, `○` over `label3` — each with its file and its `+N −N` in
+`--add`/`--del` flush right, and under the running step its note in
+`label2`, the name in `--code`. Card, blank row, field.
+
+What the app takes and leaves (aldwin-tui.md, the plan card; baseline):
+
+- The card, from the first staged edit until the review opens. Its title
+  is the request, as the review's is, where the frame writes a summary.
+- The note, reversing the 2026-09-27 call (`a-plan-step-note-is-the-cards`).
+- The counts in the diff's colours (`staged-counts-are-green-and-red`).
+- Not frame P's work row, `✓ Read 3 files … ›`
+  (`frame-p-draws-its-own-work-row`).
+- Not the footer's `Drafting the edit`: an edit's working line is
+  `Drafting router.rs`, since its words come from the call.
+
+`tokens.rs` regenerates unchanged: frame P draws no new glyph, colour or
+measure.
+
 ## Re-sync — 2026-09-29, messages queue
 
 `Aldwin Agent TUI.dc.html` was fetched again from the discussion project

@@ -13,7 +13,7 @@ understanding of the code along the way.
 
 ![Aldwin working through a plan](assets/plan.png)
 
-> **Status:** 0.7.0. Early, moving fast, and used daily to build itself.
+> **Status:** 0.8.0. Early, moving fast, and used daily to build itself.
 > Linux and Apple Silicon.
 
 ## Why use it
@@ -114,7 +114,7 @@ curl -fsSL https://raw.githubusercontent.com/hvess/aldwin-agent/main/install.sh 
 It picks the build for your machine, checks it against the release's
 checksums and signature, and puts `aldwin` in `~/.local/bin`. If either
 check fails, nothing gets installed. Set `ALDWIN_INSTALL_DIR` to put it
-somewhere else, or `ALDWIN_VERSION` (say `v0.7.0`) to pin a release.
+somewhere else, or `ALDWIN_VERSION` (say `v0.8.0`) to pin a release.
 [`install.sh`](install.sh) is short, so give it a read first if you like.
 
 To update later, type `/update` in Aldwin. It checks the new release's

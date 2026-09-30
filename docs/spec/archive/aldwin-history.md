@@ -53,7 +53,11 @@ quitting: if picking a session back up is cheap, stopping to think is cheap.
   line is a header (`version`, `started_at`, `cwd`, `model`); every line after
   it is one `LogRecord`. JSONL because writes are appends and a torn tail costs
   one turn, not the session. Beside them, `index.json` caches how far the
-  listing has read each one (Progress, 2026-09-29).
+  listing has read each one (Progress, 2026-09-29). It is a cache, not a
+  persisted format, so it takes no ADR: an index that is lost, of another
+  `INDEX_VERSION` or out of step with a transcript costs one full read of
+  that transcript, and nothing but the listing reads it (decided
+  2026-09-30).
 
   The header carries no title. It is derived at listing time instead — at the
   moment a file is opened no user message exists yet, so a header title would

@@ -10,7 +10,7 @@ the top bar, the permission panel and first run are gone, and the entries
 that measured them are no longer claims about the code.
 **Scope:** crates/tui
 **Owner:** Maximilian
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 **Progress (2026-09-29, the review's diff):** The review diffed a file with
 an LCS table, O(n · m) time and space on the UI thread, and past 2^20 cells
@@ -42,7 +42,8 @@ fresh render. `finish_call` searches only this turn. The review keeps its
 drawn rows' spans (`ReviewFile::drawn`, rebuilt when a fold opens), finds a
 line's row by `partition_point`, and draws only rows that can reach the
 pane. The draft keeps its last `Layout` until the next edit, and the
-composer is measured once per frame.
+composer is measured once per frame. Bringing back the declared change is
+accepted (the developer's call, 2026-09-30).
 
 **Progress (2026-09-29, `⌃C` over a review):** A single `⌃C` in a review
 does nothing, and a second within `DOUBLE_CTRL_C_TICKS` quits: see

@@ -8,7 +8,7 @@
 # `allowed_signers` committed at the release's tag — not one served next to
 # the signature. Nothing is installed unless both checks pass.
 #
-# ALDWIN_VERSION      a tag such as v0.8.0 (default: the latest release)
+# ALDWIN_VERSION      a tag such as v0.9.0 (default: the latest release)
 # ALDWIN_INSTALL_DIR  where `aldwin` goes (default: ~/.local/bin)
 # ALDWIN_REPO         the GitHub repository releases come from, for a fork
 set -eu
